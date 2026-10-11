@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -77,6 +78,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -87,6 +89,9 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.rememberImeBottomInset
+import com.aicode.core.ui.ProgressNode
+import com.aicode.core.ui.ProgressNodeState
+import com.aicode.core.ui.TaskProgressBorder
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
@@ -94,6 +99,7 @@ import com.aicode.feature.agent.domain.command.SlashCommandKind
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.TodoItem
+import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalRequest
@@ -121,6 +127,7 @@ import compose.icons.feathericons.Minimize
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.Shield
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 输入框区域蒙版高度：盖住圆角容器，滚动内容滑入时被渐变遮罩；随键盘（IME）上移。 */
@@ -293,6 +300,9 @@ internal fun ChatInputBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .graphicsLayer { alpha = contentAlpha }
+                    // 顶部预留进度环的外扩空间：本 Column 经 graphicsLayer 图层渲染，
+                    // 绘制在图层 bounds 外会被裁掉，卡片上方无兄弟节点时环顶边会缺失。
+                    .padding(top = 6.dp)
                     .padding(horizontal = Spacing.lg)
                     .padding(bottom = Spacing.md)
                     .padding(bottom = imeInset)
@@ -454,178 +464,246 @@ internal fun ChatInputBar(
                 )
             }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(Radius.lg))
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant,
-                        RoundedCornerShape(Radius.lg)
+            // AI 工作中：卡片外围的任务进度线框（todo 驱动；无 todo 时为流动光带），空闲时完全不渲染。
+            // 节点即本轮任务清单条目：实心=已完成，呼吸=进行中，描边=待做；点击节点在卡片上方悬浮显示对应条目文字。
+            var progressTipIndex by remember { mutableStateOf<Int?>(null) }
+            // 每次点击自增：同节点重复点击也能重置 2.5s 计时（LaunchedEffect 以值为 key，同值不重启）
+            var progressTipTick by remember { mutableStateOf(0) }
+            val progressNodes = if (isBusy) {
+                todoItems.take(6).map {
+                    ProgressNode(
+                        state = when (it.status) {
+                            TodoStatus.COMPLETED -> ProgressNodeState.COMPLETED
+                            TodoStatus.IN_PROGRESS -> ProgressNodeState.ACTIVE
+                            TodoStatus.PENDING -> ProgressNodeState.PENDING
+                        },
+                        label = it.subject
                     )
-                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
-            ) {
-                PendingAttachmentPreviewList(
-                    attachments = pendingAttachments,
-                    onRemoveAttachment = onRemoveAttachment
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    TextField(
-                        value = inputFieldValue,
-                        onValueChange = { new ->
-                            inputFieldValue = new
-                            onValueChange(new.text)
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = INPUT_FIELD_MIN_HEIGHT, max = INPUT_FIELD_MAX_HEIGHT)
-                            .onSizeChanged { inputFieldWidthPx = it.width },
-                        placeholder = {
-                            Text(
-                                stringResource(if (isBusy) R.string.chat_queue_hint else R.string.chat_input_placeholder),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        enabled = true,
-                        keyboardOptions = if (enterToSend) {
-                            KeyboardOptions(imeAction = ImeAction.Send)
-                        } else {
-                            KeyboardOptions(imeAction = ImeAction.Default)
-                        },
-                        keyboardActions = if (enterToSend) {
-                            KeyboardActions(onSend = { onSend() })
-                        } else {
-                            KeyboardActions.Default
-                        },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor = Color.Transparent
-                        )
-                    )
-
-                    if (inputOverflows) {
-                        IconButton(
-                            onClick = { showFullScreenInput = true },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                FeatherIcons.Maximize,
-                                contentDescription = stringResource(R.string.chat_input_expand),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
                 }
-
-                Row(
+            } else emptyList()
+            LaunchedEffect(progressTipTick) {
+                if (progressTipIndex != null) {
+                    delay(2500)
+                    progressTipIndex = null
+                }
+            }
+            // 本轮结束（busy→idle）后清空残留提示：新一轮的节点列表长度可能不同，索引失效会渲染空气泡
+            LaunchedEffect(isBusy) {
+                if (!isBusy) progressTipIndex = null
+            }
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically
+                        .clip(RoundedCornerShape(Radius.lg))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant,
+                            RoundedCornerShape(Radius.lg)
+                        )
+                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
                 ) {
+                    PendingAttachmentPreviewList(
+                        attachments = pendingAttachments,
+                        onRemoveAttachment = onRemoveAttachment
+                    )
+
                     Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top
                     ) {
-                        val modeColor = when (currentMode) {
-                            AgentMode.PLAN -> MaterialTheme.colorScheme.primaryContainer
-                            AgentMode.AUTO -> MaterialTheme.colorScheme.error
-                            AgentMode.BUILD -> MaterialTheme.semanticColors.success
-                        }
-                        val modeTextColor = when (currentMode) {
-                            AgentMode.PLAN -> MaterialTheme.colorScheme.onPrimaryContainer
-                            AgentMode.AUTO -> MaterialTheme.colorScheme.onError
-                            AgentMode.BUILD -> MaterialTheme.semanticColors.onSuccess
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = modeColor,
+                        TextField(
+                            value = inputFieldValue,
+                            onValueChange = { new ->
+                                inputFieldValue = new
+                                onValueChange(new.text)
+                            },
                             modifier = Modifier
-                                .clickable {
-                                    val nextMode = when (currentMode) {
-                                        AgentMode.BUILD -> AgentMode.PLAN
-                                        AgentMode.PLAN -> AgentMode.AUTO
-                                        AgentMode.AUTO -> AgentMode.BUILD
-                                    }
-                                    onToggleMode(nextMode)
-                                }
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(46.dp)
-                                    .padding(vertical = 4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
+                                .weight(1f)
+                                .heightIn(min = INPUT_FIELD_MIN_HEIGHT, max = INPUT_FIELD_MAX_HEIGHT)
+                                .onSizeChanged { inputFieldWidthPx = it.width },
+                            placeholder = {
                                 Text(
-                                    text = currentMode.name,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = modeTextColor
-                                    )
+                                    stringResource(if (isBusy) R.string.chat_queue_hint else R.string.chat_input_placeholder),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            enabled = true,
+                            keyboardOptions = if (enterToSend) {
+                                KeyboardOptions(imeAction = ImeAction.Send)
+                            } else {
+                                KeyboardOptions(imeAction = ImeAction.Default)
+                            },
+                            keyboardActions = if (enterToSend) {
+                                KeyboardActions(onSend = { onSend() })
+                            } else {
+                                KeyboardActions.Default
+                            },
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent
+                            )
+                        )
+
+                        if (inputOverflows) {
+                            IconButton(
+                                onClick = { showFullScreenInput = true },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    FeatherIcons.Maximize,
+                                    contentDescription = stringResource(R.string.chat_input_expand),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
-                        Spacer(Modifier.width(Spacing.xs))
+                    }
 
-                        ModelIconButton(
-                            provider = activeProvider,
-                            providers = providers,
-                            modelMetadata = modelMetadata,
-                            onSelectModel = onSelectModel,
-                            forceOpenSheet = forceOpenModelSheet,
-                            onSelectSuccessInOnboarding = onSelectModelInOnboarding,
-                            onSheetDismiss = onModelSheetDismiss,
-                            modifier = Modifier.onboardingTarget(OnboardingStep.OPEN_MODEL_PICKER)
-                        )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val modeColor = when (currentMode) {
+                                AgentMode.PLAN -> MaterialTheme.colorScheme.primaryContainer
+                                AgentMode.AUTO -> MaterialTheme.colorScheme.error
+                                AgentMode.BUILD -> MaterialTheme.semanticColors.success
+                            }
+                            val modeTextColor = when (currentMode) {
+                                AgentMode.PLAN -> MaterialTheme.colorScheme.onPrimaryContainer
+                                AgentMode.AUTO -> MaterialTheme.colorScheme.onError
+                                AgentMode.BUILD -> MaterialTheme.semanticColors.onSuccess
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = modeColor,
+                                modifier = Modifier
+                                    .clickable {
+                                        val nextMode = when (currentMode) {
+                                            AgentMode.BUILD -> AgentMode.PLAN
+                                            AgentMode.PLAN -> AgentMode.AUTO
+                                            AgentMode.AUTO -> AgentMode.BUILD
+                                        }
+                                        onToggleMode(nextMode)
+                                    }
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(46.dp)
+                                        .padding(vertical = 4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = currentMode.name,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = modeTextColor
+                                        )
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(Spacing.xs))
 
-                        if (workspaceViewModel != null) {
-                            WorkspaceIconButton(
-                                viewModel = workspaceViewModel,
-                                hasRunningSessions = hasRunningSessions,
-                                onSwitchConfirmed = onSwitchWorkspaceConfirmed,
-                                modifier = Modifier.size(36.dp),
-                                iconSize = 20.dp
+                            ModelIconButton(
+                                provider = activeProvider,
+                                providers = providers,
+                                modelMetadata = modelMetadata,
+                                onSelectModel = onSelectModel,
+                                forceOpenSheet = forceOpenModelSheet,
+                                onSelectSuccessInOnboarding = onSelectModelInOnboarding,
+                                onSheetDismiss = onModelSheetDismiss,
+                                modifier = Modifier.onboardingTarget(OnboardingStep.OPEN_MODEL_PICKER)
+                            )
+
+                            if (workspaceViewModel != null) {
+                                WorkspaceIconButton(
+                                    viewModel = workspaceViewModel,
+                                    hasRunningSessions = hasRunningSessions,
+                                    onSwitchConfirmed = onSwitchWorkspaceConfirmed,
+                                    modifier = Modifier.size(36.dp),
+                                    iconSize = 20.dp
+                                )
+                            }
+
+                            // 元数据未命中时（如中转站改了模型名）退回全部档位由用户自选：
+                            // 这类模型可能强制开启推理，隐藏按钮会导致无法调档。
+                            val availableEfforts = remember(activeProvider, modelMetadata) {
+                                activeProvider?.let { provider ->
+                                    modelMetadata[modelMetadataKey(provider.id, provider.effectiveModel)]?.reasoningEffortOptions
+                                        ?.let { ReasoningEffort.fromValues(it) }
+                                }.orEmpty().ifEmpty { ReasoningEffort.entries }
+                            }
+                            ReasoningEffortSelector(
+                                effort = reasoningEffort,
+                                availableEfforts = availableEfforts,
+                                onChange = onReasoningEffortChange,
+                                enabled = !isBusy
                             )
                         }
-
-                        // 元数据未命中时（如中转站改了模型名）退回全部档位由用户自选：
-                        // 这类模型可能强制开启推理，隐藏按钮会导致无法调档。
-                        val availableEfforts = remember(activeProvider, modelMetadata) {
-                            activeProvider?.let { provider ->
-                                modelMetadata[modelMetadataKey(provider.id, provider.effectiveModel)]?.reasoningEffortOptions
-                                    ?.let { ReasoningEffort.fromValues(it) }
-                            }.orEmpty().ifEmpty { ReasoningEffort.entries }
-                        }
-                        ReasoningEffortSelector(
-                            effort = reasoningEffort,
-                            availableEfforts = availableEfforts,
-                            onChange = onReasoningEffortChange,
-                            enabled = !isBusy
+                        UploadIconButton(
+                            enabled = !isBusy,
+                            icon = FeatherIcons.Mic,
+                            contentDescription = stringResource(R.string.chat_voice_input),
+                            onClick = onVoiceInput
                         )
+                        UploadIconButton(
+                            enabled = !isBusy,
+                            icon = FeatherIcons.Plus,
+                            contentDescription = stringResource(R.string.chat_add_attachment),
+                            onClick = { showAttachmentSheet = true }
+                        )
+                        SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, tokenEstimated = tokenEstimated, onSend = onSend, onStop = onStop)
                     }
-                    UploadIconButton(
-                        enabled = !isBusy,
-                        icon = FeatherIcons.Mic,
-                        contentDescription = stringResource(R.string.chat_voice_input),
-                        onClick = onVoiceInput
+                }
+
+                if (isBusy) {
+                    TaskProgressBorder(
+                        modifier = Modifier.matchParentSize(),
+                        progress = if (todoItems.isEmpty()) {
+                            null
+                        } else {
+                            todoItems.count { it.status == TodoStatus.COMPLETED }.toFloat() / todoItems.size
+                        },
+                        nodes = progressNodes,
+                        cornerRadius = Radius.lg,
+                        activeColor = MaterialTheme.colorScheme.primary,
+                        completedColor = MaterialTheme.semanticColors.success,
+                        pendingColor = MaterialTheme.colorScheme.outlineVariant,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                        onNodeClick = { progressTipIndex = it; progressTipTick++ }
                     )
-                    UploadIconButton(
-                        enabled = !isBusy,
-                        icon = FeatherIcons.Plus,
-                        contentDescription = stringResource(R.string.chat_add_attachment),
-                        onClick = { showAttachmentSheet = true }
-                    )
-                    SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, tokenEstimated = tokenEstimated, onSend = onSend, onStop = onStop)
+                    progressTipIndex?.let { tip ->
+                        progressNodes.getOrNull(tip)?.takeIf { it.label.isNotBlank() }?.let { node ->
+                            Surface(
+                                shape = RoundedCornerShape(Radius.sm),
+                                color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.92f),
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .offset(y = (-40).dp)
+                                    .zIndex(1f)
+                            ) {
+                                Text(
+                                    text = node.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
