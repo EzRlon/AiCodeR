@@ -21,8 +21,8 @@ import RFB from './core/rfb.js';
 
 const zh = (navigator.language || '').toLowerCase().startsWith('zh');
 const TEXT = zh
-  ? { connecting: '正在连接 VNC…', waiting: '正在等待容器图形服务…', clean: '连接已断开，点标题栏刷新可重连' }
-  : { connecting: 'Connecting to VNC…', waiting: 'Waiting for container graphics service…', clean: 'Disconnected' };
+  ? { connecting: '正在连接 VNC…', reconnecting: '服务未就绪或连接已断开，将自动重试…' }
+  : { connecting: 'Connecting to VNC…', reconnecting: 'Service not ready or disconnected, retrying…' };
 
 const statusEl = document.getElementById('status');
 let rfb = null;
@@ -47,12 +47,13 @@ window.vncTryConnect = function () {
       const b = bridge();
       if (b) b.onVncStatus('connected');
     });
-    rfb.addEventListener('disconnect', (e) => {
-      const clean = !!(e.detail && e.detail.clean);
-      setStatus(clean ? TEXT.clean : TEXT.waiting);
+    rfb.addEventListener('disconnect', () => {
       rfb = null;
       const b = bridge();
       if (b) b.onVncStatus('disconnected');
+      // 无限定时重试：服务未拉起时连接会被拒绝，拉起后即自动恢复画面。
+      setStatus(TEXT.reconnecting);
+      setTimeout(() => window.vncTryConnect(), 2000);
     });
     rfb.addEventListener('clipboard', (e) => {
       const b = bridge();

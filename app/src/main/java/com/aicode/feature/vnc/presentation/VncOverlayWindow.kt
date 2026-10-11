@@ -1,6 +1,7 @@
 package com.aicode.feature.vnc.presentation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,12 +10,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -24,15 +25,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
@@ -46,8 +49,8 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.vnc.domain.VncServiceState
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.ChevronDown
+import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Lock
 import compose.icons.feathericons.Maximize2
 import compose.icons.feathericons.Minimize2
@@ -183,6 +186,13 @@ private fun VncWindowSurface(
                 onConnectedChange = viewModel::setConnected,
                 modifier = Modifier.fillMaxSize(),
             )
+            if (!fullscreen && !window.pinned) {
+                ResizeCornerHandle(
+                    onResize = { dx, dy -> viewModel.resizeBy(dx, dy) },
+                    onResizeEnd = viewModel::persistGeometry,
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                )
+            }
             val failed = serviceState as? VncServiceState.Failed
             if (failed != null) {
                 Column(
@@ -307,6 +317,42 @@ private fun VncTitleAction(
             },
             modifier = Modifier.size(18.dp),
         )
+    }
+}
+
+/** 右下角缩放手柄：拖动改变小窗尺寸；视觉为双斜线的经典拖角标记。 */
+@Composable
+private fun ResizeCornerHandle(
+    onResize: (Float, Float) -> Unit,
+    onResizeEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val handleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    Box(
+        modifier = modifier
+            .size(28.dp)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        onResize(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
+                    },
+                    onDragEnd = onResizeEnd,
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.size(12.dp)) {
+            val strokeWidth = 1.5.dp.toPx()
+            drawLine(handleColor, Offset(size.width, 0f), Offset(0f, size.height), strokeWidth, StrokeCap.Round)
+            drawLine(
+                handleColor,
+                Offset(size.width, size.height * 0.45f),
+                Offset(size.width * 0.45f, size.height),
+                strokeWidth,
+                StrokeCap.Round,
+            )
+        }
     }
 }
 

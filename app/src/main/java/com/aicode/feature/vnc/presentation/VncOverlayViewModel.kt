@@ -8,10 +8,12 @@ import com.aicode.feature.vnc.domain.VncServiceState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -19,7 +21,8 @@ import kotlinx.coroutines.launch
 
 /**
  * VNC 悬浮小窗的状态中枢：窗口几何/钉住/最小化/全屏 + 容器服务状态 + 自动弹出轮询。
- * 作用域为聊天页 NavBackStackEntry（与 WorkbenchPane 同惯例），离开聊天页轮询随之停止；
+ * 作用域为聊天页 NavBackStackEntry（与 WorkbenchPane 同惯例）；轮询在聊天页存续期间运行
+ * （导航入栈或退后台时每 5s 一次容器内 pgrep，开销极小，本地模式之外直接短路）；
  * 几何与钉住状态经 DataStore 跨会话记忆，手动收起后 [AUTO_POPUP_COOLDOWN_MS] 内不再自动弹出。
  */
 @HiltViewModel
@@ -45,6 +48,9 @@ class VncOverlayViewModel @Inject constructor(
     val window: StateFlow<WindowState> = _window.asStateFlow()
 
     val serviceState: StateFlow<VncServiceState> = serviceController.state
+
+    /** 悬浮小窗是否可用（仅本地容器模式），随执行模式切换更新。 */
+    val supported: Flow<Boolean> = serviceController.supported
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -83,7 +89,13 @@ class VncOverlayViewModel @Inject constructor(
                 delay(PROBE_INTERVAL_MS)
                 if (_window.value.visible) continue
                 if (System.currentTimeMillis() < autoPopupBlockedUntilMs) continue
-                val running = runCatching { serviceController.probeRunning() }.getOrDefault(false)
+                val running = try {
+                    serviceController.probeRunning()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    false
+                }
                 if (running) show()
             }
         }

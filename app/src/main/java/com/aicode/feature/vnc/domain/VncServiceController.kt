@@ -6,9 +6,11 @@ import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -25,8 +27,9 @@ sealed interface VncServiceState {
  *
  * 仅本地 PRoot 容器模式可用：PRoot 与 App 共享网络命名空间，App 内 WebView 直接连
  * 127.0.0.1:6080 即可拿到容器画面；远程 SSH 模式下 127.0.0.1 是服务器侧，画面回不到手机。
- * 显示器与端口沿用 mcp 浏览器链路的既有约定（:1 / 5901 / 6080），两者共存时复用同一画面源。
+ * 端口约定（Xvfb :1 / x11vnc :5901 / websockify :6080）与容器内其他图形工具链路兼容，避免端口冲突；
  * Xvfb -nolock 与 x11vnc -noshm 是 PRoot 环境的硬性参数（无 /tmp 锁文件与 SysV shm）。
+ * websockify 与 x11vnc 均只绑本机回环，画面流不暴露给局域网。
  */
 @Singleton
 class VncServiceController @Inject constructor(
@@ -38,7 +41,11 @@ class VncServiceController @Inject constructor(
 
     private val ensureMutex = Mutex()
 
-    /** 悬浮小窗是否可用：仅本地容器模式支持。 */
+    /** 悬浮小窗是否可用：仅本地容器模式支持；随执行模式切换更新，供 UI 可观察订阅。 */
+    val supported: Flow<Boolean> = executionModeHolder.mode
+        .map { it == ExecutionMode.LOCAL_PROOT }
+
+    /** 同步版判断，供轮询等非组合上下文使用。 */
     fun isSupported(): Boolean =
         executionModeHolder.currentMode() == ExecutionMode.LOCAL_PROOT
 
@@ -88,7 +95,7 @@ class VncServiceController @Inject constructor(
             sleep 1
             pgrep -f "[x]11vnc" >/dev/null 2>&1 || (nohup x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet >/dev/null 2>&1 &)
             sleep 1
-            pgrep -f "[w]ebsockify" >/dev/null 2>&1 || (nohup websockify 6080 localhost:5901 >/dev/null 2>&1 &)
+            pgrep -f "[w]ebsockify" >/dev/null 2>&1 || (nohup websockify localhost:6080 localhost:5901 >/dev/null 2>&1 &)
             i=0
             while [ ${'$'}i -lt 15 ]; do
                 pgrep -f "[w]ebsockify" >/dev/null 2>&1 && echo $READY_MARKER && exit 0

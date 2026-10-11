@@ -30,8 +30,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -209,7 +209,8 @@ private fun WorkbenchIconButton(
 @Composable
 private fun VncHeaderIconButton() {
     val viewModel: VncOverlayViewModel = hiltViewModel()
-    if (!viewModel.isSupported()) return
+    val supported by viewModel.supported.collectAsStateWithLifecycle(initialValue = true)
+    if (!supported) return
     val window by viewModel.window.collectAsStateWithLifecycle()
     val overlayOpen = window.visible && !window.minimized
     Box(

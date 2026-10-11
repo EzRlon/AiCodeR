@@ -1663,7 +1663,6 @@
     <string name="browser_dialog_prompt_title">网页输入</string>
 
     <string name="vnc_toggle_window">VNC 悬浮窗</string>
-    <string name="vnc_window_title">VNC 画面</string>
     <string name="vnc_status_connecting">正在连接…</string>
     <string name="vnc_status_preparing">正在准备容器图形服务…</string>
     <string name="vnc_status_ready">已连接</string>

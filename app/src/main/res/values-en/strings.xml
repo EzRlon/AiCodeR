@@ -1664,7 +1664,6 @@
     <string name="browser_dialog_prompt_title">Page Input</string>
 
     <string name="vnc_toggle_window">VNC mini window</string>
-    <string name="vnc_window_title">VNC screen</string>
     <string name="vnc_status_connecting">Connecting…</string>
     <string name="vnc_status_preparing">Preparing container graphics service…</string>
     <string name="vnc_status_ready">Connected</string>
