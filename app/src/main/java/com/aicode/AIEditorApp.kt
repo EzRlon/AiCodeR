@@ -257,10 +257,8 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             modelMetadataService.refreshFromNetworkIfStale()
         }
-        // 启动即异步刷新仓库 providers.json 预设（12h 缓存；失败静默，兜底本地磁盘与内置 assets）。
-        appScope.launch {
-            com.aicode.feature.settings.data.local.ProviderPresetLibrary.refreshFromNetworkIfStale(this@AIEditorApp)
-        }
+        // providers.json 预设已内置化（见 ProviderPresetLibrary）：不再从官方仓库拉取，
+        // 自建分支的 models 预填字段只存在于内置数据。
         // 启动即加载持久化等级，并随设置页改动实时生效（唯一同步点）。
         appScope.launch {
             logSettings.levelFlow.collectLatest { FileLogger.setMinLevel(it) }

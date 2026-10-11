@@ -1382,13 +1382,15 @@ class SettingsViewModel @Inject constructor(
     // ── 检查更新 ──
 
     /**
-     * 检查更新。手动模式（关于页点击）不受开关与每日限制；自动模式（主页启动）
-     * 需开关开启且当天未检测过，失败时静默（不弹错误窗），无论结果都记录当天已检。
+     * 检查更新。手动模式（关于页点击）不受开关与每日限制。
+     *
+     * 自建分支：自动检查指向官方仓库发布，默认关闭（不再对官方新版本弹提示）；
+     * 手动检查保留，供用户自行比对。恢复自动检查时在 !manual 分支补回
+     * autoCheckEnabled 开关与 hasCheckedToday 每日限流即可。
      */
     fun checkUpdate(manual: Boolean) {
         if (!manual) {
-            if (!updateCheckSettingsRepository.autoCheckEnabled) return
-            if (updateCheckSettingsRepository.hasCheckedToday()) return
+            return // 自建分支禁用自动检查，避免误引导升级到官方包
         }
         if (_updateCheckState.value == UpdateCheckUiState.Checking) return
         viewModelScope.launch {
