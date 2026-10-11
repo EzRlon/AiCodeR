@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>VNC</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  #screen { width: 100%; height: 100%; }
+  #status {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #94a3b8; font: 14px/1.6 sans-serif; text-align: center; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<div id="status"></div>
+<script type="module">
+import RFB from './core/rfb.js';
+
+const zh = (navigator.language || '').toLowerCase().startsWith('zh');
+const TEXT = zh
+  ? { connecting: '正在连接 VNC…', waiting: '正在等待容器图形服务…', clean: '连接已断开，点标题栏刷新可重连' }
+  : { connecting: 'Connecting to VNC…', waiting: 'Waiting for container graphics service…', clean: 'Disconnected' };
+
+const statusEl = document.getElementById('status');
+let rfb = null;
+
+function setStatus(text) {
+  statusEl.textContent = text;
+  statusEl.style.display = text ? 'flex' : 'none';
+}
+
+function bridge() { return window.VncBridge || null; }
+
+window.vncTryConnect = function () {
+  if (rfb) return;
+  setStatus(TEXT.connecting);
+  try {
+    rfb = new RFB(document.getElementById('screen'), 'ws://127.0.0.1:6080', { shared: true });
+    rfb.scaleViewport = true;
+    rfb.resizeSession = false;
+    rfb.background = '#000000';
+    rfb.addEventListener('connect', () => {
+      setStatus('');
+      const b = bridge();
+      if (b) b.onVncStatus('connected');
+    });
+    rfb.addEventListener('disconnect', (e) => {
+      const clean = !!(e.detail && e.detail.clean);
+      setStatus(clean ? TEXT.clean : TEXT.waiting);
+      rfb = null;
+      const b = bridge();
+      if (b) b.onVncStatus('disconnected');
+    });
+    rfb.addEventListener('clipboard', (e) => {
+      const b = bridge();
+      if (b && e.detail && e.detail.text) b.pushToAndroid(e.detail.text);
+    });
+  } catch (err) {
+    setStatus((zh ? '初始化失败：' : 'Init failed: ') + err);
+    rfb = null;
+  }
+};
+
+window.vncPasteFromAndroid = function () {
+  if (!rfb) return;
+  try {
+    const b = bridge();
+    rfb.clipboardPasteFrom((b && b.getAndroidClipboard()) || '');
+  } catch (err) {
+    // 远端剪贴板同步失败不影响画面。
+  }
+};
+
+setStatus(TEXT.connecting);
+window.vncTryConnect();
+</script>
+</body>
+</html>

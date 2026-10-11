@@ -109,6 +109,8 @@ import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.presentation.TerminalViewModel
 import com.aicode.feature.terminal.presentation.component.TerminalScreen
+import com.aicode.feature.vnc.presentation.VncOverlayViewModel
+import com.aicode.feature.vnc.presentation.VncOverlayWindow
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -633,61 +635,65 @@ fun AppNavigation(
                     }
                 }
                 val paneOpen = expanded && paneKind != WorkbenchPaneKind.NONE
+                val vncOverlayViewModel: VncOverlayViewModel = hiltViewModel()
                 // 拖动把手时要把位移像素换算成分栏比例，所以记下容器实测宽度。
                 var rowWidthPx by remember { mutableIntStateOf(0) }
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .onSizeChanged { rowWidthPx = it.width }
-                ) {
-                    Box(modifier = Modifier.weight(if (paneOpen) paneSplit else 1f)) {
-                        CompositionLocalProvider(
-                            androidx.compose.ui.platform.LocalUriHandler provides fileUriHandler
-                        ) {
-                            AIChatPanel(
-                                viewModel = agentViewModel,
-                                settingsViewModel = settingsViewModel,
-                                workspaceViewModel = workspaceViewModel,
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                                showMenuButton = !permanentDrawer,
-                                onNavigateToTerminal = { openWorkbench(WorkbenchPaneKind.TERMINAL) },
-                                onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
-                                onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
-                                terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
-                                gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
-                                browserActive = paneOpen && paneKind == WorkbenchPaneKind.BROWSER,
-                                onboardingStep = if (onboardingUiState.active) onboardingUiState.step else null,
-                                onSelectModelInOnboarding = {
-                                    if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
-                                        onboardingCoordinator.nextStep()
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onSizeChanged { rowWidthPx = it.width }
+                    ) {
+                        Box(modifier = Modifier.weight(if (paneOpen) paneSplit else 1f)) {
+                            CompositionLocalProvider(
+                                androidx.compose.ui.platform.LocalUriHandler provides fileUriHandler
+                            ) {
+                                AIChatPanel(
+                                    viewModel = agentViewModel,
+                                    settingsViewModel = settingsViewModel,
+                                    workspaceViewModel = workspaceViewModel,
+                                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                                    showMenuButton = !permanentDrawer,
+                                    onNavigateToTerminal = { openWorkbench(WorkbenchPaneKind.TERMINAL) },
+                                    onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
+                                    onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
+                                    terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
+                                    gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
+                                    browserActive = paneOpen && paneKind == WorkbenchPaneKind.BROWSER,
+                                    onboardingStep = if (onboardingUiState.active) onboardingUiState.step else null,
+                                    onSelectModelInOnboarding = {
+                                        if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
+                                            onboardingCoordinator.nextStep()
+                                        }
+                                    },
+                                    onDismissModelSheetInOnboarding = {
+                                        if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
+                                            onboardingCoordinator.goToStep(OnboardingStep.OPEN_MODEL_PICKER)
+                                        }
                                     }
-                                },
-                                onDismissModelSheetInOnboarding = {
-                                    if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
-                                        onboardingCoordinator.goToStep(OnboardingStep.OPEN_MODEL_PICKER)
+                                )
+                            }
+                        }
+                        if (paneOpen) {
+                            VerticalSplitHandle(
+                                onDragDelta = { dx ->
+                                    if (rowWidthPx > 0) {
+                                        paneSplit = (paneSplit + dx / rowWidthPx)
+                                            .coerceIn(MIN_PANE_SPLIT, MAX_PANE_SPLIT)
                                     }
                                 }
                             )
+                            WorkbenchPaneContent(
+                                kind = paneKind,
+                                editorPath = paneEditorPath,
+                                editorLine = paneEditorLine,
+                                onClose = { paneKind = WorkbenchPaneKind.NONE },
+                                onOpenFile = { path -> openFile(path, 0, false) },
+                                modifier = Modifier.weight(1f - paneSplit)
+                            )
                         }
                     }
-                    if (paneOpen) {
-                        VerticalSplitHandle(
-                            onDragDelta = { dx ->
-                                if (rowWidthPx > 0) {
-                                    paneSplit = (paneSplit + dx / rowWidthPx)
-                                        .coerceIn(MIN_PANE_SPLIT, MAX_PANE_SPLIT)
-                                }
-                            }
-                        )
-                        WorkbenchPaneContent(
-                            kind = paneKind,
-                            editorPath = paneEditorPath,
-                            editorLine = paneEditorLine,
-                            onClose = { paneKind = WorkbenchPaneKind.NONE },
-                            onOpenFile = { path -> openFile(path, 0, false) },
-                            modifier = Modifier.weight(1f - paneSplit)
-                        )
-                    }
+                    VncOverlayWindow(viewModel = vncOverlayViewModel)
                 }
             }
             composable("settings") {

@@ -1662,4 +1662,21 @@
     <string name="browser_dialog_alert_title">Page Alert</string>
     <string name="browser_dialog_confirm_title">Page Confirmation</string>
     <string name="browser_dialog_prompt_title">Page Input</string>
+
+    <string name="vnc_toggle_window">VNC mini window</string>
+    <string name="vnc_window_title">VNC screen</string>
+    <string name="vnc_status_connecting">Connecting…</string>
+    <string name="vnc_status_preparing">Preparing container graphics service…</string>
+    <string name="vnc_status_ready">Connected</string>
+    <string name="vnc_status_failed">Failed to start service</string>
+    <string name="vnc_pin">Pin window (fix position)</string>
+    <string name="vnc_unpin">Unpin window</string>
+    <string name="vnc_paste">Paste clipboard into VNC</string>
+    <string name="vnc_minimize">Minimize to floating ball</string>
+    <string name="vnc_fullscreen">Fullscreen</string>
+    <string name="vnc_exit_fullscreen">Exit fullscreen</string>
+    <string name="vnc_close">Close window</string>
+    <string name="vnc_retry">Retry</string>
+    <string name="vnc_minimized_ball">VNC window (minimized, tap to restore)</string>
+    <string name="vnc_failed_hint">Failed to start the VNC service in the container. Check container network and retry.</string>
 </resources>

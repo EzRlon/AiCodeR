@@ -4,7 +4,9 @@ import android.os.Build
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,11 +25,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,10 +48,12 @@ import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
+import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Menu
+import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Terminal
 
@@ -122,6 +128,7 @@ internal fun ChatHeader(
                         )
                     }
                 }
+                VncHeaderIconButton()
                 IconButton(onClick = onNewChat) {
                     Icon(
                         FeatherIcons.Plus,
@@ -188,6 +195,50 @@ private fun WorkbenchIconButton(
                 icon,
                 contentDescription = contentDescription,
                 tint = if (active) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+/** 顶栏 VNC 悬浮小窗入口：单击弹出，双击收起；小窗开着时高亮（同工作台按钮的 active 态）。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VncHeaderIconButton() {
+    val viewModel: VncOverlayViewModel = hiltViewModel()
+    if (!viewModel.isSupported()) return
+    val window by viewModel.window.collectAsStateWithLifecycle()
+    val overlayOpen = window.visible && !window.minimized
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .combinedClickable(
+                onClick = viewModel::onHeaderSingleTap,
+                onDoubleClick = viewModel::onHeaderDoubleTap,
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .then(
+                    if (overlayOpen) {
+                        Modifier
+                            .clip(RoundedCornerShape(Radius.sm))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                    } else {
+                        Modifier
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                FeatherIcons.Monitor,
+                contentDescription = stringResource(R.string.vnc_toggle_window),
+                tint = if (overlayOpen) {
                     MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
