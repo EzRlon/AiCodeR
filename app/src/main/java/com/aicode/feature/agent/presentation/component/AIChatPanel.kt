@@ -1,8 +1,10 @@
 package com.aicode.feature.agent.presentation.component
 
 import android.content.ClipData
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -530,6 +532,7 @@ fun AIChatPanel(
     onNavigateToTerminal: () -> Unit = {},
     onNavigateToGit: () -> Unit = {},
     onNavigateToBrowser: () -> Unit = {},
+    onNavigateToAgents: () -> Unit = {},
     settingsViewModel: SettingsViewModel? = null,
     workspaceViewModel: WorkspaceViewModel? = null,
     onOpenDrawer: () -> Unit,
@@ -619,6 +622,14 @@ fun AIChatPanel(
     // 输入 "/" 打开命令菜单时重扫技能，反映磁盘上技能的增删改。
     LaunchedEffect(inputText) {
         if (inputText == "/") viewModel.refreshSlashCommands()
+    }
+    // 外部分享进来的文本：会话就绪后合并进输入框草稿（无会话时暂存在 ViewModel 里等待）。
+    val pendingExternalText by viewModel.pendingExternalText.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingExternalText, currentSessionId) {
+        val text = pendingExternalText ?: return@LaunchedEffect
+        if (currentSessionId.isNullOrBlank()) return@LaunchedEffect
+        viewModel.updateInputDraft(if (inputText.isBlank()) text else "$inputText\n\n$text")
+        viewModel.consumePendingExternalText()
     }
     var pendingAttachments by remember { mutableStateOf<List<PendingUploadAttachment>>(emptyList()) }
     var uploadingCount by remember { mutableStateOf(0) }
@@ -931,6 +942,24 @@ fun AIChatPanel(
         }
         cameraPhotoUri = uri
         takePictureLauncher.launch(uri)
+    }
+
+    // 语音输入：发系统语音识别 Intent（免 RECORD_AUDIO 权限），识别文本追加进输入框草稿。
+    val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@rememberLauncherForActivityResult
+        viewModel.updateInputDraft(if (inputText.isBlank()) text else "$inputText $text")
+    }
+    fun launchVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.chat_voice_prompt))
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            Toast.makeText(context, context.getString(R.string.chat_voice_unavailable), Toast.LENGTH_SHORT).show()
+            return
+        }
+        speechLauncher.launch(intent)
     }
 
     // 缓冲流式文本与思考过程：流式期间跟随 streamingText / streamingReasoning；流式刚结束而数据库尚未完成派发期间（messages 末尾仍是 USER/TOOL 消息），
@@ -1420,6 +1449,7 @@ fun AIChatPanel(
                 onNavigateToTerminal = onNavigateToTerminal,
                 onNavigateToGit = onNavigateToGit,
                 onNavigateToBrowser = onNavigateToBrowser,
+                onNavigateToAgents = onNavigateToAgents,
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
                 connectionState = connectionState?.takeIf { isRemote },
@@ -1650,6 +1680,7 @@ fun AIChatPanel(
                     )
                 },
                 onTakePhoto = ::takePhoto,
+                onVoiceInput = { launchVoiceInput() },
                 slashCommands = slashCommands,
                 fileMentionState = fileMentionState,
                 onFileMentionOpen = viewModel::requestFileMention,
@@ -1774,6 +1805,17 @@ fun AIChatPanel(
                     onCopyClick = {
                         copyScope.launch {
                             clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content)))
+                        }
+                    },
+                    onShareClick = {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, message.content)
+                        }
+                        runCatching {
+                            context.startActivity(Intent.createChooser(send, context.getString(R.string.chat_action_share)))
+                        }.onFailure {
+                            Toast.makeText(context, context.getString(R.string.chat_share_failed), Toast.LENGTH_SHORT).show()
                         }
                     },
                     onDeleteClick = { viewModel.deleteMessage(message.id) }

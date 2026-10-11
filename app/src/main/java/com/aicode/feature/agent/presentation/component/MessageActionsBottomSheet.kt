@@ -31,6 +31,7 @@ import com.aicode.feature.agent.presentation.hasVisibleContent
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Edit2
+import compose.icons.feathericons.Share2
 import compose.icons.feathericons.Trash2
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +41,7 @@ internal fun MessageActionsBottomSheet(
     onDismiss: () -> Unit,
     onEditClick: () -> Unit,
     onCopyClick: () -> Unit,
+    onShareClick: () -> Unit = {},
     onDeleteClick: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -82,6 +84,14 @@ internal fun MessageActionsBottomSheet(
                     onClick = {
                         onDismiss()
                         onCopyClick()
+                    }
+                )
+                MessageActionItem(
+                    icon = FeatherIcons.Share2,
+                    title = stringResource(R.string.chat_action_share),
+                    onClick = {
+                        onDismiss()
+                        onShareClick()
                     }
                 )
             }

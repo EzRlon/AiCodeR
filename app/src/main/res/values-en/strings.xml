@@ -363,6 +363,26 @@
     <string name="chat_open_sidebar">Open sidebar</string>
     <string name="chat_add_attachment">Add attachment</string>
     <string name="chat_take_photo">Take photo</string>
+    <string name="chat_voice_input">Voice input</string>
+    <string name="chat_voice_prompt">Speak now</string>
+    <string name="chat_voice_unavailable">No speech recognition service available</string>
+
+    <!-- AI agents (terminal CLI) -->
+    <string name="agent_cli_sheet_title">AI Agents</string>
+    <string name="agent_cli_sheet_subtitle">Run AI coding CLIs in the container terminal; installation and login all happen in the terminal</string>
+    <string name="agent_cli_checking">Checking…</string>
+    <string name="agent_cli_installing">Installing…</string>
+    <string name="agent_cli_installed">Installed %1$s</string>
+    <string name="agent_cli_not_installed">Not installed</string>
+    <string name="agent_cli_install">Install</string>
+    <string name="agent_cli_reinstall">Reinstall</string>
+    <string name="agent_cli_launch">Launch</string>
+    <string name="agent_cli_action_failed">Action failed: %1$s</string>
+    <string name="agent_cli_install_failed">Install failed (exit code %1$d). Switch to the terminal for details and retry</string>
+    <string name="agent_cli_install_hint">Installation runs npm in a new terminal tab — switch to the terminal anytime to see progress. If npm is missing you will be asked to install Node.js first (run aicode in the terminal).</string>
+    <string name="agent_cli_login_claude">First run: copy the login URL into your mobile browser, sign in, then paste the auth code back into the terminal.</string>
+    <string name="agent_cli_login_codex">First run: follow the prompt to sign in via browser, or use codex login.</string>
+    <string name="agent_cli_login_opencode">First run: type /auth to pick a provider and paste your API key.</string>
     <string name="chat_reasoning_effort">Reasoning effort</string>
     <string name="chat_reasoning_effort_none">None</string>
     <string name="chat_reasoning_effort_minimal">Minimal</string>
@@ -1498,6 +1518,9 @@
     <string name="chat_more_options">More Options</string>
     <string name="chat_action_edit">Edit Message</string>
     <string name="chat_action_copy">Copy Text</string>
+    <string name="chat_action_share">Share</string>
+    <string name="chat_share_failed">Share failed</string>
+    <string name="chat_shared_text_queued">Content received; it will be added to the input box</string>
     <string name="chat_action_delete">Delete Message</string>
     <string name="chat_edit_dialog_title">Edit Message</string>
     <string name="chat_edit_dialog_hint">Enter message content</string>

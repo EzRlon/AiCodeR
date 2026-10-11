@@ -50,6 +50,7 @@ import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Box
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Menu
@@ -68,6 +69,7 @@ internal fun ChatHeader(
     onNavigateToTerminal: () -> Unit,
     onNavigateToGit: () -> Unit,
     onNavigateToBrowser: () -> Unit = {},
+    onNavigateToAgents: () -> Unit = {},
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     connectionState: com.aicode.feature.agent.domain.container.ConnectionState? = null,
@@ -140,6 +142,12 @@ internal fun ChatHeader(
                     contentDescription = stringResource(R.string.chat_open_git),
                     active = gitActive,
                     onClick = onNavigateToGit
+                )
+                WorkbenchIconButton(
+                    icon = FeatherIcons.Box,
+                    contentDescription = stringResource(R.string.agent_cli_sheet_title),
+                    active = false,
+                    onClick = onNavigateToAgents
                 )
                 WorkbenchIconButton(
                     icon = FeatherIcons.Terminal,

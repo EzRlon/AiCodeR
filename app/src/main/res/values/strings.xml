@@ -363,6 +363,26 @@
     <string name="chat_open_sidebar">打开侧边栏</string>
     <string name="chat_add_attachment">添加附件</string>
     <string name="chat_take_photo">拍照</string>
+    <string name="chat_voice_input">语音输入</string>
+    <string name="chat_voice_prompt">请说话</string>
+    <string name="chat_voice_unavailable">未找到可用的语音识别服务</string>
+
+    <!-- AI 智能体（终端 CLI） -->
+    <string name="agent_cli_sheet_title">AI 智能体</string>
+    <string name="agent_cli_sheet_subtitle">在容器终端里运行 AI CLI 编程助手，安装与登录都在终端里完成</string>
+    <string name="agent_cli_checking">检测中…</string>
+    <string name="agent_cli_installing">安装中…</string>
+    <string name="agent_cli_installed">已装 %1$s</string>
+    <string name="agent_cli_not_installed">未安装</string>
+    <string name="agent_cli_install">安装</string>
+    <string name="agent_cli_reinstall">重装</string>
+    <string name="agent_cli_launch">启动</string>
+    <string name="agent_cli_action_failed">操作失败：%1$s</string>
+    <string name="agent_cli_install_failed">安装失败（退出码 %1$d），可切到终端查看输出后重试</string>
+    <string name="agent_cli_install_hint">安装在新终端标签里执行 npm，可随时切到终端查看进度；npm 未就绪时会提示先安装 Node.js 环境（终端内执行 aicode）。</string>
+    <string name="agent_cli_login_claude">首次使用：启动后按提示复制登录网址到手机浏览器完成登录，再把授权码粘贴回终端。</string>
+    <string name="agent_cli_login_codex">首次使用：启动后按提示完成浏览器登录，或用 codex login 登录账号。</string>
+    <string name="agent_cli_login_opencode">首次使用：启动后输入 /auth 选择供应商并粘贴 API Key。</string>
     <string name="chat_reasoning_effort">思考强度</string>
     <string name="chat_reasoning_effort_none">不思考</string>
     <string name="chat_reasoning_effort_minimal">极低</string>
@@ -1497,6 +1517,9 @@
     <string name="chat_more_options">更多选项</string>
     <string name="chat_action_edit">编辑消息</string>
     <string name="chat_action_copy">复制文本</string>
+    <string name="chat_action_share">分享</string>
+    <string name="chat_share_failed">分享失败</string>
+    <string name="chat_shared_text_queued">内容已收到，将填入输入框</string>
     <string name="chat_action_delete">删除消息</string>
     <string name="chat_edit_dialog_title">编辑消息</string>
     <string name="chat_edit_dialog_hint">请输入消息内容</string>

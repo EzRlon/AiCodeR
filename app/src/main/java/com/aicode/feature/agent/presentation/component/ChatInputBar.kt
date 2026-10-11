@@ -116,6 +116,7 @@ import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Maximize
+import compose.icons.feathericons.Mic
 import compose.icons.feathericons.Minimize
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Square
@@ -162,6 +163,7 @@ internal fun ChatInputBar(
     onUploadFile: () -> Unit,
     onUploadImage: () -> Unit,
     onTakePhoto: () -> Unit,
+    onVoiceInput: () -> Unit = {},
     slashCommands: List<SlashCommand> = emptyList(),
     fileMentionState: FileMentionState = FileMentionState.Idle,
     onFileMentionOpen: () -> Unit = {},
@@ -611,6 +613,12 @@ internal fun ChatInputBar(
                             enabled = !isBusy
                         )
                     }
+                    UploadIconButton(
+                        enabled = !isBusy,
+                        icon = FeatherIcons.Mic,
+                        contentDescription = stringResource(R.string.chat_voice_input),
+                        onClick = onVoiceInput
+                    )
                     UploadIconButton(
                         enabled = !isBusy,
                         icon = FeatherIcons.Plus,

@@ -267,6 +267,19 @@ class AIAgentViewModel @Inject constructor(
         draftPrefs.edit().remove(id).apply()
     }
 
+    /** 外部投递进来的文本（系统分享等）：会话未就绪时先暂存，聊天面板在会话就绪后消费并合并进输入草稿。 */
+    private val _pendingExternalText = MutableStateFlow<String?>(null)
+    val pendingExternalText: StateFlow<String?> = _pendingExternalText.asStateFlow()
+
+    fun queueExternalText(text: String) {
+        val existing = _pendingExternalText.value
+        _pendingExternalText.value = if (existing.isNullOrBlank()) text else "$existing\n\n$text"
+    }
+
+    fun consumePendingExternalText() {
+        _pendingExternalText.value = null
+    }
+
     /**
      * 工具调用（分组头与单条工具卡片）的手动展开态：key = 分组 key（`toolgroup:<组内首条消息 id>`）
      * 或单条消息 id。

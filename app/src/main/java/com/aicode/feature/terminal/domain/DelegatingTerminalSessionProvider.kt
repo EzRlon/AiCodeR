@@ -3,6 +3,7 @@ package com.aicode.feature.terminal.domain
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +27,9 @@ class DelegatingTerminalSessionProvider @Inject constructor(
     override val tabFinishedEvents: SharedFlow<TabFinishedEvent>
         get() = delegate().tabFinishedEvents
 
+    override val tabs: StateFlow<List<TerminalTab>>
+        get() = delegate().tabs
+
     override suspend fun startBackgroundCommand(
         command: String,
         title: String?,
@@ -45,6 +49,8 @@ class DelegatingTerminalSessionProvider @Inject constructor(
     override fun getTabOutput(id: String): String? = delegate().getTabOutput(id)
 
     override fun listTabs(): List<TabInfo> = delegate().listTabs()
+
+    override fun activate(id: String) = delegate().activate(id)
 
     override fun closeTab(id: String): Boolean = delegate().closeTab(id)
 }

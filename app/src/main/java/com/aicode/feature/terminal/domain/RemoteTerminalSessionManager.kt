@@ -38,7 +38,7 @@ class RemoteTerminalSessionManager @Inject constructor(
 ) : TerminalSessionProvider {
 
     private val _tabs = MutableStateFlow<List<TerminalTab>>(emptyList())
-    val tabs: StateFlow<List<TerminalTab>> = _tabs.asStateFlow()
+    override val tabs: StateFlow<List<TerminalTab>> = _tabs.asStateFlow()
 
     private val _activeTabId = MutableStateFlow<String?>(null)
     val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
@@ -191,7 +191,7 @@ class RemoteTerminalSessionManager @Inject constructor(
         return true
     }
 
-    fun activate(id: String) {
+    override fun activate(id: String) {
         if (_tabs.value.any { it.id == id }) _activeTabId.value = id
     }
 

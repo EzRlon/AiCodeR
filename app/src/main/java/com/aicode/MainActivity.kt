@@ -1,6 +1,7 @@
 package com.aicode
 
 import android.os.Build
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -77,6 +79,7 @@ import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.AIChatPanel
+import com.aicode.feature.agent.presentation.component.AgentCliSheet
 import com.aicode.feature.agent.presentation.component.ChatDrawerContent
 import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
@@ -182,6 +185,8 @@ class MainActivity : ComponentActivity() {
         // 绘制到系统状态栏/导航栏之下，让应用背景与系统栏融为一体（消除割裂的色块）。
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        handleSendTextIntent(this, intent)
 
         // 挂载离屏 WebView 隐藏宿主，确保后台/离屏状态下 WebView 也能触发 onAttachedToWindow 完成首帧真实光栅化渲染
         val hiddenHost = android.widget.FrameLayout(this).apply {
@@ -316,6 +321,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         browserManager.detachHiddenHost()
         super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleSendTextIntent(this, intent)
     }
 
 }
@@ -461,6 +471,8 @@ fun AppNavigation(
     var paneEditorPath by rememberSaveable { mutableStateOf("") }
     var paneEditorLine by rememberSaveable { mutableIntStateOf(0) }
     var paneSplit by rememberSaveable { mutableFloatStateOf(DEFAULT_PANE_SPLIT) }
+    // AI 智能体（终端 CLI）管理弹层：顶栏入口打开，启动后自动切到终端看会话。
+    var showAgentCliSheet by rememberSaveable { mutableStateOf(false) }
 
     // 右栏打开时返回键先收起它。限定聊天页：其他页面右栏不渲染，不能在那里吞掉返回事件。
     BackHandler(
@@ -657,6 +669,7 @@ fun AppNavigation(
                                     onNavigateToTerminal = { openWorkbench(WorkbenchPaneKind.TERMINAL) },
                                     onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
                                     onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
+                                    onNavigateToAgents = { showAgentCliSheet = true },
                                     terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
                                     gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
                                     browserActive = paneOpen && paneKind == WorkbenchPaneKind.BROWSER,
@@ -694,6 +707,16 @@ fun AppNavigation(
                         }
                     }
                     VncOverlayWindow(viewModel = vncOverlayViewModel)
+
+                    if (showAgentCliSheet) {
+                        AgentCliSheet(
+                            onDismiss = { showAgentCliSheet = false },
+                            onLaunched = {
+                                showAgentCliSheet = false
+                                openWorkbench(WorkbenchPaneKind.TERMINAL)
+                            }
+                        )
+                    }
                 }
             }
             composable("settings") {
@@ -992,6 +1015,19 @@ fun AppNavigation(
 /** 侧边栏文件页写操作失败提示（新建 / 重命名 / 删除共用）。 */
 private fun toastFileOpFailed(context: android.content.Context, messageRes: Int) {
     Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT).show()
+}
+
+/**
+ * 系统分享进（ACTION_SEND text/plain）：把外部分享的文本暂存到会话 ViewModel，
+ * 聊天面板在会话就绪后合并进输入框草稿。冷启动在 onCreate 投递，热启动在 onNewIntent 投递。
+ */
+private fun handleSendTextIntent(activity: MainActivity, intent: Intent?) {
+    if (intent?.action != Intent.ACTION_SEND) return
+    if (intent.type != null && intent.type != "text/plain") return
+    val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: return
+    val viewModel = ViewModelProvider(activity)[AIAgentViewModel::class.java]
+    viewModel.queueExternalText(text)
+    Toast.makeText(activity, activity.getString(R.string.chat_shared_text_queued), Toast.LENGTH_SHORT).show()
 }
 
 /**
