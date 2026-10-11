@@ -168,12 +168,16 @@ android {
     }
 
     buildTypes {
-        // debug 加包名后缀 .debug → applicationId 变 com.aicode.debug，与 release（com.aicode）
-        // 可同机共存、互不覆盖。IDE 跑 debug 不再因签名不同卸载已装的正式版。
-        // 注意：因 applicationId 不同，debug 变体私有目录为 /data/data/com.aicode.debug/，
-        // release 已解压的容器 rootfs 与工作区项目在 debug 下不可见（需重新解压/clone），属预期隔离行为。
+        // debug 双槽策略：稳定槽（默认）包名后缀 .debug，开发槽（-Pchannel=dev）后缀 .dev。
+        // 两个包名可同机共存、数据互相隔离——大改建滚动开发期的新版崩坏不影响已验收的稳定槽。
+        // 滚动规则：验收通过的版本装/归档到稳定槽；开发期构建一律 -Pchannel=dev 装 .dev 槽。
+        // 注意：因 applicationId 不同，变体私有目录隔离，容器 rootfs 与工作区项目互不可见（需重新解压/clone），属预期行为。
         debug {
-            applicationIdSuffix = ".debug"
+            val devChannel = providers.gradleProperty("channel").orElse("stable").get() == "dev"
+            applicationIdSuffix = if (devChannel) ".dev" else ".debug"
+            if (devChannel) {
+                versionNameSuffix = "-dev"
+            }
         }
         release {
             isMinifyEnabled = true

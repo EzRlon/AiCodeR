@@ -33,3 +33,5 @@ log-*.txt
 # Python（模型数据更新脚本）
 __pycache__/
 *.pyc
+# 本地 APK 归档（不进 git）
+archive/
