@@ -48,6 +48,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,12 +74,18 @@ import com.aicode.R
 import com.aicode.feature.agent.domain.mcp.McpScope
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
+import com.aicode.feature.agent.domain.memory.Memory
+import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.presentation.component.MarkdownContent
 import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
 import com.aicode.feature.backup.presentation.BackupScreen
+import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.schedule.domain.TaskSchedule
+import com.aicode.feature.schedule.presentation.component.ScheduledTaskEditorScreen
+import com.aicode.feature.schedule.presentation.component.ScheduledTasksSection
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.BackgroundSettingsRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
@@ -95,6 +102,7 @@ import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.BarChart2
 import compose.icons.feathericons.Book
 import compose.icons.feathericons.BookOpen
+import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
 import compose.icons.feathericons.Cpu
@@ -151,11 +159,15 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Prompts(R.string.prompts_title),
     PromptDetail(R.string.prompts_title),
     PromptEditor(R.string.prompts_title),
+    Memory(R.string.settings_memory),
+    MemoryEditor(R.string.settings_memory),
     SkillDetail(R.string.settings_skills),
     SkillEditor(R.string.settings_skills),
     SubAgents(R.string.settings_subagents),
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
+    ScheduledTasks(R.string.schedule_title),
+    ScheduledTaskEditor(R.string.schedule_title),
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
     Proxy(R.string.proxy_title),
@@ -184,6 +196,8 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.SubAgentEditor,
     SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
+    SettingsSection.MemoryEditor,
+    SettingsSection.ScheduledTaskEditor,
     SettingsSection.PromptDetail,
     SettingsSection.SkillDetail,
     SettingsSection.SubAgentDetail,
@@ -349,6 +363,13 @@ fun SettingsScreen(
     var showPromptsAnnouncement by remember { mutableStateOf(false) }
     // 编辑页返回目标：从详情进就回详情，从列表「+」进就回列表。
     var promptEditorReturn by remember { mutableStateOf(SettingsSection.Prompts) }
+    // 记忆编辑目标：null 表示新建；非 null 时指向被编辑的记忆（含作用域）。
+    var memoryEditTarget by remember { mutableStateOf<Memory?>(null) }
+    // 每次进入记忆编辑页递增：用作 composition key，避免 AnimatedContent 按 section 恢复上一次的初值。
+    var memoryEditorSession by remember { mutableStateOf(0) }
+    // 定时任务编辑目标：null 表示新建；同样用递增 session 隔离初值。
+    var scheduleEditTarget by remember { mutableStateOf<ScheduledTask?>(null) }
+    var scheduleEditorSession by remember { mutableStateOf(0) }
     // 技能编辑目标：null 表示新建一个；编辑现有技能时指向被编辑的条目。
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
@@ -398,6 +419,8 @@ fun SettingsScreen(
         SettingsSection.SkillDetail -> SettingsSection.Skills
         SettingsSection.PromptEditor -> promptEditorReturn
         SettingsSection.PromptDetail -> SettingsSection.Prompts
+        SettingsSection.MemoryEditor -> SettingsSection.Memory
+        SettingsSection.ScheduledTaskEditor -> SettingsSection.ScheduledTasks
         SettingsSection.SkillEditor -> skillEditorReturn
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
@@ -607,6 +630,49 @@ fun SettingsScreen(
                 )
             }
 
+            current == SettingsSection.MemoryEditor -> {
+                val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val memoryState by memoryViewModel.state.collectAsStateWithLifecycle()
+                val target = memoryEditTarget
+                // 不同编辑目标用不同 key：否则回到本 section 时 AnimatedContent 会复用上一会话的
+                // rememberSaveable 初值，打开另一条记忆会显示上一条的内容。
+                key(memoryEditorSession) {
+                    MemoryEditorScreen(
+                        isNew = target == null,
+                        initialName = target?.name.orEmpty(),
+                        initialDescription = target?.description.orEmpty(),
+                        initialContent = target?.content.orEmpty(),
+                        initialScope = target?.scope ?: MemoryScope.GLOBAL,
+                        hasWorkspace = memoryState.hasWorkspace,
+                        onSave = { name, description, content, scope ->
+                            memoryViewModel.save(name, description, content, scope)
+                            section = SettingsSection.Memory
+                        },
+                        onNavigateBack = { section = SettingsSection.Memory }
+                    )
+                }
+            }
+
+            current == SettingsSection.ScheduledTaskEditor -> {
+                val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val target = scheduleEditTarget
+                key(scheduleEditorSession) {
+                    ScheduledTaskEditorScreen(
+                        isNew = target == null,
+                        initialName = target?.name.orEmpty(),
+                        initialCommand = target?.command.orEmpty(),
+                        initialSchedule = target?.schedule ?: TaskSchedule(),
+                        onSave = { name, command, schedule ->
+                            scheduleViewModel.saveFromEditor(target, name, command, schedule)
+                            section = SettingsSection.ScheduledTasks
+                        },
+                        onNavigateBack = { section = SettingsSection.ScheduledTasks }
+                    )
+                }
+            }
+
             current == SettingsSection.RemoteServers ->
                 com.aicode.feature.workspace.presentation.remote.RemoteServerScreen(
                     onNavigateBack = { section = SettingsSection.Menu }
@@ -803,6 +869,30 @@ fun SettingsScreen(
                                 )
                             }
                         }
+                        SettingsSection.Memory -> IconButton(onClick = {
+                            memoryEditTarget = null
+                            memoryEditorSession++
+                            section = SettingsSection.MemoryEditor
+                        }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.memory_new),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        SettingsSection.ScheduledTasks -> IconButton(onClick = {
+                            scheduleEditTarget = null
+                            scheduleEditorSession++
+                            section = SettingsSection.ScheduledTaskEditor
+                        }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.schedule_new),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         SettingsSection.PromptDetail -> selectedPrompt?.let { fragment ->
                             IconButton(onClick = {
                                 promptEditTarget = PromptEditTarget(fragment.number)
@@ -956,6 +1046,41 @@ fun SettingsScreen(
                     }
                 }
                 SettingsSection.PromptEditor -> Unit
+                SettingsSection.Memory -> {
+                    val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val memoryState by memoryViewModel.state.collectAsStateWithLifecycle()
+                    val memoryError by memoryViewModel.error.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { memoryViewModel.refresh() }
+                    MemorySection(
+                        state = memoryState,
+                        error = memoryError,
+                        onErrorConsumed = memoryViewModel::consumeError,
+                        onOpenMemory = { memory ->
+                            memoryEditTarget = memory
+                            memoryEditorSession++
+                            section = SettingsSection.MemoryEditor
+                        },
+                        onDelete = { memory -> memoryViewModel.delete(memory.name, memory.scope) }
+                    )
+                }
+                SettingsSection.MemoryEditor -> Unit // 已在上方 early return 处理
+                SettingsSection.ScheduledTasks -> {
+                    val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val scheduleState by scheduleViewModel.state.collectAsStateWithLifecycle()
+                    ScheduledTasksSection(
+                        state = scheduleState,
+                        onOpenTask = { task ->
+                            scheduleEditTarget = task
+                            scheduleEditorSession++
+                            section = SettingsSection.ScheduledTaskEditor
+                        },
+                        onToggle = { task, enabled -> scheduleViewModel.setEnabled(task, enabled) },
+                        onDelete = { task -> scheduleViewModel.delete(task.id) }
+                    )
+                }
+                SettingsSection.ScheduledTaskEditor -> Unit // 已在上方 early return 处理
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(
                         entry = entry,
@@ -1630,6 +1755,12 @@ internal fun SettingsMenu(
                 title = stringResource(SettingsSection.Prompts.titleRes),
                 onClick = { onOpen(SettingsSection.Prompts) }
             )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.BookOpen,
+                title = stringResource(SettingsSection.Memory.titleRes),
+                onClick = { onOpen(SettingsSection.Memory) }
+            )
         }
 
         // ── 运行环境 ──
@@ -1639,6 +1770,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.HardDrive,
                 title = stringResource(SettingsSection.Container.titleRes),
                 onClick = { onOpen(SettingsSection.Container) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Clock,
+                title = stringResource(SettingsSection.ScheduledTasks.titleRes),
+                onClick = { onOpen(SettingsSection.ScheduledTasks) }
             )
             SettingsDivider()
             SettingsRow(
