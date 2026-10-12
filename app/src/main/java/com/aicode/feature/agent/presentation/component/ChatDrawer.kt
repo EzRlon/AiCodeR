@@ -117,6 +117,8 @@ import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Layers
+import compose.icons.feathericons.Monitor
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
@@ -173,6 +175,10 @@ fun ChatDrawerContent(
     onStartAnnotationCapture: (() -> Unit)? = null,
     /** 标注账本入口：打开账本列表页；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
+    /** 测试包入口：打开工作区 APK 列表；null 则隐藏该入口。 */
+    onNavigateToTestBuilds: (() -> Unit)? = null,
+    /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
+    onNavigateToPreview: (() -> Unit)? = null,
     onNavigateToSettings: () -> Unit,
     searchQuery: String,
     searchState: ChatSearchState,
@@ -362,6 +368,14 @@ fun ChatDrawerContent(
                 )
                 SettingsDivider()
             }
+            if (onNavigateToPreview != null) {
+                SettingsRow(
+                    icon = FeatherIcons.Monitor,
+                    title = stringResource(R.string.preview_title),
+                    onClick = onNavigateToPreview
+                )
+                SettingsDivider()
+            }
             if (onStartAnnotationCapture != null) {
                 SettingsRow(
                     icon = FeatherIcons.Camera,
@@ -375,6 +389,14 @@ fun ChatDrawerContent(
                     icon = FeatherIcons.Layers,
                     title = stringResource(R.string.annotation_ledger_title),
                     onClick = onNavigateToAnnotations
+                )
+                SettingsDivider()
+            }
+            if (onNavigateToTestBuilds != null) {
+                SettingsRow(
+                    icon = FeatherIcons.Package,
+                    title = stringResource(R.string.test_build_title),
+                    onClick = onNavigateToTestBuilds
                 )
                 SettingsDivider()
             }

@@ -119,6 +119,9 @@ export default defineConfig({
             { text: 'VNC 悬浮窗', link: '/guide/vnc' },
             { text: 'AI 智能体（终端 CLI）', link: '/guide/agent-cli' },
             { text: '界面标注（标注账本）', link: '/guide/annotations' },
+            { text: '测试包与一键安装', link: '/guide/test-builds' },
+            { text: 'Web 预览', link: '/guide/preview' },
+            { text: '工具钩子（Hooks）', link: '/guide/hooks' },
             { text: '文件浏览与代码编辑', link: '/guide/files' },
             { text: 'Git 版本管理', link: '/guide/git' },
             { text: '平板与大屏适配', link: '/guide/tablet' }

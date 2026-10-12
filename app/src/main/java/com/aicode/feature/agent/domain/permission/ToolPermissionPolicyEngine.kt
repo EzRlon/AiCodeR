@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -171,9 +172,24 @@ class ToolPermissionPolicyEngine @Inject constructor(
         val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
             evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL)
+        } else if (targetsHooksConfig(toolName, args)) {
+            // 工具钩子配置写入视为高危：hooks.json 里的脚本会在每次工具调用时零授权静默执行，
+            // 等同 Agent 配置修改——永不可记忆，仅单次放行（防「始终允许 writeFile」后经提示注入获得静默命令执行）
+            EvalResult(
+                Verdict.ASK,
+                rememberablePatterns = emptyList(),
+                rememberDisabledReason = "该文件配置工具钩子（脚本会在每次工具调用时静默执行），仅支持单次放行"
+            )
         } else {
             evaluateGeneric(rules, capabilities)
         }
+    }
+
+    /** 写入目标是否为工具钩子配置（全局 ~/.aicode/hooks.json，容器内 /root/.aicode/hooks.json）。 */
+    private fun targetsHooksConfig(toolName: String, args: Map<String, JsonElement>): Boolean {
+        if (toolName != "writeFile" && toolName != "editFile") return false
+        val path = (args["path"] as? JsonPrimitive)?.contentOrNull?.trim() ?: return false
+        return path == "/root/.aicode/hooks.json" || path.endsWith("/.aicode/hooks.json") || path == ".aicode/hooks.json"
     }
 
     private fun isDangerousTool(toolName: String, args: Map<String, JsonElement>, capabilities: Set<ToolCapability>): Boolean {

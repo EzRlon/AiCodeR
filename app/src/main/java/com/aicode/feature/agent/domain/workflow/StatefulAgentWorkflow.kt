@@ -41,6 +41,8 @@ import com.aicode.feature.agent.domain.tool.modelToolResultText
 import com.aicode.feature.agent.domain.tool.toTransportString
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.settings.data.remote.ModelMetadataService
+import com.aicode.feature.hooks.domain.HookRunner
+import com.aicode.feature.hooks.domain.HooksConfig
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -69,6 +71,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
@@ -76,6 +79,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.util.UUID
@@ -111,6 +115,7 @@ class StatefulAgentWorkflow @Inject constructor(
     private val keyRotator: ProviderKeyRotator,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
+    private val hookRunner: HookRunner,
     private val fileAccess: FileAccessProvider
 ) : AgentWorkflow {
 
@@ -851,11 +856,41 @@ class StatefulAgentWorkflow @Inject constructor(
                                 toolCalls.map { toolCall ->
                                     async {
                                         val run: suspend () -> ToolRunResult = {
-                                            val tool = toolRegistry.getTool(toolCall.name)
-                                            if (tool is StreamingAgentTool) {
-                                                runToolStream(tool, toolCall, currentContext) { send(it) }
+                                            // PreToolUse 钩子：脚本非零退出即否决该次调用（仅本地模式 + 已配钩子时生效）
+                                            val preHook = hookRunner.run(
+                                                HooksConfig.EVENT_PRE_TOOL_USE,
+                                                toolCall.name,
+                                                toolCall.arguments.toString()
+                                            )
+                                            if (preHook.blocked) {
+                                                ToolRunResult(
+                                                    ToolResult.Error(preHook.message ?: "被 PreToolUse 钩子否决", "HOOK_BLOCKED").toTransportString(),
+                                                    true
+                                                )
                                             } else {
-                                                runToolSync(tool, toolCall, currentContext)
+                                                val tool = toolRegistry.getTool(toolCall.name)
+                                                val result = if (tool is StreamingAgentTool) {
+                                                    runToolStream(tool, toolCall, currentContext) { send(it) }
+                                                } else {
+                                                    runToolSync(tool, toolCall, currentContext)
+                                                }
+                                                // 钩子输出并入结果（Pre 非否决输出 + Post 输出）：供模型与 UI 查看
+                                                val postHook = hookRunner.run(
+                                                    HooksConfig.EVENT_POST_TOOL_USE,
+                                                    toolCall.name,
+                                                    toolCall.arguments.toString()
+                                                )
+                                                val hookTexts = listOfNotNull(
+                                                    preHook.message?.takeIf { it.isNotBlank() }
+                                                        ?.let { "[hook:PreToolUse]\n$it" },
+                                                    postHook.message?.takeIf { it.isNotBlank() }
+                                                        ?.let { "[hook:PostToolUse]\n$it" }
+                                                )
+                                                if (hookTexts.isEmpty()) {
+                                                    result
+                                                } else {
+                                                    result.copy(raw = mergeHookOutput(result.raw, hookTexts.joinToString("\n\n")))
+                                                }
                                             }
                                         }
                                         // 同一批里针对同一路径的调用必须串行：并行会让「读-改-写」互相覆盖，
@@ -966,6 +1001,18 @@ class StatefulAgentWorkflow @Inject constructor(
         val text = error.message.orEmpty().lowercase()
         return listOf("context_length_exceeded", "context_window_exceeded", "maximum context length",
             "prompt is too long", "input token limit").any { it in text }
+    }
+
+    /**
+     * 把钩子输出并入 transport JSON 顶层的 hook_output 字段：结果保持合法 JSON，
+     * UI 的 formatToolResult 与各结构化解析不退化；raw 已非 JSON 时退化为文本追加。
+     */
+    private fun mergeHookOutput(raw: String, text: String): String {
+        val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+            ?: return raw + "\n\n" + text
+        val prev = (obj["hook_output"] as? JsonPrimitive)?.contentOrNull
+        val merged = if (prev.isNullOrBlank()) text else "$prev\n\n$text"
+        return JsonObject(obj + ("hook_output" to JsonPrimitive(merged))).toString()
     }
 
     private suspend fun runToolSync(tool: AgentTool?, toolCall: ToolCall, context: AgentContext): ToolRunResult {

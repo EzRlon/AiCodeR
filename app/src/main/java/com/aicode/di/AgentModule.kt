@@ -96,6 +96,7 @@ import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
+import com.aicode.feature.hooks.domain.HookRunner
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -436,6 +437,7 @@ object AgentModule {
         keyRotator: ProviderKeyRotator,
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
+        hookRunner: HookRunner,
         fileAccess: FileAccessProvider
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
@@ -462,6 +464,7 @@ object AgentModule {
             keyRotator,
             agentNotificationCenter,
             eventInjector,
+            hookRunner,
             fileAccess
         )
     }

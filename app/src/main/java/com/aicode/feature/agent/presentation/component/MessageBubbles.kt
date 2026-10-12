@@ -1,9 +1,14 @@
 package com.aicode.feature.agent.presentation.component
 
 import android.content.ClipData
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -56,15 +61,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Brand
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ContentWidth
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.hasVisibleContent
 import com.aicode.feature.agent.presentation.MessageRole
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
@@ -749,6 +757,67 @@ private fun CompactionFailureCard(message: AgentUIMessage) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 本轮产物聚合块：仅当轮内助手/工具消息携带附件时渲染（sendFile / 生成图片等交付物）。
+ * 折叠为一行摘要，展开复用消息附件行（图片预览 / 文件打开走既有链路）。
+ * 作为「结果」常显于轮块末尾，不随过程折叠。
+ */
+@Composable
+internal fun TurnArtifactsBlock(artifacts: List<AgentAttachment>) {
+    if (artifacts.isEmpty()) return
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val opener = LocalAttachmentOpener.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.xs)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(Radius.md),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    FeatherIcons.Package,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.chat_turn_artifacts, artifacts.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                ExpandableChevronIcon(
+                    expanded = expanded,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    size = 16.dp
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+        ) {
+            MessageAttachmentList(
+                attachments = artifacts,
+                onClick = { opener.open(it) }
+            )
         }
     }
 }
