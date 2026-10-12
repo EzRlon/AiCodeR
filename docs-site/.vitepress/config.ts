@@ -118,6 +118,7 @@ export default defineConfig({
             { text: '内置浏览器', link: '/guide/browser' },
             { text: 'VNC 悬浮窗', link: '/guide/vnc' },
             { text: 'AI 智能体（终端 CLI）', link: '/guide/agent-cli' },
+            { text: '界面标注（标注账本）', link: '/guide/annotations' },
             { text: '文件浏览与代码编辑', link: '/guide/files' },
             { text: 'Git 版本管理', link: '/guide/git' },
             { text: '平板与大屏适配', link: '/guide/tablet' }

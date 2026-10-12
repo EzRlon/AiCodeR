@@ -106,6 +106,7 @@ import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Camera
 import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Copy
@@ -115,6 +116,7 @@ import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.Layers
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
@@ -167,6 +169,10 @@ fun ChatDrawerContent(
     onCancelPasteOverwrite: () -> Unit,
     onClearClipboard: () -> Unit,
     onNavigateToBrowser: (() -> Unit)? = null,
+    /** 截图标注入口：收起抽屉后截取当前界面进入标注编辑；null 则隐藏该入口。 */
+    onStartAnnotationCapture: (() -> Unit)? = null,
+    /** 标注账本入口：打开账本列表页；null 则隐藏该入口。 */
+    onNavigateToAnnotations: (() -> Unit)? = null,
     onNavigateToSettings: () -> Unit,
     searchQuery: String,
     searchState: ChatSearchState,
@@ -353,6 +359,22 @@ fun ChatDrawerContent(
                     icon = FeatherIcons.Globe,
                     title = stringResource(R.string.browser_title),
                     onClick = onNavigateToBrowser
+                )
+                SettingsDivider()
+            }
+            if (onStartAnnotationCapture != null) {
+                SettingsRow(
+                    icon = FeatherIcons.Camera,
+                    title = stringResource(R.string.annotation_capture_entry),
+                    onClick = onStartAnnotationCapture
+                )
+                SettingsDivider()
+            }
+            if (onNavigateToAnnotations != null) {
+                SettingsRow(
+                    icon = FeatherIcons.Layers,
+                    title = stringResource(R.string.annotation_ledger_title),
+                    onClick = onNavigateToAnnotations
                 )
                 SettingsDivider()
             }

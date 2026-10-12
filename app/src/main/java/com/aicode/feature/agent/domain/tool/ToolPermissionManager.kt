@@ -43,10 +43,11 @@ class ToolPermissionManager @Inject constructor() {
         }
     }
 
-    /** UI 回传用户选择，唤醒对应 id 的挂起请求。 */
-    fun resolve(id: String, choice: PermissionChoice) {
-        val entry = synchronized(lock) { pending[id] } ?: return
+    /** UI 回传用户选择，唤醒对应 id 的挂起请求。返回是否命中（未命中说明请求已被解决或进程重建）。 */
+    fun resolve(id: String, choice: PermissionChoice): Boolean {
+        val entry = synchronized(lock) { pending[id] } ?: return false
         entry.decision.complete(choice)
+        return true
     }
 
     /** 取某会话当前的待决请求（stopAgent 停止单个会话时用，避免误取其它会话的弹窗）。 */

@@ -230,6 +230,10 @@ internal fun AgentMessageItem(
     reasoningDurationMs: Long? = null,
     /** 是否为分块的末块（渲染操作行、底部圆角、与下一条列表 item 的间距）；非分块消息恒为 true。 */
     isChunkFooter: Boolean = true,
+    /** in-message 思考块展开态的持久化覆盖（与过程项路径一致，见 [AIAgentViewModel.reasoningExpansionOverrides]）；null = 用内部状态。 */
+    reasoningExpandedOverride: Boolean? = null,
+    /** in-message 思考块手动展开/收起时回传新状态，由上层持久化。 */
+    onReasoningExpandedChange: ((Boolean) -> Unit)? = null,
 ) {
     if (message.isCompactionMarker) {
         // 压缩内部锚点不再渲染分隔线：摘要卡片已提供压缩反馈，避免与卡片重复。
@@ -308,7 +312,9 @@ internal fun AgentMessageItem(
             ReasoningBubble(
                 text = message.reasoning.orEmpty(),
                 cache = markdownCache,
-                durationMs = reasoningDurationMs
+                durationMs = reasoningDurationMs,
+                expandedOverride = reasoningExpandedOverride,
+                onExpandedChange = onReasoningExpandedChange
             )
         }
         if (hasContent || hasAttachments || message.role != MessageRole.ASSISTANT) {

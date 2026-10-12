@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,6 +120,12 @@ internal val DiffRemoveText: Color
 
 internal const val DIFF_COLLAPSE_THRESHOLD = 20
 internal const val TOOL_SECTION_LINE_LIMIT = 20
+
+/** 落库工具结果超过该行数折叠为摘要（实时输出走 TOOL_SECTION_LINE_LIMIT 截尾，不走折叠）。 */
+internal const val TOOL_RESULT_COLLAPSE_THRESHOLD = 40
+
+/** 折叠态保留行数（与 240dp 内容窗口大致一屏）。 */
+internal const val TOOL_RESULT_KEEP_LINES = 12
 
 /** 工具「指令 / 结果」展开窗口的最大高度：超出后在窗口内滚动，不再无限撑高。 */
 private val ToolSectionMaxHeight = 240.dp
@@ -717,6 +724,14 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
     LaunchedEffect(content, live, followLive, scrollState.isScrollInProgress) {
         if (!live || (followLive && !scrollState.isScrollInProgress)) displayedContent = content
     }
+    // 落库结果行数截断：超阈值默认折叠为保留行 + 「展开剩余 N 行」页脚（与 diff 卡同一交互范式），
+    // 否则长结果只能靠底部渐隐“猜”还有内容
+    val totalLines = remember(content) { content.trimEnd('\n').count { it == '\n' } + 1 }
+    val collapsible = !live && totalLines > TOOL_RESULT_COLLAPSE_THRESHOLD
+    var expanded by rememberSaveable(content) { mutableStateOf(false) }
+    val collapsedContent = remember(content) {
+        content.lines().take(TOOL_RESULT_KEEP_LINES).joinToString("\n")
+    }
     val fadeColor = MaterialTheme.colorScheme.background
     Box {
         ChatMonoPanel(
@@ -727,7 +742,11 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
         ) {
             SelectionContainer {
                 Text(
-                    text = if (live) displayedContent else content,
+                    text = when {
+                        live -> displayedContent
+                        collapsible && !expanded -> collapsedContent
+                        else -> content
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace
@@ -745,6 +764,13 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
                     .background(Brush.verticalGradient(listOf(Color.Transparent, fadeColor)))
             )
         }
+    }
+    if (collapsible) {
+        DiffExpandToggle(
+            expanded = expanded,
+            hiddenCount = totalLines - TOOL_RESULT_KEEP_LINES,
+            onToggle = { expanded = !expanded }
+        )
     }
 }
 

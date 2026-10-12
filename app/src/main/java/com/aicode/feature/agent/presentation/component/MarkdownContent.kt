@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,6 +19,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -380,6 +382,12 @@ private object CodeHighlightCache {
     }
 }
 
+/** 超过该行数的代码块折叠为摘要 + 「展开剩余 N 行」页脚（长代码块是消息里唯一无界块）。 */
+private const val CODE_COLLAPSE_THRESHOLD_LINES = 28
+
+/** 折叠态保留的行数。 */
+private const val CODE_COLLAPSE_KEEP_LINES = 14
+
 @Composable
 private fun SafeMarkdownHighlightedCode(
     code: String,
@@ -388,18 +396,27 @@ private fun SafeMarkdownHighlightedCode(
     highlightsBuilder: Highlights.Builder,
     showHeader: Boolean,
 ) {
+    val totalLines = remember(code) { code.trimEnd('\n').count { it == '\n' } + 1 }
+    val collapsible = totalLines > CODE_COLLAPSE_THRESHOLD_LINES
+    var expanded by rememberSaveable(code) { mutableStateOf(false) }
+    val visibleCode = if (collapsible && !expanded) {
+        remember(code) { code.lines().take(CODE_COLLAPSE_KEEP_LINES).joinToString("\n") }
+    } else {
+        code
+    }
+
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val cached = CodeHighlightCache.get(code, language, isDark)
+    val cached = CodeHighlightCache.get(visibleCode, language, isDark)
     val highlighted: AnnotatedString by produceState(
-        initialValue = cached ?: AnnotatedString(code),
-        code,
+        initialValue = cached ?: AnnotatedString(visibleCode),
+        visibleCode,
         language,
         isDark,
     ) {
-        if (CodeHighlightCache.get(code, language, isDark) != null) return@produceState
+        if (CodeHighlightCache.get(visibleCode, language, isDark) != null) return@produceState
         value = withContext(Dispatchers.Default) {
-            buildHighlightedText(code, language, highlightsBuilder)
-        }.also { CodeHighlightCache.put(code, language, isDark, it) }
+            buildHighlightedText(visibleCode, language, highlightsBuilder)
+        }.also { CodeHighlightCache.put(visibleCode, language, isDark, it) }
     }
 
     MarkdownCodeBackground(
@@ -410,13 +427,22 @@ private fun SafeMarkdownHighlightedCode(
         language = language,
         code = code,
     ) {
-        MarkdownBasicText(
-            text = highlighted,
-            style = style,
-            modifier = Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(LocalMarkdownPadding.current.codeBlock),
-        )
+        Column {
+            MarkdownBasicText(
+                text = highlighted,
+                style = style,
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(LocalMarkdownPadding.current.codeBlock),
+            )
+            if (collapsible) {
+                DiffExpandToggle(
+                    expanded = expanded,
+                    hiddenCount = totalLines - CODE_COLLAPSE_KEEP_LINES,
+                    onToggle = { expanded = !expanded }
+                )
+            }
+        }
     }
 }
 

@@ -165,6 +165,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var credentialRequestBridge: com.aicode.feature.credentials.data.CredentialRequestBridge
 
+    /** 工具授权请求的通知栏通道：用户离开 App 时可直接从通知批准/拒绝。 */
+    @Inject
+    lateinit var permissionNotificationCenter: com.aicode.feature.agent.domain.notification.PermissionNotificationCenter
+
     /** 执行模式仓库（本地 PRoot / 远程 SSH）。 */
     @Inject
     lateinit var executionModeRepository: com.aicode.feature.settings.data.repository.ExecutionModeRepository
@@ -224,6 +228,8 @@ class AIEditorApp : Application(), Configuration.Provider {
         createNotificationChannels()
         // 启动凭据请求监听：容器内 credential helper 写来的 cred-req-* → 全局弹窗回填 → 回喂 git 续跑。
         credentialRequestBridge.start()
+        // 启动工具授权通知通道：App 在后台时 AI 的授权请求可从通知栏直接批准/拒绝。
+        permissionNotificationCenter.start()
         // 启动即把最新的内置指南手册提取到私有配置目录
         appScope.launch {
             ContainerInstaller.extractDocs(this@AIEditorApp)
@@ -549,6 +555,17 @@ class AIEditorApp : Application(), Configuration.Provider {
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(agentChannel)
+
+            // 工具授权请求通知：独立渠道，用户可单独控制静音与否（不带声音时授权请求仍可用）。
+            val permissionChannel = NotificationChannel(
+                "agent_permission",
+                getString(R.string.notification_channel_agent_permission),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.notification_channel_agent_permission_desc)
+                setShowBadge(true)
+            }
+            notificationManager.createNotificationChannel(permissionChannel)
         }
     }
 }

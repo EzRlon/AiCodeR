@@ -280,6 +280,21 @@ class AIAgentViewModel @Inject constructor(
         _pendingExternalText.value = null
     }
 
+    /** 外部投递进来的附件（截图标注汇总等）：会话就绪后由聊天面板读文件转成待发附件。 */
+    private val _pendingExternalAttachments = MutableStateFlow<List<AgentAttachment>>(emptyList())
+    val pendingExternalAttachments: StateFlow<List<AgentAttachment>> = _pendingExternalAttachments.asStateFlow()
+
+    fun queueExternalAttachments(attachments: List<AgentAttachment>) {
+        if (attachments.isEmpty()) return
+        _pendingExternalAttachments.value = _pendingExternalAttachments.value + attachments
+    }
+
+    fun consumePendingExternalAttachments(): List<AgentAttachment> {
+        val current = _pendingExternalAttachments.value
+        _pendingExternalAttachments.value = emptyList()
+        return current
+    }
+
     /**
      * 工具调用（分组头与单条工具卡片）的手动展开态：key = 分组 key（`toolgroup:<组内首条消息 id>`）
      * 或单条消息 id。
