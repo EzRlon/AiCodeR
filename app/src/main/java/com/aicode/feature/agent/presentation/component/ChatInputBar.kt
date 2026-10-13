@@ -40,6 +40,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -74,6 +76,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -129,6 +132,7 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.Check
+import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.Copy
@@ -138,6 +142,9 @@ import compose.icons.feathericons.Minimize
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.Shield
+import compose.icons.feathericons.Tool
+import compose.icons.feathericons.X
+import compose.icons.feathericons.Zap
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -556,6 +563,47 @@ internal fun ChatInputBar(
                         onRemoveAttachment = onRemoveAttachment
                     )
 
+                    if (currentMode != AgentMode.BUILD) {
+                        // 非默认模式的常驻提示条：说明当前模式规则，× 一键退回构建模式
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.xs)
+                                .padding(bottom = Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = modeIcon(currentMode),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(
+                                    if (currentMode == AgentMode.PLAN) R.string.agent_mode_plan_banner
+                                    else R.string.agent_mode_auto_banner
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = { onToggleMode(AgentMode.BUILD) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    FeatherIcons.X,
+                                    contentDescription = stringResource(R.string.agent_mode_build),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.Top
@@ -632,31 +680,76 @@ internal fun ChatInputBar(
                                 AgentMode.AUTO -> MaterialTheme.colorScheme.onError
                                 AgentMode.BUILD -> MaterialTheme.semanticColors.onSuccess
                             }
+                            var showModePicker by remember { mutableStateOf(false) }
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
                                 color = modeColor,
-                                modifier = Modifier
-                                    .clickable {
-                                        val nextMode = when (currentMode) {
-                                            AgentMode.BUILD -> AgentMode.PLAN
-                                            AgentMode.PLAN -> AgentMode.AUTO
-                                            AgentMode.AUTO -> AgentMode.BUILD
-                                        }
-                                        onToggleMode(nextMode)
-                                    }
+                                modifier = Modifier.clickable { showModePicker = true }
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(46.dp)
-                                        .padding(vertical = 4.dp),
-                                    contentAlignment = Alignment.Center
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Icon(
+                                        imageVector = modeIcon(currentMode),
+                                        contentDescription = null,
+                                        tint = modeTextColor,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
                                     Text(
-                                        text = currentMode.name,
+                                        text = stringResource(modeLabelRes(currentMode)),
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontWeight = FontWeight.Bold,
                                             color = modeTextColor
                                         )
+                                    )
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = showModePicker,
+                                onDismissRequest = { showModePicker = false }
+                            ) {
+                                AgentMode.entries.forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = modeIcon(mode),
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.width(Spacing.sm))
+                                                Column {
+                                                    Text(
+                                                        text = stringResource(modeLabelRes(mode)),
+                                                        style = MaterialTheme.typography.labelLarge
+                                                    )
+                                                    Text(
+                                                        text = stringResource(modeDescRes(mode)),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        trailingIcon = if (mode == currentMode) {
+                                            {
+                                                Icon(
+                                                    FeatherIcons.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else {
+                                            null
+                                        },
+                                        onClick = {
+                                            showModePicker = false
+                                            if (mode != currentMode) onToggleMode(mode)
+                                        }
                                     )
                                 }
                             }
@@ -930,6 +1023,25 @@ private fun FullScreenInputDialog(
             }
         }
     }
+}
+
+/** 模式胶囊与选择层共用的名称/说明/图标。 */
+private fun modeLabelRes(mode: AgentMode): Int = when (mode) {
+    AgentMode.BUILD -> R.string.agent_mode_build
+    AgentMode.PLAN -> R.string.agent_mode_plan
+    AgentMode.AUTO -> R.string.agent_mode_auto
+}
+
+private fun modeDescRes(mode: AgentMode): Int = when (mode) {
+    AgentMode.BUILD -> R.string.agent_mode_build_desc
+    AgentMode.PLAN -> R.string.agent_mode_plan_desc
+    AgentMode.AUTO -> R.string.agent_mode_auto_desc
+}
+
+private fun modeIcon(mode: AgentMode): ImageVector = when (mode) {
+    AgentMode.BUILD -> FeatherIcons.Tool
+    AgentMode.PLAN -> FeatherIcons.Clipboard
+    AgentMode.AUTO -> FeatherIcons.Zap
 }
 
 /** 矩形周界上距左上角 d 像素的点（顺时针，与进度环路径方向一致）。 */
