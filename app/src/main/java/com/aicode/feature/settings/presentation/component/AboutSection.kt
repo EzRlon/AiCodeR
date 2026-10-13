@@ -120,7 +120,10 @@ internal fun AboutSection(
                     Text(
                         text = "v${appInfo.name}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.semanticColors.subtleText
+                        color = MaterialTheme.semanticColors.subtleText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 170.dp)
                     )
                 }
             )
