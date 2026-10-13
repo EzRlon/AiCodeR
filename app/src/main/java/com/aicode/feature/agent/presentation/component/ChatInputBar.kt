@@ -563,6 +563,23 @@ internal fun ChatInputBar(
                         onRemoveAttachment = onRemoveAttachment
                     )
 
+                    // 切换成功的即时反馈：选择层点选与提示条 × 两处入口共用；
+                    // 无会话时 setSessionMode 是静默 no-op，不能弹「已切换」假提示。
+                    val modeToastContext = LocalContext.current
+                    val switchModeWithToast: (AgentMode) -> Unit = { mode ->
+                        onToggleMode(mode)
+                        if (sessionId.isNotBlank()) {
+                            android.widget.Toast.makeText(
+                                modeToastContext,
+                                modeToastContext.getString(
+                                    R.string.chat_mode_switched,
+                                    modeToastContext.getString(modeLabelRes(mode))
+                                ),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+
                     if (currentMode != AgentMode.BUILD) {
                         // 非默认模式的常驻提示条：说明当前模式规则，× 一键退回构建模式
                         Row(
@@ -591,12 +608,12 @@ internal fun ChatInputBar(
                                 modifier = Modifier.weight(1f)
                             )
                             IconButton(
-                                onClick = { onToggleMode(AgentMode.BUILD) },
+                                onClick = { switchModeWithToast(AgentMode.BUILD) },
                                 modifier = Modifier.size(24.dp)
                             ) {
                                 Icon(
                                     FeatherIcons.X,
-                                    contentDescription = stringResource(R.string.agent_mode_build),
+                                    contentDescription = stringResource(R.string.agent_mode_back_to_build),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(14.dp)
                                 )
@@ -748,7 +765,7 @@ internal fun ChatInputBar(
                                         },
                                         onClick = {
                                             showModePicker = false
-                                            if (mode != currentMode) onToggleMode(mode)
+                                            if (mode != currentMode) switchModeWithToast(mode)
                                         }
                                     )
                                 }
