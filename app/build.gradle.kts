@@ -352,6 +352,8 @@ dependencies {
     implementation("commons-net:commons-net:3.10.0")
     implementation("org.apache.ftpserver:ftpserver-core:1.2.0")
     implementation("org.slf4j:slf4j-simple:2.0.9")
+    // 远程管理：局域网 HTTP 文件服务（网页端 assets/remote/）
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // 容器：解压 Alpine rootfs tar.gz（正确处理 symlink/hardlink/权限位）
     implementation("org.apache.commons:commons-compress:1.26.2")
