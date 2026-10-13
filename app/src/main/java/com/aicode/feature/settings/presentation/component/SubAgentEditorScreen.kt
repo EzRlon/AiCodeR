@@ -138,7 +138,7 @@ internal fun SubAgentEditorScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    IconButton(
                         enabled = canSave && saveState !is SubAgentSaveState.Saving,
                         onClick = {
                             onSave(
@@ -161,7 +161,11 @@ internal fun SubAgentEditorScreen(
                         if (saveState is SubAgentSaveState.Saving) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Text(stringResource(R.string.common_save))
+                            Icon(
+                                FeatherIcons.Check,
+                                contentDescription = stringResource(R.string.common_save),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }

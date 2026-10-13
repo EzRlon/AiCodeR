@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aicode.R
+import compose.icons.feathericons.Check
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
 import com.aicode.feature.schedule.domain.ScheduleMode
@@ -95,7 +97,7 @@ internal fun ScheduledTaskEditorScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    IconButton(
                         enabled = canSave,
                         onClick = {
                             val schedule = when (mode) {
@@ -112,7 +114,11 @@ internal fun ScheduledTaskEditorScreen(
                             onSave(name.trim(), command.trim(), schedule)
                         }
                     ) {
-                        Text(stringResource(R.string.common_save))
+                        Icon(
+                            FeatherIcons.Check,
+                            contentDescription = stringResource(R.string.common_save),
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             )

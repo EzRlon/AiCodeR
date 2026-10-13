@@ -63,6 +63,7 @@ import com.aicode.feature.annotation.domain.model.AnnotationStatus
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import androidx.compose.ui.text.rememberTextMeasurer
 import compose.icons.feathericons.Send
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -328,8 +329,9 @@ private fun AnnotationDetailDialog(
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize()
                         )
+                        val textMeasurer = rememberTextMeasurer()
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            marks.forEach { drawMark(it, fit, fade = false) }
+                            marks.forEach { drawMark(it, fit, fade = false, textMeasurer = textMeasurer) }
                         }
                     }
                 }

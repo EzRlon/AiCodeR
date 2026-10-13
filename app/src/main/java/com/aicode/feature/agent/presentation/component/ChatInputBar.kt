@@ -16,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -85,6 +86,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
@@ -689,15 +692,15 @@ internal fun ChatInputBar(
                         }
                         UploadIconButton(
                             enabled = !isBusy,
-                            icon = FeatherIcons.Mic,
-                            contentDescription = stringResource(R.string.chat_voice_input),
-                            onClick = onVoiceInput
-                        )
-                        UploadIconButton(
-                            enabled = !isBusy,
                             icon = FeatherIcons.Plus,
                             contentDescription = stringResource(R.string.chat_add_attachment),
                             onClick = { showAttachmentSheet = true }
+                        )
+                        UploadIconButton(
+                            enabled = !isBusy,
+                            icon = FeatherIcons.Mic,
+                            contentDescription = stringResource(R.string.chat_voice_input),
+                            onClick = onVoiceInput
                         )
                         SendButton(
                             canSend = canSend,
@@ -746,9 +749,33 @@ internal fun ChatInputBar(
                         activeColor = MaterialTheme.colorScheme.primary,
                         completedColor = MaterialTheme.semanticColors.success,
                         pendingColor = MaterialTheme.colorScheme.outlineVariant,
-                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
-                        onNodeClick = { progressTipIndex = it; progressTipTick++ }
+                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                     )
+                    if (progressNodes.isNotEmpty()) {
+                        // 节点点击热点：独立小层只拦截节点附近触摸，避免整层覆盖独占卡片内交互
+                        BoxWithConstraints(modifier = Modifier.matchParentSize()) {
+                            val density = LocalDensity.current
+                            val w = with(density) { maxWidth.toPx() }
+                            val h = with(density) { maxHeight.toPx() }
+                            val hotPx = with(density) { 30.dp.toPx() }
+                            val perimeter = 2f * (w + h)
+                            progressNodes.forEachIndexed { index, _ ->
+                                val d = perimeter * (index + 1) / (progressNodes.size + 1)
+                                val p = pointOnRectPerimeter(d, w, h)
+                                Box(
+                                    modifier = Modifier
+                                        .offset { IntOffset((p.x - hotPx).toInt(), (p.y - hotPx).toInt()) }
+                                        .size(60.dp)
+                                        .pointerInput(index) {
+                                            detectTapGestures {
+                                                progressTipIndex = index
+                                                progressTipTick++
+                                            }
+                                        }
+                                )
+                            }
+                        }
+                    }
                     progressTipIndex?.let { tip ->
                         progressNodes.getOrNull(tip)?.takeIf { it.label.isNotBlank() }?.let { node ->
                             Surface(
@@ -898,6 +925,19 @@ private fun FullScreenInputDialog(
                 )
             }
         }
+    }
+}
+
+/** 矩形周界上距左上角 d 像素的点（顺时针，与进度环路径方向一致）。 */
+private fun pointOnRectPerimeter(d: Float, w: Float, h: Float): Offset {
+    val per = 2f * (w + h)
+    if (per <= 0f) return Offset.Zero
+    val dd = ((d % per) + per) % per
+    return when {
+        dd <= w -> Offset(dd, 0f)
+        dd <= w + h -> Offset(w, dd - w)
+        dd <= 2 * w + h -> Offset(2 * w + h - dd, h)
+        else -> Offset(0f, per - dd)
     }
 }
 

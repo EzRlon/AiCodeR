@@ -1829,6 +1829,14 @@
     <string name="storage_artifact_delete_confirm_title">Delete artifact?</string>
     <string name="storage_artifact_delete_confirm_message">"%1$s" (%2$s) will be deleted permanently. Build artifacts can be regenerated.</string>
     <string name="storage_clean_confirm_artifacts">Workspace artifacts: %1$d items (%2$s)</string>
+    <string name="annotation_tool_rect">Rectangle</string>
+    <string name="annotation_tool_line">Line</string>
+    <string name="annotation_tool_arrow">Arrow</string>
+    <string name="annotation_tool_stroke">Freehand</string>
+    <string name="annotation_tool_text">Text</string>
+    <string name="annotation_edit_text">Edit text</string>
+    <string name="annotation_delete_selected">Delete selected</string>
+    <string name="annotation_text_hint">Enter text</string>
     <string name="chat_edit_dialog_title">Edit Message</string>
     <string name="chat_edit_dialog_hint">Enter message content</string>
 

@@ -1828,6 +1828,14 @@
     <string name="storage_artifact_delete_confirm_title">删除产物文件？</string>
     <string name="storage_artifact_delete_confirm_message">将删除「%1$s」（%2$s），不可恢复。构建产物可重新生成。</string>
     <string name="storage_clean_confirm_artifacts">工作区产物：%1$d 项（%2$s）</string>
+    <string name="annotation_tool_rect">矩形</string>
+    <string name="annotation_tool_line">直线</string>
+    <string name="annotation_tool_arrow">箭头</string>
+    <string name="annotation_tool_stroke">自由笔</string>
+    <string name="annotation_tool_text">文字</string>
+    <string name="annotation_edit_text">编辑文字</string>
+    <string name="annotation_delete_selected">删除所选</string>
+    <string name="annotation_text_hint">输入文字内容</string>
     <string name="chat_edit_dialog_title">编辑消息</string>
     <string name="chat_edit_dialog_hint">请输入消息内容</string>
 

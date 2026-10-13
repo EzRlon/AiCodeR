@@ -11,19 +11,24 @@ import kotlinx.serialization.json.Json
 data class AnnotationMark(
     /** 标注类型（[AnnotationType] 的 name），决定颜色。 */
     val type: String,
-    /** 图形种类：RECT（矩形框）或 STROKE（自由笔迹）。 */
+    /** 图形种类：RECT（矩形）/@LINE（直线）/ARROW（箭头）/STROKE（自由笔迹）/TEXT（文字）。 */
     val kind: String,
-    /** RECT 的左上角与宽高（归一化）。 */
+    /** RECT 的左上角与宽高；LINE/ARROW 的起点与终点差值（可为负）；TEXT 的锚点。均归一化。 */
     val x: Float = 0f,
     val y: Float = 0f,
     val w: Float = 0f,
     val h: Float = 0f,
     /** STROKE 的点集（归一化）。 */
-    val points: List<AnnotationPoint> = emptyList()
+    val points: List<AnnotationPoint> = emptyList(),
+    /** TEXT 的文本内容；其它类型为空。 */
+    val text: String = ""
 ) {
     companion object {
         const val KIND_RECT = "RECT"
         const val KIND_STROKE = "STROKE"
+        const val KIND_LINE = "LINE"
+        const val KIND_ARROW = "ARROW"
+        const val KIND_TEXT = "TEXT"
     }
 }
 
