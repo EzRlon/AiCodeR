@@ -103,6 +103,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -195,6 +197,9 @@ class AIAgentViewModel @Inject constructor(
     /** 设置里用户手动开启的常驻保活；agent 任务收尾时不能把它一并关掉。 */
     @Volatile
     private var userKeepaliveEnabled = false
+
+    /** WakeLock 续期协程：单个任务可能超过一次 acquire 的超时，需在到期前重新续上。 */
+    private var wakeLockRenewJob: Job? = null
 
     private val _currentSessionId = MutableStateFlow<String?>(null)
     val currentSessionId: StateFlow<String?> = _currentSessionId.asStateFlow()
@@ -1043,19 +1048,39 @@ class AIAgentViewModel @Inject constructor(
     /** 任务开始：拿 CPU 唤醒锁并拉起前台保活通知，避免熄屏或切后台时进程被挂起、回收。 */
     private fun acquireKeepalive() {
         TerminalKeepaliveService.enablePersistent(context)
-        if (wakeLock.isHeld) return
-        runCatching { wakeLock.acquire(KEEPALIVE_TIMEOUT_MS) }
-            .onFailure { FileLogger.e(TAG, "acquire wakeLock failed", it) }
+        if (!wakeLock.isHeld) {
+            runCatching { wakeLock.acquire(KEEPALIVE_TIMEOUT_MS) }
+                .onFailure { FileLogger.e(TAG, "acquire wakeLock failed", it) }
+        }
+        startWakeLockRenewal()
     }
 
     /** 任务收尾：释放唤醒锁；仅当既无后台终端任务、用户也没手动开保活时才停前台服务。 */
     private fun releaseKeepalive() {
+        wakeLockRenewJob?.cancel()
+        wakeLockRenewJob = null
         if (wakeLock.isHeld) {
             runCatching { wakeLock.release() }
                 .onFailure { FileLogger.e(TAG, "release wakeLock failed", it) }
         }
         if (!userKeepaliveEnabled && !terminalSessionManager.hasBackgroundTabs()) {
             TerminalKeepaliveService.disablePersistent(context)
+        }
+    }
+
+    /**
+     * 在 WakeLock 到期前持续续期，直到没有正在运行的任务。单次 acquire 的超时覆盖不了超长任务
+     * （子代理串行执行可超过一小时），过期后 CPU 可休眠，后台收包会停摆。
+     */
+    private fun startWakeLockRenewal() {
+        if (wakeLockRenewJob?.isActive == true) return
+        wakeLockRenewJob = viewModelScope.launch {
+            while (isActive) {
+                delay(KEEPALIVE_TIMEOUT_MS - WAKE_LOCK_RENEW_MARGIN_MS)
+                if (!hasRunningSessionsInCurrentWorkspace()) break
+                runCatching { wakeLock.acquire(KEEPALIVE_TIMEOUT_MS) }
+                    .onFailure { FileLogger.e(TAG, "renew wakeLock failed", it) }
+            }
         }
     }
 
@@ -1111,6 +1136,9 @@ class AIAgentViewModel @Inject constructor(
         const val AGENT_COMPLETE_NOTIFICATION_ID = 100
         /** wakeLock 超时保险：构建、装依赖类工具动辄十几分钟，给足 60 分钟；任务正常结束会主动释放。 */
         const val KEEPALIVE_TIMEOUT_MS = 60 * 60 * 1000L
+
+        /** WakeLock 续期提前量：在超时前这么早重新 acquire，避免任务中途丢锁。 */
+        private const val WAKE_LOCK_RENEW_MARGIN_MS = 10 * 60 * 1000L
         /** 从后台任务通知文本中提取 <title> 内容，供系统通知正文展示。 */
         val TASK_NOTIFICATION_TITLE_REGEX = Regex("<title>([^<]+)</title>")
         /** 文件浏览排序：目录在前，同类按名称不区分大小写。 */
@@ -2561,6 +2589,19 @@ class AIAgentViewModel @Inject constructor(
     private val _targetRewindMessageId = MutableStateFlow<String?>(null)
     val targetRewindMessageId: StateFlow<String?> = _targetRewindMessageId.asStateFlow()
 
+    /**
+     * 最近一次「回滚代码」因文件已被其他会话/用户改过而跳过的文件清单（逻辑路径）。
+     *
+     * 用一次性状态而不是事件流：UI 消费后调用 [clearRewindConflicts] 置空，避免重组时重复提示。
+     */
+    private val _rewindConflicts = MutableStateFlow<List<String>>(emptyList())
+    val rewindConflicts: StateFlow<List<String>> = _rewindConflicts.asStateFlow()
+
+    /** UI 已展示过冲突提示，清空以免重复弹。 */
+    fun clearRewindConflicts() {
+        _rewindConflicts.value = emptyList()
+    }
+
     fun openRewindMenu(messageId: String) {
         _targetRewindMessageId.value = messageId
     }
@@ -2603,7 +2644,8 @@ class AIAgentViewModel @Inject constructor(
         when (option) {
             RewindOption.RESTORE_CODE_AND_CONVERSATION -> {
                 if (checkpoint != null) {
-                    checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
+                    val result = checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
+                    _rewindConflicts.value = result.skipped
                 }
                 messagePersistenceUseCase.rewindConversation(sessionId, targetMsgEntity.timestamp)
                 withContext(Dispatchers.Main) { onFillPrompt(targetMsgEntity.content, attachments) }
@@ -2614,7 +2656,8 @@ class AIAgentViewModel @Inject constructor(
             }
             RewindOption.RESTORE_CODE -> {
                 if (checkpoint != null) {
-                    checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
+                    val result = checkpointManager.restoreCodeToCheckpoint(sessionId, checkpoint.id)
+                    _rewindConflicts.value = result.skipped
                 }
             }
         }

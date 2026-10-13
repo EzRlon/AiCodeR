@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 61,
-    "identityHash": "a668e215c41c0cebcbcbfbd3d81bc117",
+    "identityHash": "a19244a3bf3d789e7e5fdcfe7dd8d52c",
     "entities": [
       {
         "tableName": "agent_messages",
@@ -153,7 +153,7 @@
       },
       {
         "tableName": "chat_sessions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `workspacePath` TEXT NOT NULL, `mode` TEXT NOT NULL, `modeBeforePlan` TEXT, `reasoningEffort` TEXT NOT NULL, `providerId` TEXT, `model` TEXT, `totalInputTokens` INTEGER NOT NULL, `totalOutputTokens` INTEGER NOT NULL, `lastInputTokens` INTEGER NOT NULL, `isPinned` INTEGER NOT NULL, `parentId` TEXT, `subagentType` TEXT, `teamName` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `workspacePath` TEXT NOT NULL, `mode` TEXT NOT NULL, `modeBeforePlan` TEXT, `reasoningEffort` TEXT NOT NULL, `providerId` TEXT, `model` TEXT, `totalInputTokens` INTEGER NOT NULL, `totalOutputTokens` INTEGER NOT NULL, `lastInputTokens` INTEGER NOT NULL, `isPinned` INTEGER NOT NULL, `parentId` TEXT, `subagentType` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -244,11 +244,6 @@
           {
             "fieldPath": "subagentType",
             "columnName": "subagentType",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "teamName",
-            "columnName": "teamName",
             "affinity": "TEXT"
           }
         ],
@@ -470,7 +465,7 @@
       },
       {
         "tableName": "remote_connections",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `protocol` TEXT NOT NULL, `host` TEXT NOT NULL, `port` INTEGER NOT NULL, `username` TEXT NOT NULL, `authType` TEXT NOT NULL, `authData` TEXT NOT NULL, `passphrase` TEXT, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `protocol` TEXT NOT NULL, `host` TEXT NOT NULL, `port` INTEGER NOT NULL, `username` TEXT NOT NULL, `authType` TEXT NOT NULL, `authData` TEXT NOT NULL, `passphrase` TEXT, `created_at` INTEGER NOT NULL, `sort_order` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -528,6 +523,12 @@
           {
             "fieldPath": "createdAt",
             "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sort_order",
             "affinity": "INTEGER",
             "notNull": true
           }
@@ -738,7 +739,7 @@
       },
       {
         "tableName": "checkpoint_file_snapshots",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `checkpointId` TEXT NOT NULL, `filePath` TEXT NOT NULL, `snapshotRelativePath` TEXT NOT NULL, `changeType` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `checkpointId` TEXT NOT NULL, `filePath` TEXT NOT NULL, `snapshotRelativePath` TEXT NOT NULL, `changeType` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `fingerprint` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -775,6 +776,11 @@
             "columnName": "createdAt",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "fingerprint",
+            "columnName": "fingerprint",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -1017,71 +1023,11 @@
             "id"
           ]
         }
-      },
-      {
-        "tableName": "annotations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `type` TEXT NOT NULL, `status` TEXT NOT NULL, `imagePath` TEXT NOT NULL, `marksJson` TEXT NOT NULL, `note` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-        "fields": [
-          {
-            "fieldPath": "id",
-            "columnName": "id",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "type",
-            "columnName": "type",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "status",
-            "columnName": "status",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "imagePath",
-            "columnName": "imagePath",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "marksJson",
-            "columnName": "marksJson",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "note",
-            "columnName": "note",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "createdAt",
-            "columnName": "createdAt",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "updatedAt",
-            "columnName": "updatedAt",
-            "affinity": "INTEGER",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "id"
-          ]
-        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a668e215c41c0cebcbcbfbd3d81bc117')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a19244a3bf3d789e7e5fdcfe7dd8d52c')"
     ]
   }
 }

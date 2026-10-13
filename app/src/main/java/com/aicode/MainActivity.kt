@@ -14,6 +14,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -76,6 +77,7 @@ import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
+import com.aicode.core.util.ApkInstaller
 import com.aicode.core.util.ScreenCapture
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
@@ -531,7 +533,7 @@ fun AppNavigation(
                         fileName = name,
                         containerPath = path,
                         localPath = "",
-                        mimeType = APK_MIME_TYPE,
+                        mimeType = ApkInstaller.APK_MIME_TYPE,
                         sizeBytes = 0L,
                         isImage = false
                     ),
@@ -695,15 +697,21 @@ fun AppNavigation(
                 }
                 val paneOpen = expanded && paneKind != WorkbenchPaneKind.NONE
                 val vncOverlayViewModel: VncOverlayViewModel = hiltViewModel()
-                // 拖动把手时要把位移像素换算成分栏比例，所以记下容器实测宽度。
+                // 拖动把手时要把位移像素换算成分栏比例，所以记下容器实测宽度与左栏宽度。
                 var rowWidthPx by remember { mutableIntStateOf(0) }
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .onSizeChanged { rowWidthPx = it.width }
-                    ) {
-                        Box(modifier = Modifier.weight(if (paneOpen) paneSplit else 1f)) {
+                var leftPaneWidthPx by remember { mutableIntStateOf(0) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                        .onSizeChanged { rowWidthPx = it.width }
+                ) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(if (paneOpen) paneSplit else 1f)
+                                .onSizeChanged { leftPaneWidthPx = it.width }
+                        ) {
                             CompositionLocalProvider(
                                 androidx.compose.ui.platform.LocalUriHandler provides fileUriHandler
                             ) {
@@ -736,14 +744,7 @@ fun AppNavigation(
                             }
                         }
                         if (paneOpen) {
-                            VerticalSplitHandle(
-                                onDragDelta = { dx ->
-                                    if (rowWidthPx > 0) {
-                                        paneSplit = (paneSplit + dx / rowWidthPx)
-                                            .coerceIn(MIN_PANE_SPLIT, MAX_PANE_SPLIT)
-                                    }
-                                }
-                            )
+                            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             WorkbenchPaneContent(
                                 kind = paneKind,
                                 editorPath = paneEditorPath,
@@ -762,6 +763,18 @@ fun AppNavigation(
                             onLaunched = {
                                 showAgentCliSheet = false
                                 openWorkbench(WorkbenchPaneKind.TERMINAL)
+                            }
+                        )
+                    }
+
+                    if (paneOpen && leftPaneWidthPx > 0) {
+                        VerticalSplitHandle(
+                            anchorX = leftPaneWidthPx,
+                            onDragDelta = { dx ->
+                                if (rowWidthPx > 0) {
+                                    paneSplit = (paneSplit + dx / rowWidthPx)
+                                        .coerceIn(MIN_PANE_SPLIT, MAX_PANE_SPLIT)
+                                }
                             }
                         )
                     }
@@ -1013,7 +1026,8 @@ fun AppNavigation(
 
     // 检查更新弹窗（全局宿主：自动检测与关于页手动检查共用，覆盖所有页面）
     val updateCheckState by settingsViewModel.updateCheckState.collectAsStateWithLifecycle()
-    if (updateCheckState != UpdateCheckUiState.Idle) {
+    val updateCheckVisible by settingsViewModel.updateCheckVisible.collectAsStateWithLifecycle()
+    if (updateCheckVisible && updateCheckState != UpdateCheckUiState.Idle) {
         val version = remember {
             runCatching {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
@@ -1022,11 +1036,13 @@ fun AppNavigation(
         UpdateCheckDialog(
             state = updateCheckState,
             currentVersion = version,
+            canInstallInApp = settingsViewModel.inAppInstallSupported,
             onDismiss = { settingsViewModel.dismissUpdateCheck() },
             onOpenRelease = { tag ->
                 openUrl(context, githubReleaseUrl(tag))
                 settingsViewModel.dismissUpdateCheck()
-            }
+            },
+            onDownload = { settingsViewModel.downloadAndInstall() }
         )
     }
 
@@ -1195,8 +1211,6 @@ private val PREVIEWABLE_IMAGE_EXTS = setOf("png", "jpg", "jpeg", "gif", "webp", 
 
 /** 文件树里点击即调系统安装器的安装包格式。 */
 private val INSTALLABLE_APK_EXTS = setOf("apk", "apks", "xapk")
-
-private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
 
 /** 聊天区链接目标 → 归一化后的文件路径；判定为网址（非 `file` scheme）时返回 null。 */
 internal fun asChatFilePath(uri: String): String? {
