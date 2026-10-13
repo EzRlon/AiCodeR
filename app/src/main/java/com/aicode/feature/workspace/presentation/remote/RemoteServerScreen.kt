@@ -1,16 +1,24 @@
 package com.aicode.feature.workspace.presentation.remote
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -21,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -34,11 +43,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
 import com.aicode.feature.settings.presentation.component.SettingsDivider
@@ -56,6 +71,8 @@ import compose.icons.feathericons.Server
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.UploadCloud
 import kotlinx.coroutines.launch
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +82,8 @@ fun RemoteServerScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // 长按拖拽排序的触感反馈（与「供应商」页一致：进入拖拽与松手各一次）
+    val hapticFeedback = LocalHapticFeedback.current
     val pagerState = rememberPagerState(initialPage = 0) { 3 }
     var showAddConnectionDialog by remember { mutableStateOf(false) }
     var showAddMountDialog by remember { mutableStateOf(false) }
@@ -72,12 +91,16 @@ fun RemoteServerScreen(
     var showSyncSettingsSheet by remember { mutableStateOf(false) }
 
     // 列表滚动状态提升到页面层：滚动时底部 tab 栏淡出（同 Git 页面）。
-    val connScrollState = rememberScrollState()
+    // 连接列表是每行独立卡片（LazyColumn），挂载/FTP 仍是分组卡片（普通滚动容器）。
+    val connListState = rememberLazyListState()
+    val connReorderableState = rememberReorderableLazyListState(connListState) { from, to ->
+        viewModel.reorderConnections(from.index, to.index)
+    }
     val mountScrollState = rememberScrollState()
     val ftpScrollState = rememberScrollState()
     val tabsScrolling by remember {
         derivedStateOf {
-            connScrollState.isScrollInProgress ||
+            connListState.isScrollInProgress ||
                 mountScrollState.isScrollInProgress ||
                 ftpScrollState.isScrollInProgress
         }
@@ -147,19 +170,64 @@ fun RemoteServerScreen(
                             }
                         )
                     } else {
-                        SettingsList(scrollState = connScrollState) {
-                            uiState.connections.forEachIndexed { index, conn ->
-                                if (index > 0) {
-                                    SettingsDivider()
+                        // 与「供应商」页一致：一行一张独立圆角卡片（8dp 间距），长按行内容拖拽排序。
+                        LazyColumn(
+                            state = connListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = Spacing.lg),
+                            // 底部预留 tab 栏高度，最后一行可完全滚到悬浮 tab 栏之上
+                            contentPadding = PaddingValues(top = Spacing.sm, bottom = 70.dp),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                        ) {
+                            itemsIndexed(
+                                items = uiState.connections,
+                                key = { _, conn -> conn.id }
+                            ) { _, conn ->
+                                ReorderableItem(
+                                    state = connReorderableState,
+                                    key = conn.id
+                                ) { isDragging ->
+                                    val dragScale by animateFloatAsState(
+                                        targetValue = if (isDragging) 0.95f else 1f,
+                                        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+                                        label = "connectionDragScale"
+                                    )
+                                    val dragElevation by animateDpAsState(
+                                        targetValue = if (isDragging) 8.dp else 0.dp,
+                                        animationSpec = tween(durationMillis = if (isDragging) 120 else 220),
+                                        label = "connectionDragElevation"
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(Radius.lg),
+                                        color = MaterialTheme.semanticColors.cardSurface,
+                                        shadowElevation = dragElevation,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .zIndex(if (isDragging) 1f else 0f)
+                                            .graphicsLayer {
+                                                scaleX = dragScale
+                                                scaleY = dragScale
+                                            }
+                                    ) {
+                                        RemoteConnectionCard(
+                                            conn = conn,
+                                            onEdit = {
+                                                connectionToEdit = it
+                                                showAddConnectionDialog = true
+                                            },
+                                            onDelete = { pendingDeleteConnection = it },
+                                            dragModifier = Modifier.longPressDraggableHandle(
+                                                onDragStarted = {
+                                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                                },
+                                                onDragStopped = {
+                                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                                }
+                                            )
+                                        )
+                                    }
                                 }
-                                RemoteConnectionCard(
-                                    conn = conn,
-                                    onEdit = {
-                                        connectionToEdit = it
-                                        showAddConnectionDialog = true
-                                    },
-                                    onDelete = { pendingDeleteConnection = it }
-                                )
                             }
                         }
                     }

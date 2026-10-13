@@ -235,6 +235,18 @@
     <string name="settings_keepalive_subtitle">Foreground notification prevents background kill</string>
     <string name="settings_screen_on_title">Keep screen on</string>
     <string name="settings_screen_on_subtitle">Screen stays awake while the app is in the foreground</string>
+    <string name="settings_network_guide_title">Background network troubleshooting</string>
+    <string name="settings_network_guide_subtitle">Connection dropping in background? Check these</string>
+    <string name="settings_network_guide_intro">If you see \"Network connection lost\" after switching to the background, set up in this order:</string>
+    <string name="settings_network_guide_step_keepalive">1. Turn on \"Background keepalive\" above and keep its notification</string>
+    <string name="settings_network_guide_step_lock">2. Lock this app in the Recents screen instead of swiping it away</string>
+    <string name="settings_network_guide_step_battery">3. In system settings, set this app\'s battery policy to \"Unrestricted / Don\'t optimize\" and allow auto-launch</string>
+    <string name="settings_network_guide_brand_huawei">Huawei / Honor: App launch → Manage manually → Auto-launch, Associated launch, Run in background</string>
+    <string name="settings_network_guide_brand_xiaomi">Xiaomi / Redmi: Battery and performance → App battery saver → No restrictions</string>
+    <string name="settings_network_guide_brand_oppo">OPPO / OnePlus / realme: App management → Battery usage → Allow background activity; Battery → More settings → Optimize battery use → Don\'t optimize</string>
+    <string name="settings_network_guide_brand_vivo">vivo / iQOO: Battery → Background power consumption management → Allow high background power; Apps and permissions → Auto-start</string>
+    <string name="settings_network_guide_brand_samsung">Samsung: Battery and device care → Battery → Background usage limits → Never sleeping apps; Apps → Battery → Unrestricted</string>
+    <string name="settings_network_guide_more">See the online docs for more devices and details</string>
     <string name="settings_agent_sound_title">Agent completion notification</string>
     <string name="settings_agent_sound_subtitle">Pop a notification when agent finishes in background</string>
     <string name="agent_complete_notification_title">Task complete</string>
@@ -423,6 +435,29 @@
     <string name="update_channel_latest">Preview</string>
     <string name="update_channel_latest_desc">Also detects pre-releases (RC)</string>
     <string name="about_no_changelog">No changelog available</string>
+    <string name="about_update_mirror">Download mirror</string>
+    <string name="about_update_mirror_desc">Speeds up update downloads; leave empty to use GitHub directly</string>
+    <string name="about_update_mirror_preset_cdn">gh-proxy CDN (default)</string>
+    <string name="about_update_mirror_preset_v6">gh-proxy preferred node</string>
+    <string name="about_update_mirror_preset_direct">GitHub direct</string>
+    <string name="about_update_mirror_invalid">Address must start with http:// or https://</string>
+    <string name="about_update_mirror_default">Restore default</string>
+    <string name="about_update_download_install">Download &amp; install</string>
+    <string name="about_update_install">Install</string>
+    <string name="about_update_browser">Download in browser</string>
+    <string name="about_update_background">Continue in background</string>
+    <string name="about_update_downloading">Downloading %1$d%%</string>
+    <string name="about_update_download_size">%1$s / %2$s</string>
+    <string name="about_update_apk_ready">Update package is ready — tap Install to finish</string>
+    <string name="about_update_need_permission">Allow “install unknown apps” first, then come back and tap Install</string>
+    <string name="about_update_download_failed">Download failed</string>
+    <string name="about_update_download_failed_hint">Change the mirror in Settings → About → Download mirror and retry</string>
+    <string name="about_update_retry">Retry</string>
+    <string name="about_update_verify_not_apk">The downloaded file is not a valid package</string>
+    <string name="about_update_verify_package">The package does not match this app</string>
+    <string name="about_update_verify_signature">Package signature differs from this app — download in browser instead</string>
+    <string name="about_update_verify_not_newer">Package version is not newer than the installed one</string>
+    <string name="about_update_install_failed">No app available to install packages</string>
 
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI needs your confirmation</string>
@@ -639,6 +674,17 @@
     <string name="checkpoint_restore_conversation_desc">Keep current code, truncate conversation to this point</string>
     <string name="checkpoint_restore_code">Restore code only</string>
     <string name="checkpoint_restore_code_desc">Revert code to snapshot before this point, keep conversation</string>
+    <string name="checkpoint_skipped_single">Skipped 1 file: it changed after the snapshot, so it was left alone to keep those edits\n%1$s</string>
+    <string name="checkpoint_skipped_multiple">Skipped %1$d files: they changed after the snapshot, so they were left alone to keep those edits\n%2$s</string>
+
+    <!-- Editor save conflict -->
+    <string name="editor_save_conflict_title">File changed on disk</string>
+    <string name="editor_save_conflict_message">This file was modified by the AI or another program after you opened it. Saving now would overwrite those changes.</string>
+    <string name="editor_save_conflict_diff">- Current on disk\n+ Your edits\n\n%1$s</string>
+    <string name="editor_save_conflict_overwrite">Overwrite disk</string>
+    <string name="editor_save_conflict_discard">Discard my edits</string>
+    <string name="editor_save_conflict_cancel">Cancel</string>
+    <string name="editor_save_conflict_discarded">Edits discarded; reloaded from disk</string>
 
     <!-- Chat Message Bubbles -->
     <string name="chat_copied">Copied</string>
@@ -712,7 +758,6 @@
     <string name="container_empty">No containers or images</string>
     <string name="container_empty_desc">Add a custom image, or restore the built-in Alpine.</string>
     <string name="container_restore_builtin">Restore Built-in Alpine</string>
-    <string name="container_active">Currently in use</string>
     <string name="container_set_as_default">Set as default container</string>
     <string name="container_default_badge">Default</string>
     <string name="container_default_desc">In remote workspace mode, local MCP services run in this container</string>
@@ -726,6 +771,7 @@
     <string name="container_not_ready_hint">Container is not initialized yet. Please open the Terminal page to complete initialization first.</string>
     <string name="container_file_selected">File selected</string>
     <string name="container_select_image_file">Select tar.gz / tgz / tar.xz / txz image file</string>
+    <string name="container_sort_long_press">Long press to reorder</string>
     <string name="container_mount_local">Local path</string>
     <string name="container_mount_container">Container path</string>
     <string name="container_no_bindings">No mounts</string>
@@ -1355,6 +1401,7 @@
     <string name="remote_edit_connection">Edit Connection Channel</string>
     <string name="remote_add_connection">Add Connection Channel</string>
     <string name="remote_connection_name_hint">Connection name</string>
+    <string name="remote_connection_sort_long_press">Long press to reorder</string>
     <string name="remote_host_address">Host</string>
     <string name="remote_port">Port</string>
     <string name="remote_password">Password</string>
@@ -1509,6 +1556,8 @@
     <string name="terminal_font_delete">Delete this font</string>
     <string name="terminal_font_import_failed">Import failed. Please pick a valid ttf / otf / ttc font file</string>
     <string name="terminal_preview_text">Terminal Preview</string>
+    <string name="terminal_theme_follow_app">Follow App</string>
+    <string name="terminal_theme_github_light">GitHub Light</string>
     <string name="terminal_theme_termius_dark">Termius Dark</string>
     <string name="terminal_theme_dracula">Dracula</string>
     <string name="terminal_theme_one_dark">One Dark</string>
