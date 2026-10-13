@@ -1,9 +1,13 @@
 package com.aicode.feature.settings.presentation.component
 
+import android.content.ClipData
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,8 +43,12 @@ import androidx.compose.ui.draw.clip
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,9 +63,14 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
+import com.aicode.feature.agent.presentation.AgentAttachment
+import com.aicode.feature.agent.presentation.component.openSentAttachment
 import com.aicode.feature.settings.domain.model.formatStorageSize
 import com.aicode.feature.settings.presentation.StorageUiState
 import com.aicode.feature.settings.presentation.StorageViewModel
+import com.aicode.feature.workspace.domain.FileAccessProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /** 分类色点缩进宽度：色点 10dp + 与标题的间距，明细行据此与标题左对齐。 */
 private val DetailIndent = 10.dp + Spacing.md
@@ -64,13 +78,20 @@ private val SelectionWidth = 48.dp
 
 /** 连接 [StorageViewModel] 与 [StorageSection]：state 收集下沉到这里，统计逐项到达时只重组本页。 */
 @Composable
-internal fun StorageSectionHost(viewModel: StorageViewModel) {
+internal fun StorageSectionHost(
+    viewModel: StorageViewModel,
+    onRevealInTree: ((String) -> Unit)? = null
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     StorageSection(
         state = state,
+        fileAccess = viewModel.fileAccess,
         onToggleExpand = viewModel::toggleExpanded,
         onToggleCleanup = viewModel::toggleCleanup,
-        onClean = viewModel::clean
+        onToggleArtifact = viewModel::toggleArtifact,
+        onCleanSelected = viewModel::cleanSelected,
+        onDeleteArtifact = viewModel::deleteArtifact,
+        onRevealInTree = onRevealInTree
     )
 }
 
@@ -82,11 +103,20 @@ internal fun StorageSectionHost(viewModel: StorageViewModel) {
 @Composable
 internal fun StorageSection(
     state: StorageUiState,
+    fileAccess: FileAccessProvider,
     onToggleExpand: (StorageCategory) -> Unit,
     onToggleCleanup: (CleanupKind) -> Unit,
-    onClean: (List<CleanupKind>) -> Unit
+    onToggleArtifact: (String) -> Unit,
+    onCleanSelected: () -> Unit,
+    onDeleteArtifact: (String) -> Unit,
+    onRevealInTree: ((String) -> Unit)? = null
 ) {
-    var pendingCleanup by remember { mutableStateOf<List<CleanupKind>?>(null) }
+    val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    var pendingCleanup by remember { mutableStateOf(false) }
+    var actionDetail by remember { mutableStateOf<StorageDetail?>(null) }
+    var deleteTarget by remember { mutableStateOf<StorageDetail?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -135,9 +165,15 @@ internal fun StorageSection(
                             DetailRow(
                                 detail = detail,
                                 cleanupKind = detailCleanup,
-                                selected = detailCleanup in state.selectedCleanup,
+                                artifact = detail.path != null,
+                                selected = (detailCleanup != null && detailCleanup in state.selectedCleanup) ||
+                                    (detail.path != null && detail.path in state.selectedArtifacts),
                                 cleaning = state.cleaning,
-                                onSelect = { detailCleanup?.let(onToggleCleanup) }
+                                onSelect = {
+                                    if (detailCleanup != null) onToggleCleanup(detailCleanup)
+                                    else detail.path?.let(onToggleArtifact)
+                                },
+                                onClick = detail.path?.let { { actionDetail = detail } }
                             )
                         }
                     }
@@ -152,11 +188,7 @@ internal fun StorageSection(
 
         Surface(color = MaterialTheme.semanticColors.pageBackground) {
             Button(
-                onClick = {
-                    pendingCleanup = CleanupKind.entries.filter {
-                        it in state.selectedCleanup && (state.cleanableSizes[it] ?: 0L) > 0L
-                    }
-                },
+                onClick = { pendingCleanup = true },
                 enabled = state.selectedBytes > 0L && !state.cleaning,
                 modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
                 shape = RoundedCornerShape(Radius.lg)
@@ -170,9 +202,12 @@ internal fun StorageSection(
         }
     }
 
-    pendingCleanup?.let { kinds ->
+    if (pendingCleanup) {
+        val kinds = CleanupKind.entries.filter {
+            it in state.selectedCleanup && (state.cleanableSizes[it] ?: 0L) > 0L
+        }
         AlertDialog(
-            onDismissRequest = { pendingCleanup = null },
+            onDismissRequest = { pendingCleanup = false },
             title = { Text(stringResource(R.string.storage_clean_confirm_title)) },
             text = {
                 Column(
@@ -181,7 +216,7 @@ internal fun StorageSection(
                 ) {
                     Text(stringResource(
                         R.string.storage_clean_confirm_selected,
-                        formatStorageSize(kinds.sumOf { state.cleanableSizes[it] ?: 0L })
+                        formatStorageSize(state.selectedBytes)
                     ))
                     kinds.forEach { kind ->
                         Column {
@@ -189,19 +224,96 @@ internal fun StorageSection(
                             Text(stringResource(kind.descRes), style = MaterialTheme.typography.bodySmall)
                         }
                     }
+                    if (state.selectedArtifacts.isNotEmpty()) {
+                        Text(
+                            stringResource(
+                                R.string.storage_clean_confirm_artifacts,
+                                state.selectedArtifacts.size,
+                                formatStorageSize(state.selectedArtifacts.sumOf { state.artifactSizes[it] ?: 0L })
+                            ),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                     Text(stringResource(R.string.storage_clean_scope), style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onClean(kinds)
-                    pendingCleanup = null
+                    onCleanSelected()
+                    pendingCleanup = false
                 }) { Text(stringResource(R.string.storage_clean)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingCleanup = null }) {
+                TextButton(onClick = { pendingCleanup = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
+            }
+        )
+    }
+
+    actionDetail?.let { detail ->
+        val path = detail.path
+        AlertDialog(
+            onDismissRequest = { actionDetail = null },
+            title = { Text(detail.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    detail.note?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.semanticColors.subtleText)
+                    }
+                    Spacer(Modifier.height(Spacing.xs))
+                    if (path != null) {
+                        ActionRow(text = stringResource(R.string.storage_artifact_open)) {
+                            actionDetail = null
+                            openArtifact(context, detail, fileAccess, scope)
+                        }
+                        ActionRow(text = stringResource(R.string.storage_artifact_copy_path)) {
+                            actionDetail = null
+                            val copiedMsg = context.getString(R.string.storage_artifact_path_copied)
+                            scope.launch {
+                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("path", path)))
+                                Toast.makeText(context, copiedMsg, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        onRevealInTree?.let { reveal ->
+                            ActionRow(text = stringResource(R.string.storage_artifact_reveal)) {
+                                actionDetail = null
+                                reveal(path)
+                            }
+                        }
+                        ActionRow(text = stringResource(R.string.storage_artifact_delete), danger = true) {
+                            deleteTarget = detail
+                            actionDetail = null
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { actionDetail = null }) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
+    deleteTarget?.let { detail ->
+        val path = detail.path
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text(stringResource(R.string.storage_artifact_delete_confirm_title)) },
+            text = {
+                Text(stringResource(
+                    R.string.storage_artifact_delete_confirm_message,
+                    detail.label,
+                    formatStorageSize(detail.bytes)
+                ))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteTarget = null
+                    path?.let(onDeleteArtifact)
+                }) { Text(stringResource(R.string.storage_artifact_delete), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -349,13 +461,16 @@ private fun CategoryRow(
 private fun DetailRow(
     detail: StorageDetail,
     cleanupKind: CleanupKind?,
+    artifact: Boolean,
     selected: Boolean,
     cleaning: Boolean,
-    onSelect: () -> Unit
+    onSelect: () -> Unit,
+    onClick: (() -> Unit)?
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
             .padding(
                 start = Spacing.lg + DetailIndent + if (detail.indent) Spacing.lg else 0.dp,
                 end = Spacing.lg,
@@ -381,7 +496,7 @@ private fun DetailRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.semanticColors.subtleText
             )
-            if (cleanupKind != null) {
+            if (cleanupKind != null || artifact) {
                 Checkbox(
                     checked = selected && detail.bytes > 0L,
                     onCheckedChange = { onSelect() },
@@ -426,4 +541,51 @@ private fun StorageCategory.color(): Color = when (this) {
     StorageCategory.Caches -> StorageUsagePalette.Caches
     StorageCategory.OtherData -> StorageUsagePalette.OtherData
     StorageCategory.Apk -> StorageUsagePalette.Apk
+}
+
+/** 产物操作：APK 走安装引导，其他文件按分享/打开处理；复用消息附件的统一链路。 */
+private fun openArtifact(
+    context: Context,
+    detail: StorageDetail,
+    fileAccess: FileAccessProvider,
+    scope: CoroutineScope
+) {
+    val path = detail.path ?: return
+    val mime = if (detail.label.endsWith(".apk", ignoreCase = true)) {
+        "application/vnd.android.package-archive"
+    } else {
+        "application/octet-stream"
+    }
+    scope.launch {
+        openSentAttachment(
+            context,
+            AgentAttachment(
+                fileName = detail.label,
+                containerPath = path,
+                localPath = "",
+                mimeType = mime,
+                sizeBytes = detail.bytes,
+                isImage = false
+            ),
+            fileAccess
+        )
+    }
+}
+
+/** 操作菜单里的一行动作按钮（左对齐、紧凑）。 */
+@Composable
+private fun ActionRow(text: String, danger: Boolean = false, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Start
+        )
+    }
 }

@@ -147,6 +147,12 @@ class VncOverlayViewModel @Inject constructor(
 
     fun requestReconnect() = _reconnectRequests.update { it + 1 }
 
+    /** 失败态重试：重跑容器内 VNC 服务拉起（幂等）；成功后画面由 serviceState 观察方自动重连。 */
+    fun retryStart() {
+        _connected.value = false
+        viewModelScope.launch { serviceController.ensureRunning() }
+    }
+
     fun setConnected(value: Boolean) {
         _connected.value = value
     }

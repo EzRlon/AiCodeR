@@ -41,6 +41,11 @@
     <string name="settings_compaction_threshold_desc">Compact context once it reaches this share of the window</string>
     <string name="settings_percent_value">%1$d%%</string>
     <string name="settings_compaction_threshold_input_hint">Integer percentage between 1 and 100</string>
+    <string name="settings_token_budget">Per-task token budget</string>
+    <string name="settings_token_budget_desc">Pause and ask before continuing once a single task reaches this usage; 0 = unlimited</string>
+    <string name="settings_token_budget_input_hint">Integer ≥ 0; 0 means unlimited</string>
+    <string name="settings_token_budget_unlimited">Unlimited</string>
+    <string name="settings_token_budget_value">%1$,d tokens</string>
     <string name="settings_general_tools">Tools</string>
     <string name="settings_sendfile_max_size">sendFile max file size</string>
     <string name="settings_sendfile_max_size_desc">Per-file size cap; exceeding it fails the whole batch</string>
@@ -49,6 +54,9 @@
     <string name="settings_vision_model">Vision Model</string>
     <string name="settings_compaction_model">Compaction Model</string>
     <string name="settings_title_model">Title Model</string>
+    <string name="settings_verification_model">Verification Model</string>
+    <string name="settings_verification_unconfigured">Not set (final verification off)</string>
+    <string name="verification_no_models">No model available for verification. Add models in a provider first.</string>
     <string name="settings_image_gen_model">Image Generation Model</string>
     <string name="settings_mcp">MCP Servers</string>
     <string name="settings_skills">Skills</string>
@@ -248,6 +256,55 @@
     <string name="notification_keepalive_enabled">Keepalive enabled</string>
     <string name="notification_channel_agent_complete">Agent completion notifications</string>
     <string name="notification_channel_agent_complete_desc">Notifications shown when the agent finishes in background</string>
+    <string name="notification_channel_agent_permission">Tool permission requests</string>
+    <string name="notification_channel_agent_permission_desc">Approve or reject AI tool permissions right from the notification while the app is in background</string>
+    <string name="permission_notification_title">AI requests tool permission</string>
+    <string name="permission_notification_approve">Approve once</string>
+    <string name="permission_notification_reject">Reject</string>
+
+    <!-- Screenshot annotation ledger -->
+    <string name="annotation_capture_entry">Annotate screen</string>
+    <string name="annotation_ledger_title">Annotation ledger</string>
+    <string name="annotation_type_bug">Bug</string>
+    <string name="annotation_type_to_change">To change</string>
+    <string name="annotation_type_dont">Don\'t</string>
+    <string name="annotation_type_optimize">Optimize</string>
+    <string name="annotation_undo">Undo last mark</string>
+    <string name="annotation_note_hint">Add a note (optional)</string>
+    <string name="annotation_save">Save</string>
+    <string name="annotation_saved">Saved to annotation ledger</string>
+    <string name="annotation_save_failed">Save failed, please retry</string>
+    <string name="annotation_capture_failed">Screenshot failed, please retry</string>
+    <string name="annotation_ledger_empty">No annotations yet — start from "Annotate screen" in the sidebar</string>
+    <string name="annotation_no_note">(no note)</string>
+    <string name="annotation_loading">Loading…</string>
+    <string name="annotation_delete">Delete this annotation</string>
+    <string name="annotation_summary_send">Send summary to AI</string>
+    <string name="annotation_summary_header">Screenshot annotations to fix (%1$d items; images attached, each with a type and note):</string>
+    <string name="annotation_summary_line">%1$d. [%2$s] %3$s — image: %4$s</string>
+    <string name="annotation_summary_footer">Handle by type: Bug=fix it; To change=adjust as described; Don\'t=avoid the pictured approach; Optimize=improve as suitable.</string>
+    <string name="annotation_summary_queued">Injected into the input box; back to chat to send</string>
+    <string name="annotation_status_pending">To confirm</string>
+    <string name="annotation_status_sent">Sent</string>
+    <string name="annotation_status_fixing">Fixing</string>
+    <string name="annotation_status_review">To verify</string>
+    <string name="annotation_status_closed">Closed</string>
+
+    <!-- Test builds -->
+    <string name="test_build_title">Test builds</string>
+    <string name="test_build_refresh">Rescan</string>
+    <string name="test_build_empty">No APK found — build one in the workspace first</string>
+    <string name="test_build_install">Install</string>
+    <string name="chat_turn_artifacts">%1$d artifact(s) from this run</string>
+
+    <!-- Web preview -->
+    <string name="preview_title">Web preview</string>
+    <string name="preview_port_hint">Port, e.g. 8080</string>
+    <string name="preview_open">Open</string>
+    <string name="preview_reload">Reload</string>
+    <string name="preview_retry">Retry</string>
+    <string name="preview_idle_hint">Start a dev server in the terminal (e.g. npm run dev), then come back and enter the port to preview. HMR takes effect automatically.</string>
+    <string name="preview_failed">Cannot reach 127.0.0.1:%1$s — check that the server is running and the port is correct</string>
     <string name="settings_app_permissions">App Permissions</string>
     <string name="settings_permission_apk_install">Install unknown apps</string>
     <string name="settings_permission_apk_install_desc">Allow installing APK packages</string>
@@ -414,6 +471,7 @@
 
     <!-- Agent Status -->
     <string name="agent_stopped_by_user">Stopped by user</string>
+    <string name="agent_budget_stopped">Task stopped as you chose (token budget reached; about %1$,d / %2$,d tokens used this round).</string>
     <string name="agent_tool_executing">%1$s running…</string>
     <string name="agent_stop_refusal">The model declined to answer under its content safety policy.</string>
     <string name="agent_stop_context_exceeded">This request exceeds the model\'s context window. Compact the context or start a new session.</string>    <string name="agent_context_no_compaction">No compaction needed (too few messages)</string>
@@ -649,6 +707,11 @@
     <string name="chat_plan_completed">Plan completed</string>
     <string name="chat_continue_feedback">Continue feedback</string>
     <string name="chat_approve_and_implement">Approve and implement</string>
+    <string name="chat_budget_panel_title">Token budget reached</string>
+    <string name="chat_budget_panel_detail">This task has used about %1$,d / %2$,d tokens. Continue removes the limit for this task; Stop ends it now.</string>
+    <string name="chat_budget_continue">Continue</string>
+    <string name="chat_budget_stop">Stop task</string>
+    <string name="chat_verification_report">Independent verification</string>
 
     <!-- Checkpoint & Rewind -->
     <string name="checkpoint_rewind_title">Checkpoint &amp; Rewind</string>
@@ -1384,6 +1447,12 @@
     <string name="provider_models_batch_delete">Delete</string>
     <string name="provider_models_batch_delete_title">Delete Models</string>
     <string name="provider_models_batch_delete_confirm">Are you sure you want to delete the selected %1$d models?</string>
+    <string name="provider_models_test_all">Test All</string>
+    <string name="provider_models_testing_progress">Testing %1$d/%2$d</string>
+    <string name="provider_models_clean_unreachable">Clean Up</string>
+    <string name="provider_models_clean_title">Clean Unreachable Models</string>
+    <string name="provider_models_clean_confirm">%1$d models are unreachable. Delete them?\n\n%2$s</string>
+    <string name="provider_models_clean_none">All models are reachable; nothing to clean</string>
     <string name="provider_model_name">Model Name</string>    <string name="provider_model_already_added">This model has already been added</string>
     <string name="provider_edit_model">Edit Model</string>
     <string name="provider_model_section_price">Pricing</string>
@@ -1650,7 +1719,66 @@
     <string name="chat_action_share">Share</string>
     <string name="chat_share_failed">Share failed</string>
     <string name="chat_shared_text_queued">Content received; it will be added to the input box</string>
+    <string name="chat_attachment_import_failed">Some attachments could not be loaded (unreadable or too large)</string>
     <string name="chat_action_delete">Delete Message</string>
+    <string name="chat_message_actions_title">Message actions</string>
+    <string name="chat_action_quote">Quote &amp; ask</string>
+    <string name="chat_action_explain">Explain this</string>
+    <string name="chat_action_search_workspace">Search in workspace</string>
+    <string name="chat_action_select_text">Select text</string>
+    <string name="chat_select_text_mode">Text selection mode</string>
+    <string name="chat_explain_prefix">Please explain the following:</string>
+    <string name="chat_search_workspace_prefix">Find implementations in the project workspace related to the following:</string>
+    <string name="chat_session_id_copied">Session ID copied</string>
+    <string name="chat_voice_release_send">Release to send · slide up to cancel</string>
+    <string name="chat_voice_processing">Recognizing…</string>
+    <string name="chat_voice_no_speech">Didn\'t catch that, please retry</string>
+    <string name="chat_voice_failed">Speech recognition failed, please retry</string>
+    <string name="chat_voice_permission_granted">Microphone allowed, hold the send button again to talk</string>
+    <string name="browser_share">Share</string>
+    <string name="browser_copy_link">Copy link</string>
+    <string name="browser_link_copied">Link copied</string>
+    <string name="browser_add_bookmark">Add bookmark</string>
+    <string name="browser_bookmark_added">Bookmark added</string>
+    <string name="browser_bookmark_exists">Already bookmarked</string>
+    <string name="browser_bookmarks">Bookmarks</string>
+    <string name="browser_history">History</string>
+    <string name="browser_history_empty">No history yet</string>
+    <string name="browser_bookmarks_empty">No bookmarks yet</string>
+    <string name="browser_history_clear">Clear history</string>
+    <string name="browser_download_started">Download started: %1$s</string>
+    <string name="browser_download_unsupported">This download type is not supported</string>
+    <string name="settings_self_improve_mode">Self-improvement mode</string>
+    <string name="settings_self_improve_mode_desc">Let the AI reflect and refine its skills and prompts (stored in ~/.aicode, kept across updates)</string>
+    <string name="settings_handoff_prompt">Handoff reminder</string>
+    <string name="settings_handoff_prompt_desc">Prompt to start a fresh session when context usage crosses the threshold</string>
+    <string name="settings_handoff_prompt_percent">Handoff threshold</string>
+    <string name="settings_handoff_prompt_percent_desc">Percentage of the context window (1-100)</string>
+    <string name="handoff_prompt_title">Context %1$d%% used</string>
+    <string name="handoff_prompt_detail">Start a fresh session and continue with a handoff summary of the current progress.</string>
+    <string name="handoff_prompt_action">Handoff to new session</string>
+    <string name="handoff_prompt_dismiss">Not now</string>
+    <string name="handoff_prompt_generating">Preparing summary…</string>
+    <string name="settings_teams">Teams</string>
+    <string name="settings_teams_empty">No team definitions yet</string>
+    <string name="settings_teams_empty_desc">Add a &lt;name&gt;.md under ~/.aicode/teams or the workspace .aicode/teams</string>
+    <string name="settings_teams_hint">Format: YAML frontmatter with name/description/members; the body is the leader prompt. Summon from the team button in the chat header.</string>
+    <string name="team_picker_title">Expert teams</string>
+    <string name="team_picker_none">No team</string>
+    <string name="team_picker_empty">No team definitions yet</string>
+    <string name="team_members_count">%1$d members</string>
+    <string name="vnc_preparing_hint">Preparing VNC environment…</string>
+    <string name="storage_artifacts_build_dir">Build directory (%1$s)</string>
+    <string name="storage_artifacts_node_modules">Node dependencies (node_modules)</string>
+    <string name="storage_artifacts_venv">Python virtualenv (venv)</string>
+    <string name="storage_artifact_open">Install / Open</string>
+    <string name="storage_artifact_copy_path">Copy path</string>
+    <string name="storage_artifact_reveal">Show in file tree</string>
+    <string name="storage_artifact_delete">Delete this file</string>
+    <string name="storage_artifact_path_copied">Path copied</string>
+    <string name="storage_artifact_delete_confirm_title">Delete artifact?</string>
+    <string name="storage_artifact_delete_confirm_message">"%1$s" (%2$s) will be deleted permanently. Build artifacts can be regenerated.</string>
+    <string name="storage_clean_confirm_artifacts">Workspace artifacts: %1$d items (%2$s)</string>
     <string name="chat_edit_dialog_title">Edit Message</string>
     <string name="chat_edit_dialog_hint">Enter message content</string>
 
@@ -1857,4 +1985,11 @@
     <string name="browser_ua_custom_dialog_title">Custom User-Agent</string>
     <string name="browser_ua_custom_input_hint">Enter full User-Agent string</string>
     <string name="browser_ua_applied_toast">User-Agent updated, page reloaded</string>
+    <string name="memory_graph_title">Memory Graph</string>
+    <string name="memory_graph_open">Open memory graph</string>
+    <string name="memory_graph_running_only">Running only</string>
+    <string name="memory_graph_empty">No session nodes yet</string>
+    <string name="memory_graph_project">Project</string>
+    <string name="memory_graph_session">Session</string>
+    <string name="editor_note_mode">Note mode</string>
 </resources>

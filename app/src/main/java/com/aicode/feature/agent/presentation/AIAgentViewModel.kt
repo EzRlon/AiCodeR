@@ -41,6 +41,7 @@ import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ChatSession
+import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.notification.AgentNotificationCenter
 import com.aicode.feature.agent.domain.notification.AgentNotificationFormatter
@@ -57,6 +58,9 @@ import com.aicode.core.watch.FileChangeHub
 import com.aicode.core.watch.asDirtySignal
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
+import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
+import com.aicode.feature.agent.domain.workflow.BudgetApprovalManager
+import com.aicode.feature.agent.domain.workflow.BudgetApprovalRequest
 import com.aicode.feature.terminal.domain.TabFinishedEvent
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.domain.TerminalSessionManager
@@ -75,6 +79,8 @@ import com.aicode.feature.agent.domain.tool.question.AskUserQuestionManager
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
+import com.aicode.feature.agent.domain.team.TeamRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -121,6 +127,14 @@ import java.util.Calendar
 import java.util.UUID
 import javax.inject.Inject
 
+/** 交接提醒状态：上下文占用达到阈值后展示在输入区上方，确认则生成接手摘要并开新会话继续。 */
+data class HandoffPrompt(
+    val sessionId: String,
+    val percent: Int,
+    /** 正在生成接手摘要（按钮禁用、显示进度）。 */
+    val generating: Boolean = false
+)
+
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
 class AIAgentViewModel @Inject constructor(
@@ -139,6 +153,7 @@ class AIAgentViewModel @Inject constructor(
     private val sessionUseCase: SessionUseCase,
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val planApprovalManager: PlanApprovalManager,
+    private val budgetApprovalManager: BudgetApprovalManager,
     private val terminalSessionManager: TerminalSessionManager,
     private val slashCommandRegistry: SlashCommandRegistry,
     private val fileMentionRepository: FileMentionRepository,
@@ -152,6 +167,7 @@ class AIAgentViewModel @Inject constructor(
     private val subAgentEventBus: SubAgentEventBus,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
+    private val teamRepository: TeamRepository,
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
@@ -159,6 +175,12 @@ class AIAgentViewModel @Inject constructor(
 ) : ViewModel(), SlashCommandContext {
 
     private val sessionJobs = mutableMapOf<String, Job>()
+
+    private val _handoffPrompt = MutableStateFlow<HandoffPrompt?>(null)
+    val handoffPrompt: StateFlow<HandoffPrompt?> = _handoffPrompt.asStateFlow()
+
+    /** 本运行内已忽略/已处理的会话：不再重复弹交接提醒。 */
+    private val ignoredHandoffSessions = mutableSetOf<String>()
 
     /**
      * agent 执行期间持有的 CPU 唤醒锁：熄屏后系统会挂起进程，使流式响应中断、工具调用卡死。
@@ -613,6 +635,25 @@ class AIAgentViewModel @Inject constructor(
         saveExpansion(_currentWorkspace.value, updated)
     }
 
+    /** 文件树定位（存储空间等入口跳转用）：展开指定容器路径的父目录链，让目标在「文件」页签中可见。 */
+    fun revealPathInTree(containerPath: String) {
+        val root = WorkspacePathMapper.CONTAINER_ROOT
+        val normalized = containerPath.trimEnd('/')
+        if (!normalized.startsWith(root)) return
+        val rel = normalized.removePrefix(root).trim('/')
+        if (rel.isEmpty()) return
+        val parts = rel.split('/')
+        val expand = buildSet {
+            add(root)
+            var acc = root
+            for (i in 0 until parts.size - 1) {
+                acc = "$acc/${parts[i]}"
+                add(acc)
+            }
+        }
+        _expandedPaths.value = _expandedPaths.value + expand
+    }
+
     /**
      * 文件浏览的写操作共用包装：跑 IO 调度器，成功后主动重读目录（远程模式无 inotify）。
      * [busyPaths] 为本次操作涉及的条目路径，操作期间加入 [fileOpPaths] 让 UI 显示等待动画。
@@ -977,6 +1018,8 @@ class AIAgentViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val pendingPlanApproval: StateFlow<PlanApprovalRequest?> = planApprovalManager.pendingApproval
+
+    val pendingBudgetApproval: StateFlow<BudgetApprovalRequest?> = budgetApprovalManager.pendingApproval
 
     // 工具调用传入参数（argsPreview）按落库消息 id 暂存：ToolCallStarted 落库后，
     // ToolCallFinished / 用户停止会用同 id REPLACE 整行，需在此把参数带到后续落库。
@@ -1586,6 +1629,7 @@ class AIAgentViewModel @Inject constructor(
                 sessionId = sessionId,
                 inputMessageId = userMsgId,
                 lastInputTokens = sessionEntity?.lastInputTokens ?: 0,
+                teamName = sessionEntity?.teamName,
                 mode = mode,
                 modeBeforePlan = sessionDomain?.modeBeforePlan,
                 reasoningEffort = sessionDomain?.reasoningEffort?.apiValue,
@@ -1684,6 +1728,24 @@ class AIAgentViewModel @Inject constructor(
                             event.reason,
                             toolName = COMPACTION_FAILURE_TOOL_NAME,
                             isError = true
+                        )
+                    }
+                    is AgentEvent.VerificationReport -> {
+                        // 独立验收结论：落库为无配对的 TOOL 消息（专用卡片渲染，buildHistory 回放自动丢弃）。
+                        messagePersistenceUseCase.persist(
+                            sessionId,
+                            MessageRole.TOOL,
+                            event.content,
+                            toolName = VERIFICATION_REPORT_TOOL_NAME,
+                            isError = false
+                        )
+                    }
+                    is AgentEvent.BudgetStopped -> {
+                        // 用户因预算用尽选择停止：落一条说明，让对话流对「为何停下」有迹可循。
+                        messagePersistenceUseCase.persist(
+                            sessionId,
+                            MessageRole.ASSISTANT,
+                            context.getString(R.string.agent_budget_stopped, event.usedTokens, event.budgetTokens)
                         )
                     }
                     is AgentEvent.AssistantText -> {
@@ -1875,6 +1937,14 @@ class AIAgentViewModel @Inject constructor(
             // 本轮未能搭车送达的后台通知：本轮结束且 job 已移除后，合并成一条发送
             flushPendingNotifications(sessionId)
 
+            // 交接提醒：仅在本轮成功结束、无排队继续时评估（纯提示，失败静默）
+            if (isOwnJob &&
+                _agentStates.value[sessionId] is AgentUIState.Result &&
+                _queuedRequests.value[sessionId].isNullOrEmpty()
+            ) {
+                maybePromptHandoff(sessionId)
+            }
+
             // 正常完成时先回到 Idle，再处理队列；队列若有下一轮会重新设 Streaming
             val currentState = _agentStates.value[sessionId]
             if (currentState !is AgentUIState.Error && currentState !is AgentUIState.Loading && currentState !is AgentUIState.Streaming) {
@@ -1897,6 +1967,92 @@ class AIAgentViewModel @Inject constructor(
             sessionJobs[targetSessionId] = job
         }
     }
+
+    /**
+     * 交接提醒评估：上下文占用达到阈值且未忽略时，在输入区上方弹出提示。
+     * 只在回合成功结束时调用；任何一步失败都静默（纯提示，不影响主流程）。
+     */
+    private suspend fun maybePromptHandoff(sessionId: String) {
+        runCatching {
+            if (sessionId in ignoredHandoffSessions) return
+            if (!generalSettingsRepository.handoffPromptEnabledFlow.first()) return
+            val threshold = generalSettingsRepository.handoffPromptPercentFlow.first()
+            val usedTokens = sessionUseCase.getSessionById(sessionId)?.lastInputTokens ?: 0
+            if (usedTokens <= 0) return
+            val budget = agentWorkflow.handoffInputBudget(sessionId) ?: return
+            val percent = (usedTokens * 100L / budget).toInt()
+            if (percent >= threshold) {
+                _handoffPrompt.value = HandoffPrompt(sessionId, percent)
+            }
+        }.onFailure { FileLogger.w(TAG, "交接提醒评估失败", it) }
+    }
+
+    /** 确认交接：生成接手摘要并新建「（接手）旧标题」会话继续；失败时恢复提示卡。 */
+    fun confirmHandoff() {
+        val prompt = _handoffPrompt.value ?: return
+        if (prompt.generating) return
+        _handoffPrompt.value = prompt.copy(generating = true)
+        viewModelScope.launch {
+            val oldSessionId = prompt.sessionId
+            runCatching {
+                val summary = agentWorkflow.buildHandoffSummary(oldSessionId)
+                check(!summary.isNullOrBlank()) { "接手摘要生成失败" }
+                val old = sessionUseCase.getSessionById(oldSessionId)
+                checkNotNull(old) { "原会话不存在" }
+                val newEntity = sessionUseCase.newSessionEntity(
+                    workspacePath = old.workspacePath,
+                    providerId = old.providerId,
+                    model = old.model,
+                    reasoningEffort = old.reasoningEffort
+                ).copy(title = "（接手）" + old.title)
+                sessionUseCase.upsertSession(newEntity)
+                messagePersistenceUseCase.persist(newEntity.id, MessageRole.USER, CONTEXT_COMPACTION_MARKER)
+                messagePersistenceUseCase.persist(newEntity.id, MessageRole.ASSISTANT, summary)
+                messagePersistenceUseCase.invalidateHistory(newEntity.id)
+                sessionUseCase.touch(newEntity.id, messagePersistenceUseCase.nextTimestamp())
+                ignoredHandoffSessions.add(oldSessionId)
+                _handoffPrompt.value = null
+                selectSession(newEntity.id)
+            }.onFailure {
+                FileLogger.w(TAG, "交接开新会话失败", it)
+                val current = _handoffPrompt.value
+                if (current?.sessionId == oldSessionId) {
+                    _handoffPrompt.value = current.copy(generating = false)
+                }
+            }
+        }
+    }
+
+    /** 忽略本次交接提醒（本运行内该会话不再提示）。 */
+    fun dismissHandoff() {
+        _handoffPrompt.value?.let { ignoredHandoffSessions.add(it.sessionId) }
+        _handoffPrompt.value = null
+    }
+
+    private val _teamName = MutableStateFlow<String?>(null)
+
+    /** 当前会话召唤的编队名；null 表示未使用编队。 */
+    val teamName: StateFlow<String?> = _teamName.asStateFlow()
+
+    init {
+        // 跟随会话切换/冷启动刷新当前编队（单一同步点）
+        viewModelScope.launch {
+            _currentSessionId.collect { id ->
+                _teamName.value = if (id.isNullOrBlank()) null else sessionUseCase.getSessionById(id)?.teamName
+            }
+        }
+    }
+
+    /** 更新当前会话的编队（null 清除）。 */
+    fun setSessionTeam(name: String?) = viewModelScope.launch {
+        val sid = _currentSessionId.value
+        if (sid.isNullOrBlank()) return@launch
+        sessionUseCase.updateTeamName(sid, name)
+        _teamName.value = name
+    }
+
+    /** 编队定义列表（供选择器展示；实时扫描，用户改动文件后立即可见）。 */
+    fun listTeams(): List<TeamDefinitionEntry> = teamRepository.listAll()
 
     fun resolveToolPermission(id: String, choice: PermissionChoice) {
         toolPermissionManager.resolve(id, choice)
@@ -2297,6 +2453,11 @@ class AIAgentViewModel @Inject constructor(
     /** 用户选择继续反馈，唤醒 workflow 回滚到 PLAN 模式。 */
     fun refinePlan() {
         planApprovalManager.resolve(PlanApprovalChoice.REFINE)
+    }
+
+    /** 预算面板：用户选择后回传决策，唤醒 workflow 继续执行或停止本轮任务。 */
+    fun resolveBudgetApproval(id: String, choice: BudgetApprovalChoice) {
+        budgetApprovalManager.resolve(id, choice)
     }
 
     fun selectSession(id: String) {

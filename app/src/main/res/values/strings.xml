@@ -41,6 +41,11 @@
     <string name="settings_compaction_threshold_desc">上下文占用达到窗口的该比例时自动压缩</string>
     <string name="settings_percent_value">%1$d%%</string>
     <string name="settings_compaction_threshold_input_hint">填 1-100 的整数百分比</string>
+    <string name="settings_token_budget">单次任务 Token 预算</string>
+    <string name="settings_token_budget_desc">一轮任务内用量达到该值后暂停并询问是否继续，0 表示不限制</string>
+    <string name="settings_token_budget_input_hint">填大于等于 0 的整数，0 表示不限制</string>
+    <string name="settings_token_budget_unlimited">不限制</string>
+    <string name="settings_token_budget_value">%1$,d tokens</string>
     <string name="settings_general_tools">工具</string>
     <string name="settings_sendfile_max_size">sendFile 单文件上限</string>
     <string name="settings_sendfile_max_size_desc">单个文件大小上限，超过则整批发送失败</string>
@@ -49,6 +54,9 @@
     <string name="settings_vision_model">识图模型</string>
     <string name="settings_compaction_model">压缩模型</string>
     <string name="settings_title_model">标题总结模型</string>
+    <string name="settings_verification_model">验收模型</string>
+    <string name="settings_verification_unconfigured">未配置（关闭收尾验收）</string>
+    <string name="verification_no_models">没有可用于验收的模型，请先在提供商中添加</string>
     <string name="settings_image_gen_model">生图模型</string>
     <string name="settings_mcp">MCP 服务器</string>
     <string name="settings_skills">技能</string>
@@ -248,6 +256,55 @@
     <string name="notification_keepalive_enabled">后台保活已开启</string>
     <string name="notification_channel_agent_complete">Agent 完成通知</string>
     <string name="notification_channel_agent_complete_desc">Agent 在后台完成任务时弹出的通知</string>
+    <string name="notification_channel_agent_permission">工具授权请求</string>
+    <string name="notification_channel_agent_permission_desc">App 在后台时，AI 请求工具授权可从通知直接批准或拒绝</string>
+    <string name="permission_notification_title">AI 请求工具授权</string>
+    <string name="permission_notification_approve">批准一次</string>
+    <string name="permission_notification_reject">拒绝</string>
+
+    <!-- 截图标注账本 -->
+    <string name="annotation_capture_entry">界面标注</string>
+    <string name="annotation_ledger_title">标注账本</string>
+    <string name="annotation_type_bug">bug</string>
+    <string name="annotation_type_to_change">要改</string>
+    <string name="annotation_type_dont">不要</string>
+    <string name="annotation_type_optimize">优化</string>
+    <string name="annotation_undo">撤销一笔</string>
+    <string name="annotation_note_hint">补充说明（可选）</string>
+    <string name="annotation_save">保存</string>
+    <string name="annotation_saved">已保存到标注账本</string>
+    <string name="annotation_save_failed">保存失败，请重试</string>
+    <string name="annotation_capture_failed">截屏失败，请重试</string>
+    <string name="annotation_ledger_empty">还没有标注，从侧边栏「界面标注」开始</string>
+    <string name="annotation_no_note">（未填说明）</string>
+    <string name="annotation_loading">加载中…</string>
+    <string name="annotation_delete">删除这条标注</string>
+    <string name="annotation_summary_send">汇总发给 AI</string>
+    <string name="annotation_summary_header">本轮界面截图标注汇总（共 %1$d 条，图片见附件；每条含标注类型与说明）：</string>
+    <string name="annotation_summary_line">%1$d. 【%2$s】%3$s　图片：%4$s</string>
+    <string name="annotation_summary_footer">请按类型处理：bug=修复问题；要改=按说明调整；不要=避免图片中的做法；优化=酌情改进。</string>
+    <string name="annotation_summary_queued">已注入输入框，回聊天页即可发送</string>
+    <string name="annotation_status_pending">待确认</string>
+    <string name="annotation_status_sent">已发AI</string>
+    <string name="annotation_status_fixing">修复中</string>
+    <string name="annotation_status_review">待复验</string>
+    <string name="annotation_status_closed">关闭</string>
+
+    <!-- 测试包列表 -->
+    <string name="test_build_title">测试包</string>
+    <string name="test_build_refresh">重新扫描</string>
+    <string name="test_build_empty">没有找到 APK，先在工作区里构建一个吧</string>
+    <string name="test_build_install">安装</string>
+    <string name="chat_turn_artifacts">本轮产物 %1$d 个文件</string>
+
+    <!-- Web 预览 -->
+    <string name="preview_title">Web 预览</string>
+    <string name="preview_port_hint">输入端口，如 8080</string>
+    <string name="preview_open">打开</string>
+    <string name="preview_reload">刷新页面</string>
+    <string name="preview_retry">重试</string>
+    <string name="preview_idle_hint">在终端里启动开发服务（如 npm run dev），然后回到这里输入端口打开预览；前端热更新会直接生效。</string>
+    <string name="preview_failed">连不上 127.0.0.1:%1$s，请确认服务已启动且端口正确</string>
     <string name="settings_app_permissions">软件权限</string>
     <string name="settings_permission_apk_install">安装未知应用</string>
     <string name="settings_permission_apk_install_desc">允许安装 APK 安装包</string>
@@ -414,6 +471,7 @@
 
     <!-- Agent Status -->
     <string name="agent_stopped_by_user">已被用户停止</string>
+    <string name="agent_budget_stopped">已按你的选择停止当前任务（Token 预算已用尽，本轮约使用 %1$,d / %2$,d tokens）。</string>
     <string name="agent_tool_executing">%1$s 执行中…</string>
     <string name="agent_stop_refusal">模型基于内容安全策略拒绝了本次回答。</string>
     <string name="agent_stop_context_exceeded">本次输入超出模型上下文窗口，请先压缩上下文或新建会话。</string>    <string name="agent_context_no_compaction">当前上下文无需压缩（消息过少）</string>
@@ -649,6 +707,11 @@
     <string name="chat_plan_completed">计划已完成</string>
     <string name="chat_continue_feedback">继续反馈</string>
     <string name="chat_approve_and_implement">批准并实施</string>
+    <string name="chat_budget_panel_title">Token 预算已用尽</string>
+    <string name="chat_budget_panel_detail">本轮任务已使用约 %1$,d / %2$,d tokens。继续执行将解除本轮预算限制，停止则结束当前任务。</string>
+    <string name="chat_budget_continue">继续执行</string>
+    <string name="chat_budget_stop">停止任务</string>
+    <string name="chat_verification_report">独立验收</string>
 
     <!-- Checkpoint & Rewind -->
     <string name="checkpoint_rewind_title">检查点与撤销</string>
@@ -1384,6 +1447,12 @@
     <string name="provider_models_batch_delete">删除</string>
     <string name="provider_models_batch_delete_title">删除模型</string>
     <string name="provider_models_batch_delete_confirm">确定删除选中的 %1$d 个模型吗？</string>
+    <string name="provider_models_test_all">全部测试</string>
+    <string name="provider_models_testing_progress">测试中 %1$d/%2$d</string>
+    <string name="provider_models_clean_unreachable">清理不通</string>
+    <string name="provider_models_clean_title">清理连接不通的模型</string>
+    <string name="provider_models_clean_confirm">以下 %1$d 个模型连接不通，确认删除？\n\n%2$s</string>
+    <string name="provider_models_clean_none">所有模型连接正常，无需清理</string>
     <string name="provider_model_name">模型名称</string>    <string name="provider_model_already_added">该模型已添加</string>
     <string name="provider_edit_model">编辑模型</string>
     <string name="provider_model_section_price">价格</string>
@@ -1649,7 +1718,66 @@
     <string name="chat_action_share">分享</string>
     <string name="chat_share_failed">分享失败</string>
     <string name="chat_shared_text_queued">内容已收到，将填入输入框</string>
+    <string name="chat_attachment_import_failed">部分附件未能载入（文件不可读或过大）</string>
     <string name="chat_action_delete">删除消息</string>
+    <string name="chat_message_actions_title">消息操作</string>
+    <string name="chat_action_quote">引用追问</string>
+    <string name="chat_action_explain">解释这段</string>
+    <string name="chat_action_search_workspace">在工作区中查找</string>
+    <string name="chat_action_select_text">选择文本</string>
+    <string name="chat_select_text_mode">选择文本模式</string>
+    <string name="chat_explain_prefix">请解释以下内容：</string>
+    <string name="chat_search_workspace_prefix">请在项目工作区中查找与以下内容相关的实现：</string>
+    <string name="chat_session_id_copied">已复制会话 ID</string>
+    <string name="chat_voice_release_send">松开发送 · 上滑取消</string>
+    <string name="chat_voice_processing">正在识别…</string>
+    <string name="chat_voice_no_speech">没有听清，请重试</string>
+    <string name="chat_voice_failed">语音识别失败，请重试</string>
+    <string name="chat_voice_permission_granted">已允许录音，请再次长按发送键说话</string>
+    <string name="browser_share">分享</string>
+    <string name="browser_copy_link">复制链接</string>
+    <string name="browser_link_copied">链接已复制</string>
+    <string name="browser_add_bookmark">添加书签</string>
+    <string name="browser_bookmark_added">已添加书签</string>
+    <string name="browser_bookmark_exists">已在书签中</string>
+    <string name="browser_bookmarks">书签</string>
+    <string name="browser_history">历史记录</string>
+    <string name="browser_history_empty">暂无浏览记录</string>
+    <string name="browser_bookmarks_empty">暂无书签</string>
+    <string name="browser_history_clear">清空历史</string>
+    <string name="browser_download_started">已开始下载：%1$s</string>
+    <string name="browser_download_unsupported">该下载类型暂不支持</string>
+    <string name="settings_self_improve_mode">自我改进模式</string>
+    <string name="settings_self_improve_mode_desc">允许 AI 反思自身表现，把改进沉淀为技能与提示词（保存在 ~/.aicode，跨版本保留）</string>
+    <string name="settings_handoff_prompt">交接提醒</string>
+    <string name="settings_handoff_prompt_desc">上下文占用达到阈值时提示开新会话接手</string>
+    <string name="settings_handoff_prompt_percent">交接提醒阈值</string>
+    <string name="settings_handoff_prompt_percent_desc">上下文窗口的百分比（1-100）</string>
+    <string name="handoff_prompt_title">上下文已用 %1$d%%，建议交接</string>
+    <string name="handoff_prompt_detail">可开一个新会话继续：当前进展会整理成接手摘要带过去。</string>
+    <string name="handoff_prompt_action">交接开新会话</string>
+    <string name="handoff_prompt_dismiss">暂不</string>
+    <string name="handoff_prompt_generating">正在整理摘要…</string>
+    <string name="settings_teams">编队</string>
+    <string name="settings_teams_empty">暂无编队定义</string>
+    <string name="settings_teams_empty_desc">在 ~/.aicode/teams 或工作区 .aicode/teams 放置 &lt;name&gt;.md 即可新增</string>
+    <string name="settings_teams_hint">编队格式：YAML frontmatter 写 name/description/members，正文为团长提示词；聊天页顶栏的编队按钮可召唤。</string>
+    <string name="team_picker_title">专家团 · 编队</string>
+    <string name="team_picker_none">不使用编队</string>
+    <string name="team_picker_empty">暂无编队定义</string>
+    <string name="team_members_count">%1$d 名成员</string>
+    <string name="vnc_preparing_hint">正在准备 VNC 环境…</string>
+    <string name="storage_artifacts_build_dir">构建目录（%1$s）</string>
+    <string name="storage_artifacts_node_modules">Node 依赖目录（node_modules）</string>
+    <string name="storage_artifacts_venv">Python 虚拟环境（venv）</string>
+    <string name="storage_artifact_open">安装 / 打开</string>
+    <string name="storage_artifact_copy_path">复制路径</string>
+    <string name="storage_artifact_reveal">在文件树中查看</string>
+    <string name="storage_artifact_delete">删除此文件</string>
+    <string name="storage_artifact_path_copied">路径已复制</string>
+    <string name="storage_artifact_delete_confirm_title">删除产物文件？</string>
+    <string name="storage_artifact_delete_confirm_message">将删除「%1$s」（%2$s），不可恢复。构建产物可重新生成。</string>
+    <string name="storage_clean_confirm_artifacts">工作区产物：%1$d 项（%2$s）</string>
     <string name="chat_edit_dialog_title">编辑消息</string>
     <string name="chat_edit_dialog_hint">请输入消息内容</string>
 
@@ -1856,4 +1984,11 @@
     <string name="browser_ua_custom_dialog_title">自定义 User-Agent</string>
     <string name="browser_ua_custom_input_hint">输入完整的 User-Agent 字符串</string>
     <string name="browser_ua_applied_toast">已切换浏览器标识并刷新页面</string>
+    <string name="memory_graph_title">记忆图谱</string>
+    <string name="memory_graph_open">打开记忆图谱</string>
+    <string name="memory_graph_running_only">仅执行中</string>
+    <string name="memory_graph_empty">当前没有会话节点</string>
+    <string name="memory_graph_project">项目</string>
+    <string name="memory_graph_session">会话</string>
+    <string name="editor_note_mode">笔记模式</string>
 </resources>

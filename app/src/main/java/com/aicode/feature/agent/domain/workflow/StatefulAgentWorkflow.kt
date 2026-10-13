@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Base64
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
@@ -48,6 +49,7 @@ import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepositor
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
+import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.agent.domain.provider.AnthropicAdapter
 import com.aicode.feature.agent.domain.provider.fixedTemperature
@@ -102,16 +104,19 @@ class StatefulAgentWorkflow @Inject constructor(
     private val policyEngine: ToolPermissionPolicyEngine,
     private val contextCompactor: ContextCompactor,
     private val planApprovalManager: PlanApprovalManager,
+    private val budgetApprovalManager: BudgetApprovalManager,
     private val toolOutputStore: ToolOutputStore,
     private val modelMetadataService: ModelMetadataService,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val titleModelSettingsRepository: TitleModelSettingsRepository,
+    private val verificationModelSettingsRepository: VerificationModelSettingsRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val sessionUseCase: SessionUseCase,
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val checkpointManager: CheckpointManager,
     private val llmCallRecordDao: LlmCallRecordDao,
+    private val todoItemDao: TodoItemDao,
     private val keyRotator: ProviderKeyRotator,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
@@ -127,6 +132,14 @@ class StatefulAgentWorkflow @Inject constructor(
         const val TITLE_GENERATOR_FILE = "agent/title-generator.md"
         const val TITLE_MAX_CHARS = 50
         const val COMMIT_GENERATOR_FILE = "agent/commit-generator.md"
+        /** 收尾独立验收的提示词文件（验收模型专用，见 runCompletionVerification）。 */
+        const val VERIFIER_FILE = "agent/verifier.md"
+        /** 验收报告落库前的字符上限（模型输出异常超长时截断，防撑爆卡片）。 */
+        const val VERIFICATION_REPORT_MAX_CHARS = 4_000
+        /** 收尾验收输入的对话记录：最多尾部多少条消息、每条截断多少字符、总量封顶多少字符。 */
+        const val VERIFICATION_CONVERSATION_MESSAGES = 30
+        const val VERIFICATION_MESSAGE_MAX_CHARS = 1_500
+        const val VERIFICATION_CONVERSATION_MAX_CHARS = 12_000
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"
         const val MODE_REMINDER_AUTO_FILE = "agent/auto-mode.md"
@@ -266,6 +279,17 @@ class StatefulAgentWorkflow @Inject constructor(
         val result = contextCompactor.compactIfNeeded(history, compactionProvider, sessionId, force = true, windowProvider = provider, onEvent = onEvent)
         return result.compacted
     }
+
+    override suspend fun handoffInputBudget(sessionId: String): Int? = runCatching {
+        val provider = getEffectiveProvider(sessionId)
+        contextCompactor.effectiveInputBudget(provider)
+    }.getOrNull()
+
+    override suspend fun buildHandoffSummary(sessionId: String): String? = runCatching {
+        val history = messagePersistenceUseCase.buildHistory(sessionId, "__handoff__")
+        val provider = resolveCompactionFallbackProvider(sessionId) ?: getEffectiveProvider(sessionId)
+        contextCompactor.buildHandoffSummary(history, provider, sessionId = null)
+    }.getOrNull()
 
     /**
      * 根据 [config] 创建一个全新的、独立的 [AIProvider] 实例。
@@ -543,6 +567,12 @@ class StatefulAgentWorkflow @Inject constructor(
             (currentContext.history[lastAssistantIndex] as AgentMessage.AssistantMessage).inputTokens
         } else 0
         var overflowRecoveryAttempted = false
+        // 单次任务 token 预算：本轮（一次用户请求）内全部 LLM 调用的 input+output 累计，
+        // 触达预算时挂起询问用户；放行后本轮不再提示（budgetExempted），避免反复打断。
+        var taskTokensUsed = 0
+        var budgetExempted = false
+        // 预算超限且用户选择停止后置位：收尾跳过独立验收（任务是被叫停的，不是完成）。
+        var stoppedByBudget = false
 
         while (!state.isFinished && actionQueue.isNotEmpty()) {
             val action = actionQueue.removeFirst()
@@ -735,6 +765,24 @@ class StatefulAgentWorkflow @Inject constructor(
                                     )
                                 )
                                 persisted.await()
+                            }
+                            // 单次任务 token 预算：累计本轮用量；任务仍将继续（还有工具/截断续写）且
+                            // 触达预算时挂起询问。停止路径直接收尾——本次响应不入 LlmResponse 动作，
+                            // 已落库的 assistant 消息（含未配对 tool_call 声明）由 buildHistory 悬挂项过滤兜底。
+                            taskTokensUsed += (aiResponse.inputTokens + aiResponse.outputTokens).coerceAtLeast(0)
+                            if (!budgetExempted && (aiResponse.toolCalls.isNotEmpty() || aiResponse.isTruncated)) {
+                                val budget = generalSettingsRepository.tokenBudget()
+                                if (budget > 0 && taskTokensUsed >= budget) {
+                                    when (budgetApprovalManager.awaitApproval(taskTokensUsed, budget)) {
+                                        BudgetApprovalChoice.CONTINUE -> budgetExempted = true
+                                        BudgetApprovalChoice.STOP -> {
+                                            stoppedByBudget = true
+                                            state = state.copy(isFinished = true)
+                                            send(AgentEvent.BudgetStopped(taskTokensUsed, budget))
+                                            continue
+                                        }
+                                    }
+                                }
                             }
                             actionQueue.addLast(
                                 AgentAction.LlmResponse(
@@ -992,6 +1040,20 @@ class StatefulAgentWorkflow @Inject constructor(
             }
         }
         
+        // 收尾独立验收：正常完成且未被预算叫停时，用独立验收模型对目标清单做交叉检查。
+        // 失败静默跳过——验收是附加价值，绝不能反过来让主任务失败。
+        if (state.error == null && !stoppedByBudget) {
+            try {
+                val report = runCompletionVerification(currentContext, state)
+                if (report != null) {
+                    send(AgentEvent.VerificationReport(report))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "收尾独立验收失败", e)
+            }
+        }
         state.error?.let { send(AgentEvent.Failed(it, state.errorCode)) }
         send(AgentEvent.Completed)
     }
@@ -1096,6 +1158,20 @@ class StatefulAgentWorkflow @Inject constructor(
     }
 
     /**
+     * 独立验收专用 provider 解析。未配置（providerId/model 为空）或配置不可用时返回 null，
+     * 视为关闭收尾验收——本项没有「跟随当前聊天模型」的回退：同一模型验收自己等于没有交叉检查。
+     */
+    private suspend fun resolveVerificationProvider(sessionId: String): AIProvider? {
+        val providerId = verificationModelSettingsRepository.getVerificationProviderId().trim()
+        if (providerId.isEmpty()) return null
+        val model = verificationModelSettingsRepository.getVerificationModel().trim()
+        if (model.isEmpty()) return null
+        val config = aiProviderRepository.getProviderById(providerId) ?: return null
+        if (!config.isEnabled || !config.hasUsableApiKey) return null
+        return createStandaloneProvider(config.copy(selectedModel = model), sessionId)
+    }
+
+    /**
      * 为新建会话生成标题：默认跟随当前聊天模型，配置了标题总结专用模型则用之。
      * 提示词来自 [SystemPromptProvider] 的 `agent/title-generator.md`。
      * 生成失败或取不到标题时返回 null（调用方保留临时标题）。
@@ -1172,6 +1248,109 @@ class StatefulAgentWorkflow @Inject constructor(
     }.onFailure { e ->
         FileLogger.w(TAG, "生成提交信息失败", e)
     }.getOrNull()
+
+    /**
+     * 收尾独立验收：由「验收模型」核对本会话目标清单的完成度，返回报告文本（无则 null，
+     * 由调用方发送 [AgentEvent.VerificationReport] 交 ViewModel 落库为验收卡片）。
+     *
+     * 触发条件（全部满足才跑）：主会话（非子代理）、配置了可用的验收模型、会话有 todo 清单
+     * （目标拆解的载体，见 TodoTool）。异常由调用方兜底，本方法只负责正常路径。
+     */
+    private suspend fun runCompletionVerification(context: AgentContext, state: AgentSessionState): String? {
+        val sessionId = context.sessionId ?: return null
+        // 子代理会话不做验收：其产出由父会话收尾统一把关，也避免任务链无谓变长。
+        if (sessionUseCase.getSessionById(sessionId)?.parentId != null) return null
+        val todos = todoItemDao.getBySessionOnce(sessionId)
+        if (todos.isEmpty()) return null
+        val provider = resolveVerificationProvider(sessionId) ?: return null
+
+        val todoText = todos.joinToString("\n") { item ->
+            val status = when (item.status.lowercase()) {
+                "completed" -> "已完成"
+                "in_progress" -> "进行中"
+                else -> "待办"
+            }
+            val desc = if (item.description.isNotBlank()) "（${item.description}）" else ""
+            "- [$status] ${item.subject}$desc"
+        }
+        val input = "目标清单（todo）：\n$todoText\n\n最近对话记录：\n${buildVerificationConversation(state.messages)}"
+        val prompt = promptProvider.resolvePrompt(VERIFIER_FILE).replace(LEADING_COMMENT, "")
+
+        val callStartWall = System.currentTimeMillis()
+        val callStartElapsed = SystemClock.elapsedRealtime()
+        var callCompleted = false
+        var callError: String? = null
+        var usage: AIResponse? = null
+        val response = try {
+            val resp = provider.complete(
+                systemPrompt = prompt,
+                messages = listOf(AgentMessage.UserMessage(content = input)),
+                tools = emptyList()
+            )
+            usage = resp
+            callCompleted = true
+            resp
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            callError = e.message ?: e.javaClass.simpleName
+            throw e
+        } finally {
+            val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
+            runCatching {
+                llmCallRecordDao.insert(
+                    LlmCallRecordEntity(
+                        sessionId = sessionId,
+                        providerId = provider.providerId.ifBlank { null },
+                        model = provider.model,
+                        kind = "verification",
+                        inputTokens = usage?.inputTokens ?: 0,
+                        outputTokens = usage?.outputTokens ?: 0,
+                        cachedInputTokens = usage?.cachedInputTokens ?: 0,
+                        cacheCreationTokens = usage?.cacheCreationTokens ?: 0,
+                        ttfbMillis = null,
+                        durationMillis = durationMillis,
+                        // 取消口径与主聊天路径对齐：取消记 cancelled（errorMessage 留空），异常记 error。
+                        status = when {
+                            callCompleted -> "success"
+                            callError == null -> "cancelled"
+                            else -> "error"
+                        },
+                        errorMessage = callError,
+                        stopReason = usage?.stopReason,
+                        createdAt = callStartWall
+                    )
+                )
+            }
+        }
+        return response.content.trim().take(VERIFICATION_REPORT_MAX_CHARS).ifEmpty { null }
+    }
+
+    /**
+     * 拼收尾验收的对话记录：只取用户与助手的可见文本（工具原始结果又长又碎，验收判断主要
+     * 看助手汇报与 todo 完成度），按尾部窗口与字符上限截断。
+     */
+    private fun buildVerificationConversation(messages: List<AgentMessage>): String {
+        val sb = StringBuilder()
+        messages
+            .filter { it is AgentMessage.UserMessage || it is AgentMessage.AssistantMessage }
+            .takeLast(VERIFICATION_CONVERSATION_MESSAGES)
+            .forEach { msg ->
+                when (msg) {
+                    is AgentMessage.UserMessage ->
+                        if (msg.content.isNotBlank()) sb.appendLine("用户：${msg.content.take(VERIFICATION_MESSAGE_MAX_CHARS)}")
+                    is AgentMessage.AssistantMessage ->
+                        if (msg.content.isNotBlank()) sb.appendLine("助手：${msg.content.take(VERIFICATION_MESSAGE_MAX_CHARS)}")
+                    else -> {}
+                }
+            }
+        val text = sb.toString()
+        return if (text.length > VERIFICATION_CONVERSATION_MAX_CHARS) {
+            text.takeLast(VERIFICATION_CONVERSATION_MAX_CHARS)
+        } else {
+            text
+        }
+    }
 
     private suspend fun runToolStream(
         tool: StreamingAgentTool, 

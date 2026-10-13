@@ -59,7 +59,7 @@ class VncServiceController @Inject constructor(
         return result?.exitCode == 0
     }
 
-    /** 幂等拉起整套 VNC 服务；首次会 apk 安装 xvfb/x11vnc/websockify，耗时视网络而定。 */
+    /** 幂等拉起整套 VNC 服务；首次按容器包管理器补装 xvfb/x11vnc/websockify，耗时视网络而定。 */
     suspend fun ensureRunning() {
         if (!isSupported()) return
         ensureMutex.withLock {
@@ -90,7 +90,14 @@ class VncServiceController @Inject constructor(
         private const val PROBE_COMMAND = "pgrep -f \"[w]ebsockify\" >/dev/null 2>&1"
         private val ENSURE_SCRIPT = """
             pgrep -f "[w]ebsockify" >/dev/null 2>&1 && echo $READY_MARKER && exit 0
-            command -v websockify >/dev/null 2>&1 || apk add --no-cache xvfb x11vnc py3-websockify
+            if ! command -v websockify >/dev/null 2>&1; then
+                if command -v apk >/dev/null 2>&1; then
+                    apk add --no-cache xvfb x11vnc websockify
+                elif command -v apt-get >/dev/null 2>&1; then
+                    apt-get update -y >/dev/null 2>&1
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify
+                fi
+            fi
             pgrep -f "[X]vfb" >/dev/null 2>&1 || (nohup Xvfb :1 -screen 0 1152x720x24 -nolock -nolisten tcp >/dev/null 2>&1 &)
             sleep 1
             pgrep -f "[x]11vnc" >/dev/null 2>&1 || (nohup x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet >/dev/null 2>&1 &)

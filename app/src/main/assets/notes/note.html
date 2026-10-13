@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="__ASSET_BASE__notes/vditor/dist/index.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: __BG__; }
+  #vditor { height: 100%; }
+  /* 移动端：让编辑区填满、去掉圆角边框，和原生页面观感一致 */
+  .vditor { background: __BG__; border-radius: 0; }
+</style>
+</head>
+<body>
+<div id="vditor"></div>
+<script id="note-source" type="text/plain">__MD_B64__</script>
+<script src="__ASSET_BASE__notes/vditor/dist/index.min.js"></script>
+<script>
+(function () {
+  try {
+    var b64 = document.getElementById('note-source').textContent.trim();
+    var md = '';
+    if (b64) {
+      var bin = atob(b64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      md = new TextDecoder('utf-8').decode(bytes);
+    }
+    var dark = __DARK__;
+    var vditor = new Vditor('vditor', {
+      cdn: '__ASSET_BASE__notes/vditor',
+      mode: 'wysiwyg',
+      value: md,
+      theme: dark ? 'dark' : 'classic',
+      cache: { enable: false },
+      height: '100%',
+      toolbar: [
+        'headings', 'bold', 'italic', 'strike', '|',
+        'list', 'ordered-list', 'check', '|',
+        'quote', 'line', 'code', 'inline-code', 'table', '|',
+        'undo', 'redo', '|', 'fullscreen'
+      ],
+      preview: {
+        hljs: { style: dark ? 'github-dark' : 'github' },
+        markdown: { toc: true }
+      },
+      input: function (v) {
+        if (window.AiCodeNote && window.AiCodeNote.onChange) window.AiCodeNote.onChange(v);
+      },
+      after: function () {
+        if (window.AiCodeNote && window.AiCodeNote.onReady) window.AiCodeNote.onReady();
+      }
+    });
+    window.__noteGetValue = function () {
+      try { return vditor.getValue(); } catch (e) { return ''; }
+    };
+  } catch (e) {
+    document.body.textContent = 'Note editor error: ' + e;
+  }
+})();
+</script>
+</body>
+</html>

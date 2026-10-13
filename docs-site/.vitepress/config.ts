@@ -189,7 +189,8 @@ export default defineConfig({
         {
           text: '扩展开发',
           items: [
-            { text: '自定义面板', link: '/advanced/dashboard-cards' }
+            { text: '自定义面板', link: '/advanced/dashboard-cards' },
+            { text: '浏览器功能索引', link: '/advanced/browser-capabilities' }
           ]
         }
       ]

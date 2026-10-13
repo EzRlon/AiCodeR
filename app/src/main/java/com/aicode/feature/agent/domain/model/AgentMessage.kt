@@ -81,5 +81,7 @@ data class AgentContext(
      * 本会话绑定的自定义子代理定义；非空表示这是一个按定义运行的子代理会话，
      * 系统提示词与工具集都按其配置组装（见 [com.aicode.feature.agent.domain.prompt.SystemPromptProvider]）。
      */
-    val agentDefinition: AgentDefinition? = null
+    val agentDefinition: AgentDefinition? = null,
+    /** 会话级召唤的编队名：非空时系统提示词注入团长指令（见 SystemPromptProvider）。 */
+    val teamName: String? = null
 )

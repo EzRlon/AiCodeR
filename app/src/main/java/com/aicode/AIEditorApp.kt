@@ -165,6 +165,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var credentialRequestBridge: com.aicode.feature.credentials.data.CredentialRequestBridge
 
+    /** 默认网络变化监听：构造即注册；切换网络时打断活跃流式请求，触发快速重试（见 NetworkWatcher）。 */
+    @Inject
+    lateinit var networkWatcher: com.aicode.feature.agent.domain.provider.NetworkWatcher
+
     /** 工具授权请求的通知栏通道：用户离开 App 时可直接从通知批准/拒绝。 */
     @Inject
     lateinit var permissionNotificationCenter: com.aicode.feature.agent.domain.notification.PermissionNotificationCenter
@@ -172,6 +176,9 @@ class AIEditorApp : Application(), Configuration.Provider {
     /** 执行模式仓库（本地 PRoot / 远程 SSH）。 */
     @Inject
     lateinit var executionModeRepository: com.aicode.feature.settings.data.repository.ExecutionModeRepository
+
+    @Inject
+    lateinit var generalSettingsRepository: com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 
     /** 应用语言偏好仓库：持久化用户选择的语言，供 attachBaseContext 同步读取。 */
     @Inject
@@ -246,6 +253,7 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即释放内置子代理定义（Explore）到 ~/.aicode/agents/；已存在不覆盖，用户改过或删掉都不会被升级拉回。
         appScope.launch {
             ContainerInstaller.extractAgents(this@AIEditorApp)
+            ContainerInstaller.extractTeams(this@AIEditorApp)
         }
         // 启动即把旧 Room git 凭据一次性迁移到 git-credentials 文件（真源已迁到文件，删表由迁移器完成）。
         appScope.launch {
@@ -277,6 +285,12 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             val mode = executionModeRepository.executionModeFlow.first()
             executionModeHolder.setMode(mode)
+        }
+        // 启动即常驻订阅自我改进模式开关并同步到 ExecutionModeHolder（设置页改动经同一 DataStore 流即时生效）。
+        appScope.launch {
+            generalSettingsRepository.selfImproveModeFlow.collectLatest {
+                executionModeHolder.setSelfImproveMode(it)
+            }
         }
         // SSH 连接监督常驻（config 为空时空转）：定期探活、断线自动重连，重连成功后重载工作区与同步文档。
         appScope.launch {

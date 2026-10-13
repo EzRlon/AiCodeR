@@ -191,6 +191,10 @@ class SessionUseCase @Inject constructor(
         chatSessionDao.updateReasoningEffort(sessionId, effort)
     }
 
+    suspend fun updateTeamName(sessionId: String, teamName: String?) {
+        chatSessionDao.updateTeamName(sessionId, teamName)
+    }
+
     suspend fun isSessionEmpty(sessionId: String): Boolean {
         return !agentMessageDao.hasMessages(sessionId)
     }

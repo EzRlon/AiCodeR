@@ -68,11 +68,13 @@ import com.aicode.core.theme.Spacing
 import com.aicode.feature.editor.data.EditorSettings
 import com.aicode.feature.editor.domain.TextMateSetup
 import com.aicode.feature.editor.presentation.component.MarkdownPreviewWebView
+import com.aicode.feature.note.presentation.component.NoteEditorWebView
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Code
+import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Eye
 import compose.icons.feathericons.Save
 import compose.icons.feathericons.Settings
@@ -115,6 +117,8 @@ fun CodeEditorScreen(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var previewMode by remember { mutableStateOf(false) }
+    var noteMode by remember { mutableStateOf(false) }
+    var noteReloadTick by remember { mutableStateOf(0) }
     var cursorLine by remember { mutableStateOf(1) }
     var cursorColumn by remember { mutableStateOf(1) }
     val isMarkdown = remember(path) {
@@ -133,6 +137,12 @@ fun CodeEditorScreen(
         cursorLine = 1
         cursorColumn = 1
         previewMode = false
+        noteMode = false
+    }
+
+    // 退出笔记模式：从磁盘重载，反映笔记的自动保存结果
+    LaunchedEffect(noteReloadTick) {
+        if (noteReloadTick > 0) viewModel.load(path)
     }
 
     val context = LocalContext.current
@@ -172,7 +182,7 @@ fun CodeEditorScreen(
         if (dirty) showUnsavedDialog = true else onBack()
     }
 
-    BackHandler(enabled = !showSettings && !previewMode) { handleBack() }
+    BackHandler(enabled = !showSettings && !previewMode && !noteMode) { handleBack() }
     BackHandler(enabled = showSettings) { showSettings = false }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -199,12 +209,28 @@ fun CodeEditorScreen(
                     actions = {
                         val editable = state is EditorUiState.Success
                         if (isMarkdown && editable) {
-                            IconButton(onClick = { previewMode = !previewMode }) {
+                            IconButton(onClick = {
+                                previewMode = !previewMode
+                                if (previewMode) noteMode = false
+                            }) {
                                 Icon(
                                     if (previewMode) FeatherIcons.Code else FeatherIcons.Eye,
                                     contentDescription = stringResource(
                                         if (previewMode) R.string.editor_md_show_source
                                         else R.string.editor_md_preview
+                                    )
+                                )
+                            }
+                            IconButton(onClick = {
+                                val enter = !noteMode
+                                noteMode = enter
+                                if (enter) previewMode = false else noteReloadTick++
+                            }) {
+                                Icon(
+                                    if (noteMode) FeatherIcons.Code else FeatherIcons.Edit3,
+                                    contentDescription = stringResource(
+                                        if (noteMode) R.string.editor_md_show_source
+                                        else R.string.editor_note_mode
                                     )
                                 )
                             }
@@ -229,7 +255,7 @@ fun CodeEditorScreen(
                         }
                         IconButton(
                             onClick = { requestSave() },
-                            enabled = editable && dirty && !saving
+                            enabled = editable && dirty && !saving && !noteMode
                         ) {
                             if (saving) {
                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -262,7 +288,7 @@ fun CodeEditorScreen(
             }
         },
         bottomBar = {
-            if (state is EditorUiState.Success && !previewMode) {
+            if (state is EditorUiState.Success && !previewMode && !noteMode) {
                 EditorSymbolBar(
                     backgroundColor = editorBackground ?: MaterialTheme.colorScheme.background,
                     onInsert = { editorRef.value?.commitText(it) },
@@ -307,6 +333,22 @@ fun CodeEditorScreen(
                         text = previewText,
                         path = path,
                         onExitPreview = { previewMode = false },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    )
+                }
+                if (noteMode) {
+                    // 笔记模式同样覆盖在编辑器上方（源码编辑器保留不销毁）。
+                    // 进入时快照当前文本，编辑内容由 NoteEditorWebView 自动保存回文件；退出时重载源码。
+                    val noteText = remember(noteMode) {
+                        editorRef.value?.text?.toString() ?: s.content
+                    }
+                    NoteEditorWebView(
+                        text = noteText,
+                        path = path,
+                        onContentChanged = {},
+                        onSaved = {},
                         modifier = Modifier
                             .fillMaxSize()
                             .background(MaterialTheme.colorScheme.background)

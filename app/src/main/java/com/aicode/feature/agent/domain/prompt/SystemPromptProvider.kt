@@ -10,6 +10,7 @@ import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.InjectPart
+import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -37,6 +38,7 @@ class SystemPromptProvider @Inject constructor(
     private val promptFragmentCatalog: PromptFragmentCatalog,
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository,
+    private val teamRepository: TeamRepository,
     private val executionModeHolder: ExecutionModeHolder
 ) {
     // 抽象独立的 Source
@@ -124,6 +126,24 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
+    /** 编队团长指令：会话召唤了编队时注入（团长提示词 + 成员名单）；子代理路径不注入。 */
+    private inner class TeamLeaderSource : PromptSource {
+        override fun build(ctx: AgentContext): String {
+            val team = teamRepository.resolve(ctx.teamName) ?: return ""
+            val memberLines = team.members.joinToString("\n") { memberName ->
+                val desc = agentDefinitionRepository.findIncludingDisabled(memberName)?.description.orEmpty()
+                if (desc.isNotBlank()) "- $memberName: $desc" else "- $memberName"
+            }
+            return buildString {
+                append("## 编队：").append(team.name).append('\n')
+                append(team.prompt)
+                if (memberLines.isNotBlank()) {
+                    append("\n\n你的成员（用 task 工具按 agent 名派发）：\n").append(memberLines)
+                }
+            }
+        }
+    }
+
     private inner class ProjectRuleSource {
         @Volatile private var cached: ProjectRules? = null
         private var lastSignature: String = ""
@@ -180,9 +200,17 @@ class SystemPromptProvider @Inject constructor(
     private inner class EnvironmentSource : PromptSource {
         override fun build(ctx: AgentContext): String =
             when (executionModeHolder.currentMode()) {
-                ExecutionMode.LOCAL_PROOT -> "本地容器（PRoot）"
+                ExecutionMode.LOCAL_PROOT ->
+                    if (executionModeHolder.isSelfImproveMode()) "自我改进模式"
+                    else "本地容器（PRoot）"
                 ExecutionMode.REMOTE_SSH -> "远程 SSH 服务器"
             }
+    }
+
+    /** 自我改进模式指令：仅开关开启时注入（主会话路径；子代理不参与自我改进）。 */
+    private inner class SelfImproveInstructionsSource : PromptSource {
+        override fun build(ctx: AgentContext): String =
+            if (executionModeHolder.isSelfImproveMode()) SELF_IMPROVE_INSTRUCTIONS else ""
     }
 
     /** 记忆清单拆分为全局/项目两组纯列表，供 `{{AICODE_MEMORY_GLOBAL}}` / `{{AICODE_MEMORY_PROJECT}}` 变量使用。 */
@@ -231,6 +259,8 @@ class SystemPromptProvider @Inject constructor(
     private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
     private val environmentSource = EnvironmentSource()
+    private val selfImproveInstructionsSource = SelfImproveInstructionsSource()
+    private val teamLeaderSource = TeamLeaderSource()
 
     private val customDir: File
         get() = File(containerInstaller.aicodeDir, "prompts.custom")
@@ -255,6 +285,7 @@ class SystemPromptProvider @Inject constructor(
         val projectRules = projectRuleSource.build(agentContext)
         val workspaceContent = workspaceSource.build(agentContext)
         val environmentContent = environmentSource.build(agentContext)
+        val selfImproveContent = selfImproveInstructionsSource.build(agentContext)
 
         // 2. 变量就地展开：`{{AICODE_*}}` 替换为纯数据；未写变量的片段原样保留。
         val staticContent = renderVariables(
@@ -267,11 +298,15 @@ class SystemPromptProvider @Inject constructor(
             projectRules?.project,
             workspaceContent,
             environmentContent,
-            currentDate()
+            currentDate(),
+            selfImprove = selfImproveContent
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
-        return collapseBlankLines(staticContent)
+        // 编队团长指令附加在末尾：会话级内容、变更少，对前缀 KV Cache 影响最小。
+        val teamContent = teamLeaderSource.build(agentContext)
+        val withTeam = if (teamContent.isNullOrBlank()) staticContent else "$staticContent\n\n$teamContent"
+        return collapseBlankLines(withTeam)
     }
 
     /**
@@ -289,7 +324,7 @@ class SystemPromptProvider @Inject constructor(
         }
         val memories = memoryListSource.build(ctx)
         val projectRules = projectRuleSource.build(ctx)
-        return renderVariables(
+        val rendered = renderVariables(
             content,
             activeSkillsSource.build(ctx),
             memories.global,
@@ -299,8 +334,11 @@ class SystemPromptProvider @Inject constructor(
             projectRules?.project,
             workspaceSource.build(ctx),
             environmentSource.build(ctx),
-            currentDate()
+            currentDate(),
+            selfImprove = selfImproveInstructionsSource.build(ctx)
         )
+        val teamContent = teamLeaderSource.build(ctx)
+        return if (teamContent.isNullOrBlank()) rendered else "$rendered\n\n$teamContent"
     }
 
     /**
@@ -387,7 +425,8 @@ class SystemPromptProvider @Inject constructor(
         workspace: String,
         environment: String,
         date: String,
-        subAgentName: String = ""
+        subAgentName: String = "",
+        selfImprove: String? = null
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -400,6 +439,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(WORKSPACE_VAR, workspace)
         out = out.replace(ENVIRONMENT_VAR, environment)
         out = out.replace(DATE_VAR, date)
+        out = out.replace(SELF_IMPROVE_VAR, selfImprove.orEmpty())
         out = out.replace(SUBAGENT_NAME_VAR, subAgentName)
         return out
     }
@@ -461,5 +501,16 @@ class SystemPromptProvider @Inject constructor(
         const val ENVIRONMENT_VAR = "{{AICODE_ENVIRONMENT}}"
         const val DATE_VAR = "{{AICODE_DATE}}"
         const val SUBAGENT_NAME_VAR = "{{AICODE_SUBAGENT_NAME}}"
+        const val SELF_IMPROVE_VAR = "{{AICODE_SELF_IMPROVE}}"
+
+        /** 自我改进模式指令正文；仅开关开启时经 [SELF_IMPROVE_VAR] 注入主会话。 */
+        const val SELF_IMPROVE_INSTRUCTIONS =
+            "## 自我改进模式\n" +
+                "你正处于自我改进模式。利用这次机会反思表现并把改进沉淀下来：\n" +
+                "1. 技能：在 ~/.aicode/skills/<name>/SKILL.md 新建或更新技能（frontmatter 含 name/description，可附脚本）。改进应解决实际问题、避免重复现有功能。\n" +
+                "2. 提示词：在 ~/.aicode/prompts.custom/ 新建数字片段（如 00-<名称>.md）或改进现有片段，让常见任务更高效。\n" +
+                "安全约束：绝不得修改应用源码（app/src/main/java、app/src/main/res）、构建配置、工作区文件；不确定时默认禁止。\n" +
+                "步骤：a) 反思最近交互的得失；b) 选一个具体改进项；c) 落盘；d) 在回复中用一两句说明改动与目的。\n" +
+                "目标不是一次大改，而是持续的小改进——改进保存在 ~/.aicode/，软件升级时会被继承。"
     }
 }

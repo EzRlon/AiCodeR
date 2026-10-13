@@ -6,6 +6,9 @@ import com.aicode.feature.agent.domain.provider.joinUrl
 import com.aicode.feature.settings.domain.model.ProviderType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -17,6 +20,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -171,7 +175,10 @@ class ModelApiService @Inject constructor(
         }
     }
 
-    /** 发送一条极短请求验证 Key + 模型 + 端点是否可用，返回耗时。 */
+    /**
+     * 发送一条极短请求验证 Key + 模型 + 端点是否可用，返回耗时。
+     * [timeoutMs] 非空时为本次调用设置整体超时（批量测试用，中断挂死请求），超时中断按失败返回。
+     */
     suspend fun testModel(
         baseUrl: String,
         apiKey: String,
@@ -179,7 +186,8 @@ class ModelApiService @Inject constructor(
         useFullUrl: Boolean,
         useResponseApi: Boolean,
         model: String,
-        customHeaders: Map<String, String> = emptyMap()
+        customHeaders: Map<String, String> = emptyMap(),
+        timeoutMs: Long? = null
     ): ModelTestResult = withContext(Dispatchers.IO) {
         val start = System.nanoTime()
         try {
@@ -240,7 +248,14 @@ class ModelApiService @Inject constructor(
                 }
             }
 
-            client.newCall(request).execute().use { response ->
+            val call = client.newCall(request)
+            // 整体超时（含等首字节）：超时中断阻塞中的请求，避免批量测试被单个挂死模型拖垮。
+            timeoutMs?.let { call.timeout().timeout(it, TimeUnit.MILLISECONDS) }
+            // 协程取消（页面销毁等）时立即中断阻塞中的调用，不让已放弃的请求继续占着连接与线程。
+            currentCoroutineContext().job.invokeOnCompletion { cause ->
+                if (cause is CancellationException) call.cancel()
+            }
+            call.execute().use { response ->
                 val latency = (System.nanoTime() - start) / 1_000_000
                 val body = response.body?.string().orEmpty()
                 val respHeadersMap = response.headers.names().associateWith { response.header(it).orEmpty() }
@@ -272,6 +287,8 @@ class ModelApiService @Inject constructor(
                     )
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val latency = (System.nanoTime() - start) / 1_000_000
             ModelTestResult(

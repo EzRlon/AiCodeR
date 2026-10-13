@@ -27,13 +27,17 @@ enum class StorageCategory(@param:StringRes val labelRes: Int) {
  *
  * @param key 稳定标识，供界面按项取值（如按 `tool-output` 找可清理大小）；纯展示项为 null。
  * @param indent 是否作为上一层明细的下钻项缩进显示。
+ * @param path 可操作产物的容器路径（安装/打开/复制/在文件树中查看）；纯统计项为 null。
+ * @param modifiedAt 最后修改/构建时间（epoch millis）；null 不显示。
  */
 data class StorageDetail(
     val label: String,
     val bytes: Long,
     val note: String? = null,
     val key: String? = null,
-    val indent: Boolean = false
+    val indent: Boolean = false,
+    val path: String? = null,
+    val modifiedAt: Long? = null
 )
 
 data class StorageEntry(

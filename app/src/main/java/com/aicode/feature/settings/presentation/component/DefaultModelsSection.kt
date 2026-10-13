@@ -71,6 +71,8 @@ internal fun DefaultModelsSection(
     compactionModel: String,
     titleProviderId: String,
     titleModel: String,
+    verificationProviderId: String,
+    verificationModel: String,
     imageGenProviderId: String,
     imageGenModel: String,
     modelMetadata: Map<String, ModelMetadata>,
@@ -81,12 +83,15 @@ internal fun DefaultModelsSection(
     onClearCompactionModel: () -> Unit,
     onSelectTitleModel: (providerId: String, model: String) -> Unit,
     onClearTitleModel: () -> Unit,
+    onSelectVerificationModel: (providerId: String, model: String) -> Unit,
+    onClearVerificationModel: () -> Unit,
     onSelectImageGenModel: (providerId: String, model: String) -> Unit,
     onClearImageGenModel: () -> Unit
 ) {
     var showVisionSheet by remember { mutableStateOf(false) }
     var showCompactionSheet by remember { mutableStateOf(false) }
     var showTitleSheet by remember { mutableStateOf(false) }
+    var showVerificationSheet by remember { mutableStateOf(false) }
     var showImageGenSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { onLoadMetadata() }
@@ -107,6 +112,12 @@ internal fun DefaultModelsSection(
         stringResource(R.string.settings_title_follow_chat)
     } else {
         titleModel
+    }
+
+    val verificationValue = if (verificationProviderId.isBlank() || verificationModel.isBlank()) {
+        stringResource(R.string.settings_verification_unconfigured)
+    } else {
+        verificationModel
     }
 
     val imageGenValue = if (imageGenProviderId.isBlank() || imageGenModel.isBlank()) {
@@ -165,6 +176,23 @@ internal fun DefaultModelsSection(
                 trailing = {
                     Text(
                         text = titleValue,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.weight(2f)
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Check,
+                title = stringResource(R.string.settings_verification_model),
+                onClick = { showVerificationSheet = true },
+                trailing = {
+                    Text(
+                        text = verificationValue,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -254,6 +282,26 @@ internal fun DefaultModelsSection(
         )
     }
 
+    if (showVerificationSheet) {
+        ModelSelectionSheet(
+            title = stringResource(R.string.settings_verification_model),
+            noModelsText = stringResource(R.string.verification_no_models),
+            providers = providers,
+            currentProviderId = verificationProviderId,
+            currentModel = verificationModel,
+            modelMetadata = modelMetadata,
+            onSelect = { pid, model ->
+                onSelectVerificationModel(pid, model)
+                showVerificationSheet = false
+            },
+            onClear = {
+                onClearVerificationModel()
+                showVerificationSheet = false
+            },
+            onDismiss = { showVerificationSheet = false }
+        )
+    }
+
     if (showImageGenSheet) {
         ModelSelectionSheet(
             title = stringResource(R.string.settings_image_gen_model),
@@ -296,7 +344,19 @@ internal fun ModelSelectionSheet(
     val context = LocalContext.current
     val collapseStore = remember { ModelSheetCollapseStore(context.applicationContext) }
     var searchQuery by remember { mutableStateOf("") }
-    var collapsedProviderIds by remember { mutableStateOf(collapseStore.collapsedProviderIds()) }
+    var collapsedProviderIds by remember {
+        mutableStateOf(
+            if (collapseStore.hasSaved()) {
+                collapseStore.collapsedProviderIds()
+            } else {
+                // 首次使用：只展开当前选中的供应商，其余收起——避免模型多时一打开就是长列表要逐条翻。
+                // 用户手动调整任一组后即按其习惯记忆（hasSaved 后不再套用本默认）。
+                providers.filter { it.isEnabled && it.models.isNotEmpty() && it.id != currentProviderId }
+                    .map { it.id }
+                    .toSet()
+            }
+        )
+    }
 
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,

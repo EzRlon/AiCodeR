@@ -91,6 +91,15 @@ sealed class AgentEvent {
 
     /** 模式已切换（由 AI 调用 planMode 触发），UI 据此展示计划审查面板等。 */
     data class ModeChanged(val newMode: AgentMode, val reason: String) : AgentEvent()
+
+    /**
+     * 收尾独立验收完成：由「验收模型」（设置中独立配置的另一个模型）对目标清单完成度
+     * 做交叉检查后的报告。UI 落库为验收卡片；无配对 toolCallId，回放不进模型上下文。
+     */
+    data class VerificationReport(val content: String) : AgentEvent()
+
+    /** 单次任务 token 预算用尽且用户选择停止：本轮就此结束，UI 落一条说明消息。 */
+    data class BudgetStopped(val usedTokens: Int, val budgetTokens: Int) : AgentEvent()
 }
 
 interface AgentWorkflow {
@@ -111,6 +120,18 @@ interface AgentWorkflow {
      * @return 是否实际触发了压缩（历史未超阈值时返回 false，不改动）。
      */
     suspend fun compactSession(sessionId: String, onEvent: suspend (AgentEvent) -> Unit = {}): Boolean
+
+    /**
+     * 交接提醒：解析当前会话模型的有效输入预算（tokens）。
+     * 无法解析（未配置供应商 / 异常）时返回 null。
+     */
+    suspend fun handoffInputBudget(sessionId: String): Int?
+
+    /**
+     * 交接提醒：为指定会话生成「接手摘要」。
+     * 复用压缩的分块摘要逻辑，但不改动会话历史、不落库；历史过短或生成失败返回 null。
+     */
+    suspend fun buildHandoffSummary(sessionId: String): String?
 
     /**
      * 为新建会话生成标题（供首条用户消息后异步调用）。

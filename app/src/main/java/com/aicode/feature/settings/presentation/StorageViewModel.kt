@@ -8,6 +8,7 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
 import com.aicode.feature.settings.domain.service.StorageUsageScanner
+import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +26,8 @@ data class StorageUiState(
     val expanded: Set<StorageCategory> = emptySet(),
     val cleaning: Boolean = false,
     val selectedCleanup: Set<CleanupKind> = setOf(CleanupKind.Caches, CleanupKind.Logs),
+    /** 勾选的产物明细（容器路径）。 */
+    val selectedArtifacts: Set<String> = emptySet(),
     /** 上一次清理释放的字节数，非空时界面给出提示。 */
     val freedBytes: Long? = null
 ) {
@@ -39,8 +42,16 @@ data class StorageUiState(
             CleanupKind.VisionSessions to aiConfigDetail(StorageDetailKey.VISION_SESSIONS)
         )
 
+    /** 产物明细（带路径的明细行）的容器路径 → 大小。 */
+    val artifactSizes: Map<String, Long>
+        get() = entries.values
+            .flatMap { it.details }
+            .mapNotNull { detail -> detail.path?.let { it to detail.bytes } }
+            .toMap()
+
     val selectedBytes: Long
-        get() = cleanableSizes.filterKeys { it in selectedCleanup }.values.sum()
+        get() = cleanableSizes.filterKeys { it in selectedCleanup }.values.sum() +
+            selectedArtifacts.sumOf { artifactSizes[it] ?: 0L }
 
     private fun aiConfigDetail(key: String): Long =
         entries[StorageCategory.AiConfig]?.details?.firstOrNull { it.key == key }?.bytes ?: 0L
@@ -48,7 +59,9 @@ data class StorageUiState(
 
 @HiltViewModel
 class StorageViewModel @Inject constructor(
-    private val scanner: StorageUsageScanner
+    private val scanner: StorageUsageScanner,
+    /** 消息附件链路需要：产物明细的「安装/打开」复用其分享/安装实现。 */
+    val fileAccess: FileAccessProvider
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(StorageUiState())
@@ -94,13 +107,43 @@ class StorageViewModel @Inject constructor(
         }
     }
 
-    fun clean(kinds: List<CleanupKind>) {
-        if (_state.value.cleaning || kinds.isEmpty()) return
-        val targets = kinds.distinct()
+    /** 勾选/取消勾选一条产物明细（容器路径）。 */
+    fun toggleArtifact(path: String) {
+        _state.update {
+            if (it.cleaning) return@update it
+            val selected = if (path in it.selectedArtifacts) it.selectedArtifacts - path else it.selectedArtifacts + path
+            it.copy(selectedArtifacts = selected)
+        }
+    }
+
+    /** 清理当前选中的可重建数据与产物文件。 */
+    fun cleanSelected() {
+        val snapshot = _state.value
+        if (snapshot.cleaning) return
+        val kinds = CleanupKind.entries.filter {
+            it in snapshot.selectedCleanup && (snapshot.cleanableSizes[it] ?: 0L) > 0L
+        }
+        val artifacts = snapshot.selectedArtifacts.toList()
+        if (kinds.isEmpty() && artifacts.isEmpty()) return
         viewModelScope.launch {
             _state.update { it.copy(cleaning = true) }
-            val freed = targets.sumOf { scanner.clean(it) }
-            _state.update { it.copy(cleaning = false, freedBytes = freed) }
+            var freed = 0L
+            kinds.forEach { freed += scanner.clean(it) }
+            if (artifacts.isNotEmpty()) freed += scanner.cleanArtifacts(artifacts)
+            _state.update { it.copy(cleaning = false, freedBytes = freed, selectedArtifacts = emptySet()) }
+            refresh(clearMessage = false)
+        }
+    }
+
+    /** 删除单个产物文件/目录（操作菜单里的快捷删除）。 */
+    fun deleteArtifact(path: String) {
+        if (_state.value.cleaning) return
+        viewModelScope.launch {
+            _state.update { it.copy(cleaning = true) }
+            val freed = scanner.cleanArtifacts(listOf(path))
+            _state.update {
+                it.copy(cleaning = false, freedBytes = freed, selectedArtifacts = it.selectedArtifacts - path)
+            }
             refresh(clearMessage = false)
         }
     }

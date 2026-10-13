@@ -16,6 +16,8 @@ import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
+import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
+import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.RootfsSource
@@ -60,6 +62,7 @@ import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
+import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -106,7 +109,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
@@ -322,6 +328,7 @@ class SettingsViewModel @Inject constructor(
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
+    private val teamRepository: TeamRepository,
     private val languageSettingsRepository: LanguageSettingsRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val mcpManager: McpManager,
@@ -336,6 +343,7 @@ class SettingsViewModel @Inject constructor(
     private val imageGenModelSettingsRepository: ImageGenModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val titleModelSettingsRepository: TitleModelSettingsRepository,
+    private val verificationModelSettingsRepository: VerificationModelSettingsRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val containerImageCatalog: ContainerImageCatalog,
@@ -366,6 +374,12 @@ class SettingsViewModel @Inject constructor(
 
         /** 技能压缩包导入接受的扩展名（小写，不含点）。 */
         val ZIP_EXTENSIONS = setOf("zip")
+
+        /** 「全部测试」的并发上限：控制请求风暴与限流风险。 */
+        const val BULK_TEST_CONCURRENCY = 4
+
+        /** 「全部测试」单个模型的超时（毫秒）：防单个挂死请求拖垮整批。 */
+        const val BULK_TEST_TIMEOUT_MS = 30_000L
     }
 
     /** 终端个性化配置。 */
@@ -458,6 +472,13 @@ class SettingsViewModel @Inject constructor(
     private val _titleModel = MutableStateFlow("")
     val titleModel: StateFlow<String> = _titleModel.asStateFlow()
 
+    /** 独立验收专用模型选择：providerId 为空即关闭收尾独立验收（无回退）。 */
+    private val _verificationProviderId = MutableStateFlow("")
+    val verificationProviderId: StateFlow<String> = _verificationProviderId.asStateFlow()
+
+    private val _verificationModel = MutableStateFlow("")
+    val verificationModel: StateFlow<String> = _verificationModel.asStateFlow()
+
     /** 生图专用模型选择：providerId 为空即未配置（生图不跟随聊天模型）。 */
     private val _imageGenProviderId = MutableStateFlow("")
     val imageGenProviderId: StateFlow<String> = _imageGenProviderId.asStateFlow()
@@ -492,6 +513,15 @@ class SettingsViewModel @Inject constructor(
     private val _autoRemoveStaleModels = MutableStateFlow(true)
     val autoRemoveStaleModels: StateFlow<Boolean> = _autoRemoveStaleModels.asStateFlow()
 
+    private val _selfImproveMode = MutableStateFlow(false)
+    val selfImproveMode: StateFlow<Boolean> = _selfImproveMode.asStateFlow()
+
+    private val _handoffPromptEnabled = MutableStateFlow(true)
+    val handoffPromptEnabled: StateFlow<Boolean> = _handoffPromptEnabled.asStateFlow()
+
+    private val _handoffPromptPercent = MutableStateFlow(50)
+    val handoffPromptPercent: StateFlow<Int> = _handoffPromptPercent.asStateFlow()
+
     private val _startupSessionMode = MutableStateFlow(StartupSessionMode.NEW_SESSION)
     val startupSessionMode: StateFlow<StartupSessionMode> = _startupSessionMode.asStateFlow()
 
@@ -509,6 +539,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _compactionThresholdPercent = MutableStateFlow(90)
     val compactionThresholdPercent: StateFlow<Int> = _compactionThresholdPercent.asStateFlow()
+
+    private val _tokenBudget = MutableStateFlow(0)
+    val tokenBudget: StateFlow<Int> = _tokenBudget.asStateFlow()
 
     private val _sendFileMaxSizeMb = MutableStateFlow(100)
     val sendFileMaxSizeMb: StateFlow<Int> = _sendFileMaxSizeMb.asStateFlow()
@@ -589,6 +622,10 @@ class SettingsViewModel @Inject constructor(
 
     private val _testing = MutableStateFlow<Set<String>>(emptySet())
     val testing: StateFlow<Set<String>> = _testing.asStateFlow()
+
+    /** 「全部测试」进行中标记；UI 据此显示进度并禁用重复触发。 */
+    private val _bulkTesting = MutableStateFlow(false)
+    val bulkTesting: StateFlow<Boolean> = _bulkTesting.asStateFlow()
 
     private val _dashboardTestState = MutableStateFlow<ProviderDashboardState>(ProviderDashboardState.Idle)
     val dashboardTestState: StateFlow<ProviderDashboardState> = _dashboardTestState.asStateFlow()
@@ -786,6 +823,18 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
+                verificationModelSettingsRepository.providerIdFlow.collectLatest {
+                    _verificationProviderId.value = it
+                }
+            }
+
+            launch {
+                verificationModelSettingsRepository.modelFlow.collectLatest {
+                    _verificationModel.value = it
+                }
+            }
+
+            launch {
                 imageGenModelSettingsRepository.providerIdFlow.collectLatest {
                     _imageGenProviderId.value = it
                 }
@@ -828,6 +877,24 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
+                generalSettingsRepository.selfImproveModeFlow.collectLatest {
+                    _selfImproveMode.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.handoffPromptEnabledFlow.collectLatest {
+                    _handoffPromptEnabled.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.handoffPromptPercentFlow.collectLatest {
+                    _handoffPromptPercent.value = it
+                }
+            }
+
+            launch {
                 generalSettingsRepository.startupSessionModeFlow.collectLatest {
                     _startupSessionMode.value = it
                 }
@@ -860,6 +927,12 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.compactionThresholdPercentFlow.collectLatest {
                     _compactionThresholdPercent.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.tokenBudgetFlow.collectLatest {
+                    _tokenBudget.value = it
                 }
             }
 
@@ -1671,6 +1744,30 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 编队定义列表（供「编队」设置区展示）。 */
+    fun listTeams(): List<TeamDefinitionEntry> = teamRepository.listAll()
+
+    /** 自我改进模式开关：开启后系统提示词注入自我改进指令。 */
+    fun setSelfImproveMode(enabled: Boolean) {
+        viewModelScope.launch {
+            generalSettingsRepository.setSelfImproveMode(enabled)
+        }
+    }
+
+    /** 交接提醒开关。 */
+    fun setHandoffPromptEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            generalSettingsRepository.setHandoffPromptEnabled(enabled)
+        }
+    }
+
+    /** 交接提醒阈值（1..100）。 */
+    fun setHandoffPromptPercent(percent: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setHandoffPromptPercent(percent)
+        }
+    }
+
     /** 启动（含切换工作区）时进入新会话还是最近会话。 */
     fun setStartupSessionMode(mode: StartupSessionMode) {
         viewModelScope.launch {
@@ -1710,6 +1807,13 @@ class SettingsViewModel @Inject constructor(
     fun setCompactionThresholdPercent(percent: Int) {
         viewModelScope.launch {
             generalSettingsRepository.setCompactionThresholdPercent(percent)
+        }
+    }
+
+    /** 单次任务 token 预算（0 表示不限制）。 */
+    fun setTokenBudget(tokens: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setTokenBudget(tokens)
         }
     }
 
@@ -2046,6 +2150,20 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 设置独立验收专用模型；providerId 留空等同 [clearVerificationModel]（关闭收尾验收）。 */
+    fun setVerificationModel(providerId: String, model: String) {
+        viewModelScope.launch {
+            verificationModelSettingsRepository.setVerificationModel(providerId, model)
+        }
+    }
+
+    /** 清空独立验收专用模型——关闭收尾独立验收。 */
+    fun clearVerificationModel() {
+        viewModelScope.launch {
+            verificationModelSettingsRepository.clear()
+        }
+    }
+
     /** 设置生图专用模型；providerId 留空等同 [clearImageGenModel]（未配置）。 */
     fun setImageGenModel(providerId: String, model: String) {
         viewModelScope.launch {
@@ -2204,6 +2322,11 @@ class SettingsViewModel @Inject constructor(
         ) {
             titleModelSettingsRepository.clear()
         }
+        if (verificationModelSettingsRepository.getVerificationProviderId() == provider.id &&
+            verificationModelSettingsRepository.getVerificationModel() in removed
+        ) {
+            verificationModelSettingsRepository.clear()
+        }
     }
 
     fun deleteProvider(id: String) {
@@ -2294,6 +2417,51 @@ class SettingsViewModel @Inject constructor(
             _testResults.update { it + (model to result) }
             _testing.update { it - model }
         }
+    }
+
+    /**
+     * 一键测试全部模型：清空旧结果后小并发（[BULK_TEST_CONCURRENCY]）执行，
+     * 单模型超时 [BULK_TEST_TIMEOUT_MS]（中断挂死请求）；结果写入 [testResults]，
+     * UI 借其展示进度与行内结果。
+     *
+     * @return 是否真正启动（false = 已有批量在跑，或无有效目标）。
+     */
+    fun testAllModels(provider: AIProviderConfig, models: List<String>): Boolean {
+        if (_bulkTesting.value) return false
+        val targets = models.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (targets.isEmpty()) return false
+        _testResults.value = emptyMap()
+        _testing.value = emptySet()
+        _bulkTesting.value = true
+        viewModelScope.launch {
+            try {
+                val semaphore = Semaphore(BULK_TEST_CONCURRENCY)
+                coroutineScope {
+                    targets.forEach { model ->
+                        launch {
+                            semaphore.withPermit {
+                                _testing.update { it + model }
+                                val result = modelApiService.testModel(
+                                    provider.baseUrl,
+                                    provider.firstUsableApiKey,
+                                    provider.type,
+                                    provider.useFullUrl,
+                                    provider.useResponseApi,
+                                    model,
+                                    provider.customHeaders,
+                                    timeoutMs = BULK_TEST_TIMEOUT_MS
+                                )
+                                _testResults.update { it + (model to result) }
+                                _testing.update { it - model }
+                            }
+                        }
+                    }
+                }
+            } finally {
+                _bulkTesting.value = false
+            }
+        }
+        return true
     }
 
     fun clearTestResults() {

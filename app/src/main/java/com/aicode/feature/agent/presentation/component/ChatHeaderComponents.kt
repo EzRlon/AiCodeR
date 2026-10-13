@@ -1,11 +1,14 @@
 package com.aicode.feature.agent.presentation.component
 
+import android.content.ClipData
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,11 +36,16 @@ import androidx.compose.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -47,7 +55,6 @@ import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
-import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
@@ -56,12 +63,15 @@ import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Plus
+import compose.icons.feathericons.Share2
+import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun ChatHeader(
-    sessionTitle: String,
-    modelName: String?,
+    /** 当前会话 id（完整值）：顶栏显示其短形式，点击复制完整值，便于对照开发目录里的会话文件。 */
+    sessionId: String?,
     inputTokens: Int,
     outputTokens: Int,
     onOpenDrawer: () -> Unit,
@@ -69,7 +79,9 @@ internal fun ChatHeader(
     onNavigateToTerminal: () -> Unit,
     onNavigateToGit: () -> Unit,
     onNavigateToBrowser: () -> Unit = {},
+    onNavigateToMemoryGraph: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
+    onOpenTeams: (() -> Unit)? = null,
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     connectionState: com.aicode.feature.agent.domain.container.ConnectionState? = null,
@@ -106,30 +118,31 @@ internal fun ChatHeader(
                 } else {
                     Spacer(modifier = Modifier.width(Spacing.sm))
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = sessionTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
-                    ) {
-                        if (!modelName.isNullOrBlank()) {
-                            ModelLogoIcon(modelName = modelName, size = 14.dp)
+                // 会话标识行：只显示短 id（8 位），点击复制完整 id——去开发目录对照
+                // ai-logs/session-<id>.log 时一键带走完整值；模型信息在输入栏已可见，这里不再占用高度。
+                val clipboard = LocalClipboard.current
+                val context = LocalContext.current
+                val copyScope = rememberCoroutineScope()
+                val copiedText = stringResource(R.string.chat_session_id_copied)
+                val sessionIdValue = sessionId.orEmpty()
+                Text(
+                    text = sessionIdValue.take(8).ifEmpty { stringResource(R.string.chat_new_session) },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(Radius.sm))
+                        .clickable(enabled = sessionIdValue.isNotBlank()) {
+                            copyScope.launch {
+                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("session_id", sessionIdValue)))
+                                Toast.makeText(context, copiedText, Toast.LENGTH_SHORT).show()
+                            }
                         }
-                        Text(
-                            text = modelName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.chat_no_model_selected),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
+                        .padding(horizontal = Spacing.xs, vertical = 2.dp)
+                )
                 VncHeaderIconButton()
                 IconButton(onClick = onNewChat) {
                     Icon(
@@ -148,6 +161,20 @@ internal fun ChatHeader(
                     contentDescription = stringResource(R.string.agent_cli_sheet_title),
                     active = false,
                     onClick = onNavigateToAgents
+                )
+                onOpenTeams?.let { openTeams ->
+                    WorkbenchIconButton(
+                        icon = FeatherIcons.Users,
+                        contentDescription = stringResource(R.string.team_picker_title),
+                        active = false,
+                        onClick = openTeams
+                    )
+                }
+                WorkbenchIconButton(
+                    icon = FeatherIcons.Share2,
+                    contentDescription = stringResource(R.string.memory_graph_open),
+                    active = false,
+                    onClick = onNavigateToMemoryGraph
                 )
                 WorkbenchIconButton(
                     icon = FeatherIcons.Terminal,

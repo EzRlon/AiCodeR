@@ -224,6 +224,26 @@ class BrowserManager @Inject constructor(
     private var activeTabId: String = ""
     private var tabSeq = 1
     private var containerView: FrameLayout? = null
+
+    // ── 网页全屏视频：WebChromeClient.onShowCustomView 的宿主视图与退出回调。──
+    private var fullscreenVideoView: View? = null
+    private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
+    private val _fullscreenVideo = MutableStateFlow(false)
+
+    /** 网页是否处于全屏视频（供 UI 的返回键优先退出全屏）。 */
+    val fullscreenVideo: StateFlow<Boolean> = _fullscreenVideo.asStateFlow()
+
+    // ── 书签 / 浏览历史：轻量持久化（整表 JSON），供浏览器 UI 与页面回调读写。──
+    private val browserBookmarkStore = BrowserLinkStore(appContext, "browser_bookmarks")
+    private val browserHistoryStore = BrowserLinkStore(appContext, "browser_history")
+    private val _bookmarks = MutableStateFlow(browserBookmarkStore.load())
+
+    /** 书签列表（最新在前）。 */
+    val bookmarks: StateFlow<List<BrowserLink>> = _bookmarks.asStateFlow()
+    private val _browserHistory = MutableStateFlow(browserHistoryStore.load())
+
+    /** 浏览历史（最新在前，写入侧截断）。 */
+    val browserHistory: StateFlow<List<BrowserLink>> = _browserHistory.asStateFlow()
     private var hiddenHost: ViewGroup? = null
 
     /** App 外观是否为深色，由 UI 层通过 [setAppDarkTheme] 推送。 */
@@ -369,6 +389,8 @@ class BrowserManager @Inject constructor(
                 if (view != null && nightMode) applyNightModeTo(view)
                 if (view != null && tab.devToolsOpen) injectEruda(view, autoShow = false)
                 val finish = {
+                    // 记录浏览历史（按 url 去重置顶；仅 http(s) 页面）
+                    recordHistory(tab.title, tab.url)
                     tab.loadDeferred?.complete(Result.success(url.orEmpty()))
                     tab.loadDeferred = null
                     publishState()
@@ -404,6 +426,30 @@ class BrowserManager @Inject constructor(
                 if (view != null && nightMode && newProgress in 15..30) {
                     applyNightModeTo(view)
                 }
+            }
+
+            /** 网页请求全屏视频：把系统给的视图挂到当前容器最上层（悬于页面与底部栏之上）。 */
+            override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
+                val container = containerView
+                if (container == null || view == null || fullscreenVideoView != null) {
+                    callback?.onCustomViewHidden()
+                    return
+                }
+                fullscreenVideoView = view
+                fullscreenVideoCallback = callback
+                container.addView(
+                    view,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
+                tabHolderRef()?.webView?.visibility = View.INVISIBLE
+                _fullscreenVideo.value = true
+            }
+
+            override fun onHideCustomView() {
+                hideFullscreenVideo()
             }
 
             override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
@@ -460,10 +506,17 @@ class BrowserManager @Inject constructor(
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
         wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        // 允许媒体自动播放：部分视频站在「需用户手势」限制下会静音或拒绝播放，表现为「视频没声音」。
+        // [浏览器功能: 视频声音] 网页自动播放无需先触发用户手势
+        wv.settings.mediaPlaybackRequiresUserGesture = false
         if (defaultSystemUserAgent.isBlank()) {
             defaultSystemUserAgent = wv.settings.userAgentString.orEmpty()
         }
         applyUserAgentTo(wv)
+        // 网页触发的下载交给系统 DownloadManager（通知栏进度、公共下载目录），无需自建下载管理。
+        wv.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+            enqueueSystemDownload(url, userAgent, contentDisposition, mimetype)
+        }
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.setBackgroundColor(if (nightMode) NIGHT_BG_COLOR else Color.WHITE)
         applyDarkThemeToSettings(wv)
@@ -480,6 +533,7 @@ class BrowserManager @Inject constructor(
         wv.layout(0, 0, width, height)
     }
 
+    // [浏览器功能: 网页对话框]
     private fun holdDialog(tab: TabHolder, type: String, message: String, defaultValue: String?, result: JsResult) {
         tab.dialogTimeout?.let { mainHandler.removeCallbacks(it) }
         tab.pendingDialog = BrowserDialog(type, message, defaultValue)
@@ -559,6 +613,7 @@ class BrowserManager @Inject constructor(
         }
     }
 
+    // [浏览器功能: 浏览器标识 UA]
     suspend fun setUserAgent(
         preset: BrowserUserAgentPreset,
         customUa: String? = null,
@@ -600,6 +655,7 @@ class BrowserManager @Inject constructor(
     }
 
     /** 底栏手动切换；切回与 App 外观一致时自动恢复跟随。 */
+    // [浏览器功能: 夜间模式]
     fun toggleNightMode() {
         val next = !nightMode
         nightModeOverride = if (next == appDarkTheme) null else next
@@ -746,6 +802,7 @@ class BrowserManager @Inject constructor(
         wv.evaluateJavascript(js, null)
     }
 
+    // [浏览器功能: 开发者工具]
     suspend fun toggleDevTools(tabId: String? = null): Boolean = withContext(Dispatchers.Main) {
         val targetId = tabId ?: activeTabId
         val tab = findTab(targetId) ?: return@withContext false
@@ -846,6 +903,117 @@ class BrowserManager @Inject constructor(
         publishState()
     }
 
+    // [浏览器功能: 全屏视频]
+    /** 退出网页全屏视频：移除全屏视图、恢复 WebView 显示并回告系统（幂等）。 */
+    private fun hideFullscreenVideo() {
+        val container = containerView
+        val view = fullscreenVideoView
+        val callback = fullscreenVideoCallback
+        fullscreenVideoView = null
+        fullscreenVideoCallback = null
+        if (view != null && container != null) {
+            container.removeView(view)
+        }
+        findTab(activeTabId)?.webView?.visibility = View.VISIBLE
+        _fullscreenVideo.value = false
+        runCatching { callback?.onCustomViewHidden() }
+    }
+
+    /**
+     * 请求退出网页全屏视频（UI 返回键调用）：先让页面自身退出全屏以同步页面状态，
+     * 再兜底清理系统全屏视图（幂等；不依赖页面回调 onHideCustomView）。
+     */
+    fun exitFullscreenVideo() {
+        if (fullscreenVideoView == null) return
+        findTab(activeTabId)?.webView?.evaluateJavascript(
+            "document.exitFullscreen ? document.exitFullscreen() : null",
+            null
+        )
+        hideFullscreenVideo()
+    }
+
+    // [浏览器功能: 书签 / 历史记录] ── 书签 / 浏览历史 ──
+
+    /** 当前页是否已在书签中。 */
+    fun isBookmarked(url: String?): Boolean =
+        url != null && _bookmarks.value.any { it.url == url }
+
+    /** 收藏一页（已存在则更新标题与时间；非 http(s) 忽略）。 */
+    fun addBookmark(title: String?, url: String?) {
+        val u = url?.takeIf { it.startsWith("http") } ?: return
+        val t = title?.takeIf { it.isNotBlank() } ?: u
+        val next = (_bookmarks.value.filterNot { it.url == u } +
+            BrowserLink(t, u, System.currentTimeMillis())).reversed()
+        _bookmarks.value = next
+        browserBookmarkStore.save(next)
+    }
+
+    /** 移除一条书签。 */
+    fun removeBookmark(url: String) {
+        val next = _bookmarks.value.filterNot { it.url == url }
+        _bookmarks.value = next
+        browserBookmarkStore.save(next)
+    }
+
+    /** 清空浏览历史。 */
+    fun clearHistory() {
+        _browserHistory.value = emptyList()
+        browserHistoryStore.save(emptyList())
+    }
+
+    /** 记录一条浏览历史：按 url 去重置顶，最多保留 200 条。 */
+    private fun recordHistory(title: String?, url: String?) {
+        val u = url?.takeIf { it.startsWith("http") } ?: return
+        val t = title?.takeIf { it.isNotBlank() } ?: u
+        val next = (_browserHistory.value.filterNot { it.url == u } +
+            BrowserLink(t, u, System.currentTimeMillis()))
+            .takeLast(200)
+            .reversed()
+        _browserHistory.value = next
+        browserHistoryStore.save(next)
+    }
+
+    // [浏览器功能: 下载] ── 下载 ──
+
+    /** 把网页触发的下载入队到系统 DownloadManager；blob: 等特殊链接给出提示。 */
+    private fun enqueueSystemDownload(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimetype: String?
+    ) {
+        if (!url.startsWith("http")) {
+            toast(appContext.getString(R.string.browser_download_unsupported))
+            return
+        }
+        runCatching {
+            val fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype)
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url)).apply {
+                userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
+                mimetype?.takeIf { it.isNotBlank() && it != "application/octet-stream" }
+                    ?.let { setMimeType(it) }
+                android.webkit.CookieManager.getInstance().getCookie(url)
+                    ?.let { addRequestHeader("Cookie", it) }
+                setTitle(fileName)
+                setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+            }
+            val manager = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+            manager.enqueue(request)
+            toast(appContext.getString(R.string.browser_download_started, fileName))
+        }.onFailure {
+            FileLogger.w(TAG, "下载任务入队失败", it)
+            toast(appContext.getString(R.string.browser_download_unsupported))
+        }
+    }
+
+    /** 主线程弹一条轻提示（页面回调线程不固定，统一切主线程）。 */
+    private fun toast(message: String) {
+        mainHandler.post {
+            android.widget.Toast.makeText(appContext, message, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /**
      * 页面退出时解除容器挂载。
      *
@@ -853,6 +1021,8 @@ class BrowserManager @Inject constructor(
      * 把新页面正在使用的容器误清空。
      */
     fun detachContainerView(container: FrameLayout) {
+        // 全屏视频视图挂在容器上：先退出全屏恢复 WebView 可见，再统一移除（幂等）
+        hideFullscreenVideo()
         container.removeAllViews()
         if (containerView !== container) return
 
@@ -889,6 +1059,7 @@ class BrowserManager @Inject constructor(
             tab.consoleLogs.clear()
         }
         tabs.clear()
+        hideFullscreenVideo()
         containerView?.removeAllViews()
         containerView = null
         publishState()
@@ -1002,6 +1173,7 @@ class BrowserManager @Inject constructor(
     }
 
     /** 输入是否为本地文件路径：`file://`，或以 `/`、`~`、`./`、`../` 开头的裸路径。 */
+    // [浏览器功能: 本地文件预览]
     private fun isLocalPathInput(input: String): Boolean =
         input.startsWith("file://") ||
             input.startsWith("/") ||
@@ -1649,6 +1821,7 @@ class BrowserManager @Inject constructor(
             """{"from":$before,"to":$after}"""
         }
 
+    // [浏览器功能: AI 截图]
     suspend fun screenshot(tabId: String? = null): AgentImage? = withContext(Dispatchers.Main) {
         val tab = resolveTab(tabId)
         val wv = tab.webView

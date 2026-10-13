@@ -14,6 +14,9 @@ class ModelSheetCollapseStore(context: Context) {
     fun collapsedProviderIds(): Set<String> =
         prefs.getStringSet(KEY, null)?.toSet() ?: emptySet()
 
+    /** 是否保存过折叠状态：用于区分「从未手动调过」与「手动全部展开」，仅前者套用首次智能默认。 */
+    fun hasSaved(): Boolean = prefs.contains(KEY)
+
     /** 传新集合副本写入：SharedPreferences 禁止复用已存实例。 */
     fun save(collapsedProviderIds: Set<String>) {
         prefs.edit().putStringSet(KEY, HashSet(collapsedProviderIds)).apply()

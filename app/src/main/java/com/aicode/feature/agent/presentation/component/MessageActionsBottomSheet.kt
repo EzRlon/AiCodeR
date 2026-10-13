@@ -111,7 +111,7 @@ internal fun MessageActionsBottomSheet(
 }
 
 @Composable
-private fun MessageActionItem(
+internal fun MessageActionItem(
     icon: ImageVector,
     title: String,
     isDestructive: Boolean = false,

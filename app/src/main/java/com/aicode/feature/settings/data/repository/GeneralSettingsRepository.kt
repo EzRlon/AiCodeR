@@ -27,10 +27,10 @@ enum class StartupSessionMode {
 /**
  * 「偏好设置」里的用户偏好。
  *
- * 目前八项：拉取模型成功后是否自动移除远端已不存在的本地模型（默认开启）、
+ * 目前九项：拉取模型成功后是否自动移除远端已不存在的本地模型（默认开启）、
  * 启动时进入新会话还是最近会话（默认新开会话）、首字 / 数据块间隔超时（秒）、
- * 网络请求的最大重试次数（默认 6）、回车发送、自动压缩阈值、
- * sendFile 单个文件大小上限（默认 100MB），
+ * 网络请求的最大重试次数（默认 6）、回车发送、自动压缩阈值、单次任务 token 预算
+ * （默认 0 不限制）、sendFile 单个文件大小上限（默认 100MB），
  * 以及移除外部本地工作区时是否一并删除其聊天记录（默认关闭）。
  * DataStore 用法与 [KeepaliveSettingsRepository] 一致。
  */
@@ -46,22 +46,29 @@ class GeneralSettingsRepository @Inject constructor(
         val MAX_NETWORK_RETRIES_KEY = intPreferencesKey("max_network_retries")
         val ENTER_TO_SEND_KEY = booleanPreferencesKey("enter_to_send")
         val COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("compaction_threshold_percent")
+        val TOKEN_BUDGET_KEY = intPreferencesKey("token_budget")
         val SENDFILE_MAX_SIZE_MB_KEY = intPreferencesKey("sendfile_max_size_mb")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
+        val SELF_IMPROVE_MODE_KEY = booleanPreferencesKey("self_improve_mode")
+        val HANDOFF_PROMPT_ENABLED_KEY = booleanPreferencesKey("handoff_prompt_enabled")
+        val HANDOFF_PROMPT_PERCENT_KEY = intPreferencesKey("handoff_prompt_percent")
         /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
         val PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("prompts_announcement_shown_hash")
 
-        /** 首字超时默认 5 分钟，与原硬编码值一致。 */
-        const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 300
+        /** 首字超时默认 2 分钟（网络切换有主动打断兜底，此值只防静默挂起；极慢模型可上调）。 */
+        const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 120
 
-        /** 数据块间隔超时默认 5 分钟：服务端静默时能自行断开并重试，避免本轮永久停在「执行中」。 */
-        const val DEFAULT_STREAM_IDLE_TIMEOUT_SEC = 300
+        /** 数据块间隔超时默认 2 分钟：服务端静默时能自行断开并重试，避免本轮永久停在「执行中」。 */
+        const val DEFAULT_STREAM_IDLE_TIMEOUT_SEC = 120
 
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
         /** 自动压缩阈值默认 90%，与原硬编码值一致。 */
         const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 90
+
+        /** 交接提醒阈值默认 50%：上下文占用过半时提示开新会话接手。 */
+        const val DEFAULT_HANDOFF_PROMPT_PERCENT = 50
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
@@ -173,6 +180,23 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[COMPACTION_THRESHOLD_PERCENT_KEY] = percent.coerceIn(1, 100) }
     }
 
+    /** 交接提醒开关；默认开启。开启后上下文占用达到阈值时提示开新会话接手。 */
+    val handoffPromptEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[HANDOFF_PROMPT_ENABLED_KEY] ?: true }
+
+    suspend fun setHandoffPromptEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[HANDOFF_PROMPT_ENABLED_KEY] = enabled }
+    }
+
+    /** 交接提醒触发阈值（上下文窗口的百分比）；默认 50，限定 1..100。 */
+    val handoffPromptPercentFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[HANDOFF_PROMPT_PERCENT_KEY] ?: DEFAULT_HANDOFF_PROMPT_PERCENT).coerceIn(1, 100)
+    }
+
+    suspend fun setHandoffPromptPercent(percent: Int) {
+        context.generalDataStore.edit { it[HANDOFF_PROMPT_PERCENT_KEY] = percent.coerceIn(1, 100) }
+    }
+
     /** 压缩前读取一次触发阈值百分比。 */
     suspend fun compactionThresholdPercent(): Int = compactionThresholdPercentFlow.first()
 
@@ -184,6 +208,18 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun restoreEnterToSend(enabled: Boolean) = setEnterToSend(enabled)
 
     suspend fun restoreCompactionThresholdPercent(percent: Int) = setCompactionThresholdPercent(percent)
+
+    /** 单次任务 token 预算（输入+输出合计）；0 表示不限制，未设置时默认 0（不限制）。 */
+    val tokenBudgetFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[TOKEN_BUDGET_KEY] ?: 0).coerceAtLeast(0)
+    }
+
+    suspend fun setTokenBudget(tokens: Int) {
+        context.generalDataStore.edit { it[TOKEN_BUDGET_KEY] = tokens.coerceAtLeast(0) }
+    }
+
+    /** 单次任务预算检查前读取一次预算值。 */
+    suspend fun tokenBudget(): Int = tokenBudgetFlow.first()
 
     /** sendFile 单个文件大小上限（MB）；默认 100，下限 1，不设上限。 */
     val sendFileMaxSizeMbFlow: Flow<Int> = context.generalDataStore.data.map {
@@ -210,6 +246,14 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY] = enabled }
     }
 
+    /** 自我改进模式开关；默认关闭。开启后系统提示词注入自我改进指令，引导 AI 沉淀技能与提示词。 */
+    val selfImproveModeFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[SELF_IMPROVE_MODE_KEY] ?: false }
+
+    suspend fun setSelfImproveMode(enabled: Boolean) {
+        context.generalDataStore.edit { it[SELF_IMPROVE_MODE_KEY] = enabled }
+    }
+
     /** 移除外部工作区前读取一次该偏好。 */
     suspend fun deleteExternalWorkspaceSessions(): Boolean = deleteExternalWorkspaceSessionsFlow.first()
 
@@ -226,4 +270,13 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun deleteExternalWorkspaceSessionsSnapshot(): Boolean = deleteExternalWorkspaceSessionsFlow.first()
 
     suspend fun restoreDeleteExternalWorkspaceSessions(enabled: Boolean) = setDeleteExternalWorkspaceSessions(enabled)
+
+    /** 备份快照：交接提醒开关与阈值。 */
+    suspend fun handoffPromptEnabledSnapshot(): Boolean = handoffPromptEnabledFlow.first()
+
+    suspend fun handoffPromptPercentSnapshot(): Int = handoffPromptPercentFlow.first()
+
+    suspend fun restoreHandoffPromptEnabled(enabled: Boolean) = setHandoffPromptEnabled(enabled)
+
+    suspend fun restoreHandoffPromptPercent(percent: Int) = setHandoffPromptPercent(percent)
 }

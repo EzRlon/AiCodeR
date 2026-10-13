@@ -58,16 +58,26 @@ internal fun GeneralSettingsSection(
     onToggleEnterToSend: (Boolean) -> Unit,
     compactionThresholdPercent: Int,
     onSetCompactionThresholdPercent: (Int) -> Unit,
+    tokenBudget: Int,
+    onSetTokenBudget: (Int) -> Unit,
     sendFileMaxSizeMb: Int,
     onSetSendFileMaxSizeMb: (Int) -> Unit,
     deleteExternalWorkspaceSessions: Boolean,
-    onToggleDeleteExternalWorkspaceSessions: (Boolean) -> Unit
+    onToggleDeleteExternalWorkspaceSessions: (Boolean) -> Unit,
+    selfImproveMode: Boolean,
+    onToggleSelfImproveMode: (Boolean) -> Unit,
+    handoffPromptEnabled: Boolean,
+    onToggleHandoffPromptEnabled: (Boolean) -> Unit,
+    handoffPromptPercent: Int,
+    onSetHandoffPromptPercent: (Int) -> Unit
 ) {
     var showStartupSessionSheet by remember { mutableStateOf(false) }
     var editingFirstByteTimeout by remember { mutableStateOf(false) }
     var editingStreamIdleTimeout by remember { mutableStateOf(false) }
     var editingMaxNetworkRetries by remember { mutableStateOf(false) }
     var editingCompactionThreshold by remember { mutableStateOf(false) }
+    var editingHandoffPercent by remember { mutableStateOf(false) }
+    var editingTokenBudget by remember { mutableStateOf(false) }
     var editingSendFileMaxSize by remember { mutableStateOf(false) }
 
     Column(
@@ -102,6 +112,62 @@ internal fun GeneralSettingsSection(
                         text = stringResource(R.string.settings_percent_value, compactionThresholdPercent),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_prompt),
+                subtitle = stringResource(R.string.settings_handoff_prompt_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = handoffPromptEnabled,
+                        onCheckedChange = onToggleHandoffPromptEnabled
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_prompt_percent),
+                subtitle = stringResource(R.string.settings_handoff_prompt_percent_desc),
+                onClick = { editingHandoffPercent = true },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_percent_value, handoffPromptPercent),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_token_budget),
+                subtitle = stringResource(R.string.settings_token_budget_desc),
+                onClick = { editingTokenBudget = true },
+                trailing = {
+                    Text(
+                        text = if (tokenBudget <= 0) {
+                            stringResource(R.string.settings_token_budget_unlimited)
+                        } else {
+                            stringResource(R.string.settings_token_budget_value, tokenBudget)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_self_improve_mode),
+                subtitle = stringResource(R.string.settings_self_improve_mode_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = selfImproveMode,
+                        onCheckedChange = onToggleSelfImproveMode
                     )
                 }
             )
@@ -275,6 +341,35 @@ internal fun GeneralSettingsSection(
                 editingCompactionThreshold = false
             },
             onDismiss = { editingCompactionThreshold = false }
+        )
+    }
+
+    if (editingHandoffPercent) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_handoff_prompt_percent),
+            initialValue = handoffPromptPercent,
+            hint = stringResource(R.string.settings_compaction_threshold_input_hint),
+            minValue = 1,
+            maxValue = 100,
+            onConfirm = {
+                onSetHandoffPromptPercent(it)
+                editingHandoffPercent = false
+            },
+            onDismiss = { editingHandoffPercent = false }
+        )
+    }
+
+    if (editingTokenBudget) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_token_budget),
+            initialValue = tokenBudget,
+            hint = stringResource(R.string.settings_token_budget_input_hint),
+            minValue = 0,
+            onConfirm = {
+                onSetTokenBudget(it)
+                editingTokenBudget = false
+            },
+            onDismiss = { editingTokenBudget = false }
         )
     }
 

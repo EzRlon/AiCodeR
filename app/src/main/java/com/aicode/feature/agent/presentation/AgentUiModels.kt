@@ -126,6 +126,8 @@ data class AgentUIMessage(
     val isCompactionFailure: Boolean = false,
     // 后台任务完成通知：参与模型上下文但不显示为普通用户气泡，渲染为轻量提示条。
     val isBackgroundNotification: Boolean = false,
+    // 收尾独立验收报告（TOOL 消息）：渲染为可展开的验收卡片，回放不进模型上下文。
+    val isVerificationReport: Boolean = false,
     val inputTokens: Int = 0,
     val outputTokens: Int = 0,
     // 仅 ASSISTANT 消息：本次调用输入中命中服务端缓存的 token 数，气泡下方据此算缓存命中率。
@@ -159,6 +161,12 @@ const val BACKGROUND_NOTIFICATION_PREFIX = "[系统通知 - 非用户输入]"
  * 该消息无配对 toolCallId，[MessagePersistenceUseCase.buildHistory] 回放时会自动丢弃，不进入模型上下文。
  */
 const val COMPACTION_FAILURE_TOOL_NAME = "上下文压缩"
+
+/**
+ * 独立验收报告的 TOOL 消息 toolName。既是落库时的标记，也是 UI 识别验收卡片的依据；
+ * 该消息无配对 toolCallId，[MessagePersistenceUseCase.buildHistory] 回放时会自动丢弃，不进入模型上下文。
+ */
+const val VERIFICATION_REPORT_TOOL_NAME = "独立验收"
 
 /**
  * 一次会话消息查询的结果快照。

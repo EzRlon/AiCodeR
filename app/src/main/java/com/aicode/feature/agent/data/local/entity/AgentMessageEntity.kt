@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.BACKGROUND_NOTIFICATION_PREFIX
 import com.aicode.feature.agent.presentation.COMPACTION_FAILURE_TOOL_NAME
+import com.aicode.feature.agent.presentation.VERIFICATION_REPORT_TOOL_NAME
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import kotlinx.serialization.decodeFromString
@@ -71,6 +72,7 @@ data class AgentMessageEntity(
             isCompactionMarker = isCompactionMarker,
             isContextSummary = isContextSummary,
             isCompactionFailure = roleEnum == MessageRole.TOOL && toolName == COMPACTION_FAILURE_TOOL_NAME,
+            isVerificationReport = roleEnum == MessageRole.TOOL && toolName == VERIFICATION_REPORT_TOOL_NAME,
             isBackgroundNotification = roleEnum == MessageRole.USER &&
                 content.startsWith(BACKGROUND_NOTIFICATION_PREFIX),
             inputTokens = inputTokens,

@@ -1,6 +1,9 @@
 package com.aicode.feature.browser.presentation
 
+import android.content.ClipData
+import android.content.Intent
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -8,6 +11,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,6 +66,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -84,6 +91,7 @@ import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.tool.browser.BrowserDialog
+import com.aicode.feature.agent.domain.tool.browser.BrowserLink
 import com.aicode.feature.agent.domain.tool.browser.BrowserManager
 import com.aicode.feature.agent.domain.tool.browser.BrowserTabState
 import com.aicode.feature.agent.domain.tool.browser.BrowserUserAgentPreset
@@ -96,7 +104,13 @@ import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Code
+import compose.icons.feathericons.Bookmark
+import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.Link
+import compose.icons.feathericons.Share2
+import compose.icons.feathericons.Star
+import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Moon
@@ -150,6 +164,9 @@ fun BrowserScreen(
     val tabsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var showMenuSheet by rememberSaveable { mutableStateOf(false) }
+    var showBookmarksSheet by rememberSaveable { mutableStateOf(false) }
+    var showHistorySheet by rememberSaveable { mutableStateOf(false) }
+    val clipboard = LocalClipboard.current
     val menuSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var showCustomUaDialog by rememberSaveable { mutableStateOf(false) }
@@ -164,6 +181,13 @@ fun BrowserScreen(
     // 拦截物理/手势返回键：若处于地址栏编辑态，优先退出编辑态
     BackHandler(enabled = isEditingAddress) {
         isEditingAddress = false
+    }
+
+    // 网页全屏视频进行中：返回键优先退出全屏
+    val fullscreenVideo by browserManager.fullscreenVideo.collectAsStateWithLifecycle()
+    // [浏览器功能: 全屏视频] 返回键优先退出网页全屏
+    BackHandler(enabled = fullscreenVideo) {
+        browserManager.exitFullscreenVideo()
     }
 
     // 网页对话框：面板可见时交给用户处理（UI 优先，AI 的 dialog action 会被拒）
@@ -366,6 +390,37 @@ fun BrowserScreen(
         }
     }
 
+    // 书签 / 历史记录面板
+    if (showBookmarksSheet) {
+        val bookmarks by browserManager.bookmarks.collectAsStateWithLifecycle()
+        BrowserLinksSheet(
+            title = stringResource(R.string.browser_bookmarks),
+            links = bookmarks,
+            emptyText = stringResource(R.string.browser_bookmarks_empty),
+            onOpen = { link ->
+                scope.launchBrowserOp { browserManager.navigate(link.url) }
+                showBookmarksSheet = false
+            },
+            onDelete = { link -> browserManager.removeBookmark(link.url) },
+            onDismiss = { showBookmarksSheet = false }
+        )
+    }
+
+    if (showHistorySheet) {
+        val history by browserManager.browserHistory.collectAsStateWithLifecycle()
+        BrowserLinksSheet(
+            title = stringResource(R.string.browser_history),
+            links = history,
+            emptyText = stringResource(R.string.browser_history_empty),
+            onOpen = { link ->
+                scope.launchBrowserOp { browserManager.navigate(link.url) }
+                showHistorySheet = false
+            },
+            onClearAll = { browserManager.clearHistory() },
+            onDismiss = { showHistorySheet = false }
+        )
+    }
+
     // 更多设置与工具抽屉（夜间模式、调试工具、浏览器 UA）
     if (showMenuSheet) {
         BrowserMenuSheet(
@@ -391,7 +446,42 @@ fun BrowserScreen(
                     }
                     showMenuSheet = false
                 }
-            }
+            },
+            onShare = {
+                val url = state.activeTab?.url.orEmpty()
+                if (url.isNotBlank()) {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, url)
+                    }
+                    runCatching {
+                        context.startActivity(Intent.createChooser(send, context.getString(R.string.browser_share)))
+                    }
+                }
+            },
+            onCopyLink = {
+                val url = state.activeTab?.url.orEmpty()
+                if (url.isNotBlank()) {
+                    scope.launch {
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("url", url)))
+                        Toast.makeText(context, context.getString(R.string.browser_link_copied), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onAddBookmark = {
+                val tab = state.activeTab
+                if (tab != null && tab.url.isNotBlank()) {
+                    val existed = browserManager.isBookmarked(tab.url)
+                    browserManager.addBookmark(tab.title, tab.url)
+                    Toast.makeText(
+                        context,
+                        context.getString(if (existed) R.string.browser_bookmark_exists else R.string.browser_bookmark_added),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            },
+            onOpenBookmarks = { showBookmarksSheet = true },
+            onOpenHistory = { showHistorySheet = true }
         )
     }
 
@@ -755,6 +845,122 @@ private fun BrowserBottomBar(
     }
 }
 
+// [浏览器功能: 书签 / 历史记录]
+/**
+ * 书签 / 浏览历史列表面板：标题 + 链接行（标题/网址/可选删除）+ 可选清空按钮。
+ * 书签与历史共用；点击行导航到对应网址。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BrowserLinksSheet(
+    title: String,
+    links: List<BrowserLink>,
+    emptyText: String,
+    onOpen: (BrowserLink) -> Unit,
+    onDelete: ((BrowserLink) -> Unit)? = null,
+    onClearAll: (() -> Unit)? = null,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.semanticColors.pageBackground
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md)
+                .padding(bottom = Spacing.xl)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                onClearAll?.let { clear ->
+                    TextButton(onClick = clear) {
+                        Text(stringResource(R.string.browser_history_clear))
+                    }
+                }
+            }
+            if (links.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = emptyText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                ) {
+                    items(links, key = { it.url }) { link ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpen(link) }
+                                .padding(horizontal = Spacing.xs, vertical = Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = link.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = link.url,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.semanticColors.subtleText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            onDelete?.let { del ->
+                                IconButton(
+                                    onClick = { del(link) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = FeatherIcons.Trash2,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.semanticColors.subtleText,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                        HorizontalDivider(
+                            color = MaterialTheme.semanticColors.subtleBorder,
+                            thickness = 0.5.dp,
+                            modifier = Modifier.padding(horizontal = Spacing.xs)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BrowserMenuSheet(
@@ -766,7 +972,12 @@ private fun BrowserMenuSheet(
     onDismiss: () -> Unit,
     onToggleNightMode: () -> Unit,
     onToggleDevTools: () -> Unit,
-    onSelectUaPreset: (BrowserUserAgentPreset) -> Unit
+    onSelectUaPreset: (BrowserUserAgentPreset) -> Unit,
+    onShare: () -> Unit,
+    onCopyLink: () -> Unit,
+    onAddBookmark: () -> Unit,
+    onOpenBookmarks: () -> Unit,
+    onOpenHistory: () -> Unit
 ) {
     // 菜单层级：0 = 一级主菜单，1 = 二级 UA 场景选择菜单
     var menuLevel by rememberSaveable { mutableStateOf(0) }
@@ -830,6 +1041,52 @@ private fun BrowserMenuSheet(
                 }
 
                 SettingsGroup {
+                    // [浏览器功能: 分享 / 复制链接 / 书签 / 历史] 内容级操作，点后关闭菜单
+                    SettingsRow(
+                        icon = FeatherIcons.Share2,
+                        title = stringResource(R.string.browser_share),
+                        onClick = {
+                            onShare()
+                            onDismiss()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = FeatherIcons.Link,
+                        title = stringResource(R.string.browser_copy_link),
+                        onClick = {
+                            onCopyLink()
+                            onDismiss()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = FeatherIcons.Star,
+                        title = stringResource(R.string.browser_add_bookmark),
+                        onClick = {
+                            onAddBookmark()
+                            onDismiss()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = FeatherIcons.Bookmark,
+                        title = stringResource(R.string.browser_bookmarks),
+                        onClick = {
+                            onOpenBookmarks()
+                            onDismiss()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = FeatherIcons.Clock,
+                        title = stringResource(R.string.browser_history),
+                        onClick = {
+                            onOpenHistory()
+                            onDismiss()
+                        }
+                    )
+                    SettingsDivider()
                     // 1. 夜间模式
                     SettingsRow(
                         icon = if (nightMode) FeatherIcons.Moon else FeatherIcons.Sun,

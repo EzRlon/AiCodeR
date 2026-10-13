@@ -94,6 +94,7 @@ import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
+import com.aicode.feature.agent.domain.workflow.BudgetApprovalManager
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
 import com.aicode.feature.hooks.domain.HookRunner
@@ -102,6 +103,7 @@ import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepositor
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
+import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 
@@ -424,16 +426,19 @@ object AgentModule {
         policyEngine: ToolPermissionPolicyEngine,
         contextCompactor: ContextCompactor,
         planApprovalManager: PlanApprovalManager,
+        budgetApprovalManager: BudgetApprovalManager,
         toolOutputStore: ToolOutputStore,
         modelMetadataService: ModelMetadataService,
         compactionModelSettingsRepository: CompactionModelSettingsRepository,
         titleModelSettingsRepository: TitleModelSettingsRepository,
+        verificationModelSettingsRepository: VerificationModelSettingsRepository,
         defaultModelSettingsRepository: DefaultModelSettingsRepository,
         generalSettingsRepository: GeneralSettingsRepository,
         sessionUseCase: SessionUseCase,
         messagePersistenceUseCase: MessagePersistenceUseCase,
         checkpointManager: CheckpointManager,
         llmCallRecordDao: LlmCallRecordDao,
+        todoItemDao: TodoItemDao,
         keyRotator: ProviderKeyRotator,
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
@@ -451,16 +456,19 @@ object AgentModule {
             policyEngine,
             contextCompactor,
             planApprovalManager,
+            budgetApprovalManager,
             toolOutputStore,
             modelMetadataService,
             compactionModelSettingsRepository,
             titleModelSettingsRepository,
+            verificationModelSettingsRepository,
             defaultModelSettingsRepository,
             generalSettingsRepository,
             sessionUseCase,
             messagePersistenceUseCase,
             checkpointManager,
             llmCallRecordDao,
+            todoItemDao,
             keyRotator,
             agentNotificationCenter,
             eventInjector,

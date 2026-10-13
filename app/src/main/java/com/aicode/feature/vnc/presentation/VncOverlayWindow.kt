@@ -194,7 +194,8 @@ private fun VncWindowSurface(
                 )
             }
             val failed = serviceState as? VncServiceState.Failed
-            if (failed != null) {
+            val preparing = serviceState is VncServiceState.Preparing
+            if (failed != null || preparing) {
                 Column(
                     modifier = Modifier
                         .matchParentSize()
@@ -202,22 +203,32 @@ private fun VncWindowSurface(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Text(
-                        text = stringResource(R.string.vnc_failed_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.semanticColors.subtleText,
-                        modifier = Modifier.padding(horizontal = Spacing.lg),
-                    )
-                    Text(
-                        text = failed.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.semanticColors.subtleText,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-                    )
-                    TextButton(onClick = viewModel::requestReconnect) {
-                        Text(text = stringResource(R.string.vnc_retry))
+                    if (failed == null) {
+                        // 安装/重试期间保留「准备中」覆盖：避免重试后露出空白 WebView（装包可达数分钟）。
+                        Text(
+                            text = stringResource(R.string.vnc_preparing_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            modifier = Modifier.padding(horizontal = Spacing.lg),
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.vnc_failed_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            modifier = Modifier.padding(horizontal = Spacing.lg),
+                        )
+                        Text(
+                            text = failed.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.semanticColors.subtleText,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                        )
+                        TextButton(onClick = viewModel::retryStart) {
+                            Text(text = stringResource(R.string.vnc_retry))
+                        }
                     }
                 }
             }

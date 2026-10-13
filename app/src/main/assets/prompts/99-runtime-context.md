@@ -23,6 +23,8 @@
 ### 工作区规则
 {{AICODE_PROJECT_RULES_PROJECT}}
 
+{{AICODE_SELF_IMPROVE}}
+
 ## 当前上下文
 - 项目根目录: {{AICODE_WORKSPACE}}
 - 运行环境: {{AICODE_ENVIRONMENT}}

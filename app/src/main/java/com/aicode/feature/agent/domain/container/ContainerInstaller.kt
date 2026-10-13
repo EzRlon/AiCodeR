@@ -89,6 +89,28 @@ class ContainerInstaller @Inject constructor(
         }
 
         /**
+         * 从 assets 提取内置编队定义（专家团）到 ~/.aicode/teams/。
+         * 若文件已存在则不覆盖，以保留用户的修改与删除后的重建选择。
+         */
+        fun extractTeams(context: Context) {
+            val destDir = File(File(context.filesDir, "aicode"), "teams")
+            destDir.mkdirs()
+            runCatching {
+                val entries = context.assets.list("teams") ?: return@runCatching
+                for (entry in entries) {
+                    val destFile = File(destDir, entry)
+                    if (!destFile.exists()) {
+                        context.assets.open("teams/$entry").use { input ->
+                            destFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+            }.onFailure {
+                FileLogger.w(TAG, "提取内置编队定义失败: ${it.message}", it)
+            }
+        }
+
+        /**
          * 从 assets 提取内置子代理定义（如 Explore）到 ~/.aicode/agents/。
          * 若文件已存在则不覆盖，以保留用户的修改与删除后的重建选择。
          */

@@ -76,6 +76,12 @@ import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
+import com.aicode.core.util.ScreenCapture
+import com.aicode.feature.annotation.presentation.AnnotationViewModel
+import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
+import com.aicode.feature.annotation.presentation.component.AnnotationLedgerScreen
+import com.aicode.feature.installer.presentation.component.TestBuildListScreen
+import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.AIChatPanel
@@ -85,6 +91,7 @@ import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
 import com.aicode.feature.editor.presentation.CodeEditorScreen
 import com.aicode.feature.browser.presentation.BrowserScreen
+import com.aicode.feature.memorygraph.presentation.MemoryGraphScreen
 import com.aicode.feature.git.presentation.GitViewModel
 import com.aicode.feature.credentials.presentation.component.CredentialScreen
 import com.aicode.feature.git.presentation.component.GitScreen
@@ -187,6 +194,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         handleSendTextIntent(this, intent)
+
+        // 音量键直接控制媒体音量：浏览器/视频等媒体播放场景符合直觉（否则调的是铃声音量）。
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
         // 挂载离屏 WebView 隐藏宿主，确保后台/离屏状态下 WebView 也能触发 onAttachedToWindow 完成首帧真实光栅化渲染
         val hiddenHost = android.widget.FrameLayout(this).apply {
@@ -356,6 +366,9 @@ fun AppNavigation(
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // 存储空间「在文件树中查看」：设置页触发后回聊天页、开抽屉，文件树切到「文件」页签并展开目标。
+    var drawerRevealRequest by remember { mutableStateOf<String?>(null) }
 
     // 用于判断当前路由：仅在聊天页允许 Drawer 手势。
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
@@ -538,11 +551,16 @@ fun AppNavigation(
                 WorkbenchPaneKind.TERMINAL -> "terminal"
                 WorkbenchPaneKind.GIT -> "git"
                 WorkbenchPaneKind.BROWSER -> "browser"
+                WorkbenchPaneKind.PREVIEW -> "preview"
                 else -> "chat"
             }
             navController.navigate(route)
         }
     }
+
+    // ── 截图标注：账本 VM（Activity 级）+ 待编辑截图 ──
+    val annotationViewModel: AnnotationViewModel = hiltViewModel()
+    var pendingAnnotationBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     // 侧栏内容：modal 抽屉与大屏常驻栏共用同一份，不在两处重复几十行参数。
     val drawerBody: @Composable () -> Unit = {
@@ -561,6 +579,8 @@ fun AppNavigation(
             onToggleExpand = { agentViewModel.toggleExpand(it) },
             onOpenFile = openTreeEntry,
             onRefreshBrowse = { agentViewModel.refreshBrowse() },
+            revealRequest = drawerRevealRequest,
+            onRevealConsumed = { drawerRevealRequest = null },
             onCreateFile = { parent, name ->
                 agentViewModel.createBrowseFile(parent, name) { ok ->
                     if (!ok) toastFileOpFailed(context, R.string.file_browser_create_failed)
@@ -609,6 +629,33 @@ fun AppNavigation(
             onNavigateToBrowser = {
                 openWorkbench(WorkbenchPaneKind.BROWSER)
                 if (!permanentDrawer) scope.launch { drawerState.close() }
+            },
+            onStartAnnotationCapture = {
+                // 先收起抽屉等动画结束再截屏，否则会把抽屉叠在界面上截进去
+                scope.launch {
+                    if (!permanentDrawer) {
+                        drawerState.close()
+                        kotlinx.coroutines.delay(350)
+                    }
+                    val bitmap = (context as? android.app.Activity)?.let { ScreenCapture.captureActivity(it) }
+                    if (bitmap != null) {
+                        pendingAnnotationBitmap = bitmap
+                    } else {
+                        Toast.makeText(context, context.getString(R.string.annotation_capture_failed), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onNavigateToAnnotations = {
+                navController.navigate("annotations")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            },
+            onNavigateToTestBuilds = {
+                navController.navigate("testbuilds")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            },
+            onNavigateToPreview = {
+                openWorkbench(WorkbenchPaneKind.PREVIEW)
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
             },
             onNavigateToSettings = {
                 navController.navigate("settings")
@@ -669,6 +716,7 @@ fun AppNavigation(
                                     onNavigateToTerminal = { openWorkbench(WorkbenchPaneKind.TERMINAL) },
                                     onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
                                     onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
+                                    onNavigateToMemoryGraph = { navController.navigate("memorygraph") },
                                     onNavigateToAgents = { showAgentCliSheet = true },
                                     terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
                                     gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
@@ -719,6 +767,52 @@ fun AppNavigation(
                     }
                 }
             }
+            composable("memorygraph") {
+                MemoryGraphScreen(
+                    workspacePath = currentWorkspace?.path.orEmpty(),
+                    sessions = sessions,
+                    subSessionsByParent = subSessionsByParent,
+                    agentStates = agentStates,
+                    currentSessionId = currentSessionId,
+                    onOpenSession = { id ->
+                        agentViewModel.selectSession(id)
+                        navController.popBackStack()
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable("annotations") {
+                AnnotationLedgerScreen(
+                    onBack = { navController.popBackStack() },
+                    onSummaryReady = { text, items ->
+                        // 汇总注入：文本进草稿，图片作待发附件（聊天面板读文件转 base64）
+                        agentViewModel.queueExternalText(text)
+                        agentViewModel.queueExternalAttachments(
+                            items.map { item ->
+                                AgentAttachment(
+                                    fileName = item.imagePath.substringAfterLast('/'),
+                                    containerPath = item.imagePath,
+                                    localPath = "",
+                                    mimeType = "image/png",
+                                    sizeBytes = 0L,
+                                    isImage = true
+                                )
+                            }
+                        )
+                        Toast.makeText(context, context.getString(R.string.annotation_summary_queued), Toast.LENGTH_SHORT).show()
+                        // 汇总即视为已发（状态机：待确认 → 已发AI）
+                        annotationViewModel.markSent(items)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = false }
+                        }
+                    }
+                )
+            }
+            composable("testbuilds") {
+                TestBuildListScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
             composable("settings") {
                 // 复用 Activity 级 settingsViewModel（MainActivity 顶部已创建并 init），
                 // 避免进入设置页时再建一个 NavBackStackEntry 级实例、重复跑 init 与 9 路 flow 订阅，
@@ -731,6 +825,12 @@ fun AppNavigation(
                         if (!expanded) scope.launch { drawerState.open() }
                     },
                     onStopAllAndCloseTerminal = { agentViewModel.stopAllAndCloseTerminal() },
+                    onRevealInTree = { path ->
+                        agentViewModel.revealPathInTree(path)
+                        drawerRevealRequest = path
+                        navController.popBackStack()
+                        if (!expanded) scope.launch { drawerState.open() }
+                    },
                     onRerunOnboarding = {
                         // 从设置页「重新运行引导」：清状态回 in_progress、激活引导并回聊天页。
                         scope.launch {
@@ -771,6 +871,12 @@ fun AppNavigation(
                 val browserViewModel: com.aicode.feature.browser.presentation.BrowserViewModel = hiltViewModel()
                 BrowserScreen(
                     browserManager = browserViewModel.browserManager,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable("preview") {
+                PreviewScreen(
+                    embedded = false,
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
@@ -885,6 +991,24 @@ fun AppNavigation(
         ) {
             navBody()
         }
+    }
+
+    // 截图标注编辑弹层（全局宿主：入口在侧栏，截屏后覆盖全屏编辑）
+    pendingAnnotationBitmap?.let { bitmap ->
+        AnnotationEditorDialog(
+            bitmap = bitmap,
+            onSave = { marks, type, note ->
+                annotationViewModel.saveCapture(bitmap, marks, type, note) { ok ->
+                    Toast.makeText(
+                        context,
+                        context.getString(if (ok) R.string.annotation_saved else R.string.annotation_save_failed),
+                        if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                    ).show()
+                }
+                pendingAnnotationBitmap = null
+            },
+            onDismiss = { pendingAnnotationBitmap = null }
+        )
     }
 
     // 检查更新弹窗（全局宿主：自动检测与关于页手动检查共用，覆盖所有页面）

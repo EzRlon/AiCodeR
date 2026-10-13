@@ -3,6 +3,9 @@ package com.aicode.feature.agent.presentation.component
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -11,6 +14,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -25,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -71,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -85,7 +91,6 @@ import androidx.compose.ui.unit.dp
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.rememberImeBottomInset
 import com.aicode.feature.settings.presentation.component.ModelSearchField
 import com.aicode.feature.settings.presentation.component.SettingsDivider
@@ -117,6 +122,7 @@ import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Layers
+import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
@@ -135,7 +141,83 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 
 /**
- * 侧边栏内容：顶部 Tab 切换「会话」/「文件」，底部「设置」入口卡片。
+ * Blender 风竖排标签列：图标 + 小字纵向排列，选中项用抬起色块标记。
+ * 与横向分段控件同一套中性色语言（轨道 + 抬起滑块），供侧边栏使用。
+ */
+@Composable
+private fun DrawerVerticalTabs(
+    selected: Int,
+    tabs: List<Pair<ImageVector, String>>,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val trackColor = MaterialTheme.semanticColors.mutedSurface
+    val thumbColor = if (dark) MaterialTheme.semanticColors.capsuleSurface else MaterialTheme.semanticColors.cardSurface
+    val itemHeight = 56.dp
+
+    Box(
+        modifier = modifier
+            .width(60.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(trackColor)
+            .padding(3.dp)
+    ) {
+        // 选中滑块：与横向分段控件同一弹簧手感，沿纵轴位移。
+        val thumbOffset by animateDpAsState(
+            targetValue = itemHeight * selected,
+            animationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
+            label = "drawer-vertical-thumb"
+        )
+        Surface(
+            modifier = Modifier
+                .offset(y = thumbOffset)
+                .fillMaxWidth()
+                .height(itemHeight),
+            shape = RoundedCornerShape(9.dp),
+            color = thumbColor,
+            shadowElevation = 2.dp,
+            content = {}
+        )
+        Column {
+            tabs.forEachIndexed { index, (icon, label) ->
+                val isSelected = selected == index
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(itemHeight)
+                        .clip(RoundedCornerShape(9.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelect(index) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = if (isSelected) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isSelected) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 侧边栏内容：左侧 Blender 风竖排标签列切换「会话」/「文件」，底部「设置」入口卡片。
  * Tab0 为根会话列表，带子代理的会话行可就地展开；Tab1 为当前工作区的文件树。
  */
 @Composable
@@ -180,6 +262,9 @@ fun ChatDrawerContent(
     /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
     onNavigateToPreview: (() -> Unit)? = null,
     onNavigateToSettings: () -> Unit,
+    /** 定位请求（容器路径）：非空时切到「文件」页签；展开由外部先行完成，收到后调 [onRevealConsumed] 消费。 */
+    revealRequest: String? = null,
+    onRevealConsumed: (() -> Unit)? = null,
     searchQuery: String,
     searchState: ChatSearchState,
     onSearchQueryChange: (String) -> Unit,
@@ -197,6 +282,14 @@ fun ChatDrawerContent(
     var pendingRename by remember { mutableStateOf<ChatSession?>(null) }
     var menuSession by remember { mutableStateOf<ChatSession?>(null) }
     val listState = rememberLazyListState()
+
+    // 外部定位请求（存储空间「在文件树中查看」）：切到「文件」页签后随即消费。
+    LaunchedEffect(revealRequest) {
+        if (revealRequest != null) {
+            selectedTab = 1
+            onRevealConsumed?.invoke()
+        }
+    }
 
     BackHandler(enabled = isSelectionMode) {
         isSelectionMode = false
@@ -229,133 +322,148 @@ fun ChatDrawerContent(
             .padding(bottom = imeInset + Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 顶部 Tab 切换
-        SegmentedTabs(
-            selected = selectedTab,
-            labels = listOf(
-                stringResource(R.string.subagent_tab_sessions),
-                stringResource(R.string.drawer_tab_files)
-            ),
-            onSelect = { selectedTab = it }
-        )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            // Blender 风竖排标签列：会话 / 文件
+            DrawerVerticalTabs(
+                selected = selectedTab,
+                tabs = listOf(
+                    FeatherIcons.MessageSquare to stringResource(R.string.subagent_tab_sessions),
+                    FeatherIcons.Folder to stringResource(R.string.drawer_tab_files)
+                ),
+                onSelect = { selectedTab = it },
+                modifier = Modifier.fillMaxHeight()
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
 
         // 聊天记录搜索框放在 Tab 栏正下方，仅「会话」Tab 可见。
-        if (selectedTab == 0 && isSelectionMode) {
-            Surface(
-                color = MaterialTheme.semanticColors.cardSurface,
-                shape = RoundedCornerShape(Radius.mdLarge),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = {
-                            isSelectionMode = false
-                            selectedSessionIds.clear()
-                        },
-                        modifier = Modifier.size(32.dp)
+                if (selectedTab == 0 && isSelectionMode) {
+                    Surface(
+                        color = MaterialTheme.semanticColors.cardSurface,
+                        shape = RoundedCornerShape(Radius.mdLarge),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(R.string.common_cancel),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    isSelectionMode = false
+                                    selectedSessionIds.clear()
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = FeatherIcons.X,
+                                    contentDescription = stringResource(R.string.common_cancel),
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(Modifier.width(Spacing.xs))
+                            Text(
+                                text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
+                                val ids = mutableListOf<String>()
+                                sessions.forEach { s ->
+                                    ids.add(s.id)
+                                    subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                                }
+                                ids
+                            }
+                            val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
+                            TextButton(onClick = {
+                                if (allSelected) {
+                                    selectedSessionIds.clear()
+                                } else {
+                                    selectedSessionIds.clear()
+                                    selectedSessionIds.addAll(allSessionIds)
+                                }
+                            }) {
+                                Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
+                            }
+                            IconButton(
+                                onClick = { showBatchDeleteConfirm = true },
+                                enabled = selectedSessionIds.isNotEmpty(),
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = FeatherIcons.Trash2,
+                                    contentDescription = stringResource(R.string.chat_batch_delete_title),
+                                    modifier = Modifier.size(18.dp),
+                                    tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                )
+                            }
+                        }
                     }
-                    Spacer(Modifier.width(Spacing.xs))
-                    Text(
-                        text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
+                } else if (selectedTab == 0) {
+                    ChatSearchField(
+                        query = searchQuery,
+                        onQueryChange = onSearchQueryChange,
+                        onClear = onClearSearch
                     )
-                    val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
-                        val ids = mutableListOf<String>()
-                        sessions.forEach { s ->
-                            ids.add(s.id)
-                            subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
-                        }
-                        ids
-                    }
-                    val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
-                    TextButton(onClick = {
-                        if (allSelected) {
-                            selectedSessionIds.clear()
-                        } else {
-                            selectedSessionIds.clear()
-                            selectedSessionIds.addAll(allSessionIds)
-                        }
-                    }) {
-                        Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
-                    }
-                    IconButton(
-                        onClick = { showBatchDeleteConfirm = true },
-                        enabled = selectedSessionIds.isNotEmpty(),
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Trash2,
-                            contentDescription = stringResource(R.string.chat_batch_delete_title),
-                            modifier = Modifier.size(18.dp),
-                            tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                }
+
+                Box(modifier = Modifier.weight(1f)) {
+                    when (selectedTab) {
+                        0 -> SessionListTab(
+                            sessions = sessions,
+                            currentSessionId = currentSessionId,
+                            agentStates = agentStates,
+                            awaitingPermissionSessionIds = awaitingPermissionSessionIds,
+                            subSessionsByParent = subSessionsByParent,
+                            listState = listState,
+                            searchQuery = searchQuery,
+                            searchState = searchState,
+                            selectionMode = isSelectionMode,
+                            selectedSessionIds = selectedSessionIds,
+                            onToggleSelectSession = { s ->
+                                if (s.id in selectedSessionIds) {
+                                    selectedSessionIds.remove(s.id)
+                                } else {
+                                    selectedSessionIds.add(s.id)
+                                }
+                            },
+                            onSelect = onSelect,
+                            onLongClick = { menuSession = it },
+                            onOpenSearchHit = onOpenSearchHit
+                        )
+                        1 -> FileBrowserTab(
+                            state = browseState,
+                            expandedPaths = expandedPaths,
+                            expandingPath = expandingPath,
+                            fileOpPaths = fileOpPaths,
+                            clipboard = clipboard,
+                            onToggleExpand = onToggleExpand,
+                            onOpenFile = onOpenFile,
+                            onRefresh = onRefreshBrowse,
+                            onCreateFile = onCreateFile,
+                            onCreateFolder = onCreateFolder,
+                            onRenameEntry = onRenameEntry,
+                            onDeleteEntry = onDeleteEntry,
+                            onCopyEntry = onCopyEntry,
+                            onCutEntry = onCutEntry,
+                            onPasteEntry = onPasteEntry,
+                            onClearClipboard = onClearClipboard
                         )
                     }
                 }
-            }
-        } else if (selectedTab == 0) {
-            ChatSearchField(
-                query = searchQuery,
-                onQueryChange = onSearchQueryChange,
-                onClear = onClearSearch
-            )
-        }
-
-        Box(modifier = Modifier.weight(1f)) {
-            when (selectedTab) {
-                0 -> SessionListTab(
-                    sessions = sessions,
-                    currentSessionId = currentSessionId,
-                    agentStates = agentStates,
-                    awaitingPermissionSessionIds = awaitingPermissionSessionIds,
-                    subSessionsByParent = subSessionsByParent,
-                    listState = listState,
-                    searchQuery = searchQuery,
-                    searchState = searchState,
-                    selectionMode = isSelectionMode,
-                    selectedSessionIds = selectedSessionIds,
-                    onToggleSelectSession = { s ->
-                        if (s.id in selectedSessionIds) {
-                            selectedSessionIds.remove(s.id)
-                        } else {
-                            selectedSessionIds.add(s.id)
-                        }
-                    },
-                    onSelect = onSelect,
-                    onLongClick = { menuSession = it },
-                    onOpenSearchHit = onOpenSearchHit
-                )
-                1 -> FileBrowserTab(
-                    state = browseState,
-                    expandedPaths = expandedPaths,
-                    expandingPath = expandingPath,
-                    fileOpPaths = fileOpPaths,
-                    clipboard = clipboard,
-                    onToggleExpand = onToggleExpand,
-                    onOpenFile = onOpenFile,
-                    onRefresh = onRefreshBrowse,
-                    onCreateFile = onCreateFile,
-                    onCreateFolder = onCreateFolder,
-                    onRenameEntry = onRenameEntry,
-                    onDeleteEntry = onDeleteEntry,
-                    onCopyEntry = onCopyEntry,
-                    onCutEntry = onCutEntry,
-                    onPasteEntry = onPasteEntry,
-                    onClearClipboard = onClearClipboard
-                )
             }
         }
 

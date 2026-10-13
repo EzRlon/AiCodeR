@@ -126,6 +126,7 @@ import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Users
+import compose.icons.feathericons.Layers
 import compose.icons.feathericons.Zap
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
@@ -166,6 +167,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgents(R.string.settings_subagents),
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
+    Teams(R.string.settings_teams),
     ScheduledTasks(R.string.schedule_title),
     ScheduledTaskEditor(R.string.schedule_title),
     Container(R.string.settings_container),
@@ -215,7 +217,9 @@ fun SettingsScreen(
     onRerunOnboarding: () -> Unit = {},
     onboardingStep: OnboardingStep? = null,
     onOnboardingModelAdded: (() -> Unit)? = null,
-    onOnboardingDismissFetchDialog: (() -> Unit)? = null
+    onOnboardingDismissFetchDialog: (() -> Unit)? = null,
+    /** 存储空间「在文件树中查看」：把目标容器路径交给宿主页导航（null 则隐藏该操作）。 */
+    onRevealInTree: ((String) -> Unit)? = null
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
@@ -246,8 +250,12 @@ fun SettingsScreen(
     val maxNetworkRetries by viewModel.maxNetworkRetries.collectAsStateWithLifecycle()
     val enterToSend by viewModel.enterToSend.collectAsStateWithLifecycle()
     val compactionThresholdPercent by viewModel.compactionThresholdPercent.collectAsStateWithLifecycle()
+    val tokenBudget by viewModel.tokenBudget.collectAsStateWithLifecycle()
     val sendFileMaxSizeMb by viewModel.sendFileMaxSizeMb.collectAsStateWithLifecycle()
     val deleteExternalWorkspaceSessions by viewModel.deleteExternalWorkspaceSessions.collectAsStateWithLifecycle()
+    val selfImproveMode by viewModel.selfImproveMode.collectAsStateWithLifecycle()
+    val handoffPromptEnabled by viewModel.handoffPromptEnabled.collectAsStateWithLifecycle()
+    val handoffPromptPercent by viewModel.handoffPromptPercent.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themePresetId by viewModel.themePresetId.collectAsStateWithLifecycle()
     val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsStateWithLifecycle()
@@ -260,6 +268,8 @@ fun SettingsScreen(
     val compactionModel by viewModel.compactionModel.collectAsStateWithLifecycle()
     val titleProviderId by viewModel.titleProviderId.collectAsStateWithLifecycle()
     val titleModel by viewModel.titleModel.collectAsStateWithLifecycle()
+    val verificationProviderId by viewModel.verificationProviderId.collectAsStateWithLifecycle()
+    val verificationModel by viewModel.verificationModel.collectAsStateWithLifecycle()
     val imageGenProviderId by viewModel.imageGenProviderId.collectAsStateWithLifecycle()
     val imageGenModel by viewModel.imageGenModel.collectAsStateWithLifecycle()
     val modelMetadata by viewModel.modelMetadata.collectAsStateWithLifecycle()
@@ -946,10 +956,18 @@ fun SettingsScreen(
                     onToggleEnterToSend = { viewModel.setEnterToSend(it) },
                     compactionThresholdPercent = compactionThresholdPercent,
                     onSetCompactionThresholdPercent = { viewModel.setCompactionThresholdPercent(it) },
+                    tokenBudget = tokenBudget,
+                    onSetTokenBudget = { viewModel.setTokenBudget(it) },
                     sendFileMaxSizeMb = sendFileMaxSizeMb,
                     onSetSendFileMaxSizeMb = { viewModel.setSendFileMaxSizeMb(it) },
                     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
-                    onToggleDeleteExternalWorkspaceSessions = { viewModel.setDeleteExternalWorkspaceSessions(it) }
+                    onToggleDeleteExternalWorkspaceSessions = { viewModel.setDeleteExternalWorkspaceSessions(it) },
+                    selfImproveMode = selfImproveMode,
+                    onToggleSelfImproveMode = { viewModel.setSelfImproveMode(it) },
+                    handoffPromptEnabled = handoffPromptEnabled,
+                    onToggleHandoffPromptEnabled = { viewModel.setHandoffPromptEnabled(it) },
+                    handoffPromptPercent = handoffPromptPercent,
+                    onSetHandoffPromptPercent = { viewModel.setHandoffPromptPercent(it) }
                 )
                 SettingsSection.Providers -> ProvidersSection(
                     providers = providers,
@@ -970,6 +988,8 @@ fun SettingsScreen(
                     compactionModel = compactionModel,
                     titleProviderId = titleProviderId,
                     titleModel = titleModel,
+                    verificationProviderId = verificationProviderId,
+                    verificationModel = verificationModel,
                     imageGenProviderId = imageGenProviderId,
                     imageGenModel = imageGenModel,
                     modelMetadata = modelMetadata,
@@ -980,6 +1000,8 @@ fun SettingsScreen(
                     onClearCompactionModel = { viewModel.clearCompactionModel() },
                     onSelectTitleModel = { pid, m -> viewModel.setTitleModel(pid, m) },
                     onClearTitleModel = { viewModel.clearTitleModel() },
+                    onSelectVerificationModel = { pid, m -> viewModel.setVerificationModel(pid, m) },
+                    onClearVerificationModel = { viewModel.clearVerificationModel() },
                     onSelectImageGenModel = { pid, m -> viewModel.setImageGenModel(pid, m) },
                     onClearImageGenModel = { viewModel.clearImageGenModel() }
                 )
@@ -1101,6 +1123,9 @@ fun SettingsScreen(
                         section = SettingsSection.SubAgentDetail
                     }
                 )
+                SettingsSection.Teams -> TeamsSection(
+                    teams = remember(section) { viewModel.listTeams() }
+                )
                 SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
                     SubAgentDetailSection(
                         entry = entry,
@@ -1205,7 +1230,9 @@ fun SettingsScreen(
                     onSelectFilterModel = { viewModel.setFilterModel(it) },
                     onClearFilters = { viewModel.clearTokenStatsFilters() }
                 )
-                SettingsSection.Storage -> storageViewModel?.let { StorageSectionHost(viewModel = it) }
+                SettingsSection.Storage -> storageViewModel?.let {
+                    StorageSectionHost(viewModel = it, onRevealInTree = onRevealInTree)
+                }
                 SettingsSection.ProviderEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SkillEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SubAgentEditor -> {} // 已在上方 early return 处理
@@ -1748,6 +1775,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Users,
                 title = stringResource(SettingsSection.SubAgents.titleRes),
                 onClick = { onOpen(SettingsSection.SubAgents) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Layers,
+                title = stringResource(SettingsSection.Teams.titleRes),
+                onClick = { onOpen(SettingsSection.Teams) }
             )
             SettingsDivider()
             SettingsRow(

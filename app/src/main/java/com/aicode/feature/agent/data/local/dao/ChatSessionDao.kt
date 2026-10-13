@@ -74,6 +74,9 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET reasoningEffort = :effort WHERE id = :id")
     suspend fun updateReasoningEffort(id: String, effort: String)
 
+    @Query("UPDATE chat_sessions SET teamName = :teamName WHERE id = :id")
+    suspend fun updateTeamName(id: String, teamName: String?)
+
     @Query("UPDATE chat_sessions SET totalInputTokens = totalInputTokens + :inputTokens, totalOutputTokens = totalOutputTokens + :outputTokens WHERE id = :id")
     suspend fun addTokenUsage(id: String, inputTokens: Int, outputTokens: Int)
 

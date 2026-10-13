@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.presentation.component
 
 import android.content.ClipData
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -28,6 +29,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,10 +66,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -129,6 +137,7 @@ import compose.icons.feathericons.Square
 import compose.icons.feathericons.Shield
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /** 输入框区域蒙版高度：盖住圆角容器，滚动内容滑入时被渐变遮罩；随键盘（IME）上移。 */
 private val INPUT_BAR_MASK_HEIGHT = 110.dp
@@ -152,6 +161,14 @@ internal fun ChatInputBar(
     enterToSend: Boolean = false,
     onStop: () -> Unit,
     isBusy: Boolean,
+    /** 长按发送键开始应用内语音识别（微信式「按住说话」）。 */
+    onVoiceHoldStart: () -> Unit = {},
+    /** 松手：结束收音并等待识别结果。 */
+    onVoiceHoldFinish: () -> Unit = {},
+    /** 上滑取消：放弃本次语音。 */
+    onVoiceHoldCancel: () -> Unit = {},
+    /** 识别处理中（浮层显示「正在识别…」）。 */
+    voiceProcessing: Boolean = false,
     workspaceViewModel: WorkspaceViewModel?,
     hasRunningSessions: () -> Boolean,
     onSwitchWorkspaceConfirmed: () -> Unit = {},
@@ -219,6 +236,21 @@ internal fun ChatInputBar(
 
     // `@` 文件引用：`/` 菜单优先，忙碌时不弹；查询词从文本末尾提取。
     val mentionQuery = if (!isBusy && !showSlashMenu) fileMentionQuery(value) else null
+
+    // ── 语音「按住说话」：长按发送键录音，松手识别并发送；上滑取消。──
+    val voiceContext = LocalContext.current
+    var voiceHoldActive by remember { mutableStateOf(false) }
+    val recordPermissionLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            android.widget.Toast.makeText(
+                voiceContext,
+                voiceContext.getString(R.string.chat_voice_permission_granted),
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
     val mentionFiles = remember(mentionQuery, fileMentionState) {
         if (mentionQuery != null && fileMentionState is FileMentionState.Ready) {
             matchFileMentions(mentionQuery)
@@ -429,6 +461,10 @@ internal fun ChatInputBar(
                         }
                     }
                 }
+            }
+
+            if (voiceHoldActive || voiceProcessing) {
+                VoiceHoldOverlay(processing = voiceProcessing)
             }
 
             if (queuedRequests.isNotEmpty()) {
@@ -663,7 +699,37 @@ internal fun ChatInputBar(
                             contentDescription = stringResource(R.string.chat_add_attachment),
                             onClick = { showAttachmentSheet = true }
                         )
-                        SendButton(canSend = canSend, hasContent = hasContent, isBusy = isBusy, tokenProgress = tokenProgress, tokenEstimated = tokenEstimated, onSend = onSend, onStop = onStop)
+                        SendButton(
+                            canSend = canSend,
+                            hasContent = hasContent,
+                            isBusy = isBusy,
+                            tokenProgress = tokenProgress,
+                            tokenEstimated = tokenEstimated,
+                            onSend = onSend,
+                            onStop = onStop,
+                            onVoiceHoldStart = {
+                                if (voiceContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    voiceHoldActive = true
+                                    onVoiceHoldStart()
+                                } else {
+                                    recordPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                            onVoiceHoldFinish = {
+                                if (voiceHoldActive) {
+                                    voiceHoldActive = false
+                                    onVoiceHoldFinish()
+                                }
+                            },
+                            onVoiceHoldCancel = {
+                                if (voiceHoldActive) {
+                                    voiceHoldActive = false
+                                    onVoiceHoldCancel()
+                                }
+                            }
+                        )
                     }
                 }
 
@@ -864,10 +930,14 @@ internal fun SendButton(
     tokenProgress: Float,
     tokenEstimated: Boolean,
     onSend: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onVoiceHoldStart: () -> Unit = {},
+    onVoiceHoldFinish: () -> Unit = {},
+    onVoiceHoldCancel: () -> Unit = {}
 ) {
     // AI 工作中：输入框为空显示停止按钮；有内容显示橙色发送（消息排队发送）；空闲时按常规发送按钮
     val showStop = isBusy && !hasContent
+    val haptic = LocalHapticFeedback.current
     val clickable = showStop || canSend
     val buttonColor = when {
         showStop -> MaterialTheme.colorScheme.error
@@ -919,7 +989,48 @@ internal fun SendButton(
                 .size(36.dp)
                 .clip(CircleShape)
                 .background(buttonColor)
-                .clickable(enabled = clickable, onClick = if (showStop) onStop else onSend),
+                .then(
+                    if (showStop) {
+                        Modifier.clickable(enabled = clickable, onClick = onStop)
+                    } else {
+                        // 短按 = 发送；长按 = 应用内语音「按住说话」（松手识别发送、上滑取消）。
+                        Modifier.pointerInput(Unit) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
+                                var longPressed = false
+                                // 长按阈值内抬手视为短按；超时（PointerEventTimeout）视为长按成立。
+                                try {
+                                    withTimeout(viewConfiguration.longPressTimeoutMillis) {
+                                        waitForUpOrCancellation()
+                                    }
+                                } catch (e: androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException) {
+                                    longPressed = true
+                                }
+                                if (!longPressed) {
+                                    if (clickable) onSend()
+                                    return@awaitEachGesture
+                                }
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onVoiceHoldStart()
+                                var cancelled = false
+                                var released = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                        ?: break
+                                    if (!change.pressed) {
+                                        released = true
+                                        break
+                                    }
+                                    val dy = change.position.y - down.position.y
+                                    cancelled = dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx()
+                                    change.consume()
+                                }
+                                if (released && !cancelled) onVoiceHoldFinish() else onVoiceHoldCancel()
+                            }
+                        }
+                    }
+                ),
             contentAlignment = Alignment.Center
         ) {
             if (showStop) {
@@ -937,6 +1048,52 @@ internal fun SendButton(
                     modifier = Modifier.size(18.dp)
                 )
             }
+        }
+    }
+}
+
+/** 长按语音：手指向上滑动超过该距离视为取消（松手不发送）。 */
+private const val VOICE_CANCEL_SLIDE_DP = 60f
+
+/** 「按住说话」浮层：长按发送键录音时显示；识别期间文案切换。 */
+@Composable
+private fun VoiceHoldOverlay(processing: Boolean, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(Radius.md),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (processing) MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.semanticColors.success
+                    )
+            )
+            Text(
+                text = stringResource(
+                    if (processing) R.string.chat_voice_processing else R.string.chat_voice_release_send
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = FeatherIcons.Mic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }

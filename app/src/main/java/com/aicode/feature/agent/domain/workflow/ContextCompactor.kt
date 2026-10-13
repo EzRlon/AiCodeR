@@ -55,6 +55,64 @@ class ContextCompactor @Inject constructor(
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
     }
 
+    /** 解析模型的有效输入预算（tokens）；供交接提醒评估上下文占用。 */
+    suspend fun effectiveInputBudget(provider: AIProvider): Int {
+        val metadata = modelMetadataService.resolve(provider.providerId, inferProviderType(provider), provider.model)
+        return ModelContextPolicy.effectiveInputBudget(metadata)
+    }
+
+    /**
+     * 生成「接手摘要」：对给定历史走一遍分块摘要流程并返回摘要文本；
+     * 不改动会话历史、不落库（与 [compactIfNeeded] 的压缩落库路径不同）。
+     */
+    suspend fun buildHandoffSummary(
+        messages: List<AgentMessage>,
+        aiProvider: AIProvider,
+        sessionId: String? = null
+    ): String = withContext(Dispatchers.Default) {
+        val material = removeCompactionPairs(messages)
+        check(material.isNotEmpty()) { "No history to summarize" }
+        val originalOutputLimit = aiProvider.maxOutputTokens
+        try {
+            val metadata = modelMetadataService.resolve(aiProvider.providerId, inferProviderType(aiProvider), aiProvider.model)
+            val summaryContext = metadata.contextTokens.takeIf { it > 0 } ?: ModelContextPolicy.DEFAULT_CONTEXT_TOKENS
+            val outputLimit = minOf(
+                4_096,
+                originalOutputLimit?.takeIf { it > 0 } ?: 4_096,
+                metadata.outputTokens?.takeIf { it > 0 } ?: 4_096,
+                ModelContextPolicy.outputReserveTokens(metadata)
+            )
+            aiProvider.maxOutputTokens = outputLimit
+            val summaryBudget = minOf(ModelContextPolicy.effectiveInputBudget(metadata), summaryContext - outputLimit)
+            val prompt = withContext(Dispatchers.IO) {
+                systemPromptProvider.resolvePrompt("agent/compact-summary.md").replace(LEADING_COMMENT, "")
+            }
+            var summary = extractPreviousSummary(messages)
+            val cursor = CompactionText.Cursor(CompactionText.units(material))
+            var block = 0
+            while (!cursor.finished) {
+                check(block < MAX_SUMMARY_BLOCKS) { "History exceeds the $MAX_SUMMARY_BLOCKS summary block limit" }
+                val instruction = prompt.replace("{{INSTRUCTION}}", buildSummaryInstruction(summary))
+                val overhead = CompactionText.tokens(SUMMARY_SYSTEM) + CompactionText.tokens(instruction) + 64
+                val available = ((summaryBudget - overhead) * ModelContextPolicy.COMPACTION_BUDGET_RATIO).toInt()
+                check(available > 0) { "Summary instructions and previous summary exceed the input budget" }
+                val chunk = cursor.next(available)
+                val request = listOf(
+                    AgentMessage.UserMessage(
+                        content = instruction + "\n\n<history-material block=\"" + (++block) + "\">\n" + chunk + "\n</history-material>"
+                    )
+                )
+                check(CompactionText.estimateRequest(SUMMARY_SYSTEM, emptyList(), request) <= summaryBudget) { "Summary block exceeds the input budget" }
+                summary = summarize(aiProvider, sessionId, request)
+            }
+            val finalSummary = summary
+            check(!finalSummary.isNullOrBlank()) { "Summary is empty" }
+            finalSummary
+        } finally {
+            aiProvider.maxOutputTokens = originalOutputLimit
+        }
+    }
+
     suspend fun compactIfNeeded(
         messages: List<AgentMessage>,
         aiProvider: AIProvider,

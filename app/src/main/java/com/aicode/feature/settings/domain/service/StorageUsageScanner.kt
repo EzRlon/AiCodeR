@@ -18,6 +18,7 @@ import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
 import com.aicode.feature.settings.domain.model.formatStorageSize
+import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -90,6 +91,30 @@ class StorageUsageScanner @Inject constructor(
             CleanupKind.ToolOutput -> clearDirContents(toolOutputStore.outputDir)
             CleanupKind.VisionSessions -> clearDirContents(visionSessionStore.sessionDir)
         }
+    }
+
+    /**
+     * 删除工作区产物（容器路径，来自 [scan] 的明细）。仅限内置工作区内：
+     * 换算到 `filesDir/projects` 下的物理路径并做前缀校验，越界或残留 `..` 一律拒绝。
+     * 返回释放的字节数。
+     */
+    suspend fun cleanArtifacts(containerPaths: List<String>): Long = withContext(Dispatchers.IO) {
+        val projectsRoot = File(context.filesDir, PROJECTS_DIR).canonicalFile
+        containerPaths.sumOf { containerPath ->
+            val target = physicalOf(containerPath, projectsRoot) ?: return@sumOf 0L
+            val size = dirSize(target)
+            if (runCatching { target.deleteRecursively() }.getOrDefault(false)) size else 0L
+        }
+    }
+
+    /** 容器路径（`~/workspace/<rel>`）→ `projects/<rel>` 物理路径；非法路径返回 null。 */
+    private fun physicalOf(containerPath: String, projectsRoot: File): File? {
+        val root = WorkspacePathMapper.CONTAINER_ROOT
+        if (!containerPath.startsWith(root)) return null
+        val rel = containerPath.removePrefix(root).trim('/')
+        if (rel.isEmpty() || ".." in rel) return null
+        val canon = runCatching { File(projectsRoot, rel).canonicalFile }.getOrNull() ?: return null
+        return canon.takeIf { it.path.startsWith(projectsRoot.path + File.separator) }
     }
 
     // ── 各分类 ──────────────────────────────────────────────────────────────
@@ -165,11 +190,11 @@ class StorageUsageScanner @Inject constructor(
         )
     }
 
-    /** 工作区：App 内置的 `filesDir/projects`，按项目列出，并标出其中的聊天附件。 */
+    /** 工作区：App 内置的 `filesDir/projects`，按项目列出，并标出其中的聊天附件与开发产物明细。 */
     private fun workspacesEntry(cancelled: () -> Boolean): StorageEntry {
         val root = File(context.filesDir, PROJECTS_DIR)
         val projects = root.listFiles { f: File -> f.isDirectory }?.sortedBy { it.name } ?: emptyList()
-        val details = projects.map { project ->
+        val projectRows = projects.map { project ->
             val attachments = dirSize(File(project, ATTACHMENTS_RELATIVE), cancelled)
             StorageDetail(
                 label = project.name,
@@ -179,8 +204,100 @@ class StorageUsageScanner @Inject constructor(
                 }
             )
         }
+        // 产物明细只作可操作项展示，不重复计入项目总量；排列上紧随各自项目行。
+        val rows = buildList {
+            projects.forEachIndexed { index, project ->
+                add(projectRows[index])
+                addAll(workspaceArtifacts(project, cancelled))
+            }
+        }
         val looseFiles = root.listFiles { f: File -> f.isFile }?.sumOf { it.length() } ?: 0L
-        return StorageEntry(StorageCategory.Workspaces, details.sumOf { it.bytes } + looseFiles, details)
+        return StorageEntry(
+            StorageCategory.Workspaces,
+            projectRows.sumOf { it.bytes } + looseFiles,
+            rows
+        )
+    }
+
+    /**
+     * 单个工作区的开发产物明细：安装包（按构建时间倒序，最多 [MAX_ARTIFACT_FILES] 条）、
+     * 构建目录、依赖目录（node_modules / venv）与下载的大文件（压缩包、安装包、库文件等）。
+     * 全部为可重建的派生物，逐条可选中清理；一次目录遍历收集全部目标，跳过 .git / node_modules 内部。
+     */
+    private fun workspaceArtifacts(project: File, cancelled: () -> Boolean): List<StorageDetail> {
+        val apks = mutableListOf<Pair<File, Long>>()
+        val downloads = mutableListOf<Pair<File, Long>>()
+        val buildDirs = mutableListOf<File>()
+        val projectPath = project.toPath()
+        runCatching {
+            Files.walkFileTree(projectPath, object : SimpleFileVisitor<Path>() {
+                override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (cancelled()) return FileVisitResult.TERMINATE
+                    val name = dir.fileName?.toString().orEmpty()
+                    if (dir != projectPath && name in SKIP_DIRS) return FileVisitResult.SKIP_SUBTREE
+                    // build 目录记录后继续深入：编译完成的安装包就在 build/outputs 下（下载物另行排除 build）。
+                    if (dir != projectPath && name == "build") {
+                        if (buildDirs.size < MAX_BUILD_DIRS) buildDirs += dir.toFile()
+                    }
+                    return FileVisitResult.CONTINUE
+                }
+
+                override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (cancelled()) return FileVisitResult.TERMINATE
+                    if (!attrs.isRegularFile) return FileVisitResult.CONTINUE
+                    val lower = file.fileName?.toString().orEmpty().lowercase()
+                    val mtime = attrs.lastModifiedTime().toMillis()
+                    when {
+                        lower.endsWith(".apk") || lower.endsWith(".apks") || lower.endsWith(".xapk") ->
+                            if (apks.size < MAX_ARTIFACT_FILES * 3) apks += file.toFile() to mtime
+                        DOWNLOAD_EXTS.any { lower.endsWith(it) } && attrs.size() >= MIN_DOWNLOAD_BYTES &&
+                            !file.toString().contains("/build/") ->
+                            if (downloads.size < MAX_ARTIFACT_FILES * 3) downloads += file.toFile() to mtime
+                    }
+                    return FileVisitResult.CONTINUE
+                }
+
+                override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult =
+                    FileVisitResult.CONTINUE
+            })
+        }.onFailure { FileLogger.w(TAG, "扫描工作区产物失败: ${project.name}", it) }
+
+        val result = mutableListOf<StorageDetail>()
+        apks.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
+            result += artifactDetail(project, file, mtime, label = file.name)
+        }
+        buildDirs.forEach { dir ->
+            result += artifactDetail(
+                project, dir, dir.lastModified(),
+                label = context.getString(R.string.storage_artifacts_build_dir, dir.relativeTo(project).path)
+            )
+        }
+        File(project, "node_modules").takeIf { it.isDirectory }?.let { dir ->
+            result += artifactDetail(project, dir, dir.lastModified(),
+                label = context.getString(R.string.storage_artifacts_node_modules))
+        }
+        listOf("venv", ".venv").map { File(project, it) }.firstOrNull { it.isDirectory }?.let { dir ->
+            result += artifactDetail(project, dir, dir.lastModified(),
+                label = context.getString(R.string.storage_artifacts_venv))
+        }
+        downloads.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
+            result += artifactDetail(project, file, mtime, label = file.name)
+        }
+        return result
+    }
+
+    /** 构造一条可操作产物明细：note = 「项目 · 时间 · 容器路径」。 */
+    private fun artifactDetail(project: File, target: File, modifiedAt: Long, label: String): StorageDetail {
+        val rel = target.relativeTo(project).path
+        val containerPath = "${WorkspacePathMapper.CONTAINER_ROOT}/${project.name}/$rel".trimEnd('/')
+        return StorageDetail(
+            label = label,
+            bytes = dirSize(target),
+            note = "${project.name} · ${formatTime(modifiedAt)} · $containerPath",
+            indent = true,
+            path = containerPath,
+            modifiedAt = modifiedAt
+        )
     }
 
     /** AI 配置与产物：`filesDir/aicode`，按子目录拆开（工具输出与识图会话可清理）。 */
@@ -276,6 +393,24 @@ class StorageUsageScanner @Inject constructor(
 
         private const val TOP_SESSIONS = 5
         private const val TOP_SUBDIRS = 5
+
+        /** 产物扫描上限与阈值：安装包/下载文件每类最多展示条数、构建目录每项目上限、下载物最小计入大小。 */
+        private const val MAX_ARTIFACT_FILES = 8
+        private const val MAX_BUILD_DIRS = 4
+        private const val MIN_DOWNLOAD_BYTES = 1L * 1024 * 1024
+
+        /** 视为「下载物」的扩展名（压缩包 / 安装包 / 预编译库）。 */
+        private val DOWNLOAD_EXTS = listOf(
+            ".zip", ".tar.gz", ".tgz", ".tar.xz", ".xz", ".tar",
+            ".deb", ".rpm", ".whl", ".7z", ".rar", ".jar", ".aar"
+        )
+
+        /** 遍历时整体跳过内部的大目录（大小按整目录另行统计）。 */
+        private val SKIP_DIRS = setOf(".git", "node_modules", "venv", ".venv")
+
+        /** 产物明细里展示的最后修改时间。 */
+        private fun formatTime(ts: Long): String =
+            java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
 
         /**
          * 目录占用求和。

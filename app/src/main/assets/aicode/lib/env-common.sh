@@ -610,7 +610,7 @@ EOF
 # ── 场景框架 ──
 # 每个开发环境一个脚本，放在 lib/scenarios/ 下，定义 scenario_name_<id> 与 install_scenario_<id>；
 # SCENARIO_IDS 决定菜单顺序。android / flutter 较重，逻辑在各自文件里（共用 lib/android-sdk.sh）。
-SCENARIO_IDS="common python node android flutter java go rust php base"
+SCENARIO_IDS="common python node android flutter java go rust php qemu base"
 
 # 载入共享工具与各场景脚本（android-sdk.sh 供 android / flutter 场景共用）
 [ -f "$AICODE_LIB_DIR/android-sdk.sh" ] && . "$AICODE_LIB_DIR/android-sdk.sh"
@@ -628,6 +628,38 @@ scenario_name() {
 install_scenario() {
     fn="install_scenario_$1"
     if command -v "$fn" >/dev/null 2>&1; then "$fn"; else echo "${C_RED}未知场景：$1${C_RESET}"; return 1; fi
+}
+
+# ── 图形/VNC 组件包名映射（VNC 悬浮小窗依赖：Xvfb + x11vnc + websockify；web 前端由 App 内嵌页面提供）。
+#    注意：Alpine 的 websockify 包名就是 websockify，不是 py3-websockify（后者不存在，装上会整批失败）。──
+vnc_pkgs() {
+    case "$PMGR" in
+        apk) echo "xvfb x11vnc websockify" ;;
+        apt) echo "xvfb x11vnc python3-websockify" ;;
+        *)   echo "" ;;
+    esac
+}
+
+# ── 安装图形/VNC 组件（幂等；已装则秒过）。失败仅警告不返回非零：
+#    图形组件缺失不影响其它环境安装与初始化标记的写入，首次触发 VNC 小窗时 App 侧还有一次懒安装兜底。──
+install_vnc_stack() {
+    pkgs=$(vnc_pkgs)
+    if [ -z "$pkgs" ]; then
+        plog "图形组件：包管理器 ${PMGR:-未识别} 无映射，跳过"
+        return 0
+    fi
+    if command -v websockify >/dev/null 2>&1; then
+        plog "图形组件已就绪，跳过"
+        return 0
+    fi
+    echo "安装图形/VNC 组件（$pkgs）..."
+    if pkg_add $pkgs; then
+        plog "图形组件安装完成"
+    else
+        echo "${C_YELLOW}图形组件安装失败（不影响其它功能；首次打开 VNC 小窗时会自动重试安装）${C_RESET}"
+        plog "图形组件安装失败"
+    fi
+    return 0
 }
 
 # ── 轻场景安装器（供轻量场景调用）：换源 → 更新索引 → 列出清单确认 → 装包。

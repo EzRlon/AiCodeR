@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,9 +36,11 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -118,7 +122,7 @@ internal data class TurnUsage(
  */
 private fun splitTurns(messages: List<AgentUIMessage>, lastTurnFinished: Boolean): List<AgentTurn> {
     val turnMessages = messages.filter {
-        !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure
+        !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure && !it.isVerificationReport
     }
     if (turnMessages.isEmpty()) return emptyList()
     val turns = mutableListOf<AgentTurn>()
@@ -242,6 +246,12 @@ internal fun AgentMessageItem(
     reasoningExpandedOverride: Boolean? = null,
     /** in-message 思考块手动展开/收起时回传新状态，由上层持久化。 */
     onReasoningExpandedChange: ((Boolean) -> Unit)? = null,
+    /** 长按消息内容回调（弹「消息操作」菜单）；null = 不启用（如工具消息）。 */
+    onMessageLongPress: ((AgentUIMessage) -> Unit)? = null,
+    /** 「选择文本」模式：正文挂 SelectionContainer 进入选字；false 时长按走操作菜单。 */
+    selectTextMode: Boolean = false,
+    /** 「选择文本」模式的完成/退出回调。 */
+    onSelectTextDone: (() -> Unit)? = null,
 ) {
     if (message.isCompactionMarker) {
         // 压缩内部锚点不再渲染分隔线：摘要卡片已提供压缩反馈，避免与卡片重复。
@@ -258,6 +268,11 @@ internal fun AgentMessageItem(
         return
     }
 
+    if (message.isVerificationReport) {
+        VerificationReportCard(message, markdownCache)
+        return
+    }
+
     if (message.isBackgroundNotification) {
         BackgroundNotificationBar(message)
         return
@@ -270,6 +285,18 @@ internal fun AgentMessageItem(
     if (message.role == MessageRole.ASSISTANT && !hasContent && !hasReasoning && !hasAttachments) return
 
     val isUser = message.role == MessageRole.USER
+    // 长按弹「消息操作」菜单的手势；未启用时为空 Modifier。只监听长按、不拦截点击：
+    // 正文内的链接点击（更内层 clickable）优先命中，长按空白/正文处才弹菜单。
+    val latestMessage = rememberUpdatedState(message)
+    val longPressModifier = remember(message.id, onMessageLongPress) {
+        if (onMessageLongPress == null) {
+            Modifier
+        } else {
+            Modifier.pointerInput(message.id) {
+                detectTapGestures(onLongPress = { onMessageLongPress(latestMessage.value) })
+            }
+        }
+    }
     // 分块消息：块间只留一个段落间距，视觉上仍是连续的一段正文（DSH 扁平文档流下不再有描边接缝）。
     val chunked = contentSlice != null
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
@@ -355,31 +382,41 @@ internal fun AgentMessageItem(
                             }
                         } else if (isUser) {
                             // 用户消息：右对齐浅色药丸 + 深色文字（不再整块主题色反白）。
+                            // 默认长按弹「消息操作」菜单；仅「选择文本」模式挂 SelectionContainer 进入选字。
+                            val userBubbleBody: @Composable () -> Unit = {
+                                CompositionLocalProvider(
+                                    LocalTextSelectionColors provides TextSelectionColors(
+                                        handleColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        backgroundColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.24f),
+                                    )
+                                ) {
+                                    Text(
+                                        text = message.content,
+                                        color = chatUserBubbleTextColor(),
+                                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
+                                        modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                                    )
+                                }
+                            }
                             Surface(
                                 shape = RoundedCornerShape(ChatStyle.bubbleCorner),
                                 color = chatUserBubbleColor(),
-                                modifier = Modifier.widthIn(max = maxUserBubbleWidth)
+                                modifier = Modifier
+                                    .widthIn(max = maxUserBubbleWidth)
+                                    // 选字模式不挂长按菜单手势：SelectionContainer 的选词长按会与菜单长按同时判定，两者竞争
+                                    .then(if (selectTextMode) Modifier else longPressModifier)
                             ) {
-                                SelectionContainer {
-                                    CompositionLocalProvider(
-                                        LocalTextSelectionColors provides TextSelectionColors(
-                                            handleColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            backgroundColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.24f),
-                                        )
-                                    ) {
-                                        Text(
-                                            text = message.content,
-                                            color = chatUserBubbleTextColor(),
-                                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                                            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                                        )
-                                    }
+                                if (selectTextMode) {
+                                    SelectionContainer { userBubbleBody() }
+                                } else {
+                                    userBubbleBody()
                                 }
                             }
                         } else {
                             // 助手正文：不套容器，直接铺在页面底色上（文档流）。分块之间只留一个段落间距，
                             // 整条消息看起来仍是连续的一段正文。
-                            SelectionContainer {
+                            // 默认长按弹「消息操作」菜单；仅「选择文本」模式挂 SelectionContainer 进入选字。
+                            val assistantBody: @Composable () -> Unit = {
                                 CompositionLocalProvider(
                                     LocalTextSelectionColors provides TextSelectionColors(
                                         handleColor = MaterialTheme.colorScheme.primary,
@@ -394,12 +431,47 @@ internal fun AgentMessageItem(
                                     )
                                 }
                             }
+                            if (selectTextMode) {
+                                SelectionContainer { assistantBody() }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(longPressModifier)
+                                ) {
+                                    assistantBody()
+                                }
+                            }
                         }
                     }
                 }
                 if ((isUser || message.role == MessageRole.ASSISTANT) && hasAttachments) {
                     MessageAttachmentList(attachments = message.attachments)
                 }
+                // 「选择文本」模式的退出条：给选字交互一个明确出口，避免用户被困在系统选择交互里。
+                if (selectTextMode && isChunkFooter) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = Spacing.xs)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.chat_select_text_mode),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(Spacing.xs))
+                        TextButton(
+                            onClick = { onSelectTextDone?.invoke() },
+                            contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.common_done),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+
                 // 气泡下方的元信息行（工具消息不显示）：用户消息每条都常驻「时间 + 复制/回退/更多」，
                 // 助手消息只挂整段会话最新的一条，避免每条回复下面都吊一排按钮把聊天记录割碎。
                 // 排列固定为「统计（用量/缓存/耗时）→ 复制 → 更多选项」：信息在前，操作入口收在行尾。
@@ -756,6 +828,72 @@ private fun CompactionFailureCard(message: AgentUIMessage) {
                         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 独立验收报告卡：默认折叠为「圆点 + 独立验收 + 结论首行 + 箭头」，点击展开查看完整报告。
+ * 报告由收尾时的独立验收模型给出（另一个模型交叉检查目标完成度），以无配对 TOOL 消息
+ * 落库，回放不进模型上下文。
+ */
+@Composable
+private fun VerificationReportCard(message: AgentUIMessage, markdownCache: MarkdownRenderCache?) {
+    var expanded by remember(message.id) { mutableStateOf(false) }
+    val firstLine = message.content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs)) {
+        ChatHairline()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(ChatStyle.panelCorner))
+                .background(chatMutedSurfaceColor())
+                .clickable { expanded = !expanded }
+                .padding(horizontal = Spacing.sm, vertical = Spacing.sm)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.tertiary)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.chat_verification_report),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                if (!expanded && firstLine.isNotBlank()) {
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        text = firstLine,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                ExpandableChevronIcon(
+                    expanded = expanded,
+                    contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
+                    tint = Brand.IconGray,
+                    size = 16.dp
+                )
+            }
+            if (expanded && message.content.hasVisibleContent()) {
+                Spacer(Modifier.height(Spacing.xs))
+                MarkdownContent(
+                    text = message.content,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth(),
+                    cache = markdownCache
+                )
             }
         }
     }
