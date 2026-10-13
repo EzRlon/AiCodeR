@@ -667,7 +667,9 @@
 
     <!-- Subagent -->
     <string name="subagent_tab_sessions">Chats</string>
+    <string name="drawer_tab_sessions_desc">Chats and subagents</string>
     <string name="drawer_tab_files">Files</string>
+    <string name="drawer_tab_files_desc">Workspace files</string>
     <string name="drawer_expand_subagents">Expand subagents</string>
     <string name="drawer_collapse_subagents">Collapse subagents</string>
     <string name="file_browser_up">Up one level</string>
@@ -1588,6 +1590,21 @@
     <string name="ftp_save_config">Save Configuration</string>
     <string name="ftp_copy_address">Copy address</string>
     <string name="ftp_address_copied">Address copied</string>
+
+    <!-- Remote Manager (HTTP) -->
+    <string name="remote_mgr_title">Remote Manager</string>
+    <string name="remote_mgr_usage_title">How to use</string>
+    <string name="remote_mgr_usage_item_1">Connect phone and computer to the same Wi-Fi</string>
+    <string name="remote_mgr_usage_item_2">Open the address below in your computer browser</string>
+    <string name="remote_mgr_usage_item_3">Browse, upload, download, rename and delete phone files</string>
+    <string name="remote_mgr_running">Running: %1$s</string>
+    <string name="remote_mgr_not_running">Service is off</string>
+    <string name="remote_mgr_error">Error: %1$s</string>
+    <string name="remote_mgr_copy_address">Copy address</string>
+    <string name="remote_mgr_address_copied">Address copied</string>
+    <string name="remote_mgr_scope_note">Scope: %1$s (all phone external storage)</string>
+    <string name="remote_mgr_no_auth_note">LAN use only; any device on the same Wi-Fi can access</string>
+    <string name="remote_mgr_permission_needed">Storage permission is required to manage phone files</string>
 
     <!-- Remote Server -->
     <string name="remote_workspace_title">Connections &amp; Sync</string>

@@ -662,7 +662,9 @@
 
     <!-- Subagent -->
     <string name="subagent_tab_sessions">会话</string>
+    <string name="drawer_tab_sessions_desc">聊天记录与子代理</string>
     <string name="drawer_tab_files">文件</string>
+    <string name="drawer_tab_files_desc">工作区文件管理</string>
     <string name="drawer_expand_subagents">展开子代理</string>
     <string name="drawer_collapse_subagents">收起子代理</string>
     <string name="file_browser_up">上一级</string>
@@ -1588,6 +1590,21 @@
     <string name="ftp_save_config">保存配置</string>
     <string name="ftp_copy_address">复制地址</string>
     <string name="ftp_address_copied">地址已复制</string>
+
+    <!-- Remote Manager (HTTP) -->
+    <string name="remote_mgr_title">远程管理</string>
+    <string name="remote_mgr_usage_title">使用说明</string>
+    <string name="remote_mgr_usage_item_1">手机与电脑连接同一 WiFi</string>
+    <string name="remote_mgr_usage_item_2">电脑浏览器打开下方地址</string>
+    <string name="remote_mgr_usage_item_3">可浏览、上传、下载、重命名和删除手机文件</string>
+    <string name="remote_mgr_running">运行中：%1$s</string>
+    <string name="remote_mgr_not_running">服务未开启</string>
+    <string name="remote_mgr_error">错误：%1$s</string>
+    <string name="remote_mgr_copy_address">复制地址</string>
+    <string name="remote_mgr_address_copied">地址已复制</string>
+    <string name="remote_mgr_scope_note">管理范围：%1$s（手机全部外部存储）</string>
+    <string name="remote_mgr_no_auth_note">仅限局域网使用，同一 WiFi 下设备可直接访问</string>
+    <string name="remote_mgr_permission_needed">需要存储权限才能管理手机文件</string>
 
     <!-- Remote Server -->
     <string name="remote_workspace_title">连接与同步</string>

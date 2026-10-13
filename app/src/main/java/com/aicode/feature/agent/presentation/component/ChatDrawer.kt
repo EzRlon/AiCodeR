@@ -3,9 +3,6 @@ package com.aicode.feature.agent.presentation.component
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -15,6 +12,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -78,7 +78,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -87,7 +89,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import com.aicode.core.ui.drawerWidth
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -124,6 +129,7 @@ import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Layers
 import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
+import compose.icons.feathericons.Server
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Settings
@@ -140,75 +146,99 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
+/** 抽屉标签项：图标 + 名称 + 功能说明（说明用于按住时的浮出提示）。 */
+private data class DrawerTab(val icon: ImageVector, val label: String, val desc: String)
+
+/** 索引标签宽度（同时决定浮出提示的横向偏移量）。 */
+private val drawerTabWidth = 38.dp
+
 /**
- * Blender 风竖排标签列：图标 + 小字纵向排列，选中项用抬起色块标记。
- * 与横向分段控件同一套中性色语言（轨道 + 抬起滑块），供侧边栏使用。
+ * 产品册索引标签风竖排标签列：贴卡片右缘、仅左侧圆角的小标签，图标简洁；
+ * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被卡片裁剪）。
  */
 @Composable
 private fun DrawerVerticalTabs(
     selected: Int,
-    tabs: List<Pair<ImageVector, String>>,
+    tabs: List<DrawerTab>,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val trackColor = MaterialTheme.semanticColors.mutedSurface
-    val thumbColor = if (dark) MaterialTheme.semanticColors.capsuleSurface else MaterialTheme.semanticColors.cardSurface
-    val itemHeight = 56.dp
+    val unselectedColor = MaterialTheme.semanticColors.mutedSurface
+    val selectedColor = if (dark) MaterialTheme.semanticColors.capsuleSurface else MaterialTheme.semanticColors.cardSurface
+    // 右侧空间不足（窄屏）时把提示改锚到标签左侧，避免被屏幕右缘裁剪。
+    val placeTooltipOnStart = LocalConfiguration.current.screenWidthDp - drawerWidth().value >= 200f
+    val tooltipOffsetPx = with(LocalDensity.current) {
+        if (placeTooltipOnStart) (drawerTabWidth + 10.dp).roundToPx()
+        else -(drawerTabWidth + 10.dp).roundToPx()
+    }
+    val tabShape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
 
-    Box(
+    Column(
         modifier = modifier
-            .width(60.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(trackColor)
-            .padding(3.dp)
+            .width(drawerTabWidth)
+            .padding(top = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // 选中滑块：与横向分段控件同一弹簧手感，沿纵轴位移。
-        val thumbOffset by animateDpAsState(
-            targetValue = itemHeight * selected,
-            animationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
-            label = "drawer-vertical-thumb"
-        )
-        Surface(
-            modifier = Modifier
-                .offset(y = thumbOffset)
-                .fillMaxWidth()
-                .height(itemHeight),
-            shape = RoundedCornerShape(9.dp),
-            color = thumbColor,
-            shadowElevation = 2.dp,
-            content = {}
-        )
-        Column {
-            tabs.forEachIndexed { index, (icon, label) ->
-                val isSelected = selected == index
-                Box(
+        tabs.forEachIndexed { index, tab ->
+            val isSelected = selected == index
+            val interactionSource = remember { MutableInteractionSource() }
+            val pressed by interactionSource.collectIsPressedAsState()
+            Box {
+                Surface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(itemHeight)
-                        .clip(RoundedCornerShape(9.dp))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
+                        .width(drawerTabWidth)
+                        .height(48.dp)
+                        .selectable(
+                            selected = isSelected,
+                            interactionSource = interactionSource,
+                            indication = null,
+                            role = Role.Tab
                         ) { onSelect(index) },
-                    contentAlignment = Alignment.Center
+                    shape = tabShape,
+                    color = if (isSelected) selectedColor else unselectedColor,
+                    shadowElevation = if (isSelected) 2.dp else 0.dp
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
+                            imageVector = tab.icon,
+                            contentDescription = tab.label,
+                            modifier = Modifier.size(18.dp),
                             tint = if (isSelected) MaterialTheme.colorScheme.onSurface
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (isSelected) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    }
+                }
+                if (pressed) {
+                    Popup(
+                        alignment = if (placeTooltipOnStart) Alignment.CenterStart else Alignment.CenterEnd,
+                        offset = IntOffset(tooltipOffsetPx, 0)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 6.dp
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .widthIn(max = 220.dp)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = tab.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = tab.desc,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -217,9 +247,10 @@ private fun DrawerVerticalTabs(
 }
 
 /**
- * 侧边栏内容：左侧 Blender 风竖排标签列切换「会话」/「文件」，底部「设置」入口卡片。
+ * 侧边栏内容：右缘「产品册索引标签」切换「会话」/「文件」（按住浮出功能提示），底部「设置」入口卡片。
  * Tab0 为根会话列表，带子代理的会话行可就地展开；Tab1 为当前工作区的文件树。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatDrawerContent(
     sessions: List<ChatSession>,
@@ -261,6 +292,8 @@ fun ChatDrawerContent(
     onNavigateToTestBuilds: (() -> Unit)? = null,
     /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
     onNavigateToPreview: (() -> Unit)? = null,
+    /** 远程管理入口：与 Web 预览同行弹出选择；null 则隐藏该选项。 */
+    onNavigateToRemoteManager: (() -> Unit)? = null,
     onNavigateToSettings: () -> Unit,
     /** 定位请求（容器路径）：非空时切到「文件」页签；展开由外部先行完成，收到后调 [onRevealConsumed] 消费。 */
     revealRequest: String? = null,
@@ -275,6 +308,7 @@ fun ChatDrawerContent(
     // tab 与展开状态进 saveable：大屏下侧栏收起后整棵子树会离开组合（见 MainActivity 的
     // SaveableStateProvider），用 remember 存会让每次回到聊天页都重置回「会话」页。
     var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var showPreviewEntrySheet by remember { mutableStateOf(false) }
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
     val selectedSessionIds = remember { mutableStateListOf<String>() }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
@@ -318,7 +352,7 @@ fun ChatDrawerContent(
                     WindowInsetsSides.Horizontal + WindowInsetsSides.Top
                 )
             )
-            .padding(horizontal = Spacing.lg)
+            .padding(start = Spacing.lg)
             .padding(bottom = imeInset + Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
@@ -328,16 +362,6 @@ fun ChatDrawerContent(
                 .fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            // Blender 风竖排标签列：会话 / 文件
-            DrawerVerticalTabs(
-                selected = selectedTab,
-                tabs = listOf(
-                    FeatherIcons.MessageSquare to stringResource(R.string.subagent_tab_sessions),
-                    FeatherIcons.Folder to stringResource(R.string.drawer_tab_files)
-                ),
-                onSelect = { selectedTab = it },
-                modifier = Modifier.fillMaxHeight()
-            )
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -465,9 +489,28 @@ fun ChatDrawerContent(
                     }
                 }
             }
+
+            // 产品册索引标签：贴卡片右缘，按住浮出功能提示
+            DrawerVerticalTabs(
+                selected = selectedTab,
+                tabs = listOf(
+                    DrawerTab(
+                        FeatherIcons.MessageSquare,
+                        stringResource(R.string.subagent_tab_sessions),
+                        stringResource(R.string.drawer_tab_sessions_desc)
+                    ),
+                    DrawerTab(
+                        FeatherIcons.Folder,
+                        stringResource(R.string.drawer_tab_files),
+                        stringResource(R.string.drawer_tab_files_desc)
+                    )
+                ),
+                onSelect = { selectedTab = it },
+                modifier = Modifier.fillMaxHeight()
+            )
         }
 
-        SettingsGroup {
+        SettingsGroup(modifier = Modifier.padding(end = Spacing.lg)) {
             if (onNavigateToBrowser != null) {
                 SettingsRow(
                     icon = FeatherIcons.Globe,
@@ -480,7 +523,7 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Monitor,
                     title = stringResource(R.string.preview_title),
-                    onClick = onNavigateToPreview
+                    onClick = { showPreviewEntrySheet = true }
                 )
                 SettingsDivider()
             }
@@ -553,6 +596,43 @@ fun ChatDrawerContent(
                 TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
+    }
+
+    if (showPreviewEntrySheet) {
+        val entrySheetState = rememberModalBottomSheetState()
+        AdaptiveModalBottomSheet(
+            onDismissRequest = { showPreviewEntrySheet = false },
+            sheetState = entrySheetState,
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Spacing.sm)
+                    .padding(bottom = Spacing.xl)
+            ) {
+                SheetActionRow(
+                    icon = FeatherIcons.Monitor,
+                    label = stringResource(R.string.preview_title),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    onClick = {
+                        showPreviewEntrySheet = false
+                        onNavigateToPreview?.invoke()
+                    }
+                )
+                if (onNavigateToRemoteManager != null) {
+                    SheetActionRow(
+                        icon = FeatherIcons.Server,
+                        label = stringResource(R.string.remote_mgr_title),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        onClick = {
+                            showPreviewEntrySheet = false
+                            onNavigateToRemoteManager?.invoke()
+                        }
+                    )
+                }
+            }
+        }
     }
 
     menuSession?.let { session ->

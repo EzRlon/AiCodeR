@@ -808,14 +808,15 @@ internal fun ChatInputBar(
                                 enabled = !isBusy
                             )
                         }
+                        // 工作中也可用：附件/语音输入随消息排队发送（AIChatPanel 统一队列链路）。
                         UploadIconButton(
-                            enabled = !isBusy,
+                            enabled = true,
                             icon = FeatherIcons.Plus,
                             contentDescription = stringResource(R.string.chat_add_attachment),
                             onClick = { showAttachmentSheet = true }
                         )
                         UploadIconButton(
-                            enabled = !isBusy,
+                            enabled = true,
                             icon = FeatherIcons.Mic,
                             contentDescription = stringResource(R.string.chat_voice_input),
                             onClick = onVoiceInput
@@ -919,8 +920,8 @@ internal fun ChatInputBar(
 
     if (showAttachmentSheet) {
         AttachmentSheet(
-            canUploadFiles = canUploadFiles && !isBusy,
-            canUploadImages = canUploadImages && !isBusy,
+            canUploadFiles = canUploadFiles,
+            canUploadImages = canUploadImages,
             onUploadFile = {
                 showAttachmentSheet = false
                 onUploadFile()

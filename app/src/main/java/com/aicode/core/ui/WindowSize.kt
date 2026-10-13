@@ -47,8 +47,8 @@ object ContentWidth {
     val readable = 800.dp
 
     /** 侧边栏宽度：窄窗保持原尺寸，大屏给文件树多留一点横向空间。 */
-    val drawerCompact = 300.dp
-    val drawerWide = 340.dp
+    val drawerCompact = 272.dp
+    val drawerWide = 308.dp
 }
 
 /**

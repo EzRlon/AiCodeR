@@ -77,6 +77,7 @@ import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Menu
+import compose.icons.feathericons.Paperclip
 import compose.icons.feathericons.X
 import compose.icons.feathericons.Zap
 import java.util.Base64
@@ -216,6 +217,21 @@ internal fun QueuedRequestPanel(
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
+                            if (req.inputAttachments.isNotEmpty()) {
+                                Spacer(Modifier.width(Spacing.sm))
+                                Icon(
+                                    FeatherIcons.Paperclip,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = req.inputAttachments.size.toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Spacer(Modifier.width(Spacing.sm))
                             Text(
                                 text = req.request,

@@ -84,6 +84,7 @@ import com.aicode.feature.annotation.presentation.component.AnnotationEditorDial
 import com.aicode.feature.annotation.presentation.component.AnnotationLedgerScreen
 import com.aicode.feature.installer.presentation.component.TestBuildListScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
+import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
 import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.AIChatPanel
@@ -660,6 +661,10 @@ fun AppNavigation(
                 openWorkbench(WorkbenchPaneKind.PREVIEW)
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
             },
+            onNavigateToRemoteManager = {
+                navController.navigate("remote")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            },
             onNavigateToSettings = {
                 navController.navigate("settings")
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
@@ -903,6 +908,11 @@ fun AppNavigation(
             composable("preview") {
                 PreviewScreen(
                     embedded = false,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable("remote") {
+                RemoteManagerScreen(
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
