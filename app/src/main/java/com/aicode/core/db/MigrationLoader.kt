@@ -64,6 +64,13 @@ object MigrationLoader {
             
             migrations.add(FileMigration(version, fileName, statements))
         }
+
+        // 62/63 改用幂等 Kotlin 版执行（SQL 文件保留作审计与编号校验）：兼容曾装过
+        // 旧编号 60/61（annotations/session_team）中间开发版的设备——那类设备缺官方
+        // 60/61 两列，需要在 62/63 里按列存在性补齐；正常设备行为等价。见 IdempotentMigrations.kt。
+        migrations.removeAll { it is FileMigration && (it.version == 62 || it.version == 63) }
+        migrations.add(Migration61To62())
+        migrations.add(Migration62To63())
         
         return migrations.toTypedArray()
     }

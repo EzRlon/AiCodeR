@@ -142,7 +142,8 @@
     <string name="storage_clean_selected">清理选中项 · %1$s</string>
     <string name="storage_clean_confirm_title">确认清理</string>
     <string name="storage_clean_confirm_selected">将清理以下选中项，共约 %1$s。此操作不可恢复。</string>
-    <string name="storage_clean_scope">仅清理本机应用缓存、日志及全局目录中的所选数据，可能影响多个工作区的历史输出读取或识图追问；不会删除聊天记录、工作区文件、容器、AI 配置或远程服务器数据。</string>
+    <string name="storage_clean_scope">清理范围：应用缓存、日志、全局临时数据，以及你勾选的工作区产物（构建目录/依赖目录/下载文件，均可重新生成）；不会删除聊天记录、源码文件、容器、AI 配置或远程服务器数据。可能影响多个工作区的历史输出读取或识图追问。</string>
+    <string name="storage_artifact_other_project">该文件属于其他项目，请先切换到对应工作区再查看</string>
     <string name="storage_category_chat">聊天记录</string>
     <string name="storage_category_container">容器</string>
     <string name="storage_category_container_images">容器镜像包</string>

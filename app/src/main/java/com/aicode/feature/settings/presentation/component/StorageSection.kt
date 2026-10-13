@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
+import com.aicode.core.util.ApkInstaller
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.StorageUsagePalette
@@ -63,14 +64,13 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
-import com.aicode.feature.agent.presentation.AgentAttachment
-import com.aicode.feature.agent.presentation.component.openSentAttachment
+import com.aicode.feature.agent.presentation.component.openLocalFile
 import com.aicode.feature.settings.domain.model.formatStorageSize
 import com.aicode.feature.settings.presentation.StorageUiState
 import com.aicode.feature.settings.presentation.StorageViewModel
-import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.io.File
 
 /** 分类色点缩进宽度：色点 10dp + 与标题的间距，明细行据此与标题左对齐。 */
 private val DetailIndent = 10.dp + Spacing.md
@@ -85,7 +85,6 @@ internal fun StorageSectionHost(
     val state by viewModel.state.collectAsStateWithLifecycle()
     StorageSection(
         state = state,
-        fileAccess = viewModel.fileAccess,
         onToggleExpand = viewModel::toggleExpanded,
         onToggleCleanup = viewModel::toggleCleanup,
         onToggleArtifact = viewModel::toggleArtifact,
@@ -103,7 +102,6 @@ internal fun StorageSectionHost(
 @Composable
 internal fun StorageSection(
     state: StorageUiState,
-    fileAccess: FileAccessProvider,
     onToggleExpand: (StorageCategory) -> Unit,
     onToggleCleanup: (CleanupKind) -> Unit,
     onToggleArtifact: (String) -> Unit,
@@ -229,7 +227,7 @@ internal fun StorageSection(
                             stringResource(
                                 R.string.storage_clean_confirm_artifacts,
                                 state.selectedArtifacts.size,
-                                formatStorageSize(state.selectedArtifacts.sumOf { state.artifactSizes[it] ?: 0L })
+                                formatStorageSize(state.artifactSelectedBytes)
                             ),
                             fontWeight = FontWeight.Medium
                         )
@@ -263,9 +261,11 @@ internal fun StorageSection(
                     }
                     Spacer(Modifier.height(Spacing.xs))
                     if (path != null) {
-                        ActionRow(text = stringResource(R.string.storage_artifact_open)) {
-                            actionDetail = null
-                            openArtifact(context, detail, fileAccess, scope)
+                        if (!detail.isDirectory) {
+                            ActionRow(text = stringResource(R.string.storage_artifact_open)) {
+                                actionDetail = null
+                                openArtifact(context, detail, scope)
+                            }
                         }
                         ActionRow(text = stringResource(R.string.storage_artifact_copy_path)) {
                             actionDetail = null
@@ -543,33 +543,24 @@ private fun StorageCategory.color(): Color = when (this) {
     StorageCategory.Apk -> StorageUsagePalette.Apk
 }
 
-/** 产物操作：APK 走安装引导，其他文件按分享/打开处理；复用消息附件的统一链路。 */
+/** 产物操作：APK 走安装引导，其他文件按分享/打开处理。物理路径直取（不经容器路径映射），任意项目可用。 */
 private fun openArtifact(
     context: Context,
     detail: StorageDetail,
-    fileAccess: FileAccessProvider,
     scope: CoroutineScope
 ) {
     val path = detail.path ?: return
+    val file = File(File(context.filesDir, "projects"), path)
+    if (!file.isFile) {
+        Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
+        return
+    }
     val mime = if (detail.label.endsWith(".apk", ignoreCase = true)) {
-        "application/vnd.android.package-archive"
+        ApkInstaller.APK_MIME_TYPE
     } else {
         "application/octet-stream"
     }
-    scope.launch {
-        openSentAttachment(
-            context,
-            AgentAttachment(
-                fileName = detail.label,
-                containerPath = path,
-                localPath = "",
-                mimeType = mime,
-                sizeBytes = detail.bytes,
-                isImage = false
-            ),
-            fileAccess
-        )
-    }
+    scope.launch { openLocalFile(context, file, detail.label, mime) }
 }
 
 /** 操作菜单里的一行动作按钮（左对齐、紧凑）。 */

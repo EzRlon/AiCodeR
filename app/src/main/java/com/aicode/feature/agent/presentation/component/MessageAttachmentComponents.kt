@@ -240,9 +240,22 @@ internal suspend fun openSentAttachment(
         Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
         return
     }
+    openLocalFile(context, local, attachment.fileName, attachment.mimeType)
+}
+
+/**
+ * 打开已就绪的本地文件：APK 走安装引导（含「允许安装未知应用」判定与设置页引导），
+ * 其余走分享 / 系统打开。附件链路与存储空间等场景共用（后者直接持有宿主文件）。
+ */
+internal suspend fun openLocalFile(
+    context: Context,
+    local: File,
+    fileName: String,
+    mimeType: String
+) {
     // APK 安装包：统一走 ApkInstaller（含「允许安装未知应用」的授权判定与设置页引导）。
     // 外部本地目录工作区、自定义挂载源的文件不在 FileProvider 目录树内，先拷进 cacheDir 再授权。
-    if (isApk(attachment)) {
+    if (isApkName(fileName, mimeType)) {
         val installable = withContext(Dispatchers.IO) {
             if (isShareable(context, local)) local else copyToShareCache(context, local)
         }
@@ -274,7 +287,7 @@ internal suspend fun openSentAttachment(
         return
     }
     val intent = Intent(Intent.ACTION_VIEW)
-        .setDataAndType(uri, attachment.mimeType.ifBlank { "*/*" })
+        .setDataAndType(uri, mimeType.ifBlank { "*/*" })
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     try {
         context.startActivity(intent)
@@ -309,8 +322,8 @@ private fun copyToShareCache(context: Context, source: File): File? = runCatchin
 
 private const val SHARE_CACHE_DIR = "sent_files"
 
-private fun isApk(attachment: AgentAttachment): Boolean {
-    if (attachment.mimeType.equals("application/vnd.android.package-archive", ignoreCase = true)) return true
-    val name = attachment.fileName.lowercase()
+private fun isApkName(fileName: String, mimeType: String): Boolean {
+    if (mimeType.equals("application/vnd.android.package-archive", ignoreCase = true)) return true
+    val name = fileName.lowercase()
     return name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk")
 }

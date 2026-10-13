@@ -142,7 +142,8 @@
     <string name="storage_clean_selected">Clean selected · %1$s</string>
     <string name="storage_clean_confirm_title">Confirm cleanup</string>
     <string name="storage_clean_confirm_selected">The selected items below will be deleted (about %1$s). This cannot be undone.</string>
-    <string name="storage_clean_scope">Only selected local app caches, logs and data in global directories are cleaned. This may affect historical output access or image follow-ups across multiple workspaces. Chat history, workspace files, containers, AI configuration and remote server data are not deleted.</string>
+    <string name="storage_clean_scope">Cleans app caches, logs, global temp data, and the selected workspace artifacts (build/dependency directories, downloaded files — all regenerable). Chat history, source files, containers, AI configuration and remote server data are not deleted. Historical output access or image follow-ups across workspaces may be affected.</string>
+    <string name="storage_artifact_other_project">This file belongs to another project. Switch to that workspace first.</string>
     <string name="storage_category_chat">Chat history</string>
     <string name="storage_category_container">Containers</string>
     <string name="storage_category_container_images">Container images</string>

@@ -406,7 +406,8 @@ fun AppNavigation(
         onboardingCoordinator.initialize(status ?: OnboardingStatus.IN_PROGRESS)
     }
 
-    // 自动检查更新：进入主页时异步检测（开关开启且每天最多一次，失败静默）
+    // 自动检查更新：进入主页时触发；自建分支已在 checkUpdate 内禁用自动检查（非 manual 提前返回），
+    // 保留调用以兼容将来恢复。
     LaunchedEffect(Unit) {
         settingsViewModel.checkUpdate(manual = false)
     }
@@ -838,11 +839,23 @@ fun AppNavigation(
                         if (!expanded) scope.launch { drawerState.open() }
                     },
                     onStopAllAndCloseTerminal = { agentViewModel.stopAllAndCloseTerminal() },
-                    onRevealInTree = { path ->
-                        agentViewModel.revealPathInTree(path)
-                        drawerRevealRequest = path
-                        navController.popBackStack()
-                        if (!expanded) scope.launch { drawerState.open() }
+                    onRevealInTree = { relPath ->
+                        // relPath = 「<项目名>/<相对路径>」；仅当前工作区的项目可转容器路径后定位。
+                        val currentProjectName = currentWorkspace?.path
+                            ?.trimEnd('/')?.substringAfterLast('/')
+                        val containerPath = if (!currentProjectName.isNullOrBlank() && relPath.startsWith("$currentProjectName/")) {
+                            "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/${relPath.removePrefix("$currentProjectName/")}"
+                        } else {
+                            null
+                        }
+                        if (containerPath != null) {
+                            agentViewModel.revealPathInTree(containerPath)
+                            drawerRevealRequest = containerPath
+                            navController.popBackStack()
+                            if (!expanded) scope.launch { drawerState.open() }
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.storage_artifact_other_project), Toast.LENGTH_SHORT).show()
+                        }
                     },
                     onRerunOnboarding = {
                         // 从设置页「重新运行引导」：清状态回 in_progress、激活引导并回聊天页。

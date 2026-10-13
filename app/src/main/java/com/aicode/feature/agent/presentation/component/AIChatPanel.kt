@@ -54,7 +54,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -207,10 +206,6 @@ internal fun turnKeyOf(firstMessageId: String): String = "turn:$firstMessageId"
  *
  * [endMessageId] 是轮末助手消息 id，据此查本轮耗时（见 [computeTaskDurations]，口径一致）。
  */
-    /** 整轮折叠头 item 的渲染状态。非空即表示这是一条「执行中 / 已完成」头行。
-     *
-     * [endMessageId] 是轮末助手消息 id，据此查本轮耗时（见 [computeTaskDurations]，口径一致）。
-     */
 internal data class TurnHeaderState(
     val key: String,
     val endMessageId: String?,

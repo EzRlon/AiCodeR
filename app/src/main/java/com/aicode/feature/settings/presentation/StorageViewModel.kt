@@ -8,7 +8,6 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
 import com.aicode.feature.settings.domain.service.StorageUsageScanner
-import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,16 +41,29 @@ data class StorageUiState(
             CleanupKind.VisionSessions to aiConfigDetail(StorageDetailKey.VISION_SESSIONS)
         )
 
-    /** 产物明细（带路径的明细行）的容器路径 → 大小。 */
+    /** 产物明细（带路径的明细行）的定位标识 → 大小。 */
     val artifactSizes: Map<String, Long>
         get() = entries.values
             .flatMap { it.details }
             .mapNotNull { detail -> detail.path?.let { it to detail.bytes } }
             .toMap()
 
+    /** 勾选产物的合计大小（去除「已选中目录」与其后代项的重复计）。 */
+    val artifactSelectedBytes: Long
+        get() {
+            val kept = mutableListOf<String>()
+            var sum = 0L
+            selectedArtifacts.sorted().forEach { path ->
+                if (kept.none { path == it || path.startsWith("$it/") }) {
+                    kept += path
+                    sum += artifactSizes[path] ?: 0L
+                }
+            }
+            return sum
+        }
+
     val selectedBytes: Long
-        get() = cleanableSizes.filterKeys { it in selectedCleanup }.values.sum() +
-            selectedArtifacts.sumOf { artifactSizes[it] ?: 0L }
+        get() = cleanableSizes.filterKeys { it in selectedCleanup }.values.sum() + artifactSelectedBytes
 
     private fun aiConfigDetail(key: String): Long =
         entries[StorageCategory.AiConfig]?.details?.firstOrNull { it.key == key }?.bytes ?: 0L
@@ -59,9 +71,7 @@ data class StorageUiState(
 
 @HiltViewModel
 class StorageViewModel @Inject constructor(
-    private val scanner: StorageUsageScanner,
-    /** 消息附件链路需要：产物明细的「安装/打开」复用其分享/安装实现。 */
-    val fileAccess: FileAccessProvider
+    private val scanner: StorageUsageScanner
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(StorageUiState())

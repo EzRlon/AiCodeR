@@ -4,6 +4,7 @@ import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeFileDelete
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.domain.container.ContainerInstaller
@@ -18,7 +19,6 @@ import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
 import com.aicode.feature.settings.domain.model.formatStorageSize
-import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -94,26 +94,27 @@ class StorageUsageScanner @Inject constructor(
     }
 
     /**
-     * 删除工作区产物（容器路径，来自 [scan] 的明细）。仅限内置工作区内：
-     * 换算到 `filesDir/projects` 下的物理路径并做前缀校验，越界或残留 `..` 一律拒绝。
-     * 返回释放的字节数。
+     * 删除工作区产物（`<项目名>/<相对路径>`，来自 [scan] 的明细）。仅限内置工作区：
+     * 映射到 `filesDir/projects` 下并做 canonical 前缀与项目目录校验；
+     * 递归删除走 [SafeFileDelete]（不跟随符号链接，防止越出目标子树）。返回释放的字节数。
      */
-    suspend fun cleanArtifacts(containerPaths: List<String>): Long = withContext(Dispatchers.IO) {
+    suspend fun cleanArtifacts(paths: List<String>): Long = withContext(Dispatchers.IO) {
         val projectsRoot = File(context.filesDir, PROJECTS_DIR).canonicalFile
-        containerPaths.sumOf { containerPath ->
-            val target = physicalOf(containerPath, projectsRoot) ?: return@sumOf 0L
+        paths.sumOf { rel ->
+            val target = physicalOf(rel, projectsRoot) ?: return@sumOf 0L
             val size = dirSize(target)
-            if (runCatching { target.deleteRecursively() }.getOrDefault(false)) size else 0L
+            if (SafeFileDelete.deleteRecursively(target)) size else 0L
         }
     }
 
-    /** 容器路径（`~/workspace/<rel>`）→ `projects/<rel>` 物理路径；非法路径返回 null。 */
-    private fun physicalOf(containerPath: String, projectsRoot: File): File? {
-        val root = WorkspacePathMapper.CONTAINER_ROOT
-        if (!containerPath.startsWith(root)) return null
-        val rel = containerPath.removePrefix(root).trim('/')
-        if (rel.isEmpty() || ".." in rel) return null
-        val canon = runCatching { File(projectsRoot, rel).canonicalFile }.getOrNull() ?: return null
+    /** `<项目名>/<相对路径>` → `projects/<该项目>/<相对路径>` 物理路径；非法或越界返回 null。 */
+    private fun physicalOf(rel: String, projectsRoot: File): File? {
+        val clean = rel.trim('/')
+        if (clean.isEmpty() || ".." in clean) return null
+        val firstSegment = clean.substringBefore('/')
+        if (firstSegment.isEmpty() || firstSegment.startsWith(".")) return null
+        if (!File(projectsRoot, firstSegment).isDirectory) return null
+        val canon = runCatching { File(projectsRoot, clean).canonicalFile }.getOrNull() ?: return null
         return canon.takeIf { it.path.startsWith(projectsRoot.path + File.separator) }
     }
 
@@ -269,16 +270,17 @@ class StorageUsageScanner @Inject constructor(
         buildDirs.forEach { dir ->
             result += artifactDetail(
                 project, dir, dir.lastModified(),
-                label = context.getString(R.string.storage_artifacts_build_dir, dir.relativeTo(project).path)
+                label = context.getString(R.string.storage_artifacts_build_dir, dir.relativeTo(project).path),
+                isDirectory = true
             )
         }
         File(project, "node_modules").takeIf { it.isDirectory }?.let { dir ->
             result += artifactDetail(project, dir, dir.lastModified(),
-                label = context.getString(R.string.storage_artifacts_node_modules))
+                label = context.getString(R.string.storage_artifacts_node_modules), isDirectory = true)
         }
         listOf("venv", ".venv").map { File(project, it) }.firstOrNull { it.isDirectory }?.let { dir ->
             result += artifactDetail(project, dir, dir.lastModified(),
-                label = context.getString(R.string.storage_artifacts_venv))
+                label = context.getString(R.string.storage_artifacts_venv), isDirectory = true)
         }
         downloads.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
             result += artifactDetail(project, file, mtime, label = file.name)
@@ -286,17 +288,26 @@ class StorageUsageScanner @Inject constructor(
         return result
     }
 
-    /** 构造一条可操作产物明细：note = 「项目 · 时间 · 容器路径」。 */
-    private fun artifactDetail(project: File, target: File, modifiedAt: Long, label: String): StorageDetail {
+    /**
+     * 构造一条可操作产物明细。[path] 为「`<项目名>/<相对路径>`」（存储页与删除链路共用的定位标识）；
+     * note = 「项目 · 时间 · 相对路径」。
+     */
+    private fun artifactDetail(
+        project: File,
+        target: File,
+        modifiedAt: Long,
+        label: String,
+        isDirectory: Boolean = false
+    ): StorageDetail {
         val rel = target.relativeTo(project).path
-        val containerPath = "${WorkspacePathMapper.CONTAINER_ROOT}/${project.name}/$rel".trimEnd('/')
         return StorageDetail(
             label = label,
             bytes = dirSize(target),
-            note = "${project.name} · ${formatTime(modifiedAt)} · $containerPath",
+            note = "${project.name} · ${formatTime(modifiedAt)} · $rel",
             indent = true,
-            path = containerPath,
-            modifiedAt = modifiedAt
+            path = "${project.name}/$rel",
+            modifiedAt = modifiedAt,
+            isDirectory = isDirectory
         )
     }
 
@@ -364,13 +375,13 @@ class StorageUsageScanner @Inject constructor(
 
     // ── 工具 ────────────────────────────────────────────────────────────────
 
-    /** 删除目录下所有内容但保留目录本身，返回释放字节数。 */
+    /** 删除目录下所有内容但保留目录本身，返回释放字节数。递归删除走 [SafeFileDelete]（不跟随符号链接）。 */
     private fun clearDirContents(dir: File): Long {
         if (!dir.isDirectory) return 0L
         var freed = 0L
         dir.listFiles()?.forEach { child ->
             val size = dirSize(child)
-            if (runCatching { child.deleteRecursively() }.getOrDefault(false)) freed += size
+            if (SafeFileDelete.deleteRecursively(child)) freed += size
         }
         return freed
     }
@@ -399,14 +410,14 @@ class StorageUsageScanner @Inject constructor(
         private const val MAX_BUILD_DIRS = 4
         private const val MIN_DOWNLOAD_BYTES = 1L * 1024 * 1024
 
-        /** 视为「下载物」的扩展名（压缩包 / 安装包 / 预编译库）。 */
+        /** 视为「下载物」的扩展名（压缩包 / 安装包）；jar/aar 不列入：多为随源码检入的依赖。 */
         private val DOWNLOAD_EXTS = listOf(
             ".zip", ".tar.gz", ".tgz", ".tar.xz", ".xz", ".tar",
-            ".deb", ".rpm", ".whl", ".7z", ".rar", ".jar", ".aar"
+            ".deb", ".rpm", ".whl", ".7z", ".rar"
         )
 
-        /** 遍历时整体跳过内部的大目录（大小按整目录另行统计）。 */
-        private val SKIP_DIRS = setOf(".git", "node_modules", "venv", ".venv")
+        /** 遍历时整体跳过内部的大目录（大小按整目录另行统计；.aicode 含附件与配置，不视为内存产物）。 */
+        private val SKIP_DIRS = setOf(".git", ".aicode", "node_modules", "venv", ".venv")
 
         /** 产物明细里展示的最后修改时间。 */
         private fun formatTime(ts: Long): String =
