@@ -38,7 +38,7 @@ data class ProgressNode(
 
 /**
  * 依附于容器外围的「任务进度线框」：在容器边框外侧画一圈圆角矩形描边，
- * 弧长按任务进度点亮（progress 为 null 时表现为流动光带），节点均匀分布其上
+ * 弧长按任务进度点亮，节点均匀分布其上
  * （已完成实心、进行中呼吸、未开始描边）。
  *
  * 纯绘制组件、不参与触摸命中（本层为全尺寸覆盖，自行挂手势会独占卡片内交互；
@@ -46,7 +46,7 @@ data class ProgressNode(
  */
 @Composable
 fun TaskProgressBorder(
-    progress: Float?,
+    progress: Float,
     nodes: List<ProgressNode>,
     cornerRadius: Dp,
     modifier: Modifier = Modifier,
@@ -57,7 +57,7 @@ fun TaskProgressBorder(
 ) {
     // 进度变化时弧长平滑过渡
     val animatedProgress by animateFloatAsState(
-        targetValue = (progress ?: 0f).coerceIn(0f, 1f),
+        targetValue = progress.coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 400),
         label = "task-progress-arc"
     )
@@ -67,12 +67,6 @@ fun TaskProgressBorder(
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
         label = "task-progress-breath-alpha"
-    )
-    val flowHead by breath.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
-        label = "task-progress-flow-head"
     )
 
     Canvas(modifier = modifier) {
@@ -100,25 +94,11 @@ fun TaskProgressBorder(
         drawPath(path, trackColor, style = Stroke(1.5.dp.toPx()))
 
         val strokeWidth = 2.5.dp.toPx()
-        if (progress == null) {
-            // 无 todo：一段流动光带（indeterminate）
-            val arcLen = (total * 0.18f).coerceAtMost(200.dp.toPx())
-            val seg = Path()
-            val start = total * flowHead
-            if (start + arcLen <= total) {
-                measure.getSegment(start, start + arcLen, seg, true)
-            } else {
-                measure.getSegment(start, total, seg, true)
-                measure.getSegment(0f, (start + arcLen) - total, seg, true)
-            }
-            drawPath(seg, activeColor.copy(alpha = 0.9f), style = Stroke(strokeWidth, cap = StrokeCap.Round))
-        } else {
-            // 有 todo：弧长 = 完成比例，从路径起点顺时针点亮
-            val seg = Path()
-            if (animatedProgress > 0.001f) {
-                measure.getSegment(0f, total * animatedProgress, seg, true)
-                drawPath(seg, completedColor, style = Stroke(strokeWidth, cap = StrokeCap.Round))
-            }
+        // 弧长 = 完成比例，从路径起点顺时针点亮（无 todo 时调用方不渲染本组件，不做假进度）
+        val seg = Path()
+        if (animatedProgress > 0.001f) {
+            measure.getSegment(0f, total * animatedProgress, seg, true)
+            drawPath(seg, completedColor, style = Stroke(strokeWidth, cap = StrokeCap.Round))
         }
 
         // 节点：均匀内缩分布在整圈轨迹上（点击由上层热点层实现）

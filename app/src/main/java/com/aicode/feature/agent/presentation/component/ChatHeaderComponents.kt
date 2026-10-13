@@ -150,18 +150,7 @@ internal fun ChatHeader(
                         contentDescription = stringResource(R.string.chat_new_session),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                WorkbenchIconButton(
-                    icon = FeatherIcons.GitBranch,
-                    contentDescription = stringResource(R.string.chat_open_git),
-                    active = gitActive,
-                    onClick = onNavigateToGit
-                )
-                WorkbenchIconButton(
-                    icon = FeatherIcons.Box,
-                    contentDescription = stringResource(R.string.agent_cli_sheet_title),
-                    active = false,
-                    onClick = onNavigateToAgents
-                )
+                // 顶栏按钮顺序（左→右）：专家团、智能体、记忆图谱、Git、终端
                 onOpenTeams?.let { openTeams ->
                     WorkbenchIconButton(
                         icon = FeatherIcons.Users,
@@ -171,10 +160,22 @@ internal fun ChatHeader(
                     )
                 }
                 WorkbenchIconButton(
+                    icon = FeatherIcons.Box,
+                    contentDescription = stringResource(R.string.agent_cli_sheet_title),
+                    active = false,
+                    onClick = onNavigateToAgents
+                )
+                WorkbenchIconButton(
                     icon = FeatherIcons.Share2,
                     contentDescription = stringResource(R.string.memory_graph_open),
                     active = false,
                     onClick = onNavigateToMemoryGraph
+                )
+                WorkbenchIconButton(
+                    icon = FeatherIcons.GitBranch,
+                    contentDescription = stringResource(R.string.chat_open_git),
+                    active = gitActive,
+                    onClick = onNavigateToGit
                 )
                 WorkbenchIconButton(
                     icon = FeatherIcons.Terminal,

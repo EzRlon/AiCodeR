@@ -1874,6 +1874,7 @@ fun AIChatPanel(
                 onInterjectQueued = { viewModel.interjectQueuedRequest(it) },
                 dashboardState = currentDashboardState,
                 todoItems = currentTodoItems,
+                activeToolLabel = thinkingLabel,
                 sessionId = currentSessionId.orEmpty(),
                 onTodoExpandedChange = { todoExpanded = it },
                 forceCollapseDashboard = pendingPermission != null || pendingQuestion != null || planApproval != null || budgetApproval != null || imeVisible,

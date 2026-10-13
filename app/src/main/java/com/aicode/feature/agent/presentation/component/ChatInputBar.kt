@@ -208,6 +208,8 @@ internal fun ChatInputBar(
     onRefreshDashboardByButton: () -> Unit = {},
     onDashboardExpandedChange: (Boolean) -> Unit = {},
     todoItems: List<TodoItem> = emptyList(),
+    /** 此刻真实在做的事（正在执行的工具/阶段文案），拼在「进行中」节点提示里。 */
+    activeToolLabel: String? = null,
     sessionId: String = "",
     onTodoExpandedChange: (Boolean) -> Unit = {},
     forceCollapseDashboard: Boolean = false,
@@ -503,20 +505,26 @@ internal fun ChatInputBar(
                 )
             }
 
-            // AI 工作中：卡片外围的任务进度线框（todo 驱动；无 todo 时为流动光带），空闲时完全不渲染。
-            // 节点即本轮任务清单条目：实心=已完成，呼吸=进行中，描边=待做；点击节点在卡片上方悬浮显示对应条目文字。
+            // AI 工作中：卡片外围的任务进度线框——完全由 todo 驱动（节点=条目、弧长=完成比例）；
+            // 无 todo 时不渲染（不摆假进度）；节点点击在卡片上方悬浮显示对应条目文字。
             var progressTipIndex by remember { mutableStateOf<Int?>(null) }
             // 每次点击自增：同节点重复点击也能重置 2.5s 计时（LaunchedEffect 以值为 key，同值不重启）
             var progressTipTick by remember { mutableStateOf(0) }
+            // 进行中节点拼接「此刻真实在做的事」（正在执行的工具/阶段）——点击节点即可确认当前动作
+            val activeIndex = todoItems.indexOfFirst { it.status == TodoStatus.IN_PROGRESS }
             val progressNodes = if (isBusy) {
-                todoItems.take(6).map {
+                todoItems.take(12).mapIndexed { index, item ->
                     ProgressNode(
-                        state = when (it.status) {
+                        state = when (item.status) {
                             TodoStatus.COMPLETED -> ProgressNodeState.COMPLETED
                             TodoStatus.IN_PROGRESS -> ProgressNodeState.ACTIVE
                             TodoStatus.PENDING -> ProgressNodeState.PENDING
                         },
-                        label = it.subject
+                        label = if (index == activeIndex && !activeToolLabel.isNullOrBlank()) {
+                            "${item.subject} · $activeToolLabel"
+                        } else {
+                            item.subject
+                        }
                     )
                 }
             } else emptyList()
@@ -736,14 +744,10 @@ internal fun ChatInputBar(
                     }
                 }
 
-                if (isBusy) {
+                if (isBusy && todoItems.isNotEmpty()) {
                     TaskProgressBorder(
                         modifier = Modifier.matchParentSize(),
-                        progress = if (todoItems.isEmpty()) {
-                            null
-                        } else {
-                            todoItems.count { it.status == TodoStatus.COMPLETED }.toFloat() / todoItems.size
-                        },
+                        progress = todoItems.count { it.status == TodoStatus.COMPLETED }.toFloat() / todoItems.size,
                         nodes = progressNodes,
                         cornerRadius = Radius.lg,
                         activeColor = MaterialTheme.colorScheme.primary,

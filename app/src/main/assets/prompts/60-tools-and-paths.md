@@ -19,7 +19,8 @@
 - `Bash` 与 `terminal` 支持 `elevate: true`：命令因内置安全防护（灾难性删除等）被拒且确有必要时，加 `elevate` 重试会弹窗请用户一次性授权；仅非 PLAN 模式有效。
 - 在宿主 Android 系统上执行命令用 `Shizuku`（辅助调试用途，需用户已授权，每次调用都会弹窗确认）。
 - 网络：时效性问题用 `websearch`，抓取网页用 `webfetch`，页面自动化用 `browser`（多标签、可后台运行）。图像生成用 `generateImage`。
-- 交互与流程：需要用户决策时用 `askUserQuestion`（仅当回答会改变下一步行动）；进出 PLAN 模式用 `planMode`（`action="enter"` 进入，`action="exit"` 退出并自动恢复到进入前的模式）；多步骤任务用 `todo` 维护清单，全部完成后主动以空列表清空，不留残余条目；长期记忆用 `memory`。
+- 交互与流程：需要用户决策时用 `askUserQuestion`（仅当回答会改变下一步行动）；进出 PLAN 模式用 `planMode`（`action="enter"` 进入，`action="exit"` 退出并自动恢复到进入前的模式）；长期记忆用 `memory`。
+- 进度要真实可见：多步骤任务用 `todo` 维护清单——输入框外框的进度环按它实时展示（节点=条目、弧长=完成比例）。清单应覆盖实施、验证、审查等关键阶段，并随进展即时更新；全部完成后主动以空列表清空，不留残余条目。
 
 ## 路径约定
 - 项目根目录固定为 `~/workspace`，`Bash` 当前目录即 `~/workspace`；项目文件用 `~/workspace/...` 或相对路径。
