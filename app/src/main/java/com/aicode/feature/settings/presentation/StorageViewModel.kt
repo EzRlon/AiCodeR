@@ -25,7 +25,7 @@ data class StorageUiState(
     val expanded: Set<StorageCategory> = emptySet(),
     val cleaning: Boolean = false,
     val selectedCleanup: Set<CleanupKind> = setOf(CleanupKind.Caches, CleanupKind.Logs),
-    /** 勾选的产物明细（容器路径）。 */
+    /** 勾选的产物明细（定位标识 `<项目名>/<相对路径>`）。 */
     val selectedArtifacts: Set<String> = emptySet(),
     /** 上一次清理释放的字节数，非空时界面给出提示。 */
     val freedBytes: Long? = null
@@ -117,7 +117,7 @@ class StorageViewModel @Inject constructor(
         }
     }
 
-    /** 勾选/取消勾选一条产物明细（容器路径）。 */
+    /** 勾选/取消勾选一条产物明细（定位标识）。 */
     fun toggleArtifact(path: String) {
         _state.update {
             if (it.cleaning) return@update it
