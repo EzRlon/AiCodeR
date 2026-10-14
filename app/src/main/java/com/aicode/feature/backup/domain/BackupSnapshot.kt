@@ -232,7 +232,9 @@ data class AgentMessageDto(
     /** Anthropic thinking / redacted_thinking 内容块的原样快照（JSON 数组文本）。 */
     val thinkingBlocksJson: String? = null,
     val isContextExcluded: Boolean = false,
-    val compactedBySummaryId: String? = null
+    val compactedBySummaryId: String? = null,
+    /** 仅 USER 行：消息类型标签键；null 表示旧备份无此字段，导入时回退未分类。 */
+    val intentType: String? = null
 )
 
 @Serializable

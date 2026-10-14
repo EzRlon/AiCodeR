@@ -648,6 +648,7 @@ fun AIChatPanel(
     val fileMentionState by viewModel.fileMentionState.collectAsStateWithLifecycle()
 
     val inputText by viewModel.inputDraft.collectAsStateWithLifecycle()
+    val draftIntentType by viewModel.draftIntentType.collectAsStateWithLifecycle()
     // 输入 "/" 打开命令菜单时重扫技能，反映磁盘上技能的增删改。
     LaunchedEffect(inputText) {
         if (inputText == "/") viewModel.refreshSlashCommands()
@@ -1303,15 +1304,18 @@ fun AIChatPanel(
         if (t.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.chat_voice_no_speech), Toast.LENGTH_SHORT).show()
         } else {
+            val intentType = draftIntentType
             viewModel.enqueueAgentRequest(
                 request = t,
-                modelRequest = t,
+                modelRequest = t + MessageIntentCatalog.modelNote(context, intentType),
                 currentFile = currentFile,
                 selectedCode = selectedCode,
                 projectRoot = projectRoot,
                 inputImages = emptyList(),
-                inputAttachments = emptyList()
+                inputAttachments = emptyList(),
+                intentType = intentType
             )
+            viewModel.updateDraftIntentType(null)
             followBottom = true
             scope.launch {
                 delay(0)
@@ -1339,7 +1343,9 @@ fun AIChatPanel(
             val attachments = pendingAttachments
             val modelSupportsVision = activeModelMetadata?.supportsVision == true
             val promptAttachments = if (modelSupportsVision) attachments.filterNot { it.isImage } else attachments
-            val modelRequest = appendAttachmentsToRequest(context, text, promptAttachments)
+            val intentType = draftIntentType
+            val modelRequest = appendAttachmentsToRequest(context, text, promptAttachments) +
+                MessageIntentCatalog.modelNote(context, intentType)
             val images = if (modelSupportsVision) attachments.toAgentImages() else emptyList()
             // 统一走队列：AI 忙时入队（等本轮结束后自动发送下一条），空闲时直接发送。
             // 斜杠命令在 ViewModel 内（agent workflow 之前）分流执行，无需在此区分。
@@ -1350,7 +1356,8 @@ fun AIChatPanel(
                 selectedCode = selectedCode,
                 projectRoot = projectRoot,
                 inputImages = images,
-                inputAttachments = attachments.toAgentAttachments()
+                inputAttachments = attachments.toAgentAttachments(),
+                intentType = intentType
             )
             viewModel.clearInputDraft()
             pendingAttachments = emptyList()
@@ -1848,6 +1855,8 @@ fun AIChatPanel(
                 },
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
+                intentType = draftIntentType,
+                onIntentTypeChange = viewModel::updateDraftIntentType,
                 reasoningEffort = reasoningEffort,
                 onReasoningEffortChange = { viewModel.setSessionReasoningEffort(it) },
                 pendingAttachments = pendingAttachments,

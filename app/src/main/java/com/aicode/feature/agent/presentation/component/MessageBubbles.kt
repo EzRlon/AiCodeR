@@ -358,6 +358,10 @@ internal fun AgentMessageItem(
                 // 助手消息左对齐，用户消息右对齐
                 horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
             ) {
+                // 消息类型小徽章：标在用户气泡上方（弱化色，仅展示）
+                if (isUser && message.intentType != null) {
+                    MessageIntentBadge(intentType = message.intentType)
+                }
                 if (hasContent || message.role == MessageRole.TOOL) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically
@@ -589,6 +593,30 @@ internal fun AgentMessageItem(
                 }
             }
         }
+    }
+}
+
+/** 用户气泡上方的消息类型小徽章（图标+名称，弱化色）：标出「这条消息是什么」。 */
+@Composable
+private fun MessageIntentBadge(intentType: String) {
+    val intent = MessageIntentCatalog.find(intentType) ?: return
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(bottom = 1.dp)
+    ) {
+        Icon(
+            intent.icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(11.dp)
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = stringResource(intent.labelRes),
+            style = MaterialTheme.typography.labelSmall,
+            color = tint
+        )
     }
 }
 

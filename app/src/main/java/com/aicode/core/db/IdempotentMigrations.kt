@@ -45,6 +45,18 @@ internal class Migration62To63 : Migration(62, 63) {
     }
 }
 
+/**
+ * 幂等版 63→64（替代 `64_add_message_intent_type.sql` 执行）：按列存在性补 intentType。
+ */
+internal class Migration63To64 : Migration(63, 64) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(
+            db, "agent_messages", "intentType",
+            "ALTER TABLE agent_messages ADD COLUMN intentType TEXT"
+        )
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {

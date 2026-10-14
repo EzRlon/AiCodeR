@@ -154,6 +154,7 @@ App 里的改动与手工放文件完全等价，两种方式可以混用。
 | `20-coding-discipline.md` | 编码纪律 |
 | `30-comments.md` | 代码注释规范 |
 | `40-approach.md` | 工作方式与流程 |
+| `45-message-intent.md` | 消息类型：按用户标注的消息类型调整处理策略 |
 | `50-safety.md` | 安全与可信边界 |
 | `60-tools-and-paths.md` | 工具说明与路径约定 |
 | `70-skills-and-mcp.md` | 技能与 MCP 说明 |

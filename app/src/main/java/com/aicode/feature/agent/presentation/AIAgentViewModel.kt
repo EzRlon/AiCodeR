@@ -288,10 +288,30 @@ class AIAgentViewModel @Inject constructor(
         editor.apply()
     }
 
+    /**
+     * 各会话草稿的「消息类型」标记（仅内存、不持久化）：类型描述的是「这一条」，
+     * 发送后随清草稿一并重置；未分类即键不存在。
+     */
+    private val _intentDrafts = MutableStateFlow<Map<String, String>>(emptyMap())
+    val draftIntentType: StateFlow<String?> = _currentSessionId
+        .flatMapLatest { id -> if (id == null) flowOf(null) else _intentDrafts.map { it[id] } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** 设置/清除当前会话草稿的消息类型；null 清除（未分类）。 */
+    fun updateDraftIntentType(type: String?) {
+        val id = _currentSessionId.value ?: return
+        _intentDrafts.value = if (type == null) {
+            _intentDrafts.value - id
+        } else {
+            _intentDrafts.value + (id to type)
+        }
+    }
+
     fun clearInputDraft() {
         val id = _currentSessionId.value ?: return
         _inputDrafts.value = _inputDrafts.value - id
         draftPrefs.edit().remove(id).apply()
+        _intentDrafts.value = _intentDrafts.value - id
     }
 
     /** 外部投递进来的文本（系统分享等）：会话未就绪时先暂存，聊天面板在会话就绪后消费并合并进输入草稿。 */
@@ -1418,7 +1438,8 @@ class AIAgentViewModel @Inject constructor(
         inputImages: List<AgentImage> = emptyList(),
         inputAttachments: List<AgentAttachment> = emptyList(),
         isAutoTrigger: Boolean = false,
-        targetSessionId: String? = null
+        targetSessionId: String? = null,
+        intentType: String? = null
     ) {
         val sid = targetSessionId ?: _currentSessionId.value
         val isCurrentRunning = sid != null &&
@@ -1433,7 +1454,8 @@ class AIAgentViewModel @Inject constructor(
                 projectRoot = projectRoot,
                 inputImages = inputImages,
                 inputAttachments = inputAttachments,
-                isAutoTrigger = isAutoTrigger
+                isAutoTrigger = isAutoTrigger,
+                intentType = intentType
             )
             val currentList = _queuedRequests.value[sid] ?: emptyList()
             _queuedRequests.value = _queuedRequests.value + (sid to (currentList + req))
@@ -1447,7 +1469,8 @@ class AIAgentViewModel @Inject constructor(
                 inputImages = inputImages,
                 inputAttachments = inputAttachments,
                 targetSessionId = sid,
-                isAutoTrigger = isAutoTrigger
+                isAutoTrigger = isAutoTrigger,
+                intentType = intentType
             )
         }
     }
@@ -1532,7 +1555,8 @@ class AIAgentViewModel @Inject constructor(
             inputImages = next.inputImages,
             inputAttachments = next.inputAttachments,
             targetSessionId = sessionId,
-            isAutoTrigger = next.isAutoTrigger
+            isAutoTrigger = next.isAutoTrigger,
+            intentType = next.intentType
         )
     }
 
@@ -1568,6 +1592,8 @@ class AIAgentViewModel @Inject constructor(
         inputAttachments: List<AgentAttachment> = emptyList(),
         targetSessionId: String? = null,
         isAutoTrigger: Boolean = false,
+        /** 本条用户消息的类型标签键（仅 USER 行落库）；模型侧瞬态说明由调用方并入 modelRequest。 */
+        intentType: String? = null,
         /** 子代理等场景：已预设会话标题，跳过首条消息的标题推导/生成，保留预设标题。 */
         skipTitleUpdate: Boolean = false
     ): Job = viewModelScope.launch {
@@ -1620,7 +1646,8 @@ class AIAgentViewModel @Inject constructor(
 
             val userMsgId = UUID.randomUUID().toString()
             if (!isAutoTrigger) {
-                messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId, attachments = inputAttachments)
+                messagePersistenceUseCase.persist(sessionId, MessageRole.USER, request, id = userMsgId,
+                    attachments = inputAttachments, intentType = intentType)
                 checkpointManager.createCheckpoint(sessionId, userMsgId, request)
                 if (isFirst && !skipTitleUpdate) {
                     sessionUseCase.updateTitle(sessionId, sessionUseCase.deriveTitle(request))
@@ -2517,6 +2544,7 @@ class AIAgentViewModel @Inject constructor(
             _retryStates.value = _retryStates.value - sid
             _queuedRequests.value = _queuedRequests.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
+            _intentDrafts.value = _intentDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
             agentNotificationCenter.clear(sid)
         }
@@ -2556,6 +2584,7 @@ class AIAgentViewModel @Inject constructor(
             _retryStates.value = _retryStates.value - sid
             _queuedRequests.value = _queuedRequests.value - sid
             _inputDrafts.value = _inputDrafts.value - sid
+            _intentDrafts.value = _intentDrafts.value - sid
             draftPrefs.edit().remove(sid).apply()
             agentNotificationCenter.clear(sid)
         }

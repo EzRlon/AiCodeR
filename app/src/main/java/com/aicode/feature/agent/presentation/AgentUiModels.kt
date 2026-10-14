@@ -131,7 +131,9 @@ data class AgentUIMessage(
     val inputTokens: Int = 0,
     val outputTokens: Int = 0,
     // 仅 ASSISTANT 消息：本次调用输入中命中服务端缓存的 token 数，气泡下方据此算缓存命中率。
-    val cachedInputTokens: Int = 0
+    val cachedInputTokens: Int = 0,
+    // 仅 USER 消息：消息类型标签键（如 "bug_fix"）；null=未分类。渲染为气泡小徽章。
+    val intentType: String? = null
 )
 
 @Immutable
@@ -238,5 +240,7 @@ data class QueuedRequest(
     val projectRoot: String,
     val inputImages: List<AgentImage> = emptyList(),
     val inputAttachments: List<AgentAttachment> = emptyList(),
-    val isAutoTrigger: Boolean = false
+    val isAutoTrigger: Boolean = false,
+    /** 消息类型标签键（仅 USER 行）：入队时保留，执行前随清草稿后仍能随请求落库。 */
+    val intentType: String? = null
 )
