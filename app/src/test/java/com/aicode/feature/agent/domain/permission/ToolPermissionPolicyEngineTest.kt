@@ -25,12 +25,18 @@ import org.junit.Test
  */
 class ToolPermissionPolicyEngineTest {
 
-    private fun engine(vararg rules: PermissionRule, safetyDisabled: Boolean = false): ToolPermissionPolicyEngine {
+    private fun engine(
+        vararg rules: PermissionRule,
+        safetyDisabled: Boolean = false,
+        tier: ToolPermissionTier = ToolPermissionTier.ASK
+    ): ToolPermissionPolicyEngine {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         coEvery { repo.loadEffectiveForCurrentProject() } returns rules.toList()
         val safety = mockk<ToolSafetySettingsRepository>(relaxed = true)
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
-        return ToolPermissionPolicyEngine(repo, safety)
+        val tiers = mockk<ToolPermissionTierRepository>(relaxed = true)
+        coEvery { tiers.tierOf(any()) } returns tier
+        return ToolPermissionPolicyEngine(repo, safety, tiers)
     }
 
     private fun tool(vararg caps: ToolCapability): AgentTool {
@@ -471,12 +477,44 @@ class ToolPermissionPolicyEngineTest {
     fun remember_dedupesAndAddsEach() = runTest {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         coEvery { repo.add(any(), any()) } just runs
-        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true))
+        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true), mockk(relaxed = true))
 
         e.remember("Bash", listOf("git pull", "git pull", "ls"), PermissionScope.PROJECT)
 
         coVerify(exactly = 2) { repo.add(PermissionScope.PROJECT, any()) }
         coVerify { repo.add(PermissionScope.PROJECT, PermissionRule("Bash", "git pull", PermissionDecision.ALLOW)) }
         coVerify { repo.add(PermissionScope.PROJECT, PermissionRule("Bash", "ls", PermissionDecision.ALLOW)) }
+    }
+
+    // ── 工具档位：禁止 / 自动允许 ──────────────────────────────────
+
+    @Test
+    fun denyTier_deniesEvenInAutoMode() = runTest {
+        val e = engine(tier = ToolPermissionTier.DENY)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.AUTO)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+        assertNotNull(r.denyReason)
+    }
+
+    @Test
+    fun autoTier_genericToolIsAllowed() = runTest {
+        val e = engine(tier = ToolPermissionTier.AUTO)
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    @Test
+    fun autoTier_shellUnanalyzableStillAsks() = runTest {
+        val e = engine(tier = ToolPermissionTier.AUTO)
+        // 命令替换 → 不可静态判定：自动允许档不越过系统兜底，仍需询问。
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("cat \$(echo /tmp/x)"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    @Test
+    fun autoTier_shellNormalCommandIsAllowed() = runTest {
+        val e = engine(tier = ToolPermissionTier.AUTO)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git push origin main"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 }

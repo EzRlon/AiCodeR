@@ -28,7 +28,8 @@ import javax.inject.Singleton
 @Singleton
 class ToolPermissionPolicyEngine @Inject constructor(
     private val rulesRepo: PermissionRulesRepository,
-    private val toolSafetySettings: ToolSafetySettingsRepository
+    private val toolSafetySettings: ToolSafetySettingsRepository,
+    private val toolPermissionTiers: ToolPermissionTierRepository
 ) {
     private companion object {
         /** 以 `command` 参数承载 shell 命令、按命令前缀做指令级匹配的工具。 */
@@ -125,6 +126,17 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
     suspend fun evaluate(tool: AgentTool?, toolName: String, args: Map<String, JsonElement>, mode: com.aicode.feature.agent.domain.model.AgentMode): EvalResult {
         val capabilities = tool?.effectiveCapabilities(args).orEmpty()
+
+        // 工具档位（工具授权中心的「禁止」）：用户显式设置，压过 PLAN/AUTO 模式与一切内置规则，直接拒绝。
+        val tier = toolPermissionTiers.tierOf(toolName)
+        if (tier == ToolPermissionTier.DENY) {
+            return EvalResult(
+                Verdict.DENY,
+                emptyList(),
+                denyReason = "该工具已被用户在「设置 → 工具授权」中设为「禁止」。如确需使用，请先调整授权设置。"
+            )
+        }
+
         if (mode == com.aicode.feature.agent.domain.model.AgentMode.PLAN && isDangerousTool(toolName, args, capabilities)) {
             return EvalResult(Verdict.DENY, emptyList(), denyReason = "当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。请在计划模式下仅调用只读工具探索代码，不要尝试修改文件或执行命令。")
         }
@@ -171,7 +183,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
-            evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL)
+            evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL, tier = tier)
         } else if (targetsHooksConfig(toolName, args)) {
             // 工具钩子配置写入视为高危：hooks.json 里的脚本会在每次工具调用时零授权静默执行，
             // 等同 Agent 配置修改——永不可记忆，仅单次放行（防「始终允许 writeFile」后经提示注入获得静默命令执行）
@@ -181,7 +193,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 rememberDisabledReason = "该文件配置工具钩子（脚本会在每次工具调用时静默执行），仅支持单次放行"
             )
         } else {
-            evaluateGeneric(rules, capabilities)
+            evaluateGeneric(rules, capabilities, tier = tier)
         }
     }
 
@@ -272,10 +284,15 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
     }
 
-    private fun evaluateGeneric(rules: List<PermissionRule>, capabilities: Set<ToolCapability>): EvalResult {
+    /** 工具档位查询（工作流/UI 用）：显式设置优先，否则目录默认档位。 */
+    suspend fun tierOf(toolName: String): ToolPermissionTier = toolPermissionTiers.tierOf(toolName)
+
+    private fun evaluateGeneric(rules: List<PermissionRule>, capabilities: Set<ToolCapability>, tier: ToolPermissionTier): EvalResult {
         val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
         if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
         if (whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
+        // 工具档位「自动允许」：用户显式设置，作兜底放行（在 DENY 与已记忆规则之后）。
+        if (tier == ToolPermissionTier.AUTO) return EvalResult(Verdict.ALLOW, emptyList())
         if (capabilities.any { it in NON_REMEMBERABLE_CAPABILITIES }) {
             return EvalResult(
                 Verdict.ASK,
@@ -349,7 +366,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
     private fun evaluateShell(
         rules: List<PermissionRule>,
         args: Map<String, JsonElement>,
-        forceAsk: Boolean = false
+        forceAsk: Boolean = false,
+        tier: ToolPermissionTier = ToolPermissionTier.ASK
     ): EvalResult {
         val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
             ?: return EvalResult(Verdict.ASK, emptyList())
@@ -415,6 +433,9 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 rememberDisabledReason = "高风险删除操作（递归/通配/强制批量删除），为确保数据安全不可记忆，仅可单次放行"
             )
         }
+
+        // 工具档位「自动允许」：用户显式设置，兜底放行（内置防护/Shizuku/不可静态判定/rm 高危均在前，仍保留）。
+        if (tier == ToolPermissionTier.AUTO) return EvalResult(Verdict.ALLOW, emptyList())
 
         val rememberable = analysis.segments.mapNotNull { ShellCommandParser.rememberablePrefix(it) }.distinct()
         return EvalResult(Verdict.ASK, rememberable)

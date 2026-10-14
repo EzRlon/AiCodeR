@@ -219,7 +219,9 @@ fun SettingsScreen(
     onOnboardingModelAdded: (() -> Unit)? = null,
     onOnboardingDismissFetchDialog: (() -> Unit)? = null,
     /** 存储空间「在文件树中查看」：把目标容器路径交给宿主页导航（null 则隐藏该操作）。 */
-    onRevealInTree: ((String) -> Unit)? = null
+    onRevealInTree: ((String) -> Unit)? = null,
+    /** 授权记录「打开所在会话」：把会话 id 交给宿主页导航（null 则隐藏跳转）。 */
+    onOpenSession: ((String) -> Unit)? = null
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
@@ -240,6 +242,8 @@ fun SettingsScreen(
     val projectRules by viewModel.projectRules.collectAsStateWithLifecycle()
     val currentProjectName by viewModel.currentProjectName.collectAsStateWithLifecycle()
     val disableSafetyInterception by viewModel.disableSafetyInterception.collectAsStateWithLifecycle()
+    val toolTiers by viewModel.toolTiers.collectAsStateWithLifecycle()
+    val permissionAudit by viewModel.permissionAudit.collectAsStateWithLifecycle()
     val keepaliveEnabled by viewModel.keepaliveEnabled.collectAsStateWithLifecycle()
     val screenOnEnabled by viewModel.screenOnEnabled.collectAsStateWithLifecycle()
     val agentSoundEnabled by viewModel.agentSoundEnabled.collectAsStateWithLifecycle()
@@ -1200,10 +1204,15 @@ fun SettingsScreen(
                     projectRules = projectRules,
                     globalRules = globalRules,
                     disableSafetyInterception = disableSafetyInterception,
+                    toolTiers = toolTiers,
+                    auditRecords = permissionAudit,
                     onToggleSafetyInterception = { viewModel.setDisableSafetyInterception(it) },
                     onDeleteProject = { viewModel.deleteProjectRule(it) },
                     onPromote = { viewModel.promoteRuleToGlobal(it) },
-                    onDeleteGlobal = { viewModel.deleteGlobalRule(it) }
+                    onDeleteGlobal = { viewModel.deleteGlobalRule(it) },
+                    onSetToolTier = { tool, tier -> viewModel.setToolTier(tool, tier) },
+                    onApplyProfile = { viewModel.applyPermissionProfile(it) },
+                    onJumpToSession = onOpenSession
                 )
                 SettingsSection.AppPermissions -> {
                     val shizukuViewModel: ShizukuViewModel =

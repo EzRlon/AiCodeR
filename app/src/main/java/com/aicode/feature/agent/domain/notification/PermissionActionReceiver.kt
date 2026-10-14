@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationManagerCompat
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.permission.PermissionAuditSource
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import dagger.hilt.EntryPoint
@@ -27,8 +28,8 @@ class PermissionActionReceiver : BroadcastReceiver() {
             .fromApplication(context.applicationContext, PermissionReceiverEntryPoint::class.java)
             .toolPermissionManager()
         val resolved = when (intent.action) {
-            ACTION_APPROVE -> manager.resolve(requestId, PermissionChoice.ONCE)
-            ACTION_REJECT -> manager.resolve(requestId, PermissionChoice.REJECT)
+            ACTION_APPROVE -> manager.resolve(requestId, PermissionChoice.ONCE, PermissionAuditSource.NOTIFICATION)
+            ACTION_REJECT -> manager.resolve(requestId, PermissionChoice.REJECT, PermissionAuditSource.NOTIFICATION)
             else -> return
         }
         FileLogger.i(TAG, "通知栏授权动作: action=${intent.action} request=$requestId resolved=$resolved")

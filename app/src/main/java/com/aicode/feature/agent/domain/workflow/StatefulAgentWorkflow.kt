@@ -20,8 +20,10 @@ import com.aicode.feature.agent.domain.notification.PendingNotification
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
+import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.permission.PermissionScope
+import com.aicode.feature.agent.domain.permission.ToolPermissionTier
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
@@ -121,7 +123,8 @@ class StatefulAgentWorkflow @Inject constructor(
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
     private val hookRunner: HookRunner,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val auditRecorder: PermissionAuditRecorder
 ) : AgentWorkflow {
 
     private companion object {
@@ -1565,10 +1568,20 @@ class StatefulAgentWorkflow @Inject constructor(
         if (eval.verdict == ToolPermissionPolicyEngine.Verdict.DENY) {
             val reason = eval.denyReason ?: "该工具被项目安全规则策略禁止执行"
             val code = if (mode == AgentMode.PLAN) "PLAN_MODE_REJECTED" else "SYSTEM_DENIED"
+            if (code == "SYSTEM_DENIED") {
+                // 授权记录：系统自动拒绝（档位禁止/规则/内置防护）；PLAN 拦截属模式设计行为，不记录。
+                auditRecorder.recordSystemDeny(
+                    sessionId = sessionId,
+                    toolName = tool.name,
+                    summary = tool.buildPermissionRequest(callId, arguments, argsPreview).summary,
+                    reason = reason
+                )
+            }
             return PermissionCheckResult(false, reason, code)
         }
 
-        if (tool.permissionPolicy == ToolPermissionPolicy.AUTO_APPROVE) {
+        if (tool.permissionPolicy == ToolPermissionPolicy.AUTO_APPROVE &&
+            policyEngine.tierOf(tool.name) != ToolPermissionTier.ASK) {
             return PermissionCheckResult(true)
         }
 

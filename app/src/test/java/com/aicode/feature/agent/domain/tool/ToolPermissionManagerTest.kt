@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool
 
 import com.aicode.feature.agent.domain.permission.PermissionChoice
+import io.mockk.mockk
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -29,7 +30,7 @@ class ToolPermissionManagerTest {
 
     @Test
     fun twoSessionsPendSimultaneously_resolveByIdTargetsCorrectSession() = runBlocking {
-        val mgr = ToolPermissionManager()
+        val mgr = ToolPermissionManager(mockk(relaxed = true))
 
         val d1 = async { mgr.awaitApproval(req("id1", "s1")) }
         val d2 = async { mgr.awaitApproval(req("id2", "s2")) }
@@ -60,7 +61,7 @@ class ToolPermissionManagerTest {
 
     @Test
     fun resolveUnknownId_isNoop() = runBlocking {
-        val mgr = ToolPermissionManager()
+        val mgr = ToolPermissionManager(mockk(relaxed = true))
         val d1 = async { mgr.awaitApproval(req("id1", "s1")) }
         withTimeout(1000) { while (mgr.pendingRequest.value == null) yield() }
 

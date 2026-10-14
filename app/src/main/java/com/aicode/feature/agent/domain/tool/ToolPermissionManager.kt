@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.domain.tool
 
+import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
+import com.aicode.feature.agent.domain.permission.PermissionAuditSource
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -9,7 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 @Singleton
-class ToolPermissionManager @Inject constructor() {
+class ToolPermissionManager @Inject constructor(
+    private val auditRecorder: PermissionAuditRecorder
+) {
     /**
      * 所有待决授权请求，按插入顺序保存（key = 请求 id）。多会话并行时每个会话可各自挂起一个请求，
      * 互不阻塞——这样侧边栏才能同时点亮所有等待授权的会话。同一会话内的权限请求由 workflow 串行处理，
@@ -43,10 +47,14 @@ class ToolPermissionManager @Inject constructor() {
         }
     }
 
-    /** UI 回传用户选择，唤醒对应 id 的挂起请求。返回是否命中（未命中说明请求已被解决或进程重建）。 */
-    fun resolve(id: String, choice: PermissionChoice): Boolean {
+    /**
+     * UI 回传用户选择，唤醒对应 id 的挂起请求。返回是否命中（未命中说明请求已被解决或进程重建）。
+     * [source] 用于授权记录区分弹窗/通知栏来源，不影响裁决。
+     */
+    fun resolve(id: String, choice: PermissionChoice, source: PermissionAuditSource = PermissionAuditSource.POPUP): Boolean {
         val entry = synchronized(lock) { pending[id] } ?: return false
         entry.decision.complete(choice)
+        auditRecorder.recordUserDecision(entry.request, choice, source)
         return true
     }
 

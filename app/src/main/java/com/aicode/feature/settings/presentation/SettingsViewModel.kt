@@ -12,6 +12,7 @@ import com.aicode.core.util.LogLevel
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.RecentCallRecord
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
+import com.aicode.feature.agent.data.local.entity.PermissionAuditEntity
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
@@ -31,8 +32,12 @@ import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
 import com.aicode.feature.agent.domain.mcp.auth.McpOAuthCancelledException
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.PermissionRule
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
+import com.aicode.feature.agent.domain.permission.ToolPermissionCatalog
+import com.aicode.feature.agent.domain.permission.ToolPermissionTier
+import com.aicode.feature.agent.domain.permission.ToolPermissionTierRepository
 import com.aicode.feature.agent.domain.skill.SkillConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillForm
 import com.aicode.feature.agent.domain.skill.SkillImportError
@@ -397,7 +402,9 @@ class SettingsViewModel @Inject constructor(
     private val apkVerifier: ApkVerifier,
     private val providerDashboardRunner: ProviderDashboardRunner,
     private val terminalSettingsRepository: TerminalSettingsRepository,
-    private val proxySettingsRepository: ProxySettingsRepository
+    private val proxySettingsRepository: ProxySettingsRepository,
+    private val toolPermissionTiers: ToolPermissionTierRepository,
+    private val permissionAuditRecorder: PermissionAuditRecorder
 ) : ViewModel() {
     private companion object {
         const val MAX_LOG_LINES = 1200
@@ -701,6 +708,14 @@ class SettingsViewModel @Inject constructor(
 
     private val _disableSafetyInterception = MutableStateFlow(false)
     val disableSafetyInterception: StateFlow<Boolean> = _disableSafetyInterception.asStateFlow()
+
+    /** 工具档位（工具授权中心）：仅含显式设置项；UI 显示时对未设置项回退 [ToolPermissionCatalog] 默认档位。 */
+    val toolTiers: StateFlow<Map<String, ToolPermissionTier>> = toolPermissionTiers.tiersFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** 授权记录（审计）：最近 200 条，时间倒序。 */
+    val permissionAudit: StateFlow<List<PermissionAuditEntity>> = permissionAuditRecorder.observeRecent()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _activeProfileId = MutableStateFlow(ContainerProfile.BUILTIN_ID)
     val activeProfileId: StateFlow<String> = _activeProfileId.asStateFlow()
@@ -2770,6 +2785,15 @@ class SettingsViewModel @Inject constructor(
 
     fun setDisableSafetyInterception(disabled: Boolean) {
         viewModelScope.launch { toolSafetySettingsRepository.setDisableSafetyInterception(disabled) }
+    }
+
+    fun setToolTier(toolName: String, tier: ToolPermissionTier) {
+        viewModelScope.launch { toolPermissionTiers.setTier(toolName, tier) }
+    }
+
+    fun applyPermissionProfile(profileId: String) {
+        val profile = ToolPermissionCatalog.profiles.firstOrNull { it.id == profileId } ?: return
+        viewModelScope.launch { toolPermissionTiers.applyProfile(profile) }
     }
 }
 

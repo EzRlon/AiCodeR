@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.dao.PermissionAuditDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
@@ -50,6 +51,7 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
+import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.ToolOutputStore
@@ -175,6 +177,12 @@ object AgentModule {
     @Singleton
     fun provideAnnotationDao(database: AgentDatabase): AnnotationDao {
         return database.annotationDao()
+    }
+
+    @Provides
+    @Singleton
+    fun providePermissionAuditDao(database: AgentDatabase): PermissionAuditDao {
+        return database.permissionAuditDao()
     }
 
     @Provides
@@ -446,7 +454,8 @@ object AgentModule {
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
         hookRunner: HookRunner,
-        fileAccess: FileAccessProvider
+        fileAccess: FileAccessProvider,
+        auditRecorder: PermissionAuditRecorder
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -476,7 +485,8 @@ object AgentModule {
             agentNotificationCenter,
             eventInjector,
             hookRunner,
-            fileAccess
+            fileAccess,
+            auditRecorder
         )
     }
 }

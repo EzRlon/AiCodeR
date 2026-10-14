@@ -862,6 +862,14 @@ fun AppNavigation(
                             Toast.makeText(context, context.getString(R.string.storage_artifact_other_project), Toast.LENGTH_SHORT).show()
                         }
                     },
+                    onOpenSession = { sessionId ->
+                        if (sessions.any { it.id == sessionId }) {
+                            agentViewModel.selectSession(sessionId)
+                            navController.popBackStack()
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.perm_audit_session_gone), Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onRerunOnboarding = {
                         // 从设置页「重新运行引导」：清状态回 in_progress、激活引导并回聊天页。
                         scope.launch {

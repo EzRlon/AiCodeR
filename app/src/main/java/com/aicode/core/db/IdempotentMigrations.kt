@@ -57,6 +57,29 @@ internal class Migration63To64 : Migration(63, 64) {
     }
 }
 
+/**
+ * 幂等版 64→65（替代 `65_add_permission_audit.sql` 执行）：建授权记录表。
+ * 纯新建表，天然可重复执行。
+ */
+internal class Migration64To65 : Migration(64, 65) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS permission_audit (" +
+                "id TEXT PRIMARY KEY NOT NULL, " +
+                "timestamp INTEGER NOT NULL, " +
+                "sessionId TEXT NOT NULL, " +
+                "toolName TEXT NOT NULL, " +
+                "summary TEXT NOT NULL, " +
+                "decision TEXT NOT NULL, " +
+                "source TEXT NOT NULL, " +
+                "reason TEXT)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_permission_audit_timestamp ON permission_audit(timestamp)"
+        )
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {
