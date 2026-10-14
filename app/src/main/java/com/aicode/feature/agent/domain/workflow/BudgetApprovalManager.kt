@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.workflow
 
+import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,7 +19,9 @@ import javax.inject.Singleton
  * 渲染预算面板；用户选择后调用 [resolve] 唤醒 workflow。
  */
 @Singleton
-class BudgetApprovalManager @Inject constructor() {
+class BudgetApprovalManager @Inject constructor(
+    private val watchModeSettings: WatchModeSettingsRepository
+) {
 
     private val requestMutex = Mutex()
 
@@ -34,7 +37,10 @@ class BudgetApprovalManager @Inject constructor() {
      * workflow 侧调用：单次任务的累计用量已触达预算，挂起等待用户决定是否继续。
      * 同一时刻只允许一个请求（由 [requestMutex] 保证串行）。
      */
-    suspend fun awaitApproval(usedTokens: Int, budgetTokens: Int): BudgetApprovalChoice = requestMutex.withLock {
+    suspend fun awaitApproval(usedTokens: Int, budgetTokens: Int): BudgetApprovalChoice = if (watchModeSettings.isArmed()) {
+        // 守夜：预算耗尽不暂停——按停止处理（工作流的预算停止路径收尾并汇报），不无限等人。
+        BudgetApprovalChoice.STOP
+    } else requestMutex.withLock {
         val request = BudgetApprovalRequest(usedTokens = usedTokens, budgetTokens = budgetTokens)
         val decision = CompletableDeferred<BudgetApprovalChoice>()
         currentId = request.id

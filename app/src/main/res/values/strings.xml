@@ -1929,6 +1929,13 @@
     <string name="perm_audit_source_popup">弹窗</string>
     <string name="perm_audit_source_notification">通知栏</string>
     <string name="perm_audit_source_system">自动</string>
+    <string name="perm_watch_group">无人值守（守夜）</string>
+    <string name="perm_watch_title">守夜守护</string>
+    <string name="perm_watch_desc">离开或睡觉时自主推进：危险操作自动拒绝并继续、弹窗超时自动拒绝，不无限等待；建议配合「离开模式」档案使用</string>
+    <string name="perm_audit_decision_allow_watch">守夜放行</string>
+    <string name="perm_audit_decision_watch_timeout">守夜超时</string>
+    <string name="permission_watch_timeout_title">守夜守护</string>
+    <string name="permission_watch_timeout_text">无人值守：「%1$s」的授权请求超时，已自动拒绝并继续</string>
     <string name="perm_group_files">文件与搜索</string>
     <string name="perm_group_terminal">终端与系统</string>
     <string name="perm_group_network">网络与浏览</string>

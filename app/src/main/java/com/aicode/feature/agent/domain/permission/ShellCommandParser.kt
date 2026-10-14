@@ -220,4 +220,57 @@ object ShellCommandParser {
         for (k in patternTokens.indices) if (eff[k] != patternTokens[k]) return false
         return true
     }
+
+    // ── 守夜专用：删除动作全量收集（含嵌套变体） ──────────────────────────
+
+    /** 承载内部命令的嵌套 shell 程序（`sh -c "..."` 形式）。 */
+    private val NESTED_SHELL_PROGRAMS = setOf("sh", "bash", "zsh", "ash", "dash", "ksh")
+
+    /** find 携带 -exec 删除或 `-delete` 时的占位标记（值本身不是路径，调用方视为"不确定目标"）。 */
+    const val FIND_EXEC_MARKER = "<find-exec>"
+
+    /**
+     * 守夜专用：收集命令中**所有**删除动作的目标路径原文——本层全部 rm 段、嵌套 shell
+     * （`sh -c "..."`，最多下钻 2 层）内的 rm、以及 `find -exec rm` / `find -delete`（返回
+     * [FIND_EXEC_MARKER] 占位）。无删除动作返回空列表。
+     *
+     * 返回**原文**（未归一化，可能含未展开变量如 `$DIR`）——A 类分级判定由调用方负责。
+     */
+    fun collectRmTargets(segments: List<List<String>>, depth: Int = 0): List<String> {
+        if (depth > 2) return emptyList()
+        val out = mutableListOf<String>()
+        for (seg in segments) {
+            val eff = effectiveTokens(seg)
+            val program = eff.firstOrNull() ?: continue
+            val rmInfo = parseRmInfo(seg)
+            if (rmInfo.isRm) {
+                out += rmInfo.targetPaths
+                continue
+            }
+            if (program in NESTED_SHELL_PROGRAMS) {
+                val cIdx = eff.indexOf("-c")
+                if (cIdx >= 1 && cIdx + 1 < eff.size) {
+                    out += collectRmTargets(analyze(eff[cIdx + 1]).segments, depth + 1)
+                }
+                continue
+            }
+            if (program == "find") {
+                if (findHasExecRm(eff) || eff.contains("-delete")) out += FIND_EXEC_MARKER
+            }
+        }
+        return out
+    }
+
+    /** find 的任一 `-exec` 后首个非 `;/+/{}` token 为 rm（或嵌套 shell）即视为删除执行。 */
+    private fun findHasExecRm(tokens: List<String>): Boolean {
+        for (idx in tokens.indices) {
+            if (tokens[idx] != "-exec") continue
+            val first = (idx + 1 until tokens.size)
+                .firstOrNull { k -> tokens[k] != ";" && tokens[k] != "+" && tokens[k] != "{}" }
+                ?: continue
+            val t = tokens[first]
+            if (t == "rm" || t.endsWith("/rm") || t in NESTED_SHELL_PROGRAMS) return true
+        }
+        return false
+    }
 }

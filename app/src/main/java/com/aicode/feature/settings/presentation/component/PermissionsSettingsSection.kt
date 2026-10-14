@@ -61,6 +61,7 @@ import com.aicode.feature.agent.domain.permission.ToolPermissionTier
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.CheckCircle
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Moon
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.XCircle
@@ -81,6 +82,8 @@ internal fun PermissionsSection(
     projectRules: List<PermissionRule>,
     globalRules: List<PermissionRule>,
     disableSafetyInterception: Boolean,
+    watchMode: Boolean,
+    onToggleWatchMode: (Boolean) -> Unit,
     toolTiers: Map<String, ToolPermissionTier>,
     auditRecords: List<PermissionAuditEntity>,
     onToggleSafetyInterception: (Boolean) -> Unit,
@@ -122,6 +125,21 @@ internal fun PermissionsSection(
                             if (enabled) showSafetyConfirm = true
                             else onToggleSafetyInterception(false)
                         }
+                    )
+                }
+            )
+        }
+
+        SettingsGroupHeader(text = stringResource(R.string.perm_watch_group))
+        SettingsGroup {
+            SettingsRow(
+                icon = FeatherIcons.Moon,
+                title = stringResource(R.string.perm_watch_title),
+                subtitle = stringResource(R.string.perm_watch_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = watchMode,
+                        onCheckedChange = onToggleWatchMode
                     )
                 }
             )
@@ -515,13 +533,13 @@ private fun AuditRow(
     val decision = PermissionAuditDecision.fromKey(record.decision)
     val source = PermissionAuditSource.fromKey(record.source)
     val icon = when (decision) {
-        PermissionAuditDecision.ALLOW_ONCE, PermissionAuditDecision.ALLOW_ALWAYS -> FeatherIcons.CheckCircle
+        PermissionAuditDecision.ALLOW_ONCE, PermissionAuditDecision.ALLOW_ALWAYS, PermissionAuditDecision.ALLOW_WATCH -> FeatherIcons.CheckCircle
         PermissionAuditDecision.DENY_USER -> FeatherIcons.XCircle
         else -> FeatherIcons.Shield
     }
     val iconTint = when (decision) {
-        PermissionAuditDecision.ALLOW_ONCE, PermissionAuditDecision.ALLOW_ALWAYS -> MaterialTheme.semanticColors.success
-        PermissionAuditDecision.DENY_USER, PermissionAuditDecision.DENY_SYSTEM -> MaterialTheme.colorScheme.error
+        PermissionAuditDecision.ALLOW_ONCE, PermissionAuditDecision.ALLOW_ALWAYS, PermissionAuditDecision.ALLOW_WATCH -> MaterialTheme.semanticColors.success
+        PermissionAuditDecision.DENY_USER, PermissionAuditDecision.DENY_SYSTEM, PermissionAuditDecision.WATCH_TIMEOUT -> MaterialTheme.colorScheme.error
         null -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val decisionLabel = when (decision) {
@@ -529,6 +547,8 @@ private fun AuditRow(
         PermissionAuditDecision.ALLOW_ALWAYS -> stringResource(R.string.perm_audit_decision_allow_always)
         PermissionAuditDecision.DENY_USER -> stringResource(R.string.perm_audit_decision_deny_user)
         PermissionAuditDecision.DENY_SYSTEM -> stringResource(R.string.perm_audit_decision_deny_system)
+        PermissionAuditDecision.ALLOW_WATCH -> stringResource(R.string.perm_audit_decision_allow_watch)
+        PermissionAuditDecision.WATCH_TIMEOUT -> stringResource(R.string.perm_audit_decision_watch_timeout)
         null -> record.decision
     }
     val sourceLabel = when (source) {

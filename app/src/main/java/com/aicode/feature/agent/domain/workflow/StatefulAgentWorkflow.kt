@@ -24,6 +24,7 @@ import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.permission.PermissionScope
 import com.aicode.feature.agent.domain.permission.ToolPermissionTier
+import com.aicode.feature.agent.domain.tool.ToolApprovalOutcome
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
@@ -1565,6 +1566,17 @@ class StatefulAgentWorkflow @Inject constructor(
         }
 
         val eval = policyEngine.evaluate(tool, tool.name, arguments, mode)
+
+        // 守夜自动放行：写授权记录（放行 + 记录）。
+        eval.watchAutoAllow?.let { reason ->
+            auditRecorder.recordWatchAllow(
+                sessionId = sessionId,
+                toolName = tool.name,
+                summary = tool.buildPermissionRequest(callId, arguments, argsPreview).summary,
+                reason = reason
+            )
+        }
+
         if (eval.verdict == ToolPermissionPolicyEngine.Verdict.DENY) {
             val reason = eval.denyReason ?: "该工具被项目安全规则策略禁止执行"
             val code = if (mode == AgentMode.PLAN) "PLAN_MODE_REJECTED" else "SYSTEM_DENIED"
@@ -1596,14 +1608,21 @@ class StatefulAgentWorkflow @Inject constructor(
                     rememberDisabledReason = eval.rememberDisabledReason,
                     sessionId = sessionId.orEmpty()
                 )
-                when (permissionManager.awaitApproval(request)) {
-                    PermissionChoice.REJECT -> PermissionCheckResult(false, "用户拒绝执行该工具", "USER_REJECTED")
-                    PermissionChoice.ONCE -> PermissionCheckResult(true)
-                    PermissionChoice.ALWAYS -> {
-                        if (eval.rememberablePatterns.isNotEmpty()) {
-                            policyEngine.remember(tool.name, eval.rememberablePatterns, PermissionScope.PROJECT)
+                when (val outcome = permissionManager.awaitApproval(request)) {
+                    is ToolApprovalOutcome.WatchTimedOut -> PermissionCheckResult(
+                        false,
+                        "守夜模式：用户不在场，本次授权请求超时已自动拒绝。请改用可逆或更简单的替代方案继续推进；若无安全替代，跳过此项并继续完成其余任务。",
+                        "WATCH_TIMEOUT"
+                    )
+                    is ToolApprovalOutcome.Decided -> when (outcome.choice) {
+                        PermissionChoice.REJECT -> PermissionCheckResult(false, "用户拒绝执行该工具", "USER_REJECTED")
+                        PermissionChoice.ONCE -> PermissionCheckResult(true)
+                        PermissionChoice.ALWAYS -> {
+                            if (eval.rememberablePatterns.isNotEmpty()) {
+                                policyEngine.remember(tool.name, eval.rememberablePatterns, PermissionScope.PROJECT)
+                            }
+                            PermissionCheckResult(true)
                         }
-                        PermissionCheckResult(true)
                     }
                 }
             }

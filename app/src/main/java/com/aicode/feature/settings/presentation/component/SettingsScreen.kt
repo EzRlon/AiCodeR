@@ -244,6 +244,7 @@ fun SettingsScreen(
     val disableSafetyInterception by viewModel.disableSafetyInterception.collectAsStateWithLifecycle()
     val toolTiers by viewModel.toolTiers.collectAsStateWithLifecycle()
     val permissionAudit by viewModel.permissionAudit.collectAsStateWithLifecycle()
+    val watchMode by viewModel.watchMode.collectAsStateWithLifecycle()
     val keepaliveEnabled by viewModel.keepaliveEnabled.collectAsStateWithLifecycle()
     val screenOnEnabled by viewModel.screenOnEnabled.collectAsStateWithLifecycle()
     val agentSoundEnabled by viewModel.agentSoundEnabled.collectAsStateWithLifecycle()
@@ -1204,6 +1205,8 @@ fun SettingsScreen(
                     projectRules = projectRules,
                     globalRules = globalRules,
                     disableSafetyInterception = disableSafetyInterception,
+                    watchMode = watchMode,
+                    onToggleWatchMode = { viewModel.setWatchMode(it) },
                     toolTiers = toolTiers,
                     auditRecords = permissionAudit,
                     onToggleSafetyInterception = { viewModel.setDisableSafetyInterception(it) },

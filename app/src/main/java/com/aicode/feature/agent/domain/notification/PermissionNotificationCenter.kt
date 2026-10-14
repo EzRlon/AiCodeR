@@ -41,6 +41,7 @@ class PermissionNotificationCenter @Inject constructor(
         const val TAG = "PermissionNotificationCenter"
         const val CHANNEL_ID = "agent_permission"
         const val NOTIFICATION_ID = 102
+        const val NOTIFICATION_ID_WATCH_TIMEOUT = 103
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -65,6 +66,10 @@ class PermissionNotificationCenter @Inject constructor(
                 toolPermissionManager.pendingRequest.value?.let { notifyRequest(it) }
             }
         })
+        // 守夜兜底超时：自动拒绝后的即时告知（独立通知 id，不覆盖待授权通知）。
+        scope.launch {
+            toolPermissionManager.watchTimeoutEvents.collect { request -> notifyWatchTimeout(request) }
+        }
         FileLogger.i(TAG, "工具授权通知通道已启动")
     }
 
@@ -114,6 +119,23 @@ class PermissionNotificationCenter @Inject constructor(
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+
+    /** 守夜兜底超时：弹窗无人应答已被自动拒绝的告知（无操作按钮，仅提示）。 */
+    private fun notifyWatchTimeout(request: PendingToolPermission) {
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return
+        val text = context.getString(R.string.permission_watch_timeout_text, request.toolName)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setContentTitle(context.getString(R.string.permission_watch_timeout_title))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+        runCatching { manager.notify(NOTIFICATION_ID_WATCH_TIMEOUT, notification) }
+            .onFailure { FileLogger.w(TAG, "发送守夜超时通知失败", it) }
+    }
 
     private fun cancelNotification() {
         runCatching { NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID) }

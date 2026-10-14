@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.question
 
 import com.aicode.feature.agent.domain.tool.ToolResult
+import io.mockk.mockk
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -22,7 +23,7 @@ class AskUserQuestionToolTest {
 
     @Before
     fun setUp() {
-        manager = AskUserQuestionManager()
+        manager = AskUserQuestionManager(mockk(relaxed = true))
         tool = AskUserQuestionTool(manager)
     }
 

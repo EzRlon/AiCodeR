@@ -28,7 +28,8 @@ class ToolPermissionPolicyEngineTest {
     private fun engine(
         vararg rules: PermissionRule,
         safetyDisabled: Boolean = false,
-        tier: ToolPermissionTier = ToolPermissionTier.ASK
+        tier: ToolPermissionTier = ToolPermissionTier.ASK,
+        watchMode: Boolean = false
     ): ToolPermissionPolicyEngine {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         coEvery { repo.loadEffectiveForCurrentProject() } returns rules.toList()
@@ -36,7 +37,9 @@ class ToolPermissionPolicyEngineTest {
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
         val tiers = mockk<ToolPermissionTierRepository>(relaxed = true)
         coEvery { tiers.tierOf(any()) } returns tier
-        return ToolPermissionPolicyEngine(repo, safety, tiers)
+        val watch = mockk<WatchModeSettingsRepository>(relaxed = true)
+        coEvery { watch.isArmed() } returns watchMode
+        return ToolPermissionPolicyEngine(repo, safety, tiers, watch)
     }
 
     private fun tool(vararg caps: ToolCapability): AgentTool {
@@ -477,7 +480,7 @@ class ToolPermissionPolicyEngineTest {
     fun remember_dedupesAndAddsEach() = runTest {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         coEvery { repo.add(any(), any()) } just runs
-        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true), mockk(relaxed = true))
+        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
 
         e.remember("Bash", listOf("git pull", "git pull", "ls"), PermissionScope.PROJECT)
 
@@ -516,5 +519,84 @@ class ToolPermissionPolicyEngineTest {
         val e = engine(tier = ToolPermissionTier.AUTO)
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git push origin main"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    // ── 守夜守护（无人值守）──────────────────────────────────────
+
+    @Test
+    fun watchMode_shizukuDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", bash("ls"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+        assertNotNull(r.denyReason)
+    }
+
+    @Test
+    fun watchMode_planModeAllowed() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(), "planMode", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    @Test
+    fun watchMode_rmInsideWorkspaceAllowed() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf build"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+        assertNotNull(r.watchAutoAllow)
+    }
+
+    @Test
+    fun watchMode_rmWithUnexpandedVariableDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf \"\$DIR\"/build"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_nestedShellRmOutsideDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("sh -c \"rm -rf /system/x\""), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_unanalyzableBenignAllowed() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("echo \$(date)"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+        assertNotNull(r.watchAutoAllow)
+    }
+
+    @Test
+    fun watchMode_unanalyzableDestructiveDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf \$(pwd)/build"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_catastrophicRmElevateStillDenied() = runTest {
+        val e = engine(watchMode = true)
+        val args = bash("rm -rf /").toMutableMap()
+        args["elevate"] = JsonPrimitive(true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", args, AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_findMultiExecRmDenied() = runTest {
+        val e = engine(watchMode = true)
+        // 第一个 -exec 是 echo、第二个才是 rm：需遍历全部 -exec（不只看第一个）。
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("find . -exec echo {} \\; -exec rm {} \\;"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_nestedSingleQuoteVariableDenied() = runTest {
+        val e = engine(watchMode = true)
+        // 单引号内双引号包裹的变量：嵌套解析后仍应识别未展开变量并拒绝。
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("sh -c 'rm -rf \"\$DIR\"'"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
     }
 }

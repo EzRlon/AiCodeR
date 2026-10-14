@@ -38,6 +38,7 @@ import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
 import com.aicode.feature.agent.domain.permission.ToolPermissionCatalog
 import com.aicode.feature.agent.domain.permission.ToolPermissionTier
 import com.aicode.feature.agent.domain.permission.ToolPermissionTierRepository
+import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
 import com.aicode.feature.agent.domain.skill.SkillConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillForm
 import com.aicode.feature.agent.domain.skill.SkillImportError
@@ -404,7 +405,8 @@ class SettingsViewModel @Inject constructor(
     private val terminalSettingsRepository: TerminalSettingsRepository,
     private val proxySettingsRepository: ProxySettingsRepository,
     private val toolPermissionTiers: ToolPermissionTierRepository,
-    private val permissionAuditRecorder: PermissionAuditRecorder
+    private val permissionAuditRecorder: PermissionAuditRecorder,
+    private val watchModeSettingsRepository: WatchModeSettingsRepository
 ) : ViewModel() {
     private companion object {
         const val MAX_LOG_LINES = 1200
@@ -716,6 +718,10 @@ class SettingsViewModel @Inject constructor(
     /** 授权记录（审计）：最近 200 条，时间倒序。 */
     val permissionAudit: StateFlow<List<PermissionAuditEntity>> = permissionAuditRecorder.observeRecent()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 守夜守护开关（无人值守安全层）。 */
+    val watchMode: StateFlow<Boolean> = watchModeSettingsRepository.watchModeFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     private val _activeProfileId = MutableStateFlow(ContainerProfile.BUILTIN_ID)
     val activeProfileId: StateFlow<String> = _activeProfileId.asStateFlow()
@@ -2794,6 +2800,10 @@ class SettingsViewModel @Inject constructor(
     fun applyPermissionProfile(profileId: String) {
         val profile = ToolPermissionCatalog.profiles.firstOrNull { it.id == profileId } ?: return
         viewModelScope.launch { toolPermissionTiers.applyProfile(profile) }
+    }
+
+    fun setWatchMode(armed: Boolean) {
+        viewModelScope.launch { watchModeSettingsRepository.setArmed(armed) }
     }
 }
 

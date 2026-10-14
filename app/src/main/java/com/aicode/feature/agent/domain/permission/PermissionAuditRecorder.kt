@@ -17,7 +17,13 @@ enum class PermissionAuditDecision(val key: String) {
     ALLOW_ONCE("ALLOW_ONCE"),
     ALLOW_ALWAYS("ALLOW_ALWAYS"),
     DENY_USER("DENY_USER"),
-    DENY_SYSTEM("DENY_SYSTEM");
+    DENY_SYSTEM("DENY_SYSTEM"),
+
+    /** 守夜模式自动放行（删除分级通过 / 非破坏性不可判定命令 / 计划审查自动通过等）。 */
+    ALLOW_WATCH("ALLOW_WATCH"),
+
+    /** 守夜兜底超时：无人应答，自动拒绝。 */
+    WATCH_TIMEOUT("WATCH_TIMEOUT");
 
     companion object {
         fun fromKey(key: String?): PermissionAuditDecision? = entries.firstOrNull { it.key == key }
@@ -80,6 +86,30 @@ class PermissionAuditRecorder @Inject constructor(
             toolName = toolName,
             summary = summary,
             decision = PermissionAuditDecision.DENY_SYSTEM,
+            source = PermissionAuditSource.SYSTEM,
+            reason = reason
+        )
+    }
+
+    /** 守夜兜底超时：无人值守无人应答，自动拒绝（通知由通知中心订阅超时事件流发出）。 */
+    fun recordWatchTimeout(request: PendingToolPermission) {
+        write(
+            sessionId = request.sessionId,
+            toolName = request.toolName,
+            summary = request.summary,
+            decision = PermissionAuditDecision.WATCH_TIMEOUT,
+            source = PermissionAuditSource.SYSTEM,
+            reason = "守夜模式：弹窗超时无人应答，已自动拒绝并继续"
+        )
+    }
+
+    /** 守夜自动放行（删除分级通过 / 非破坏性不可判定命令 / 计划审查自动通过等）。 */
+    fun recordWatchAllow(sessionId: String?, toolName: String, summary: String, reason: String) {
+        write(
+            sessionId = sessionId.orEmpty(),
+            toolName = toolName,
+            summary = summary,
+            decision = PermissionAuditDecision.ALLOW_WATCH,
             source = PermissionAuditSource.SYSTEM,
             reason = reason
         )

@@ -29,7 +29,8 @@ import javax.inject.Singleton
 class ToolPermissionPolicyEngine @Inject constructor(
     private val rulesRepo: PermissionRulesRepository,
     private val toolSafetySettings: ToolSafetySettingsRepository,
-    private val toolPermissionTiers: ToolPermissionTierRepository
+    private val toolPermissionTiers: ToolPermissionTierRepository,
+    private val watchModeSettings: WatchModeSettingsRepository
 ) {
     private companion object {
         /** 以 `command` 参数承载 shell 命令、按命令前缀做指令级匹配的工具。 */
@@ -47,6 +48,12 @@ class ToolPermissionPolicyEngine @Inject constructor(
          */
         const val TERMINAL_TOOL = "terminal"
         const val TERMINAL_SHELL_ACTION = "start"
+
+        /** 计划模式切换工具（守夜：申请/退出为只读方向，直接放行）。 */
+        const val PLAN_MODE_TOOL = "planMode"
+
+        /** MCP 管理工具（守夜：配置类操作，拒绝 + 记录）。 */
+        const val MANAGE_MCP_TOOL = "manageMcp"
         val NON_REMEMBERABLE_CAPABILITIES = setOf(
             ToolCapability.MODIFY_AGENT_CONFIG,
             ToolCapability.MODIFY_CONTAINER_ENV
@@ -121,7 +128,9 @@ class ToolPermissionPolicyEngine @Inject constructor(
         val denyReason: String? = null,
         val rememberDisabledReason: String? = null,
         /** ASK 时的弹窗标题覆盖；null 表示用工具默认标题。 */
-        val askTitle: String? = null
+        val askTitle: String? = null,
+        /** 守夜模式下的自动放行原因；非空表示「放行 + 记录」（工作流据此写授权审计）。 */
+        val watchAutoAllow: String? = null
     )
 
     suspend fun evaluate(tool: AgentTool?, toolName: String, args: Map<String, JsonElement>, mode: com.aicode.feature.agent.domain.model.AgentMode): EvalResult {
@@ -137,6 +146,23 @@ class ToolPermissionPolicyEngine @Inject constructor(
             )
         }
 
+        // 守夜守护：无人值守语义（见 unattended-security-plan §L2）。
+        val watchMode = watchModeSettings.isArmed()
+        if (watchMode) {
+            // 宿主高危与配置类工具：拒绝 + 记录（记录由工作流的系统拒绝打点承担）。
+            if (toolName == SHIZUKU_TOOL || toolName == MANAGE_MCP_TOOL) {
+                return EvalResult(
+                    Verdict.DENY,
+                    emptyList(),
+                    denyReason = "守夜模式：用户不在场，「$toolName」属高危/配置类操作，已自动拒绝并记录。请改用容器内的等效安全方式，或留待用户在场时执行。"
+                )
+            }
+            // 计划模式切换：只读方向的操作，直接放行。
+            if (toolName == PLAN_MODE_TOOL) {
+                return EvalResult(Verdict.ALLOW, emptyList())
+            }
+        }
+
         if (mode == com.aicode.feature.agent.domain.model.AgentMode.PLAN && isDangerousTool(toolName, args, capabilities)) {
             return EvalResult(Verdict.DENY, emptyList(), denyReason = "当前处于 PLAN（计划）模式，系统物理沙盒已禁止修改系统状态或执行写操作。请在计划模式下仅调用只读工具探索代码，不要尝试修改文件或执行命令。")
         }
@@ -149,11 +175,11 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
                 if (command != null) {
                     val analysis = ShellCommandParser.analyze(command)
-                    checkCatastrophicRm(analysis.segments)?.let { return elevationOrDeny(it, args) }
+                    checkCatastrophicRm(analysis.segments)?.let { return elevationOrDeny(it, args, watchMode) }
                     // 命令替换/子 shell/绝对路径重定向等无法静态判定的构造，删除目标不可知；
                     // 若同时疑似破坏性，宁可拦下（可提权），避免绕过安全防护。
                     if (!analysis.analyzable && looksDestructive(command)) {
-                        return elevationOrDeny(REASON_UNANALYZABLE_DESTRUCTIVE, args)
+                        return elevationOrDeny(REASON_UNANALYZABLE_DESTRUCTIVE, args, watchMode)
                     }
                 }
             }
@@ -183,15 +209,24 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
-            evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL, tier = tier)
+            evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL, tier = tier, watchMode = watchMode)
         } else if (targetsHooksConfig(toolName, args)) {
-            // 工具钩子配置写入视为高危：hooks.json 里的脚本会在每次工具调用时零授权静默执行，
-            // 等同 Agent 配置修改——永不可记忆，仅单次放行（防「始终允许 writeFile」后经提示注入获得静默命令执行）
-            EvalResult(
-                Verdict.ASK,
-                rememberablePatterns = emptyList(),
-                rememberDisabledReason = "该文件配置工具钩子（脚本会在每次工具调用时静默执行），仅支持单次放行"
-            )
+            if (watchMode) {
+                // 守夜：hooks.json 写入直接拒绝 + 记录（脚本会在每次工具调用时静默执行，无人值守不放开）。
+                EvalResult(
+                    Verdict.DENY,
+                    emptyList(),
+                    denyReason = "守夜模式：hooks.json 会在每次工具调用时静默执行脚本，属高危配置，已自动拒绝。请留待用户在场时修改。"
+                )
+            } else {
+                // 工具钩子配置写入视为高危：hooks.json 里的脚本会在每次工具调用时零授权静默执行，
+                // 等同 Agent 配置修改——永不可记忆，仅单次放行（防「始终允许 writeFile」后经提示注入获得静默命令执行）
+                EvalResult(
+                    Verdict.ASK,
+                    rememberablePatterns = emptyList(),
+                    rememberDisabledReason = "该文件配置工具钩子（脚本会在每次工具调用时静默执行），仅支持单次放行"
+                )
+            }
         } else {
             evaluateGeneric(rules, capabilities, tier = tier)
         }
@@ -261,8 +296,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
      * 灾难性删除的裁决：携带提权参数时降级为一次性用户授权（ASK），否则硬拒绝（DENY）
      * 并在原因里提示可提权重试。AUTO 与非 AUTO 模式共用。提权仅对本次调用生效，不可记忆。
      */
-    private fun elevationOrDeny(catastrophicReason: String, args: Map<String, JsonElement>): EvalResult =
-        if (isElevationRequested(args)) {
+    private fun elevationOrDeny(catastrophicReason: String, args: Map<String, JsonElement>, watchMode: Boolean = false): EvalResult =
+        if (!watchMode && isElevationRequested(args)) {
             EvalResult(
                 verdict = Verdict.ASK,
                 rememberablePatterns = emptyList(),
@@ -273,7 +308,11 @@ class ToolPermissionPolicyEngine @Inject constructor(
             EvalResult(
                 Verdict.DENY,
                 emptyList(),
-                denyReason = "$catastrophicReason。如确需执行，可在调用时加 `$ELEVATE_ARG: true` 重试，系统将向用户请求授权。"
+                denyReason = if (watchMode) {
+                    "$catastrophicReason。守夜模式下该操作永不放行（提权亦不可用），请改用安全方式：可逆操作（如先 mv 到临时目录）或工作区内明确路径。"
+                } else {
+                    "$catastrophicReason。如确需执行，可在调用时加 `$ELEVATE_ARG: true` 重试，系统将向用户请求授权。"
+                }
             )
         }
 
@@ -363,11 +402,44 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
     }
 
+    /**
+     * 守夜专用：判断删除目标是否全部安全（null=全部安全；否则返回首个不安全原因）。
+     * 安全范围 = 工作区（含相对路径——命令 cwd 即工作区）与容器 /tmp；`.git` 内部除外；
+     * 未展开变量（`$DIR` 等）、find -exec 等不确定目标一律不安全。
+     */
+    private fun watchRmRejectReason(targets: List<String>): String? {
+        for (raw in targets) {
+            if (raw == ShellCommandParser.FIND_EXEC_MARKER) {
+                return "命令通过 find -exec/-delete 删除文件，目标无法明确核对"
+            }
+            val normalized = normalizePath(raw)
+            if (normalized.contains('$')) {
+                return "删除目标含未展开的变量（${raw}），实际路径不可确认（空变量可能展开为根路径）"
+            }
+            if (!isWatchSafeRmTarget(normalized)) {
+                return "删除目标「${raw}」不在工作区或临时目录内"
+            }
+        }
+        return null
+    }
+
+    /** 归一化后的路径是否在守夜安全范围（工作区子路径 / 容器临时目录；不含 .git 内部）。 */
+    private fun isWatchSafeRmTarget(normalized: String): Boolean {
+        val p = normalized
+        if (p.isEmpty() || p == "." || p.startsWith("..")) return false
+        if (p == ".git" || p.startsWith(".git/") || p.contains("/.git/") || p.endsWith("/.git")) return false
+        if (p.startsWith("/root/workspace/") || p.startsWith("workspace/")) return true
+        if (p.startsWith("/tmp/")) return true
+        // 其余相对路径：命令 cwd 即工作区，视为工作区内。
+        return !p.startsWith("/")
+    }
+
     private fun evaluateShell(
         rules: List<PermissionRule>,
         args: Map<String, JsonElement>,
         forceAsk: Boolean = false,
-        tier: ToolPermissionTier = ToolPermissionTier.ASK
+        tier: ToolPermissionTier = ToolPermissionTier.ASK,
+        watchMode: Boolean = false
     ): EvalResult {
         val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
             ?: return EvalResult(Verdict.ASK, emptyList())
@@ -377,10 +449,10 @@ class ToolPermissionPolicyEngine @Inject constructor(
         val deny = rules.filter { it.decision == PermissionDecision.DENY }
 
         // 0) rm 高危操作防护：禁止直接删除系统根目录、工作区根目录或系统关键目录。
-        //    携带提权参数时降级为一次性用户授权。
+        //    携带提权参数时降级为一次性用户授权（守夜下永不放行）。
         val catastrophicReason = checkCatastrophicRm(analysis.segments)
         if (catastrophicReason != null) {
-            return elevationOrDeny(catastrophicReason, args)
+            return elevationOrDeny(catastrophicReason, args, watchMode)
         }
 
         // 1) DENY 优先（含对内置安全白名单的覆盖）：任一段命中 DENY 即拒。
@@ -393,8 +465,47 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(Verdict.ASK, emptyList(), rememberDisabledReason = REASON_SHIZUKU)
         }
 
-        // 3) 不可静态判定 → 必须弹窗、不可记忆（内置白名单也不适用）。
-        if (!analysis.analyzable) return EvalResult(Verdict.ASK, emptyList())
+        // 3) 不可静态判定 → 守夜分支（破坏性拒绝+引导 / 非破坏性放行+记录）；否则必须弹窗、不可记忆（内置白名单也不适用）。
+        if (!analysis.analyzable) {
+            if (watchMode) {
+                return if (looksDestructive(command)) {
+                    EvalResult(
+                        Verdict.DENY,
+                        emptyList(),
+                        denyReason = "守夜模式：命令包含命令替换/子 shell/绝对路径重定向等无法静态判定的构造且疑似破坏性，已自动拒绝。请改写为不含这些构造、路径明确可分析的简单命令后重试。"
+                    )
+                } else {
+                    EvalResult(
+                        Verdict.ALLOW,
+                        emptyList(),
+                        watchAutoAllow = "守夜：命令不可静态判定但未见破坏性构造，放行并记录"
+                    )
+                }
+            }
+            return EvalResult(Verdict.ASK, emptyList())
+        }
+
+        // 3.5) 守夜：删除动作分级（本层 + 嵌套 shell / find 变体）。
+        //      目标全在工作区或容器临时目录 → 放行 + 记录；否则（含未展开变量、find -exec、越界路径）拒绝 + 引导。
+        if (watchMode) {
+            val rmTargets = ShellCommandParser.collectRmTargets(analysis.segments)
+            if (rmTargets.isNotEmpty()) {
+                val unsafeReason = watchRmRejectReason(rmTargets)
+                return if (unsafeReason == null) {
+                    EvalResult(
+                        Verdict.ALLOW,
+                        emptyList(),
+                        watchAutoAllow = "守夜：删除目标均位于工作区或临时目录，放行并记录"
+                    )
+                } else {
+                    EvalResult(
+                        Verdict.DENY,
+                        emptyList(),
+                        denyReason = "守夜模式：$unsafeReason。请改用工作区内明确路径（可先 cd 到目标目录用相对路径），或改用可逆方式（如先 mv 到临时目录）。"
+                    )
+                }
+            }
+        }
 
         // 4) 内置安全白名单：每段都命中安全前缀（ls/git status 等）→ 自动放行，不弹窗。
         if (analysis.segments.isNotEmpty() &&
@@ -427,6 +538,14 @@ class ToolPermissionPolicyEngine @Inject constructor(
             rmInfo.isRm && (rmInfo.targetPaths.isEmpty() || rmInfo.isRecursive || rmInfo.isWildcard)
         }
         if (hasRmUnrememberable) {
+            if (watchMode) {
+                // 守夜：删除缺少明确目标或结构异常（已在前置分级之外）。
+                return EvalResult(
+                    Verdict.DENY,
+                    emptyList(),
+                    denyReason = "守夜模式：删除操作缺少明确目标或结构异常，已自动拒绝。请给出明确、可分析的目标路径。"
+                )
+            }
             return EvalResult(
                 verdict = Verdict.ASK,
                 rememberablePatterns = emptyList(),

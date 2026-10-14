@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.tool.question
 
+import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +20,9 @@ import javax.inject.Singleton
  * 同一时刻只允许一个待决问题（mutex 串行化），与权限弹窗互不干扰。
  */
 @Singleton
-class AskUserQuestionManager @Inject constructor() {
+class AskUserQuestionManager @Inject constructor(
+    private val watchModeSettings: WatchModeSettingsRepository
+) {
 
     private val requestMutex = Mutex()
 
@@ -36,6 +39,18 @@ class AskUserQuestionManager @Inject constructor() {
      * 同一时刻只允许一个请求（由 [requestMutex] 保证串行）。
      */
     suspend fun awaitAnswer(question: PendingUserQuestion): UserQuestionAnswer = requestMutex.withLock {
+        if (watchModeSettings.isArmed()) {
+            // 守夜：用户不在场，不挂起——自动答复，请 AI 自主决策或跳过。
+            return@withLock UserQuestionAnswer(
+                answers = question.questions.map { q ->
+                    SingleAnswer(
+                        question = q.question,
+                        selected = emptyList(),
+                        customText = "（守夜模式：用户不在场，请基于现有信息自主做出合理决策，或跳过此问题继续推进）"
+                    )
+                }
+            )
+        }
         val decision = CompletableDeferred<UserQuestionAnswer>()
         currentId = question.id
         currentDecision = decision
