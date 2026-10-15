@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 自适应图标背景：深板岩（与设计源 ~/.aicode/assets/app-icon.svg 一致）。 -->
-    <color name="ic_launcher_background">#0F172A</color>
+    <!-- 自适应图标背景：白色（与前景图标的白色底板无缝衔接）。 -->
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>
