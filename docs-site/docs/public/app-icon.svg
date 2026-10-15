@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <!-- AiCode App 图标设计源（2026-10-15 定稿）
+       构图：深板岩底 + 终端提示符 ">_"（青→靛线性渐变、圆头笔画）
+       背景色 #0F172A 与 Android 自适应图标背景 @color/ic_launcher_background 一致；
+       Android 前景安全区内居中（108 视口，内容约 32-86 x 34-74）。
+       预览为圆角底板；应用内由自适应图标系统负责裁切形状。 -->
+  <defs>
+    <linearGradient id="prompt-gradient" x1="23" y1="39" x2="85" y2="69" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="108" height="108" rx="24" fill="#0F172A"/>
+  <polyline points="23,39 47,54 23,69" fill="none" stroke="url(#prompt-gradient)"
+            stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="58" y1="69" x2="85" y2="69" stroke="url(#prompt-gradient)"
+        stroke-width="10" stroke-linecap="round"/>
+</svg>
