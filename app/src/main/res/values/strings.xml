@@ -276,7 +276,8 @@
     <string name="permission_notification_reject">拒绝</string>
 
     <!-- 截图标注账本 -->
-    <string name="annotation_capture_entry">界面标注</string>
+    <string name="annotation_capture_entry">截屏标注</string>
+    <string name="annotation_live_entry">界面标注</string>
     <string name="annotation_ledger_title">标注账本</string>
     <string name="annotation_type_bug">bug</string>
     <string name="annotation_type_to_change">要改</string>
@@ -1905,6 +1906,14 @@
     <string name="annotation_tool_arrow">箭头</string>
     <string name="annotation_tool_stroke">自由笔</string>
     <string name="annotation_tool_text">文字</string>
+    <string name="annotation_live_select">选择组件</string>
+    <string name="annotation_live_exit">退出标注</string>
+    <string name="annotation_live_capture_failed">捕获屏幕失败，请重试</string>
+    <string name="annotation_live_auth_cancelled">未授权屏幕捕获</string>
+    <string name="annotation_live_auth_failed">无法发起屏幕捕获授权</string>
+    <string name="annotation_live_add_text">在此处加文字</string>
+    <string name="annotation_live_arrow_from">从这里画箭头</string>
+    <string name="annotation_live_deselect">取消选中</string>
     <string name="annotation_edit_text">编辑文字</string>
     <string name="annotation_delete_selected">删除所选</string>
     <string name="annotation_text_hint">输入文字内容</string>

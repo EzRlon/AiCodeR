@@ -80,8 +80,10 @@ import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.core.util.ApkInstaller
 import com.aicode.core.util.ScreenCapture
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
+import com.aicode.feature.annotation.domain.model.AnnotationMark
 import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
 import com.aicode.feature.annotation.presentation.component.AnnotationLedgerScreen
+import com.aicode.feature.annotation.presentation.component.LiveAnnotationOverlay
 import com.aicode.feature.installer.presentation.component.TestBuildListScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
@@ -565,6 +567,10 @@ fun AppNavigation(
     // ── 截图标注：账本 VM（Activity 级）+ 待编辑截图 ──
     val annotationViewModel: AnnotationViewModel = hiltViewModel()
     var pendingAnnotationBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    // 活标注（v2）完成时携带的标注 marks（归一化，随 bitmap 一起进编辑器）
+    var pendingAnnotationMarks by remember { mutableStateOf<List<AnnotationMark>>(emptyList()) }
+    // 活标注层是否激活（v2 入口打开，覆盖全屏）
+    var liveAnnotationActive by remember { mutableStateOf(false) }
 
     // 侧栏内容：modal 抽屉与大屏常驻栏共用同一份，不在两处重复几十行参数。
     val drawerBody: @Composable () -> Unit = {
@@ -633,6 +639,16 @@ fun AppNavigation(
             onNavigateToBrowser = {
                 openWorkbench(WorkbenchPaneKind.BROWSER)
                 if (!permanentDrawer) scope.launch { drawerState.close() }
+            },
+            onStartLiveAnnotation = {
+                // 活标注（v2）：先收起抽屉等动画结束再激活标注层，避免把抽屉拍进定格图
+                scope.launch {
+                    if (!permanentDrawer) {
+                        drawerState.close()
+                        kotlinx.coroutines.delay(350)
+                    }
+                    liveAnnotationActive = true
+                }
             },
             onStartAnnotationCapture = {
                 // 先收起抽屉等动画结束再截屏，否则会把抽屉叠在界面上截进去
@@ -1037,10 +1053,24 @@ fun AppNavigation(
         }
     }
 
+    // 活标注层（v2）：真实界面之上叠透明标注层（操作态触摸穿透、弹窗照弹），
+    // 「完成」时隐藏本层→ MediaProjection 抓一帧整屏（含弹层）→ 携带 marks 进 v1 编辑器精修。
+    if (liveAnnotationActive) {
+        LiveAnnotationOverlay(
+            onExit = { liveAnnotationActive = false },
+            onComplete = { bitmap, marks ->
+                liveAnnotationActive = false
+                pendingAnnotationMarks = marks
+                pendingAnnotationBitmap = bitmap
+            }
+        )
+    }
+
     // 截图标注编辑弹层（全局宿主：入口在侧栏，截屏后覆盖全屏编辑）
     pendingAnnotationBitmap?.let { bitmap ->
         AnnotationEditorDialog(
             bitmap = bitmap,
+            initialMarks = pendingAnnotationMarks,
             onSave = { marks, type, note ->
                 annotationViewModel.saveCapture(bitmap, marks, type, note) { ok ->
                     Toast.makeText(
@@ -1050,8 +1080,12 @@ fun AppNavigation(
                     ).show()
                 }
                 pendingAnnotationBitmap = null
+                pendingAnnotationMarks = emptyList()
             },
-            onDismiss = { pendingAnnotationBitmap = null }
+            onDismiss = {
+                pendingAnnotationBitmap = null
+                pendingAnnotationMarks = emptyList()
+            }
         )
     }
 

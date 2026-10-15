@@ -276,7 +276,8 @@
     <string name="permission_notification_reject">Reject</string>
 
     <!-- Screenshot annotation ledger -->
-    <string name="annotation_capture_entry">Annotate screen</string>
+    <string name="annotation_capture_entry">Screenshot annotation</string>
+    <string name="annotation_live_entry">Live annotation</string>
     <string name="annotation_ledger_title">Annotation ledger</string>
     <string name="annotation_type_bug">Bug</string>
     <string name="annotation_type_to_change">To change</string>
@@ -288,7 +289,7 @@
     <string name="annotation_saved">Saved to annotation ledger</string>
     <string name="annotation_save_failed">Save failed, please retry</string>
     <string name="annotation_capture_failed">Screenshot failed, please retry</string>
-    <string name="annotation_ledger_empty">No annotations yet — start from "Annotate screen" in the sidebar</string>
+    <string name="annotation_ledger_empty">No annotations yet — start from "Live annotation" in the sidebar</string>
     <string name="annotation_no_note">(no note)</string>
     <string name="annotation_loading">Loading…</string>
     <string name="annotation_delete">Delete this annotation</string>
@@ -1906,6 +1907,14 @@
     <string name="annotation_tool_arrow">Arrow</string>
     <string name="annotation_tool_stroke">Freehand</string>
     <string name="annotation_tool_text">Text</string>
+    <string name="annotation_live_select">Select component</string>
+    <string name="annotation_live_exit">Exit annotation</string>
+    <string name="annotation_live_capture_failed">Failed to capture screen, please retry</string>
+    <string name="annotation_live_auth_cancelled">Screen capture not authorized</string>
+    <string name="annotation_live_auth_failed">Could not request screen capture permission</string>
+    <string name="annotation_live_add_text">Add text here</string>
+    <string name="annotation_live_arrow_from">Draw arrow from here</string>
+    <string name="annotation_live_deselect">Deselect</string>
     <string name="annotation_edit_text">Edit text</string>
     <string name="annotation_delete_selected">Delete selected</string>
     <string name="annotation_text_hint">Enter text</string>

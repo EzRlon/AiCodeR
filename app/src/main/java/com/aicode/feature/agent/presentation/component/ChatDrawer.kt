@@ -120,6 +120,7 @@ import compose.icons.feathericons.Camera
 import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Crosshair
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FilePlus
@@ -286,6 +287,8 @@ fun ChatDrawerContent(
     onNavigateToBrowser: (() -> Unit)? = null,
     /** 截图标注入口：收起抽屉后截取当前界面进入标注编辑；null 则隐藏该入口。 */
     onStartAnnotationCapture: (() -> Unit)? = null,
+    /** 界面标注 v2（活标注：真实界面叠标注层，完成时整屏捕获含弹窗）。 */
+    onStartLiveAnnotation: (() -> Unit)? = null,
     /** 标注账本入口：打开账本列表页；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
     /** 测试包入口：打开工作区 APK 列表；null 则隐藏该入口。 */
@@ -524,6 +527,14 @@ fun ChatDrawerContent(
                     icon = FeatherIcons.Monitor,
                     title = stringResource(R.string.preview_title),
                     onClick = { showPreviewEntrySheet = true }
+                )
+                SettingsDivider()
+            }
+            if (onStartLiveAnnotation != null) {
+                SettingsRow(
+                    icon = FeatherIcons.Crosshair,
+                    title = stringResource(R.string.annotation_live_entry),
+                    onClick = onStartLiveAnnotation
                 )
                 SettingsDivider()
             }

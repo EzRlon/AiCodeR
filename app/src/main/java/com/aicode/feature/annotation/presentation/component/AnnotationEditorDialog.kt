@@ -87,7 +87,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /** 标注工具：矩形 / 直线 / 箭头 / 自由笔 / 文字。 */
-private enum class AnnotationTool { RECT, LINE, ARROW, STROKE, TEXT }
+internal enum class AnnotationTool { RECT, LINE, ARROW, STROKE, TEXT }
 
 /** 元素命中测试的手指容差（像素）。 */
 private const val HIT_PAD_PX = 24f
@@ -106,12 +106,14 @@ private const val ARROW_WING_ANGLE = 0.45f
 @Composable
 internal fun AnnotationEditorDialog(
     bitmap: Bitmap,
+    /** 预置标注（活标注 v2「完成」时带来的 marks；普通截屏标注为空）。 */
+    initialMarks: List<AnnotationMark> = emptyList(),
     onSave: (marks: List<AnnotationMark>, type: AnnotationType, note: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var currentType by remember { mutableStateOf(AnnotationType.BUG) }
     var tool by remember { mutableStateOf(AnnotationTool.RECT) }
-    val marks = remember { mutableStateListOf<AnnotationMark>() }
+    val marks = remember { mutableStateListOf<AnnotationMark>().apply { addAll(initialMarks) } }
     var draftMark by remember { mutableStateOf<AnnotationMark?>(null) }
     var note by remember { mutableStateOf("") }
     var imageArea by remember { mutableStateOf(IntSize.Zero) }
@@ -450,8 +452,8 @@ private fun fitOf(pos: Offset?, area: IntSize, bitmap: Bitmap): FitRect? {
     )
 }
 
-/** 依据工具创建草稿元素（归一化起点）。 */
-private fun createDraft(tool: AnnotationTool, type: AnnotationType, start: Offset, fit: FitRect): AnnotationMark = when (tool) {
+/** 依据工具创建草稿元素（归一化起点）。v2 活标注复用。 */
+internal fun createDraft(tool: AnnotationTool, type: AnnotationType, start: Offset, fit: FitRect): AnnotationMark = when (tool) {
     AnnotationTool.RECT -> AnnotationMark(
         type = type.name,
         kind = AnnotationMark.KIND_RECT,
@@ -478,8 +480,8 @@ private fun createDraft(tool: AnnotationTool, type: AnnotationType, start: Offse
     AnnotationTool.TEXT -> AnnotationMark(type = type.name, kind = AnnotationMark.KIND_TEXT)
 }
 
-/** 拖动中的草稿更新：RECT/LINE/ARROW 记差值，STROKE 追加点。 */
-private fun updateDraft(draft: AnnotationMark, pos: Offset, fit: FitRect): AnnotationMark = when (draft.kind) {
+/** 拖动中的草稿更新：RECT/LINE/ARROW 记差值，STROKE 追加点。v2 活标注复用。 */
+internal fun updateDraft(draft: AnnotationMark, pos: Offset, fit: FitRect): AnnotationMark = when (draft.kind) {
     AnnotationMark.KIND_STROKE -> draft.copy(points = draft.points + fit.normalize(pos))
     else -> draft.copy(
         w = fit.normalizeX(pos.x) - draft.x,
@@ -487,8 +489,8 @@ private fun updateDraft(draft: AnnotationMark, pos: Offset, fit: FitRect): Annot
     )
 }
 
-/** 平移元素：整体位移（归一化并夹在画布内）。 */
-private fun translateMark(mark: AnnotationMark, delta: Offset, fit: FitRect): AnnotationMark {
+/** 平移元素：整体位移（归一化并夹在画布内）。v2 活标注复用。 */
+internal fun translateMark(mark: AnnotationMark, delta: Offset, fit: FitRect): AnnotationMark {
     val dx = delta.x / fit.width
     val dy = delta.y / fit.height
     return when (mark.kind) {
@@ -504,8 +506,8 @@ private fun translateMark(mark: AnnotationMark, delta: Offset, fit: FitRect): An
     }
 }
 
-/** 命中测试：矩形用包围盒（含容差）；直线/箭头用点到线段距离；笔迹用点距；文字用保守框。 */
-private fun markHitTest(mark: AnnotationMark, pos: Offset, fit: FitRect): Boolean {
+/** 命中测试：矩形用包围盒（含容差）；直线/箭头用点到线段距离；笔迹用点距；文字用保守框。v2 活标注复用。 */
+internal fun markHitTest(mark: AnnotationMark, pos: Offset, fit: FitRect): Boolean {
     val padX = HIT_PAD_PX / fit.width
     val padY = HIT_PAD_PX / fit.height
     return when (mark.kind) {
@@ -537,7 +539,7 @@ private fun markHitTest(mark: AnnotationMark, pos: Offset, fit: FitRect): Boolea
 }
 
 /** 点到线段的最短距离（像素坐标）。 */
-private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
+internal fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
     val ab = b - a
     val lenSq = ab.x * ab.x + ab.y * ab.y
     if (lenSq <= 1e-4f) return (p - a).getDistance()
@@ -565,7 +567,7 @@ private fun TypeChip(type: AnnotationType, selected: Boolean, onClick: () -> Uni
 }
 
 @Composable
-private fun ToolToggle(
+internal fun ToolToggle(
     selected: Boolean,
     icon: ImageVector,
     contentDescription: String,
@@ -630,7 +632,7 @@ internal fun computeFitRect(
     return FitRect((containerWidth - w) / 2f, (containerHeight - h) / 2f, w, h)
 }
 
-private fun AnnotationMark.isMeaningful(): Boolean = when (kind) {
+internal fun AnnotationMark.isMeaningful(): Boolean = when (kind) {
     AnnotationMark.KIND_RECT -> abs(w) > 0.01f && abs(h) > 0.01f
     AnnotationMark.KIND_LINE, AnnotationMark.KIND_ARROW ->
         (abs(w) > 0.01f || abs(h) > 0.01f)

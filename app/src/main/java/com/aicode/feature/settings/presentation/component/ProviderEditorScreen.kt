@@ -812,46 +812,53 @@ fun ProviderEditorScreen(
                                         selectedModels.addAll(models)
                                     }
                                 },
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             ) {
-                                Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
+                                Text(
+                                    stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
                             }
                             TextButton(
                                 onClick = {
                                     selectedModels.forEach { m -> viewModel.testModel(currentConfig(), m) }
                                 },
                                 enabled = selectedModels.isNotEmpty() && !bulkTesting,
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.primary
                                 )
                             ) {
                                 Icon(FeatherIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
-                                Text(stringResource(R.string.provider_models_batch_test))
+                                Text(stringResource(R.string.provider_models_batch_test), style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
                                 onClick = { showBatchDeleteConfirm = true },
                                 enabled = selectedModels.isNotEmpty(),
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.error
                                 )
                             ) {
                                 Icon(FeatherIcons.Trash2, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
-                                Text(stringResource(R.string.provider_models_batch_delete))
+                                Text(stringResource(R.string.provider_models_batch_delete), style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
                                 onClick = {
                                     isSelectionMode = false
                                     selectedModels.clear()
                                 },
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             ) {
-                                Text(stringResource(R.string.common_cancel))
+                                Text(stringResource(R.string.common_cancel), style = MaterialTheme.typography.labelMedium)
                             }
                         } else {
                             Text(
@@ -876,9 +883,9 @@ fun ProviderEditorScreen(
                                 )
                             ) {
                                 if (bulkTesting) {
-                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 } else {
-                                    Icon(FeatherIcons.Play, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Icon(FeatherIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
                                 }
                                 Spacer(Modifier.width(Spacing.xs))
                                 Text(stringResource(R.string.provider_models_test_all), style = MaterialTheme.typography.labelMedium)
@@ -909,7 +916,7 @@ fun ProviderEditorScreen(
                                     contentColor = MaterialTheme.colorScheme.error
                                 )
                             ) {
-                                Icon(FeatherIcons.Trash2, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Icon(FeatherIcons.Trash2, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
                                 Text(stringResource(R.string.provider_models_clean_unreachable), style = MaterialTheme.typography.labelMedium)
                             }
@@ -918,14 +925,15 @@ fun ProviderEditorScreen(
                                     fetchDialogKey++
                                     showFetchDialog = true
                                 },
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 ),
                                 modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_FETCH_MODELS)
                             ) {
-                                Icon(FeatherIcons.DownloadCloud, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(FeatherIcons.DownloadCloud, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
-                                Text(stringResource(R.string.provider_fetch_models))
+                                Text(stringResource(R.string.provider_fetch_models), style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
