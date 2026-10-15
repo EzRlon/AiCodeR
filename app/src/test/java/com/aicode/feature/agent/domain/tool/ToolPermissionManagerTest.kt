@@ -34,7 +34,7 @@ class ToolPermissionManagerTest {
 
     @Test
     fun twoSessionsPendSimultaneously_resolveByIdTargetsCorrectSession() = runBlocking {
-        val mgr = ToolPermissionManager(mockk(relaxed = true), mockk(relaxed = true))
+        val mgr = ToolPermissionManager(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
 
         val d1 = async { mgr.awaitApproval(req("id1", "s1")) }
         val d2 = async { mgr.awaitApproval(req("id2", "s2")) }
@@ -65,7 +65,7 @@ class ToolPermissionManagerTest {
 
     @Test
     fun resolveUnknownId_isNoop() = runBlocking {
-        val mgr = ToolPermissionManager(mockk(relaxed = true), mockk(relaxed = true))
+        val mgr = ToolPermissionManager(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
         val d1 = async { mgr.awaitApproval(req("id1", "s1")) }
         withTimeout(1000) { while (mgr.pendingRequest.value == null) yield() }
 
@@ -83,7 +83,7 @@ class ToolPermissionManagerTest {
         val audit = mockk<PermissionAuditRecorder>(relaxed = true)
         val watch = mockk<WatchModeSettingsRepository>(relaxed = true)
         coEvery { watch.isArmed() } returns true
-        val mgr = ToolPermissionManager(audit, watch)
+        val mgr = ToolPermissionManager(audit, watch, mockk(relaxed = true))
         mgr.watchApprovalTimeoutMs = 100
 
         val outcome = async { mgr.awaitApproval(req("id1", "s1")) }

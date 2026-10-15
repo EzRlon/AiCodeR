@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.tool.mode
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
+import com.aicode.feature.schedule.domain.ScheduledAiRunState
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -23,7 +24,8 @@ import kotlinx.coroutines.launch
 class PlanApprovalManager @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val watchModeSettings: WatchModeSettingsRepository,
-    private val auditRecorder: PermissionAuditRecorder
+    private val auditRecorder: PermissionAuditRecorder,
+    private val scheduledAiRunState: ScheduledAiRunState
 ) {
     private val _pendingApproval = MutableStateFlow<PlanApprovalRequest?>(null)
     val pendingApproval: StateFlow<PlanApprovalRequest?> = _pendingApproval.asStateFlow()
@@ -34,7 +36,8 @@ class PlanApprovalManager @Inject constructor(
 
     /** 挂起等待用户在计划审查面板中的决策（守夜模式下自动通过 + 记录，不挂起）。 */
     suspend fun awaitApproval(reason: String, sessionId: String? = null): PlanApprovalChoice {
-        if (watchModeSettings.isArmed()) {
+        // 守夜或定时 AI 任务运行中：无人值守不卡在审查面板——自动通过并记录（可回看）。
+        if (watchModeSettings.isArmed() || scheduledAiRunState.hasActive()) {
             // 守夜：无人值守不卡在审查面板——自动通过并记录（可回看）。
             auditRecorder.recordWatchAllow(sessionId, "planMode", "计划审查", "守夜：计划审查自动通过")
             return PlanApprovalChoice.APPROVE

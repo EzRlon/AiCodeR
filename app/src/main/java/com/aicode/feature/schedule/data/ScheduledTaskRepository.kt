@@ -93,6 +93,17 @@ class ScheduledTaskRepository @Inject constructor(
         }
     }
 
+    /** 仅更新启用开关（Worker 内部自动停用 ONCE/过期任务用，避免整份写回回退执行结果）。 */
+    suspend fun setEnabled(id: String, enabled: Boolean) {
+        context.scheduleDataStore.edit { prefs ->
+            val current = decode(prefs[TASKS_KEY])
+            val next = current.map { task ->
+                if (task.id == id) task.copy(enabled = enabled) else task
+            }
+            prefs[TASKS_KEY] = json.encodeToString(next)
+        }
+    }
+
     private fun decode(raw: String?): List<ScheduledTask> =
         raw?.let { runCatching { json.decodeFromString<List<ScheduledTask>>(it) }.getOrDefault(emptyList()) }
             ?: emptyList()

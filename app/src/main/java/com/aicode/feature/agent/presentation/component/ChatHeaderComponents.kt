@@ -68,6 +68,7 @@ import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatHeader(
     /** 当前会话 id（完整值）：顶栏显示其短形式，点击复制完整值，便于对照开发目录里的会话文件。 */
@@ -76,6 +77,8 @@ internal fun ChatHeader(
     outputTokens: Int,
     onOpenDrawer: () -> Unit,
     onNewChat: () -> Unit,
+    /** 「新建会话」长按：弹新建类型选择层（新建/定时任务/定时 Plan）；null 时不响应长按。 */
+    onNewChatLongClick: (() -> Unit)? = null,
     onNavigateToTerminal: () -> Unit,
     onNavigateToGit: () -> Unit,
     onNavigateToBrowser: () -> Unit = {},
@@ -144,7 +147,15 @@ internal fun ChatHeader(
                         .padding(horizontal = Spacing.xs, vertical = 2.dp)
                 )
                 VncHeaderIconButton()
-                IconButton(onClick = onNewChat) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                            onClick = onNewChat,
+                            onLongClick = onNewChatLongClick
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         FeatherIcons.Plus,
                         contentDescription = stringResource(R.string.chat_new_session),

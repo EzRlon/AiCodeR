@@ -2,6 +2,9 @@ package com.aicode.feature.agent.domain.permission
 
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCapability
+import com.aicode.feature.schedule.domain.AuthCategoryVerdict
+import com.aicode.feature.schedule.domain.ScheduledAiRunState
+import com.aicode.feature.schedule.domain.ScheduledAuthCategoryMapping
 import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -30,7 +33,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
     private val rulesRepo: PermissionRulesRepository,
     private val toolSafetySettings: ToolSafetySettingsRepository,
     private val toolPermissionTiers: ToolPermissionTierRepository,
-    private val watchModeSettings: WatchModeSettingsRepository
+    private val watchModeSettings: WatchModeSettingsRepository,
+    private val scheduledAiRunState: ScheduledAiRunState
 ) {
     private companion object {
         /** 以 `command` 参数承载 shell 命令、按命令前缀做指令级匹配的工具。 */
@@ -147,7 +151,9 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
 
         // 守夜守护：无人值守语义（见 unattended-security-plan §L2）。
-        val watchMode = watchModeSettings.isArmed()
+        // 定时 AI 任务运行中同样视为无人值守：超档挂起走兜底超时，不无限等待。
+        val activeRun = scheduledAiRunState.current()
+        val watchMode = watchModeSettings.isArmed() || activeRun != null
         if (watchMode) {
             // 宿主高危与配置类工具：拒绝 + 记录（记录由工作流的系统拒绝打点承担）。
             if (toolName == SHIZUKU_TOOL || toolName == MANAGE_MCP_TOOL) {
@@ -190,6 +196,40 @@ class ToolPermissionPolicyEngine @Inject constructor(
             return EvalResult(Verdict.ALLOW, emptyList())
         }
 
+        // 定时 AI 任务运行中：预授权类别内的操作直接放行 + 记录；超出类别继续走主链
+        // （ASK → 通知授权通道 / 守夜兜底超时），落实超档三级分级的「可逆盒内放行、越界引导」。
+        // 位于 AUTO 之后：AUTO 任务由上方分支全放行；PLAN 任务保持只读拦截，不被预授权越过。
+        // Shizuku/MCP 的守夜拒绝与上方灾难性 rm 检查已先行，不会被本分支覆盖。
+        if (activeRun != null && mode == com.aicode.feature.agent.domain.model.AgentMode.BUILD) {
+            // C 类核心配置写入（hooks/mcp/agents/teams）：守夜「永不自动放行」，预授权不覆盖，
+            // 落到主链评估（hooks 守夜拒绝；其余 ASK 后走兜底超时）。
+            val protectedWrite = targetsProtectedConfig(toolName, args)
+            if (!protectedWrite) {
+                if (isShellTool(toolName, args)) {
+                    val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
+                    if (command != null) {
+                        val analysis = ShellCommandParser.analyze(command)
+                        checkCatastrophicRm(analysis.segments)?.let { return elevationOrDeny(it, args, watchMode) }
+                        if (!analysis.analyzable && looksDestructive(command)) {
+                            return elevationOrDeny(REASON_UNANALYZABLE_DESTRUCTIVE, args, watchMode)
+                        }
+                    }
+                }
+                val commandText = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.contentOrNull
+                when (val verdict = ScheduledAuthCategoryMapping.judge(
+                    capabilities, commandText, activeRun.authorizedCategories
+                )) {
+                    is AuthCategoryVerdict.Covered -> return EvalResult(
+                        Verdict.ALLOW,
+                        emptyList(),
+                        watchAutoAllow = "定时任务「${activeRun.taskName}」预授权放行（${verdict.reason}）"
+                    )
+                    is AuthCategoryVerdict.NotCovered,
+                    AuthCategoryVerdict.NotApplicable -> Unit
+                }
+            }
+        }
+
         if (capabilities == setOf(ToolCapability.READ_AGENT_CONFIG)) {
             return EvalResult(Verdict.ALLOW, emptyList())
         }
@@ -209,7 +249,14 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         val rules = rulesRepo.loadEffectiveForCurrentProject().filter { it.toolName == toolName }
         return if (isShellTool(toolName, args)) {
-            evaluateShell(rules, args, forceAsk = toolName == SHIZUKU_TOOL, tier = tier, watchMode = watchMode)
+            evaluateShell(
+                rules,
+                args,
+                forceAsk = toolName == SHIZUKU_TOOL,
+                tier = tier,
+                watchMode = watchMode,
+                scheduledRun = activeRun != null
+            )
         } else if (targetsHooksConfig(toolName, args)) {
             if (watchMode) {
                 // 守夜：hooks.json 写入直接拒绝 + 记录（脚本会在每次工具调用时静默执行，无人值守不放开）。
@@ -228,7 +275,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 )
             }
         } else {
-            evaluateGeneric(rules, capabilities, tier = tier)
+            evaluateGeneric(rules, capabilities, tier = tier, scheduledRun = activeRun != null)
         }
     }
 
@@ -237,6 +284,20 @@ class ToolPermissionPolicyEngine @Inject constructor(
         if (toolName != "writeFile" && toolName != "editFile") return false
         val path = (args["path"] as? JsonPrimitive)?.contentOrNull?.trim() ?: return false
         return path == "/root/.aicode/hooks.json" || path.endsWith("/.aicode/hooks.json") || path == ".aicode/hooks.json"
+    }
+
+    /**
+     * 预授权不可覆盖的守夜「永不自动放行」配置路径（hooks.json / mcp.json / agents / teams）。
+     * 命中时预授权直接跳过，让主链评估（hooks 守夜拒绝；其余 ASK 后走兜底超时）接住。
+     */
+    private fun targetsProtectedConfig(toolName: String, args: Map<String, JsonElement>): Boolean {
+        if (toolName != "writeFile" && toolName != "editFile") return false
+        val path = (args["path"] as? JsonPrimitive)?.contentOrNull?.trim() ?: return false
+        val p = path.replace('\\', '/')
+        if (p.endsWith("/.aicode/hooks.json") || p == ".aicode/hooks.json") return true
+        if (p.endsWith("/.aicode/mcp.json") || p == ".aicode/mcp.json") return true
+        return p.contains("/.aicode/agents/") || p.startsWith(".aicode/agents/") ||
+            p.contains("/.aicode/teams/") || p.startsWith(".aicode/teams/")
     }
 
     private fun isDangerousTool(toolName: String, args: Map<String, JsonElement>, capabilities: Set<ToolCapability>): Boolean {
@@ -326,12 +387,13 @@ class ToolPermissionPolicyEngine @Inject constructor(
     /** 工具档位查询（工作流/UI 用）：显式设置优先，否则目录默认档位。 */
     suspend fun tierOf(toolName: String): ToolPermissionTier = toolPermissionTiers.tierOf(toolName)
 
-    private fun evaluateGeneric(rules: List<PermissionRule>, capabilities: Set<ToolCapability>, tier: ToolPermissionTier): EvalResult {
+    private fun evaluateGeneric(rules: List<PermissionRule>, capabilities: Set<ToolCapability>, tier: ToolPermissionTier, scheduledRun: Boolean = false): EvalResult {
         val whole = rules.filter { it.pattern == PermissionRule.WHOLE_TOOL }
         if (whole.any { it.decision == PermissionDecision.DENY }) return EvalResult(Verdict.DENY, emptyList(), denyReason = "该工具被项目权限规则策略禁止执行")
-        if (whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
+        // 定时 AI 任务运行中：历史记忆的整工具放行与档位兜底不生效（预授权清单为任务级权威，未覆盖项走通知授权）
+        if (!scheduledRun && whole.any { it.decision == PermissionDecision.ALLOW }) return EvalResult(Verdict.ALLOW, emptyList())
         // 工具档位「自动允许」：用户显式设置，作兜底放行（在 DENY 与已记忆规则之后）。
-        if (tier == ToolPermissionTier.AUTO) return EvalResult(Verdict.ALLOW, emptyList())
+        if (!scheduledRun && tier == ToolPermissionTier.AUTO) return EvalResult(Verdict.ALLOW, emptyList())
         if (capabilities.any { it in NON_REMEMBERABLE_CAPABILITIES }) {
             return EvalResult(
                 Verdict.ASK,
@@ -439,7 +501,9 @@ class ToolPermissionPolicyEngine @Inject constructor(
         args: Map<String, JsonElement>,
         forceAsk: Boolean = false,
         tier: ToolPermissionTier = ToolPermissionTier.ASK,
-        watchMode: Boolean = false
+        watchMode: Boolean = false,
+        /** 定时 AI 任务运行中：删除动作不自动放行（预授权类别未覆盖时走通知授权），保持「删除类单独放行」语义。 */
+        scheduledRun: Boolean = false
     ): EvalResult {
         val command = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.content
             ?: return EvalResult(Verdict.ASK, emptyList())
@@ -487,16 +551,25 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         // 3.5) 守夜：删除动作分级（本层 + 嵌套 shell / find 变体）。
         //      目标全在工作区或容器临时目录 → 放行 + 记录；否则（含未展开变量、find -exec、越界路径）拒绝 + 引导。
+        //      定时 AI 任务运行时：删除必须由预授权 DELETE 类别覆盖（上方已判定），未覆盖则弹通知授权（不静默放行）。
         if (watchMode) {
             val rmTargets = ShellCommandParser.collectRmTargets(analysis.segments)
             if (rmTargets.isNotEmpty()) {
                 val unsafeReason = watchRmRejectReason(rmTargets)
                 return if (unsafeReason == null) {
-                    EvalResult(
-                        Verdict.ALLOW,
-                        emptyList(),
-                        watchAutoAllow = "守夜：删除目标均位于工作区或临时目录，放行并记录"
-                    )
+                    if (scheduledRun) {
+                        EvalResult(
+                            Verdict.ASK,
+                            rememberablePatterns = emptyList(),
+                            rememberDisabledReason = "定时任务运行中：删除操作不在预授权范围内，请从通知一键批准，或等待 10 分钟自动拒绝"
+                        )
+                    } else {
+                        EvalResult(
+                            Verdict.ALLOW,
+                            emptyList(),
+                            watchAutoAllow = "守夜：删除目标均位于工作区或临时目录，放行并记录"
+                        )
+                    }
                 } else {
                     EvalResult(
                         Verdict.DENY,
@@ -516,6 +589,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
 
         // 5) 已记忆的 ALLOW：每段都命中 → 放行。
         // 对 rm 命令进行精细化校验：避免存量或宽泛的 "rm"/"rm -rf" 无目标规则放行高风险删除
+        // 定时 AI 任务运行中（scheduledRun）：不以历史记忆静默放行——未覆盖项一律走通知授权（预授权清单为任务级权威）。
         val allAllowed = analysis.segments.isNotEmpty() &&
             analysis.segments.all { seg ->
                 val rmInfo = ShellCommandParser.parseRmInfo(seg)
@@ -530,7 +604,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                     }
                 }
             }
-        if (allAllowed) return EvalResult(Verdict.ALLOW, emptyList())
+        if (!scheduledRun && allAllowed) return EvalResult(Verdict.ALLOW, emptyList())
 
         // 6) 否则弹窗，可记忆前缀（子命令分发器记 程序名+子命令）。
         val hasRmUnrememberable = analysis.segments.any { seg ->
@@ -554,7 +628,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
 
         // 工具档位「自动允许」：用户显式设置，兜底放行（内置防护/Shizuku/不可静态判定/rm 高危均在前，仍保留）。
-        if (tier == ToolPermissionTier.AUTO) return EvalResult(Verdict.ALLOW, emptyList())
+        // 定时 AI 任务运行中：任务预授权清单优先——档位兜底不生效（未覆盖项走通知授权）。
+        if (!scheduledRun && tier == ToolPermissionTier.AUTO) return EvalResult(Verdict.ALLOW, emptyList())
 
         val rememberable = analysis.segments.mapNotNull { ShellCommandParser.rememberablePrefix(it) }.distinct()
         return EvalResult(Verdict.ASK, rememberable)

@@ -5,7 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.feature.schedule.data.ScheduledTaskRepository
 import com.aicode.feature.schedule.domain.ScheduledTask
-import com.aicode.feature.schedule.domain.ScheduledTaskWorker
+import com.aicode.feature.schedule.domain.TaskScheduling
 import com.aicode.feature.schedule.domain.TaskSchedule
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -44,7 +44,7 @@ class ScheduledTasksViewModel @Inject constructor(
         // 修补「界面显示启用、后台却永不触发」的缺口。删除/禁用方向的残留由 Worker 自身复查兜底。
         viewModelScope.launch {
             repository.tasksFlow.first().filter { it.enabled }.forEach { task ->
-                ScheduledTaskWorker.schedule(context, task)
+                TaskScheduling.schedule(context, task)
             }
         }
     }
@@ -53,14 +53,14 @@ class ScheduledTasksViewModel @Inject constructor(
     fun save(task: ScheduledTask) {
         viewModelScope.launch {
             repository.upsert(task)
-            ScheduledTaskWorker.schedule(context, task)
+            TaskScheduling.schedule(context, task)
         }
     }
 
     fun delete(id: String) {
         viewModelScope.launch {
             repository.delete(id)
-            ScheduledTaskWorker.cancel(context, id)
+            TaskScheduling.cancel(context, id)
         }
     }
 
@@ -73,13 +73,21 @@ class ScheduledTasksViewModel @Inject constructor(
         command: String,
         schedule: TaskSchedule
     ) {
-        val task = existing?.copy(name = name, command = command, schedule = schedule)
-            ?: ScheduledTask(
+        val task = if (existing != null) {
+            // AI 型任务的 command 字段不参与编辑（内容只读），避免误清空
+            existing.copy(
+                name = name,
+                command = if (existing.isAiType) existing.command else command,
+                schedule = schedule
+            )
+        } else {
+            ScheduledTask(
                 id = UUID.randomUUID().toString(),
                 name = name,
                 command = command,
                 schedule = schedule
             )
+        }
         save(task)
     }
 }

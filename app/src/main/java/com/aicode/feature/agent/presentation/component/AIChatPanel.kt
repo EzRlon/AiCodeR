@@ -88,6 +88,11 @@ import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
+import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.schedule.presentation.component.QuickSchedule
+import com.aicode.feature.schedule.presentation.component.ScheduleExecutionSheet
+import com.aicode.feature.schedule.presentation.component.ScheduledAiTaskSheet
+import com.aicode.feature.schedule.presentation.component.ScheduledPlanSheet
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.AgentUIState
@@ -808,6 +813,10 @@ fun AIChatPanel(
 
     // 余额/待办面板展开状态：展开时叠加面板联动折叠，避免输入框被双重顶开
     var showTeamPicker by rememberSaveable { mutableStateOf(false) }
+    var showNewSessionSheet by rememberSaveable { mutableStateOf(false) }
+    var showScheduledTaskSheet by rememberSaveable { mutableStateOf(false) }
+    var showScheduledPlanSheet by rememberSaveable { mutableStateOf(false) }
+    var showScheduleExecutionSheet by rememberSaveable { mutableStateOf(false) }
     var dashboardExpanded by rememberSaveable { mutableStateOf(false) }
     var todoExpanded by rememberSaveable { mutableStateOf(false) }
     // ProviderDashboardBar 仅在有面板脚本的 provider 下渲染（见 ChatInputBar）。无该栏时
@@ -1568,6 +1577,7 @@ fun AIChatPanel(
                     onOpenDrawer()
                 },
                 onNewChat = { viewModel.newSession() },
+                onNewChatLongClick = { showNewSessionSheet = true },
                 onNavigateToTerminal = onNavigateToTerminal,
                 onNavigateToGit = onNavigateToGit,
                 onNavigateToBrowser = onNavigateToBrowser,
@@ -1768,6 +1778,7 @@ fun AIChatPanel(
                         state = state,
                         onApprove = { viewModel.approvePlanAndBuild() },
                         onRefine = { viewModel.refinePlan() },
+                        onSchedule = { showScheduleExecutionSheet = true },
                         forceCollapse = dashboardCollapseActive
                     )
                 }
@@ -1824,6 +1835,56 @@ fun AIChatPanel(
                 )
             }
 
+            if (showNewSessionSheet) {
+                NewSessionTypeSheet(
+                    onDismiss = { showNewSessionSheet = false },
+                    onNewSession = { viewModel.newSession() },
+                    onScheduledTask = { showScheduledTaskSheet = true },
+                    onScheduledPlan = { showScheduledPlanSheet = true }
+                )
+            }
+
+            if (showScheduledTaskSheet) {
+                ScheduledAiTaskSheet(
+                    initialContent = inputText,
+                    initialMode = currentMode,
+                    onDismiss = { showScheduledTaskSheet = false },
+                    onCreate = { content, mode, categories, quick ->
+                        viewModel.createScheduledAiTask(
+                            name = "",
+                            prompt = content,
+                            runMode = mode,
+                            categories = categories,
+                            schedule = quick.toTaskSchedule()
+                        )
+                        toastScheduledCreated(context, quick)
+                    }
+                )
+            }
+
+            if (showScheduledPlanSheet) {
+                ScheduledPlanSheet(
+                    initialGoal = inputText,
+                    onDismiss = { showScheduledPlanSheet = false },
+                    onPrepare = { goal -> viewModel.startPlanDraftingSession(goal) }
+                )
+            }
+
+            if (showScheduleExecutionSheet) {
+                ScheduleExecutionSheet(
+                    onDismiss = { showScheduleExecutionSheet = false },
+                    onConfirm = { categories, quick ->
+                        val created = viewModel.scheduleCurrentPlan(
+                            name = "",
+                            planText = planApproval?.reason.orEmpty(),
+                            categories = categories,
+                            schedule = quick.toTaskSchedule()
+                        )
+                        if (created != null) toastScheduledCreated(context, quick)
+                    }
+                )
+            }
+
             ChatInputBar(
                 value = inputText,
                 onValueChange = viewModel::updateInputDraft,
@@ -1855,6 +1916,12 @@ fun AIChatPanel(
                 },
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
+                onModePillLongClick = {
+                    when (currentMode) {
+                        AgentMode.PLAN -> showScheduledPlanSheet = true
+                        else -> showScheduledTaskSheet = true
+                    }
+                },
                 intentType = draftIntentType,
                 onIntentTypeChange = viewModel::updateDraftIntentType,
                 reasoningEffort = reasoningEffort,
@@ -2179,5 +2246,15 @@ private fun ScrollToBottomButton(
             )
         }
     }
+}
+
+/** 定时任务创建成功提示（待排期用专属文案）。 */
+private fun toastScheduledCreated(context: android.content.Context, quick: QuickSchedule) {
+    val msg = if (quick == QuickSchedule.PENDING) {
+        context.getString(R.string.schedule_created_pending_toast)
+    } else {
+        context.getString(R.string.schedule_created_toast, context.getString(quick.labelRes))
+    }
+    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
 }
 

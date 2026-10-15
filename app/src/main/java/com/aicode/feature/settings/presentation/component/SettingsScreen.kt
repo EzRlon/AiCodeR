@@ -680,6 +680,10 @@ fun SettingsScreen(
                         initialName = target?.name.orEmpty(),
                         initialCommand = target?.command.orEmpty(),
                         initialSchedule = target?.schedule ?: TaskSchedule(),
+                        initialType = target?.type ?: com.aicode.feature.schedule.domain.ScheduledTaskType.COMMAND,
+                        initialAiContent = target?.let { t ->
+                            if (t.type == com.aicode.feature.schedule.domain.ScheduledTaskType.AI_PLAN) t.planText else t.prompt
+                        },
                         onSave = { name, command, schedule ->
                             scheduleViewModel.saveFromEditor(target, name, command, schedule)
                             section = SettingsSection.ScheduledTasks

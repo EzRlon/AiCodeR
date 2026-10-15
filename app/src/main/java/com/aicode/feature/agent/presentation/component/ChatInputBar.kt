@@ -11,9 +11,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -166,6 +168,7 @@ private val INPUT_FIELD_MAX_HEIGHT = 140.dp
  */
 private val INPUT_FIELD_CONTENT_PADDING = 16.dp
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatInputBar(
     value: String,
@@ -192,6 +195,8 @@ internal fun ChatInputBar(
     onSelectModel: (String, String) -> Unit,
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
+    /** 长按模式胶囊：按当前模式弹「定时任务 / 定时 Plan」创建面板；null 时不响应。 */
+    onModePillLongClick: (() -> Unit)? = null,
     /** 本条消息类型键（细标签行）；null=未分类。 */
     intentType: String? = null,
     onIntentTypeChange: (String?) -> Unit = {},
@@ -709,7 +714,10 @@ internal fun ChatInputBar(
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
                                 color = modeColor,
-                                modifier = Modifier.clickable { showModePicker = true }
+                                modifier = Modifier.combinedClickable(
+                                    onClick = { showModePicker = true },
+                                    onLongClick = onModePillLongClick
+                                )
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -777,6 +785,13 @@ internal fun ChatInputBar(
                                         }
                                     )
                                 }
+                                // 可发现性：长按胶囊可创建定时任务（长按手势天生隐蔽，选择层底部常驻提示）
+                                Text(
+                                    text = stringResource(R.string.chat_mode_longpress_hint),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
                             }
                             Spacer(Modifier.width(Spacing.xs))
 
@@ -1765,6 +1780,8 @@ internal fun PlanApprovalPanel(
     state: PlanApprovalRequest,
     onApprove: () -> Unit,
     onRefine: () -> Unit,
+    /** 「定时执行…」：不立即施工，把计划存档为定时 Plan 排期（打开排期弹层）。 */
+    onSchedule: (() -> Unit)? = null,
     forceCollapse: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(true) }
@@ -1838,6 +1855,14 @@ internal fun PlanApprovalPanel(
                             modifier = Modifier.weight(1f),
                             tone = AgentActionTone.Neutral
                         )
+                        if (onSchedule != null) {
+                            AgentActionButton(
+                                text = stringResource(R.string.schedule_exec_action),
+                                onClick = onSchedule,
+                                modifier = Modifier.weight(1f),
+                                tone = AgentActionTone.Neutral
+                            )
+                        }
                         AgentActionButton(
                             text = stringResource(R.string.chat_approve_and_implement),
                             onClick = onApprove,

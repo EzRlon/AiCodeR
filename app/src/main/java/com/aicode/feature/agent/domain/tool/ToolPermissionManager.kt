@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.PermissionAuditSource
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
+import com.aicode.feature.schedule.domain.ScheduledAiRunState
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CompletableDeferred
@@ -19,7 +20,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 @Singleton
 class ToolPermissionManager @Inject constructor(
     private val auditRecorder: PermissionAuditRecorder,
-    private val watchModeSettings: WatchModeSettingsRepository
+    private val watchModeSettings: WatchModeSettingsRepository,
+    private val scheduledAiRunState: ScheduledAiRunState
 ) {
     private companion object {
         const val TAG = "ToolPermissionManager"
@@ -61,7 +63,8 @@ class ToolPermissionManager @Inject constructor(
             publish()
         }
         try {
-            if (watchModeSettings.isArmed()) {
+            // 守夜或定时 AI 任务运行中：带兜底超时，不无限等待（无人值守语义，见 L2.5）。
+            if (watchModeSettings.isArmed() || scheduledAiRunState.hasActive()) {
                 val choice = withTimeoutOrNull(watchApprovalTimeoutMs) { decision.await() }
                 if (choice == null) {
                     // 竞态防护：超时瞬间用户可能刚好点了按钮（decision 已完成）——采纳用户选择，避免弃选与审计失真。

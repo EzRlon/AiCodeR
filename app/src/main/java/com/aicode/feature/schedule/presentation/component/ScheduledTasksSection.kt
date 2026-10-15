@@ -29,6 +29,7 @@ import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.schedule.domain.ScheduleMode
 import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.schedule.domain.ScheduledTaskType
 import com.aicode.feature.schedule.presentation.ScheduledTasksUiState
 import com.aicode.feature.settings.presentation.component.SettingsGroup
 import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
@@ -102,6 +103,13 @@ private fun TaskCard(
     onDelete: () -> Unit
 ) {
     val subtitle = when (task.schedule.mode) {
+        ScheduleMode.UNSET -> stringResource(R.string.schedule_unscheduled)
+        ScheduleMode.ONCE -> {
+            val at = task.schedule.startAt?.let { startAt ->
+                SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(startAt))
+            }.orEmpty()
+            stringResource(R.string.schedule_once_at, at)
+        }
         ScheduleMode.DAILY -> stringResource(
             R.string.schedule_daily_at,
             "%02d:%02d".format(task.schedule.dailyHour, task.schedule.dailyMinute)
@@ -118,13 +126,17 @@ private fun TaskCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = task.name,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TaskTypeBadge(task.type)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = task.name,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodyMedium,
@@ -141,6 +153,30 @@ private fun TaskCard(
 
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.semanticColors.cardSurface) {
         SwipeToDeleteRow(onDelete = onDelete, onClick = onClick, deleteEnabled = true) { row() }
+    }
+}
+
+/** 任务类型徽标：命令 / AI / AI·计划（共用列表内区分行内类型）。 */
+@Composable
+private fun TaskTypeBadge(type: ScheduledTaskType) {
+    val labelRes = when (type) {
+        ScheduledTaskType.COMMAND -> R.string.schedule_badge_command
+        ScheduledTaskType.AI_TASK -> R.string.schedule_badge_ai
+        ScheduledTaskType.AI_PLAN -> R.string.schedule_badge_plan
+    }
+    val color = when (type) {
+        ScheduledTaskType.COMMAND -> MaterialTheme.colorScheme.onSurfaceVariant
+        ScheduledTaskType.AI_TASK -> MaterialTheme.colorScheme.primary
+        ScheduledTaskType.AI_PLAN -> MaterialTheme.colorScheme.tertiary
+    }
+    Surface(shape = RoundedCornerShape(4.dp), color = color.copy(alpha = 0.12f)) {
+        Text(
+            text = stringResource(labelRes),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+            color = color,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+        )
     }
 }
 

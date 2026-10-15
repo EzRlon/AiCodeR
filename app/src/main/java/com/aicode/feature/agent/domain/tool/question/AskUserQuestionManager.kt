@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.tool.question
 
 import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
+import com.aicode.feature.schedule.domain.ScheduledAiRunState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,7 +22,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class AskUserQuestionManager @Inject constructor(
-    private val watchModeSettings: WatchModeSettingsRepository
+    private val watchModeSettings: WatchModeSettingsRepository,
+    private val scheduledAiRunState: ScheduledAiRunState
 ) {
 
     private val requestMutex = Mutex()
@@ -39,8 +41,8 @@ class AskUserQuestionManager @Inject constructor(
      * 同一时刻只允许一个请求（由 [requestMutex] 保证串行）。
      */
     suspend fun awaitAnswer(question: PendingUserQuestion): UserQuestionAnswer = requestMutex.withLock {
-        if (watchModeSettings.isArmed()) {
-            // 守夜：用户不在场，不挂起——自动答复，请 AI 自主决策或跳过。
+        if (watchModeSettings.isArmed() || scheduledAiRunState.hasActive()) {
+            // 守夜或定时 AI 任务运行中：用户不在场，不挂起——自动答复，请 AI 自主决策或跳过。
             return@withLock UserQuestionAnswer(
                 answers = question.questions.map { q ->
                     SingleAnswer(

@@ -23,7 +23,7 @@ class AskUserQuestionToolTest {
 
     @Before
     fun setUp() {
-        manager = AskUserQuestionManager(mockk(relaxed = true))
+        manager = AskUserQuestionManager(mockk(relaxed = true), mockk(relaxed = true))
         tool = AskUserQuestionTool(manager)
     }
 

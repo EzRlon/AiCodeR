@@ -173,6 +173,7 @@ class AIAgentViewModel @Inject constructor(
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
+    private val scheduledTaskRepository: com.aicode.feature.schedule.data.ScheduledTaskRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -197,6 +198,12 @@ class AIAgentViewModel @Inject constructor(
     /** 设置里用户手动开启的常驻保活；agent 任务收尾时不能把它一并关掉。 */
     @Volatile
     private var userKeepaliveEnabled = false
+
+    /**
+     * 定时任务离屏实例：关闭 agent 完成通知（由任务完成通知统一告知，避免双通知）。
+     * 仅由 [com.aicode.feature.schedule.domain.ScheduledAiTaskWorker] 在离屏装配后置位。
+     */
+    var suppressAgentCompletionNotification = false
 
     /** WakeLock 续期协程：单个任务可能超过一次 acquire 的超时，需在到期前重新续上。 */
     private var wakeLockRenewJob: Job? = null
@@ -1930,9 +1937,10 @@ class AIAgentViewModel @Inject constructor(
                             }
                         }
                         // 仅当 App 不在前台时发 agent 完成通知（避免打扰正在看对话的用户）。
+                        // 定时任务离屏实例由任务完成通知统一告知，不在此重复。
                         val inForeground = ProcessLifecycleOwner.get().lifecycle.currentState
                             .isAtLeast(Lifecycle.State.STARTED)
-                        if (!inForeground && agentSoundSettings.isEnabled()) {
+                        if (!suppressAgentCompletionNotification && !inForeground && agentSoundSettings.isEnabled()) {
                             showAgentCompletedNotification(modelRequest)
                         }
                     }
@@ -2733,6 +2741,107 @@ class AIAgentViewModel @Inject constructor(
         sessionUseCase.upsertSession(s)
         return s.id
     }
+
+    /**
+     * 定时任务运行（Worker 离屏调用）：在工作区新建预设标题与运行模式的会话，返回会话 id。
+     * 标题带「⏰」前缀与执行时间，与普通会话区分（见 scheduled-ai-task-plan §2.4）。
+     */
+    suspend fun createScheduledRunSession(workspacePath: String, title: String, runMode: AgentMode): String {
+        val s = createSession(workspacePath).copy(title = title, mode = runMode.name)
+        sessionUseCase.upsertSession(s)
+        return s.id
+    }
+
+    /** 会话最近一轮是否成功完成（定时任务 Worker 读取运行结果用）。 */
+    fun scheduledRunSucceeded(sessionId: String): Boolean = sessionId in _completedSessions.value
+
+    // region 定时任务（会话侧创建与管理）
+
+    /**
+     * 创建一条 AI 定时任务（轻量型入口）。[schedule] 为 null 表示待排期（设置页可补配）。
+     * 返回创建的任务，供 UI 弹提示（含排期描述）。
+     */
+    fun createScheduledAiTask(
+        name: String,
+        prompt: String,
+        runMode: AgentMode,
+        categories: Set<com.aicode.feature.schedule.domain.ScheduledAuthCategory>,
+        schedule: com.aicode.feature.schedule.domain.TaskSchedule?
+    ): com.aicode.feature.schedule.domain.ScheduledTask {
+        val task = com.aicode.feature.schedule.domain.ScheduledTask(
+            id = UUID.randomUUID().toString(),
+            name = name.ifBlank { sessionUseCase.deriveTitle(prompt) },
+            type = com.aicode.feature.schedule.domain.ScheduledTaskType.AI_TASK,
+            prompt = prompt.trim(),
+            runMode = runMode.name,
+            authCategories = categories.toList(),
+            workspacePath = _currentWorkspace.value,
+            schedule = schedule ?: com.aicode.feature.schedule.domain.TaskSchedule(
+                mode = com.aicode.feature.schedule.domain.ScheduleMode.UNSET
+            )
+        )
+        viewModelScope.launch {
+            scheduledTaskRepository.upsert(task)
+            com.aicode.feature.schedule.domain.TaskScheduling.schedule(context, task)
+        }
+        return task
+    }
+
+    /**
+     * 把当前审批面板中的计划排期为定时 Plan（「定时执行…」确认后调用）：
+     * 存档计划正文并以 REFINE 解除本轮的审查挂起（会话留在 PLAN 模式，不立即施工）。
+     */
+    fun scheduleCurrentPlan(
+        name: String,
+        planText: String,
+        categories: Set<com.aicode.feature.schedule.domain.ScheduledAuthCategory>,
+        schedule: com.aicode.feature.schedule.domain.TaskSchedule?
+    ): com.aicode.feature.schedule.domain.ScheduledTask? {
+        // 计划正文缺失（审批状态已变化等边界）：不创建任务，静默跳过
+        if (planText.isBlank()) return null
+        val task = com.aicode.feature.schedule.domain.ScheduledTask(
+            id = UUID.randomUUID().toString(),
+            name = name.ifBlank { sessionUseCase.deriveTitle(planText) },
+            type = com.aicode.feature.schedule.domain.ScheduledTaskType.AI_PLAN,
+            planText = planText,
+            sourceSessionId = _currentSessionId.value,
+            runMode = AgentMode.BUILD.name,
+            authCategories = categories.toList(),
+            workspacePath = _currentWorkspace.value,
+            schedule = schedule ?: com.aicode.feature.schedule.domain.TaskSchedule(
+                mode = com.aicode.feature.schedule.domain.ScheduleMode.UNSET
+            )
+        )
+        viewModelScope.launch {
+            scheduledTaskRepository.upsert(task)
+            com.aicode.feature.schedule.domain.TaskScheduling.schedule(context, task)
+        }
+        planApprovalManager.resolve(PlanApprovalChoice.REFINE)
+        return task
+    }
+
+    /**
+     * 「定时 Plan」面板的「准备计划」：切到 PLAN 模式（复用空会话或新建），
+     * 把目标预填入输入草稿，由用户聊完计划后在审批面板排期。
+     */
+    fun startPlanDraftingSession(goal: String) {
+        viewModelScope.launch {
+            if (_currentWorkspace.value.isBlank()) return@launch
+            val curId = _currentSessionId.value
+            val targetId = if (curId != null && sessionUseCase.isSessionEmpty(curId)) {
+                sessionUseCase.updateMode(curId, AgentMode.PLAN.name)
+                curId
+            } else {
+                val sid = createAndUpsertSession(_currentWorkspace.value)
+                sessionUseCase.updateMode(sid, AgentMode.PLAN.name)
+                _currentSessionId.value = sid
+                sid
+            }
+            _inputDrafts.value = _inputDrafts.value + (targetId to goal)
+        }
+    }
+
+    // endregion
 
     /**
      * 创建新会话并按「新会话默认模型」绑定 provider/model；未设置默认时回退全局 active provider。
