@@ -286,11 +286,17 @@ internal fun ToolMessageBody(
                 }
             }
             if (running) {
-                // 运行中的这条：行尾用统一的涟漪场景文案说明「正在做什么」。工具名在开始执行前
+                // 运行中的这条：行尾用统一的场景文案说明「正在做什么」。工具名在开始执行前
                 // 就已到达（AgentEvent.ToolCallStarted），所以不必停在笼统的「执行中」；
                 // 折叠态也看得见，不必展开才知道它在跑。
                 Spacer(Modifier.width(Spacing.sm))
-                RippleText(text = stringResource(toolRunningLabelRes(message.toolName)))
+                Text(
+                    text = stringResource(toolRunningLabelRes(message.toolName)),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             if (edit != null) {
                 DiffStat(added = edit.added, removed = edit.removed)
@@ -610,7 +616,7 @@ private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase
 
 /**
  * 工具执行中的场景文案：把工具名归成用户一眼能懂的「正在做什么」，供统一忙碌指示器
- * （[AgentBusyIndicator] / [RippleText]）使用。
+ * （[AgentBusyIndicator]）与工具行使用。
  *
  * 键与 [toolIcon] 一致（工具注册名，忽略大小写）。归类原则是「用户视角」而不是「实现视角」：
  * 读文件与列目录都算「正在读取文件」，联网搜索与抓网页都算「正在联网搜索」。工具名在执行前
@@ -644,8 +650,8 @@ internal fun AgentUIMessage.isToolRunning(liveOutput: String?): Boolean =
  * 点一下手动展开/收起（运行中也不自动弹开）。
  * 布局对齐思考行：左侧工具图标（锤子/施工） + 中间调用计数 + 折叠箭头。
  *
- * [running] 为真时给「N 次工具调用」这行文案本身走涟漪高光，表示这批调用还在跑。
- * 不再另挂三个跳动的点，也不在这里重复场景文案（「正在编辑文件」这类说的是**具体哪个工具**，
+ * [running] 为真时「N 次工具调用」用主题色标注（静态色差，不做文字动画）；
+ * 不另挂三个跳动的点，也不在这里重复场景文案（「正在编辑文件」这类说的是**具体哪个工具**，
  * 展开后由每条工具行的运行状态给出，见 [ToolMessageBody]）。
  */
 @Composable
@@ -677,12 +683,13 @@ internal fun ToolCallGroupHeader(
             modifier = Modifier.size(ChatStyle.rowIconSize)
         )
         Spacer(Modifier.width(Spacing.sm))
-        // 权重挂在外层占位，涟漪画在文字自身的尺寸上：光带只扫「N 次工具调用」这几个字，
-        // 不会在整行空白里慢慢爬（见 Modifier.rippleHighlight）。
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            RippleText(
+            Text(
                 text = stringResource(R.string.chat_tool_calls_count, count),
-                highlight = if (running) Color.White else null
+                color = if (running) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         ExpandableChevronIcon(
