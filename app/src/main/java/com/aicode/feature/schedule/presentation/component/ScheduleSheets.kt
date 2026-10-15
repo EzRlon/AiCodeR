@@ -2,6 +2,8 @@ package com.aicode.feature.schedule.presentation.component
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -342,9 +344,14 @@ private fun SectionLabel(text: String) {
     )
 }
 
+/** 快捷时间选项：自动换行排列——四项在窄屏排不下时换到下一行，避免最后一个被挤出面板。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuickScheduleChips(selected: QuickSchedule, onSelect: (QuickSchedule) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+    ) {
         QuickSchedule.entries.forEach { q ->
             FilterChip(
                 selected = selected == q,

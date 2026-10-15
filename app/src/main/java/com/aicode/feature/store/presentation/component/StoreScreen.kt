@@ -38,6 +38,8 @@ import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.StoreTranslation
+import com.aicode.feature.store.data.storeTranslationKey
 import com.aicode.feature.store.presentation.StoreUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Download
@@ -56,7 +58,8 @@ internal fun StoreScreen(
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onInstall: (StoreItem) -> Unit,
-    onConsumeMessage: () -> Unit
+    onConsumeMessage: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
@@ -68,7 +71,7 @@ internal fun StoreScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth()) {
         // Tab：技能 / MCP
         Row(
             modifier = Modifier
@@ -112,6 +115,17 @@ internal fun StoreScreen(
                     )
                 }
             }
+        }
+
+        if (state.translating) {
+            Text(
+                text = stringResource(R.string.store_translating),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(horizontal = Spacing.lg)
+                    .padding(top = Spacing.xs)
+            )
         }
 
         Spacer(Modifier.size(Spacing.xs))
@@ -162,6 +176,7 @@ internal fun StoreScreen(
                 items(state.items, key = { "${it.kind}:${it.id}" }) { item ->
                     StoreItemCard(
                         item = item,
+                        translation = state.translations[item.storeTranslationKey()],
                         installed = item.id in state.installedIds,
                         installing = state.installingId == item.id,
                         installBusy = state.installingId != null,
@@ -195,6 +210,7 @@ internal fun StoreScreen(
 @Composable
 private fun StoreItemCard(
     item: StoreItem,
+    translation: StoreTranslation?,
     installed: Boolean,
     installing: Boolean,
     installBusy: Boolean,
@@ -211,8 +227,9 @@ private fun StoreItemCard(
                 .padding(start = Spacing.lg, end = Spacing.md, top = 12.dp, bottom = 8.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                val nameZh = translation?.nameZh.orEmpty()
                 Text(
-                    text = item.name,
+                    text = if (nameZh.isBlank()) item.name else "${item.name}（${nameZh}）",
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
@@ -241,7 +258,26 @@ private fun StoreItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (item.description.isNotBlank()) {
+            val descriptionZh = translation?.descriptionZh.orEmpty()
+            if (descriptionZh.isNotBlank()) {
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    text = descriptionZh,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (item.description.isNotBlank()) {
+                    Text(
+                        text = item.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            } else if (item.description.isNotBlank()) {
                 Spacer(Modifier.size(4.dp))
                 Text(
                     text = item.description,

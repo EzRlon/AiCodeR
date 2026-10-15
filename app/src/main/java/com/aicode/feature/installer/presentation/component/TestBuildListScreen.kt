@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.formatBytes
 import com.aicode.feature.agent.presentation.component.openSentAttachment
@@ -70,7 +71,7 @@ internal fun TestBuildListScreen(
     val scope = rememberCoroutineScope()
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.test_build_title)) },
@@ -98,7 +99,7 @@ internal fun TestBuildListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = settingsPageBackground()
                 )
             )
         }

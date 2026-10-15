@@ -6,9 +6,6 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
-import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
-import com.aicode.feature.agent.data.remote.gemini.GeminiApi
-import com.aicode.feature.agent.data.remote.openai.OpenAIApi
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
@@ -28,6 +25,7 @@ import com.aicode.feature.agent.domain.tool.ToolApprovalOutcome
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
+import com.aicode.feature.agent.domain.provider.AIProviderFactory
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.provider.AIStreamChunk
 import com.aicode.feature.agent.domain.tool.AgentTool
@@ -50,17 +48,11 @@ import com.aicode.feature.hooks.domain.HooksConfig
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
-import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
 import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.agent.domain.provider.AnthropicAdapter
-import com.aicode.feature.agent.domain.provider.fixedTemperature
 import com.aicode.feature.agent.domain.provider.GeminiAdapter
-import com.aicode.feature.agent.domain.provider.AllKeysFailedException
-import com.aicode.feature.agent.domain.provider.KeySwitchOutcome
-import com.aicode.feature.agent.domain.provider.isKeySwitchFailure
-import com.aicode.feature.agent.domain.provider.OpenAIAdapter
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.agent.domain.provider.StreamApiException
@@ -99,9 +91,7 @@ import javax.inject.Inject
 class StatefulAgentWorkflow @Inject constructor(
     private val toolRegistry: ToolRegistry,
     private val aiProviderRepository: AIProviderRepository,
-    private val openAIApi: OpenAIApi,
-    private val anthropicApi: AnthropicApi,
-    private val geminiApi: GeminiApi,
+    private val aiProviderFactory: AIProviderFactory,
     private val promptProvider: SystemPromptProvider,
     private val permissionManager: ToolPermissionManager,
     private val policyEngine: ToolPermissionPolicyEngine,
@@ -120,7 +110,6 @@ class StatefulAgentWorkflow @Inject constructor(
     private val checkpointManager: CheckpointManager,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val todoItemDao: TodoItemDao,
-    private val keyRotator: ProviderKeyRotator,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val eventInjector: AgentEventInjector,
     private val hookRunner: HookRunner,
@@ -236,7 +225,7 @@ class StatefulAgentWorkflow @Inject constructor(
             ?: throw IllegalStateException("尚未配置 AI 供应商，请到设置中添加并选择一个")
         if (!config.hasUsableApiKey) throw IllegalStateException("「${config.name}」未填写 API Key")
         if (config.effectiveModel.isBlank()) throw IllegalStateException("「${config.name}」未选择模型")
-        return createStandaloneProvider(config, sessionId)
+        return aiProviderFactory.create(config, sessionId)
     }
 
     /**
@@ -274,7 +263,7 @@ class StatefulAgentWorkflow @Inject constructor(
             ?: throw IllegalStateException("尚未配置 AI 供应商，请到设置中添加并选择一个")
         if (!config.hasUsableApiKey) throw IllegalStateException("「${config.name}」未填写 API Key")
         if (config.effectiveModel.isBlank()) throw IllegalStateException("「${config.name}」未选择模型")
-        val provider = createStandaloneProvider(config, sessionId)
+        val provider = aiProviderFactory.create(config, sessionId)
         val history = messagePersistenceUseCase.buildHistory(sessionId, "__manual_compress__")
         if (history.size <= 2) return false
         val compactionProvider = resolveCompactionFallbackProvider(sessionId) ?: provider
@@ -294,64 +283,6 @@ class StatefulAgentWorkflow @Inject constructor(
         val provider = resolveCompactionFallbackProvider(sessionId) ?: getEffectiveProvider(sessionId)
         contextCompactor.buildHandoffSummary(history, provider, sessionId = null)
     }.getOrNull()
-
-    /**
-     * 根据 [config] 创建一个全新的、独立的 [AIProvider] 实例。
-     * 用于上下文压缩等独立请求场景，完全不占用或修改主对话所用的 Provider 单例。
-     * 同时把提供商级 LLM 缓存开关（Anthropic 断点 / OpenAI cache key）应用到实例。
-     */
-    private suspend fun createStandaloneProvider(config: AIProviderConfig, sessionId: String?): AIProvider {
-        val provider: AIProvider = when (config.type) {
-            ProviderType.ANTHROPIC -> AnthropicAdapter(anthropicApi).also {
-                it.cacheBreakpointsEnabled = config.anthropicCacheBreakpoints
-            }
-            ProviderType.GEMINI -> GeminiAdapter(geminiApi)
-            else -> OpenAIAdapter(openAIApi).also {
-                it.chatCacheKeyEnabled = config.openaiChatCacheKey
-            }
-        }
-        // 多 Key 模式下由轮换器决定本次用哪个 Key（会话内粘住，Key 不可用时切下一个并重发）。
-        val activeKeys = config.effectiveApiKeys
-        provider.apiKey = keyRotator.activeKey(config, sessionId)
-            ?: throw IllegalStateException("「${config.name}」的 Key 均在冷却中，请稍后重试")
-        // 只有真正的多 Key 才需要自动切换：单 Key 冷却后没有可切换目标，只会把用户锁死一段时间。
-        val keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? =
-            if (activeKeys.size > 1) {
-                { error, failedKey, triedKeys ->
-                    if (!error.isKeySwitchFailure(config.effectiveKeySwitchStatusCodes)) {
-                        null
-                    } else {
-                        val switched = keyRotator.reportFailure(config.id, sessionId, failedKey, triedKeys)
-                        if (switched == null) {
-                            throw AllKeysFailedException(
-                                "「${config.name}」的 ${activeKeys.size} 个 Key 均失败：${error.message ?: error.javaClass.simpleName}",
-                                error
-                            )
-                        }
-                        KeySwitchOutcome(switched.newKey, switched.newIndex, switched.total)
-                    }
-                }
-            } else {
-                null
-            }
-        provider.keySwitcher = keySwitcher
-        provider.baseUrl = config.baseUrl
-        provider.model = config.effectiveModel
-        provider.useFullUrl = config.useFullUrl
-        provider.useResponseApi = config.useResponseApi
-        provider.providerId = config.id
-        provider.logSessionId = sessionId
-        provider.customHeaders = config.customHeaders
-        val metadata = modelMetadataService.resolve(config.id, config.type, config.effectiveModel)
-        // 模型元数据的输出上限（models.dev limit.output）：不传时 Anthropic 会把输出卡在 adapter 兜底值上。
-        provider.maxOutputTokens = metadata.outputTokens
-        // 元数据说不接受自定义温度就不发该字段（kimi-k3、gpt-5 系带了直接 400）；允许的只发官方固定值。
-        provider.temperature = if (metadata.supportsCustomTemperature) fixedTemperature(config.effectiveModel) else null
-        provider.firstByteTimeoutMs = generalSettingsRepository.firstByteTimeoutMs()
-        provider.streamIdleTimeoutMs = generalSettingsRepository.streamIdleTimeoutMs()
-        provider.maxNetworkRetries = generalSettingsRepository.maxNetworkRetries()
-        return provider
-    }
 
     /** 核心 Reducer，接收旧状态与 Action，返回新状态以及触发的副作用列表 (纯函数) */
     private fun reduce(
@@ -1144,7 +1075,7 @@ class StatefulAgentWorkflow @Inject constructor(
         if (model.isEmpty()) return null
         val config = aiProviderRepository.getProviderById(providerId) ?: return null
         if (!config.isEnabled || !config.hasUsableApiKey) return null
-        return createStandaloneProvider(config.copy(selectedModel = model), sessionId)
+        return aiProviderFactory.create(config.copy(selectedModel = model), sessionId)
     }
 
     /**
@@ -1158,7 +1089,7 @@ class StatefulAgentWorkflow @Inject constructor(
         if (model.isEmpty()) return null
         val config = aiProviderRepository.getProviderById(providerId) ?: return null
         if (!config.isEnabled || !config.hasUsableApiKey) return null
-        return createStandaloneProvider(config.copy(selectedModel = model), sessionId)
+        return aiProviderFactory.create(config.copy(selectedModel = model), sessionId)
     }
 
     /**
@@ -1172,7 +1103,7 @@ class StatefulAgentWorkflow @Inject constructor(
         if (model.isEmpty()) return null
         val config = aiProviderRepository.getProviderById(providerId) ?: return null
         if (!config.isEnabled || !config.hasUsableApiKey) return null
-        return createStandaloneProvider(config.copy(selectedModel = model), sessionId)
+        return aiProviderFactory.create(config.copy(selectedModel = model), sessionId)
     }
 
     /**

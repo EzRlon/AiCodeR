@@ -1,7 +1,9 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -93,6 +95,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import com.aicode.core.ui.drawerWidth
+import com.aicode.core.ui.pageEnter
+import com.aicode.core.ui.pageExit
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -166,13 +170,12 @@ private fun DrawerVerticalTabs(
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val unselectedColor = MaterialTheme.semanticColors.mutedSurface
-    val selectedColor = if (dark) MaterialTheme.semanticColors.capsuleSurface else MaterialTheme.semanticColors.cardSurface
-    // 右侧空间不足（窄屏）时把提示改锚到标签左侧，避免被屏幕右缘裁剪。
-    val placeTooltipOnStart = LocalConfiguration.current.screenWidthDp - drawerWidth().value >= 200f
-    val tooltipOffsetPx = with(LocalDensity.current) {
-        if (placeTooltipOnStart) (drawerTabWidth + 10.dp).roundToPx()
-        else -(drawerTabWidth + 10.dp).roundToPx()
-    }
+    // 深色下用 surfaceBright：与未选中的色阶差足够大，选中态一眼可辨（胶囊色在深色下对比不足）。
+    val selectedColor = if (dark) MaterialTheme.colorScheme.surfaceBright else MaterialTheme.semanticColors.cardSurface
+    // 提示统一浮在按钮右侧（用户规则：含以后新增的按钮）；宽度自适应到屏幕右缘，窄屏自动折行。
+    val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
+    val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value)
+        .coerceIn(64f, 220f).dp
     val tabShape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
 
     Column(
@@ -215,7 +218,7 @@ private fun DrawerVerticalTabs(
                 }
                 if (pressed) {
                     Popup(
-                        alignment = if (placeTooltipOnStart) Alignment.CenterStart else Alignment.CenterEnd,
+                        alignment = Alignment.CenterStart,
                         offset = IntOffset(tooltipOffsetPx, 0)
                     ) {
                         Surface(
@@ -225,7 +228,7 @@ private fun DrawerVerticalTabs(
                         ) {
                             Column(
                                 modifier = Modifier
-                                    .widthIn(max = 220.dp)
+                                    .widthIn(max = tooltipMaxWidth)
                                     .padding(horizontal = 12.dp, vertical = 8.dp)
                             ) {
                                 Text(
@@ -360,10 +363,12 @@ fun ChatDrawerContent(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         Row(
+            // 图标列右缘与底部「设置」卡片对齐（统一右边距，不再顶到屏幕边缘）；
+            // 与内容卡片之间零间隙（贴住卡片右缘），内容卡片随之缩窄（用户 2026-10-15 反馈）。
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                .fillMaxWidth()
+                .padding(end = Spacing.lg)
         ) {
             Column(
                 modifier = Modifier
@@ -447,8 +452,18 @@ fun ChatDrawerContent(
                     )
                 }
 
-                Box(modifier = Modifier.weight(1f)) {
-                    when (selectedTab) {
+                AnimatedContent(
+                    targetState = selectedTab,
+                    modifier = Modifier.weight(1f),
+                    transitionSpec = {
+                        // 与全局页面切换动效同语言：切到「文件」从右来、切回「会话」从左来。
+                        // sizeTransform 必须给 null，否则容器裁剪会留下拖影。
+                        val forward = targetState > initialState
+                        ContentTransform(pageEnter(forward), pageExit(forward), sizeTransform = null)
+                    },
+                    label = "drawer-tab-content"
+                ) { tab ->
+                    when (tab) {
                         0 -> SessionListTab(
                             sessions = sessions,
                             currentSessionId = currentSessionId,

@@ -12,6 +12,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -30,6 +31,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -47,12 +49,16 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -257,6 +263,20 @@ class MainActivity : ComponentActivity() {
                 AppThemeMode.LIGHT -> false
             }
             val view = LocalView.current
+            // 状态栏/导航栏图标色跟随主题；回到前台时再校正一遍——个别 ROM 会在后台重置系统栏外观，
+            // 只靠组合期的设置不足以覆盖（“切浅色后字色/图标色没反向”的加强）。
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner, darkTheme) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                        val controller = WindowCompat.getInsetsController(window, view)
+                        controller.isAppearanceLightStatusBars = !darkTheme
+                        controller.isAppearanceLightNavigationBars = !darkTheme
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
             SideEffect {
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.isAppearanceLightStatusBars = !darkTheme
@@ -272,8 +292,24 @@ class MainActivity : ComponentActivity() {
                 preset = AppThemePreset.findById(themePresetId),
                 dynamicColor = dynamicColor
             ) {
+                // 窗口底色与当前主题背景同步（含强制深浅与自定义预设）：启动窗/重建过渡到首帧
+                // 之间露出的窗口区域不闪色（“切回闪光/页面顶部异常”的加强）。
+                val windowBg = MaterialTheme.colorScheme.background
+                LaunchedEffect(windowBg) {
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(windowBg.toArgb()))
+                }
+                // 启动/重建时内容淡入：消除“启动图/白屏 → 界面”的硬切。
+                var contentAppeared by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { contentAppeared = true }
+                val startupAlpha by animateFloatAsState(
+                    targetValue = if (contentAppeared) 1f else 0f,
+                    animationSpec = tween(durationMillis = 260),
+                    label = "startup-fade"
+                )
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = startupAlpha },
                     color = MaterialTheme.colorScheme.background
                 ) {
                     // 全局自定义背景图：叠加在所有页面内容之上（水印效果），透明度可调。

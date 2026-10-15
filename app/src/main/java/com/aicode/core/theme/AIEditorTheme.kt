@@ -274,7 +274,8 @@ private val AppTypography = Typography().run {
 
 /**
  * @param preset 用户选定的配色主题。
- * @param dynamicColor 是否启用系统莫奈取色；低于 Android 12 时自动回退到 [preset]。
+ * @param dynamicColor 是否启用动态取色：Android 12+ 用系统莫奈调色板，Android 11 及以下
+ *   由壁纸调色板推导；两者都取不到时自动回退到 [preset]。
  */
 @Composable
 fun AIEditorTheme(
@@ -285,10 +286,16 @@ fun AIEditorTheme(
 ) {
     val context = LocalContext.current
     val themeColors = remember(darkTheme, preset, dynamicColor, context) {
-        if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val dynamicScheme =
-                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            deriveDynamicThemeColors(dynamicScheme, darkTheme)
+        if (dynamicColor) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val dynamicScheme =
+                    if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+                deriveDynamicThemeColors(dynamicScheme, darkTheme)
+            } else {
+                // Android 12 以下：没有系统莫奈调色板，用壁纸主色调推导；取不到时回退预设主题。
+                deriveWallpaperThemeColors(context, darkTheme)
+                    ?: if (darkTheme) preset.dark else preset.light
+            }
         } else if (darkTheme) {
             preset.dark
         } else {

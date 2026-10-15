@@ -176,6 +176,8 @@ class BrowserManager @Inject constructor(
         private const val HEADLESS_HEIGHT_DP = 915
         private const val MAX_CONSOLE_LOGS = 200
         private const val DIALOG_TIMEOUT_MS = 30_000L
+        /** Activity 重建后，把已有离屏 WebView 重新挂回隐藏宿主的延迟（首帧后执行，不抢首屏渲染）。 */
+        private const val HIDDEN_HOST_MOUNT_DELAY_MS = 200L
         const val MAX_TABS = 10
 
         /** 地址栏输入不像网址时，作为关键词交给该搜索引擎（Bing）。 */
@@ -873,14 +875,22 @@ class BrowserManager @Inject constructor(
         // 面板未打开（离屏）一律用 Application context：WebView 弹不出原生 UI（如下拉列表、对话框），
         // 后台页面就无法把弹窗伪装成 App 自己的界面
         tabs.forEach { it.contextWrapper.baseContext = appContext }
-        val density = appContext.resources.displayMetrics.density
-        val width = (HEADLESS_WIDTH_DP * density).toInt().coerceAtLeast(1)
-        val height = (HEADLESS_HEIGHT_DP * density).toInt().coerceAtLeast(1)
-        tabs.forEach { tab ->
-            if (tab.webView.parent == null) {
-                host.addView(tab.webView, ViewGroup.LayoutParams(width, height))
+        if (tabs.isEmpty()) return
+        // 已有 WebView 的重新挂载延后到首帧之后：Activity 重建（切回前台）时重新 attach WebView
+        // 的代价不小，不能让它抢在首屏渲染之前执行（“从后台切回慢半拍”优化）。
+        // 该窗口期内若新建标签页，走 createTabInternal 的 hiddenHost 分支直接挂载，不受影响；
+        // detach（快速重建）后靠 identity 检查丢弃过期的挂载任务。
+        host.postOnAnimationDelayed({
+            if (hiddenHost !== host) return@postOnAnimationDelayed
+            val density = appContext.resources.displayMetrics.density
+            val width = (HEADLESS_WIDTH_DP * density).toInt().coerceAtLeast(1)
+            val height = (HEADLESS_HEIGHT_DP * density).toInt().coerceAtLeast(1)
+            tabs.forEach { tab ->
+                if (tab.webView.parent == null) {
+                    host.addView(tab.webView, ViewGroup.LayoutParams(width, height))
+                }
             }
-        }
+        }, HIDDEN_HOST_MOUNT_DELAY_MS)
     }
 
     fun detachHiddenHost() {

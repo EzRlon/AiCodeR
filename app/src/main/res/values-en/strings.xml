@@ -193,7 +193,6 @@
     <string name="theme_preset_forest">Forest</string>
     <string name="theme_dynamic_color">Dynamic color</string>
     <string name="theme_dynamic_color_desc">Derive colors from your wallpaper. Overrides the color theme above.</string>
-    <string name="theme_dynamic_color_unsupported">Requires Android 12 or newer</string>
     <string name="settings_background_image">Background image</string>
     <string name="settings_background_image_none">None</string>
     <string name="settings_background_image_alpha">Opacity</string>
@@ -436,7 +435,6 @@
     <string name="chat_add_attachment">Add attachment</string>
     <string name="chat_take_photo">Take photo</string>
     <string name="chat_voice_input">Voice input</string>
-    <string name="chat_voice_prompt">Speak now</string>
     <string name="chat_voice_unavailable">No speech recognition service available</string>
 
     <!-- AI agents (terminal CLI) -->
@@ -1278,6 +1276,7 @@
     <string name="memory_delete_failed">Failed to delete memory</string>
     <string name="schedule_title">Scheduled tasks</string>
     <string name="store_title">Store</string>
+    <string name="store_translating">Translating…</string>
     <string name="store_tab_skills">Skills</string>
     <string name="store_tab_mcp">MCP Servers</string>
     <string name="store_search_hint">Search skills</string>
@@ -1868,9 +1867,11 @@
     <string name="chat_session_id_copied">Session ID copied</string>
     <string name="chat_voice_release_send">Release to send · slide up to cancel</string>
     <string name="chat_voice_processing">Recognizing…</string>
+    <string name="chat_voice_listening_hint">Listening… tap again to stop</string>
     <string name="chat_voice_no_speech">Didn\'t catch that, please retry</string>
     <string name="chat_voice_failed">Speech recognition failed, please retry</string>
     <string name="chat_voice_permission_granted">Microphone allowed, hold the send button again to talk</string>
+    <string name="chat_voice_permission_granted_tap">Microphone allowed, tap the mic button again to talk</string>
     <string name="browser_share">Share</string>
     <string name="browser_copy_link">Copy link</string>
     <string name="browser_link_copied">Link copied</string>
@@ -1941,11 +1942,9 @@
     <string name="agent_mode_auto_banner">Auto mode: operations auto-approved (catastrophic deletes still blocked)</string>
     <string name="agent_mode_back_to_build">Back to Build mode</string>
 
-    <!-- Message intent: "message type" v1 — chip row / picker sheet / bubble badge / model note -->
+    <!-- Message intent: "message type" v1 — icon button / anchored menu / bubble badge / model note -->
     <string name="intent_chip_label">Type: %1$s</string>
     <string name="intent_none">Uncategorized</string>
-    <string name="intent_none_desc">No specific type; handled by default</string>
-    <string name="intent_picker_title">Type of this message</string>
     <string name="intent_picker_coding">Development</string>
     <string name="intent_picker_general">General</string>
     <string name="intent_model_note">(Message type: %1$s)</string>
@@ -2232,6 +2231,7 @@
     <string name="provider_proxy_enable_desc">When enabled, requests to this vendor use its own proxy; otherwise the global proxy applies</string>
 
     <!-- First-run onboarding -->
+    <string name="settings_onboarding">Onboarding</string>
     <string name="settings_rerun_onboarding">Re-run onboarding</string>
     <string name="onboarding_skip">Skip</string>
     <string name="onboarding_next">Next</string>

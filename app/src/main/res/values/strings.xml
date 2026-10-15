@@ -193,7 +193,6 @@
     <string name="theme_preset_forest">森林</string>
     <string name="theme_dynamic_color">动态取色</string>
     <string name="theme_dynamic_color_desc">从系统壁纸提取配色，开启后配色方案不再生效</string>
-    <string name="theme_dynamic_color_unsupported">需要 Android 12 及以上系统</string>
     <string name="settings_background_image">背景图</string>
     <string name="settings_background_image_none">未设置</string>
     <string name="settings_background_image_alpha">透明度</string>
@@ -436,7 +435,6 @@
     <string name="chat_add_attachment">添加附件</string>
     <string name="chat_take_photo">拍照</string>
     <string name="chat_voice_input">语音输入</string>
-    <string name="chat_voice_prompt">请说话</string>
     <string name="chat_voice_unavailable">未找到可用的语音识别服务</string>
 
     <!-- AI 智能体（终端 CLI） -->
@@ -1278,6 +1276,7 @@
     <string name="memory_delete_failed">记忆删除失败</string>
     <string name="schedule_title">定时任务</string>
     <string name="store_title">在线商店</string>
+    <string name="store_translating">正在翻译…</string>
     <string name="store_tab_skills">技能</string>
     <string name="store_tab_mcp">MCP 服务器</string>
     <string name="store_search_hint">搜索技能</string>
@@ -1867,9 +1866,11 @@
     <string name="chat_session_id_copied">已复制会话 ID</string>
     <string name="chat_voice_release_send">松开发送 · 上滑取消</string>
     <string name="chat_voice_processing">正在识别…</string>
+    <string name="chat_voice_listening_hint">正在聆听…再点一下结束</string>
     <string name="chat_voice_no_speech">没有听清，请重试</string>
     <string name="chat_voice_failed">语音识别失败，请重试</string>
     <string name="chat_voice_permission_granted">已允许录音，请再次长按发送键说话</string>
+    <string name="chat_voice_permission_granted_tap">已允许录音，再点一下麦克风即可说话</string>
     <string name="browser_share">分享</string>
     <string name="browser_copy_link">复制链接</string>
     <string name="browser_link_copied">链接已复制</string>
@@ -1940,11 +1941,9 @@
     <string name="agent_mode_auto_banner">自动模式：操作已全放行（灾难性删除仍被拦截）</string>
     <string name="agent_mode_back_to_build">返回构建模式</string>
 
-    <!-- 消息类型：「消息类型」v1 —— 细标签行 / 选择层 / 气泡徽章 / 模型瞬态行 -->
+    <!-- 消息类型：「消息类型」v1 —— 控制行图标按钮 / 锚定菜单 / 气泡徽章 / 模型瞬态行 -->
     <string name="intent_chip_label">类型：%1$s</string>
     <string name="intent_none">未分类</string>
-    <string name="intent_none_desc">不指定类型，按默认方式处理</string>
-    <string name="intent_picker_title">本条消息类型</string>
     <string name="intent_picker_coding">编程方向</string>
     <string name="intent_picker_general">通用方向</string>
     <string name="intent_model_note">（本条消息类型：%1$s）</string>
@@ -2231,6 +2230,7 @@
     <string name="provider_proxy_enable_desc">开启后该供应商的请求走专属代理；关闭则跟随全局代理</string>
 
     <!-- 首次启动引导 -->
+    <string name="settings_onboarding">新手引导</string>
     <string name="settings_rerun_onboarding">重新运行新手引导</string>
     <string name="onboarding_skip">跳过</string>
     <string name="onboarding_next">下一步</string>

@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
-import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -1023,24 +1022,6 @@ fun AIChatPanel(
         takePictureLauncher.launch(uri)
     }
 
-    // 语音输入：发系统语音识别 Intent（免 RECORD_AUDIO 权限），识别文本追加进输入框草稿。
-    val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            ?.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@rememberLauncherForActivityResult
-        viewModel.updateInputDraft(if (inputText.isBlank()) text else "$inputText $text")
-    }
-    fun launchVoiceInput() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.chat_voice_prompt))
-        }
-        if (intent.resolveActivity(context.packageManager) == null) {
-            Toast.makeText(context, context.getString(R.string.chat_voice_unavailable), Toast.LENGTH_SHORT).show()
-            return
-        }
-        speechLauncher.launch(intent)
-    }
-
     // 缓冲流式文本与思考过程：流式期间跟随 streamingText / streamingReasoning；流式刚结束而数据库尚未完成派发期间（messages 末尾仍是 USER/TOOL 消息），
     // 持续保留本轮完整文本与思考，撑住底部气泡，彻底杜绝「字快打完了突然整段蒸发消失（空白闪回）」或「思考块突然消失又冒出」；
     // 一旦 messages 列表末尾正式接纳了本轮助手消息，立即清空让位。
@@ -1304,15 +1285,50 @@ fun AIChatPanel(
         }.collect { calibrateToAnchor() }
     }
 
-    // ── 语音「按住说话」（长按发送键）：应用内识别，松手识别并直接发送（微信式）。──
+    // ── 语音输入（应用内识别）：长按发送键为「按住说话」（松手直接发送）；
+    // 点击麦克风为点击聆听（再点一下结束，识别结果追加进输入框草稿）。──
     val voiceController = remember { VoiceInputController(context.applicationContext) }
     var voiceProcessing by remember { mutableStateOf(false) }
+    // 点击聆听进行中（从开始持续到结果/错误到达；结果分流靠它区分点击与长按两种来源）
+    var voiceTapActive by remember { mutableStateOf(false) }
+    val voicePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            Toast.makeText(context, context.getString(R.string.chat_voice_permission_granted_tap), Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun launchVoiceInput() {
+        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            voicePermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (voiceTapActive) {
+            // 再点一下结束：结果处理中重复点击忽略，等 onResult/onError 复位
+            if (!voiceProcessing) {
+                voiceProcessing = true
+                voiceController.finish()
+            }
+        } else if (!voiceProcessing) {
+            // 先立标记再启动：无识别服务时 start() 会同步回调 onError，标记随复位不残留
+            voiceTapActive = true
+            voiceController.start()
+        }
+    }
     val onVoiceResult = rememberUpdatedState<(String) -> Unit>({ text ->
         voiceProcessing = false
+        val fromTap = voiceTapActive
+        voiceTapActive = false
         val t = text.trim()
         if (t.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.chat_voice_no_speech), Toast.LENGTH_SHORT).show()
+        } else if (fromTap) {
+            // 点击聆听：识别文本追加进输入框草稿（不直接发送）
+            viewModel.updateInputDraft(if (inputText.isBlank()) t else "$inputText $t")
         } else {
+            // 长按「按住说话」：维持现状，识别结果直接发送
             val intentType = draftIntentType
             viewModel.enqueueAgentRequest(
                 request = t,
@@ -1334,7 +1350,9 @@ fun AIChatPanel(
     })
     val onVoiceError = rememberUpdatedState<(Int) -> Unit>({ code ->
         voiceProcessing = false
+        voiceTapActive = false
         val msgRes = when (code) {
+            VoiceInputController.ERROR_UNAVAILABLE -> R.string.chat_voice_unavailable
             SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> R.string.chat_voice_no_speech
             else -> R.string.chat_voice_failed
         }
@@ -1891,6 +1909,8 @@ fun AIChatPanel(
                 onSend = sendMessage,
                 onVoiceHoldStart = {
                     voiceProcessing = false
+                    // 长按接管：清掉未完成的点击聆听标记，识别结果统一按长按路径直接发送
+                    voiceTapActive = false
                     voiceController.start()
                 },
                 onVoiceHoldFinish = {
@@ -1902,6 +1922,7 @@ fun AIChatPanel(
                     voiceController.cancel()
                 },
                 voiceProcessing = voiceProcessing,
+                voiceTapActive = voiceTapActive,
                 enterToSend = settingsViewModel?.enterToSend?.collectAsStateWithLifecycle()?.value ?: false,
                 onStop = { viewModel.stopAgent() },
                 isBusy = isBusy,

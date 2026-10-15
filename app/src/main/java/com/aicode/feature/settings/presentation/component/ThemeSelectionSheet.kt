@@ -39,7 +39,6 @@ import com.aicode.R
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
-import com.aicode.core.theme.isDynamicColorSupported
 import com.aicode.core.ui.AppSwitch
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import compose.icons.FeatherIcons
@@ -152,22 +151,15 @@ internal fun ThemeSelectionSheet(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = stringResource(
-                            if (isDynamicColorSupported) {
-                                R.string.theme_dynamic_color_desc
-                            } else {
-                                R.string.theme_dynamic_color_unsupported
-                            }
-                        ),
+                        text = stringResource(R.string.theme_dynamic_color_desc),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Spacer(Modifier.width(Spacing.md))
                 AppSwitch(
-                    checked = dynamicColorEnabled && isDynamicColorSupported,
-                    onCheckedChange = onDynamicColorChanged,
-                    enabled = isDynamicColorSupported
+                    checked = dynamicColorEnabled,
+                    onCheckedChange = onDynamicColorChanged
                 )
             }
         }

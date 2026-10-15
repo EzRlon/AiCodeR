@@ -2,16 +2,27 @@ package com.aicode.feature.store.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
+import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.store.data.StoreApiClient
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.StoreTranslation
+import com.aicode.feature.store.data.StoreTranslationService
+import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.store.data.nextCursorOrNull
+import com.aicode.feature.store.data.storeTranslationKey
+import com.aicode.feature.store.data.storeTranslationSourceHash
 import com.aicode.feature.store.data.toStoreItem
 import com.aicode.feature.store.domain.StoreInstaller
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.Locale
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,7 +46,11 @@ data class StoreUiState(
     /** 正在安装的条目 id；null 表示空闲。 */
     val installingId: String? = null,
     /** 一次性提示消息（UI 消费后调 [consumeMessage]）。 */
-    val message: String? = null
+    val message: String? = null,
+    /** 条目 key（[storeTranslationKey]）→ 中文翻译（界面上双语展示用；仅在中文界面下生成）。 */
+    val translations: Map<String, StoreTranslation> = emptyMap(),
+    /** 正在后台翻译（列表顶部显示提示行）。 */
+    val translating: Boolean = false
 )
 
 /**
@@ -49,12 +64,16 @@ class StoreViewModel @Inject constructor(
     private val api: StoreApiClient,
     private val installer: StoreInstaller,
     private val skillRepository: SkillRepository,
-    private val mcpConfig: McpConfigRepository
+    private val mcpConfig: McpConfigRepository,
+    private val translationService: StoreTranslationService,
+    private val translationStore: StoreTranslationStore,
+    private val languageSettings: LanguageSettingsRepository
 ) : ViewModel() {
 
     private companion object {
         const val PAGE_SIZE = 20
         const val MCP_PAGE_SIZE = 50
+        const val TAG = "StoreViewModel"
     }
 
     private val _state = MutableStateFlow(StoreUiState())
@@ -62,6 +81,9 @@ class StoreViewModel @Inject constructor(
 
     private var page = 1
     private var mcpCursor: String? = null
+
+    /** 翻译任务：单 Job 串行，列表重新加载时取消旧任务重开（见 [kickTranslation]）。 */
+    private var translationJob: Job? = null
 
     init {
         loadTab(StoreKind.SKILL)
@@ -104,6 +126,7 @@ class StoreViewModel @Inject constructor(
                     }
                     _state.update { it.copy(items = skills, loading = false, searching = false, hasMore = false) }
                     refreshInstalled()
+                    kickTranslation()
                 },
                 onFailure = { e ->
                     _state.update {
@@ -150,6 +173,7 @@ class StoreViewModel @Inject constructor(
                         )
                     }
                     refreshInstalled()
+                    kickTranslation()
                 },
                 onFailure = { e ->
                     _state.update {
@@ -170,15 +194,19 @@ class StoreViewModel @Inject constructor(
                 onSuccess = { resp ->
                     mcpCursor = resp.nextCursorOrNull()
                     val incoming = resp.servers.map { it.server.toStoreItem() }
+                    // 去重：MCP Registry 可能返回重复 name，导致 LazyColumn key 冲突
+                    val dedupedIncoming = incoming.distinctBy { it.id }
                     _state.update {
+                        val merged = if (next) (it.items + dedupedIncoming).distinctBy { it.id } else dedupedIncoming
                         it.copy(
-                            items = if (next) it.items + incoming else incoming,
+                            items = merged,
                             loading = false,
                             loadingMore = false,
                             hasMore = mcpCursor != null
                         )
                     }
                     refreshInstalled()
+                    kickTranslation()
                 },
                 onFailure = { e ->
                     _state.update {
@@ -214,6 +242,60 @@ class StoreViewModel @Inject constructor(
 
     fun consumeMessage() {
         _state.update { it.copy(message = null) }
+    }
+
+    /**
+     * 触发列表翻译（后台行为，不阻塞加载）：取消旧任务后单 Job 串行执行。
+     * 界面语言非中文直接跳过；缓存命中的条目先载入 state，未命中的按批翻译后落缓存。
+     */
+    private fun kickTranslation() {
+        translationJob?.cancel()
+        // LAZY + 赋值后再 start：确保协程体执行时 translationJob 已是本任务，finally 的当前任务判定才可靠
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                if (isChineseUi()) translatePendingItems()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "商店翻译任务异常", e)
+            } finally {
+                // 已被新任务取代时不复位，避免踩掉新任务的 translating 状态
+                if (translationJob === coroutineContext[Job]) {
+                    _state.update { it.copy(translating = false) }
+                }
+            }
+        }
+        translationJob = job
+        job.start()
+    }
+
+    private suspend fun translatePendingItems() {
+        // 缓存先载入 state：已有译文立即可见，再只翻译缺失 / 源文变化的条目
+        val cached = translationStore.all()
+        _state.update { it.copy(translations = it.translations + cached) }
+        val pending = _state.value.items.filter { item ->
+            val entry = cached[item.storeTranslationKey()]
+            entry == null || entry.sourceHash != item.storeTranslationSourceHash()
+        }
+        if (pending.isEmpty()) return
+        _state.update { it.copy(translating = true) }
+        for (batch in pending.chunked(StoreTranslationService.MAX_BATCH_SIZE)) {
+            val result = runCatching { translationService.translateBatch(batch) }
+                .getOrElse { e ->
+                    if (e is CancellationException) throw e
+                    FileLogger.w(TAG, "商店翻译批次失败", e)
+                    emptyMap()
+                }
+            if (result.isEmpty()) continue
+            translationStore.putAll(result)
+            _state.update { it.copy(translations = it.translations + result) }
+        }
+    }
+
+    /** 界面语言是否为中文：用户显式选择按 tag 判断，跟随系统时看系统语言。 */
+    private suspend fun isChineseUi(): Boolean {
+        val tag = languageSettings.snapshot()
+        return if (tag.isNullOrBlank()) Locale.getDefault().language == "zh" else tag.startsWith("zh")
     }
 
     /** 刷新「已安装」集合：本地技能名（忽略大小写）+ 本地 MCP 配置名。 */

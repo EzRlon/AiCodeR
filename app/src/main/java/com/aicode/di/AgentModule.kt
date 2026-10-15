@@ -100,11 +100,11 @@ import com.aicode.feature.agent.domain.tool.browser.BrowserTool
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalManager
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
+import com.aicode.feature.agent.domain.provider.AIProviderFactory
 import com.aicode.feature.hooks.domain.HookRunner
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
-import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
 import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
@@ -429,9 +429,7 @@ object AgentModule {
     fun provideAgentWorkflow(
         toolRegistry: ToolRegistry,
         aiProviderRepository: AIProviderRepository,
-        openAIApi: OpenAIApi,
-        anthropicApi: AnthropicApi,
-        geminiApi: GeminiApi,
+        aiProviderFactory: AIProviderFactory,
         promptProvider: SystemPromptProvider,
         permissionManager: ToolPermissionManager,
         policyEngine: ToolPermissionPolicyEngine,
@@ -450,7 +448,6 @@ object AgentModule {
         checkpointManager: CheckpointManager,
         llmCallRecordDao: LlmCallRecordDao,
         todoItemDao: TodoItemDao,
-        keyRotator: ProviderKeyRotator,
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
         hookRunner: HookRunner,
@@ -460,9 +457,7 @@ object AgentModule {
         return StatefulAgentWorkflow(
             toolRegistry,
             aiProviderRepository,
-            openAIApi,
-            anthropicApi,
-            geminiApi,
+            aiProviderFactory,
             promptProvider,
             permissionManager,
             policyEngine,
@@ -481,7 +476,6 @@ object AgentModule {
             checkpointManager,
             llmCallRecordDao,
             todoItemDao,
-            keyRotator,
             agentNotificationCenter,
             eventInjector,
             hookRunner,

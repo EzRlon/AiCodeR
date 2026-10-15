@@ -44,7 +44,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +51,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -71,6 +69,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -106,7 +105,6 @@ import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.rememberImeBottomInset
 import com.aicode.core.ui.ProgressNode
 import com.aicode.core.ui.ProgressNodeState
@@ -138,7 +136,6 @@ import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Clipboard
-import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Maximize
@@ -186,6 +183,8 @@ internal fun ChatInputBar(
     onVoiceHoldCancel: () -> Unit = {},
     /** 识别处理中（浮层显示「正在识别…」）。 */
     voiceProcessing: Boolean = false,
+    /** 点击麦克风的应用内聆听进行中（浮层显示「正在聆听…再点一下结束」）。 */
+    voiceTapActive: Boolean = false,
     workspaceViewModel: WorkspaceViewModel?,
     hasRunningSessions: () -> Boolean,
     onSwitchWorkspaceConfirmed: () -> Unit = {},
@@ -197,7 +196,7 @@ internal fun ChatInputBar(
     onToggleMode: (AgentMode) -> Unit,
     /** 长按模式胶囊：按当前模式弹「定时任务 / 定时 Plan」创建面板；null 时不响应。 */
     onModePillLongClick: (() -> Unit)? = null,
-    /** 本条消息类型键（细标签行）；null=未分类。 */
+    /** 本条消息类型键（控制行类型图标按钮）；null=未分类。 */
     intentType: String? = null,
     onIntentTypeChange: (String?) -> Unit = {},
     reasoningEffort: ReasoningEffort,
@@ -488,8 +487,8 @@ internal fun ChatInputBar(
                 }
             }
 
-            if (voiceHoldActive || voiceProcessing) {
-                VoiceHoldOverlay(processing = voiceProcessing)
+            if (voiceHoldActive || voiceProcessing || voiceTapActive) {
+                VoiceHoldOverlay(processing = voiceProcessing, tapMode = voiceTapActive)
             }
 
             if (queuedRequests.isNotEmpty()) {
@@ -830,6 +829,48 @@ internal fun ChatInputBar(
                                 onChange = onReasoningEffortChange,
                                 enabled = !isBusy
                             )
+
+                            Box {
+                                IntentIconButton(
+                                    intentType = intentType,
+                                    onClick = { showIntentPicker = true }
+                                )
+                                DropdownMenu(
+                                    expanded = showIntentPicker,
+                                    onDismissRequest = { showIntentPicker = false }
+                                ) {
+                                    MessageIntentMenuItem(
+                                        intent = null,
+                                        selected = intentType == null,
+                                        onClick = {
+                                            showIntentPicker = false
+                                            onIntentTypeChange(null)
+                                        }
+                                    )
+                                    MessageIntentGroupHeader(stringResource(R.string.intent_picker_coding))
+                                    MessageIntentCatalog.coding.forEach { item ->
+                                        MessageIntentMenuItem(
+                                            intent = item,
+                                            selected = item.key == intentType,
+                                            onClick = {
+                                                showIntentPicker = false
+                                                onIntentTypeChange(item.key)
+                                            }
+                                        )
+                                    }
+                                    MessageIntentGroupHeader(stringResource(R.string.intent_picker_general))
+                                    MessageIntentCatalog.general.forEach { item ->
+                                        MessageIntentMenuItem(
+                                            intent = item,
+                                            selected = item.key == intentType,
+                                            onClick = {
+                                                showIntentPicker = false
+                                                onIntentTypeChange(item.key)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                         // 工作中也可用：附件/语音输入随消息排队发送（AIChatPanel 统一队列链路）。
                         UploadIconButton(
@@ -876,10 +917,6 @@ internal fun ChatInputBar(
                             }
                         )
                     }
-                    MessageIntentChip(
-                        intentType = intentType,
-                        onClick = { showIntentPicker = true }
-                    )
                 }
 
                 if (isBusy && todoItems.isNotEmpty()) {
@@ -889,7 +926,12 @@ internal fun ChatInputBar(
                         nodes = progressNodes,
                         cornerRadius = Radius.lg,
                         activeColor = MaterialTheme.colorScheme.primary,
-                        completedColor = MaterialTheme.semanticColors.success,
+                        // 完成弧与完成节点弱化：亮绿太抢眼（用户 2026-10-15 反馈），向表面色混合降饱和。
+                        completedColor = lerp(
+                            MaterialTheme.semanticColors.success,
+                            MaterialTheme.colorScheme.surfaceVariant,
+                            0.4f
+                        ),
                         pendingColor = MaterialTheme.colorScheme.outlineVariant,
                         trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                     )
@@ -962,17 +1004,6 @@ internal fun ChatInputBar(
                 onTakePhoto()
             },
             onDismiss = { showAttachmentSheet = false }
-        )
-    }
-
-    if (showIntentPicker) {
-        MessageIntentPickerSheet(
-            current = intentType,
-            onSelect = { key ->
-                showIntentPicker = false
-                onIntentTypeChange(key)
-            },
-            onDismiss = { showIntentPicker = false }
         )
     }
 
@@ -1081,176 +1112,95 @@ private fun FullScreenInputDialog(
     }
 }
 
-/** 消息类型细标签行（常驻卡片内底部）：左侧胶囊显示当前类型，点击弹选择层。 */
+/** 消息类型图标按钮（控制行「思考强度」右侧）：点击弹出锚定菜单；已选时图标高亮、右上角带角标点。 */
 @Composable
-private fun MessageIntentChip(
+private fun IntentIconButton(
     intentType: String?,
     onClick: () -> Unit
 ) {
     val intent = MessageIntentCatalog.find(intentType)
-    val containerColor = if (intent != null) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-    }
-    val contentColor = if (intent != null) {
-        MaterialTheme.colorScheme.onSecondaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.xs)
-            .padding(bottom = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(36.dp)
     ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = containerColor,
-            modifier = Modifier.clickable(onClick = onClick)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = intent?.icon ?: FeatherIcons.Tag,
-                    contentDescription = null,
-                    tint = contentColor,
-                    modifier = Modifier.size(12.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = stringResource(
-                        R.string.intent_chip_label,
-                        stringResource(intent?.labelRes ?: R.string.intent_none)
-                    ),
-                    style = MaterialTheme.typography.labelSmall.copy(color = contentColor)
-                )
-                Spacer(Modifier.width(2.dp))
-                Icon(
-                    FeatherIcons.ChevronDown,
-                    contentDescription = null,
-                    tint = contentColor.copy(alpha = 0.75f),
-                    modifier = Modifier.size(11.dp)
+        Box {
+            Icon(
+                imageVector = intent?.icon ?: FeatherIcons.Tag,
+                contentDescription = stringResource(
+                    R.string.intent_chip_label,
+                    stringResource(intent?.labelRes ?: R.string.intent_none)
+                ),
+                tint = if (intent != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(20.dp)
+            )
+            if (intent != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 2.dp, y = (-2).dp)
+                        .size(4.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
                 )
             }
         }
     }
 }
 
-/** 消息类型选择层：顶部「未分类」+ 编程/通用两组列表；点选即定、自动关层。 */
-@OptIn(ExperimentalMaterial3Api::class)
+/** 消息类型菜单条目：图标 + 名称紧凑单行，选中打勾。 */
 @Composable
-private fun MessageIntentPickerSheet(
-    current: String?,
-    onSelect: (String?) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.lg)
-                .padding(bottom = Spacing.xl)
-        ) {
-            Text(
-                text = stringResource(R.string.intent_picker_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = Spacing.sm)
-            )
-            MessageIntentSheetItem(
-                intent = null,
-                selected = current == null,
-                onClick = { onSelect(null) }
-            )
-            MessageIntentGroupHeader(stringResource(R.string.intent_picker_coding))
-            MessageIntentCatalog.coding.forEach { intent ->
-                MessageIntentSheetItem(
-                    intent = intent,
-                    selected = current == intent.key,
-                    onClick = { onSelect(intent.key) }
-                )
-            }
-            MessageIntentGroupHeader(stringResource(R.string.intent_picker_general))
-            MessageIntentCatalog.general.forEach { intent ->
-                MessageIntentSheetItem(
-                    intent = intent,
-                    selected = current == intent.key,
-                    onClick = { onSelect(intent.key) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MessageIntentGroupHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = Spacing.xs, top = Spacing.md, bottom = Spacing.xs)
-    )
-}
-
-@Composable
-private fun MessageIntentSheetItem(
+private fun MessageIntentMenuItem(
     intent: MessageIntent?,
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    val label = stringResource(intent?.labelRes ?: R.string.intent_none)
-    val desc = stringResource(intent?.descRes ?: R.string.intent_none_desc)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.sm))
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = intent?.icon ?: FeatherIcons.Tag,
-            contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(Modifier.width(Spacing.md))
-        Column(modifier = Modifier.weight(1f)) {
+    DropdownMenuItem(
+        text = {
             Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
+                text = stringResource(intent?.labelRes ?: R.string.intent_none),
+                style = MaterialTheme.typography.labelLarge,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                text = desc,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (selected) {
+        },
+        leadingIcon = {
             Icon(
-                FeatherIcons.Check,
+                imageVector = intent?.icon ?: FeatherIcons.Tag,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp)
             )
-        }
-    }
+        },
+        trailingIcon = if (selected) {
+            {
+                Icon(
+                    FeatherIcons.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        } else {
+            null
+        },
+        onClick = onClick
+    )
+}
+
+/** 消息类型菜单分组标题（左缘与菜单条目图标列对齐）。 */
+@Composable
+private fun MessageIntentGroupHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = Spacing.md, top = Spacing.sm, bottom = Spacing.xs)
+    )
 }
 
 /** 模式胶囊与选择层共用的名称/说明/图标。 */
@@ -1439,9 +1389,9 @@ internal fun SendButton(
 /** 长按语音：手指向上滑动超过该距离视为取消（松手不发送）。 */
 private const val VOICE_CANCEL_SLIDE_DP = 60f
 
-/** 「按住说话」浮层：长按发送键录音时显示；识别期间文案切换。 */
+/** 语音浮层：长按「按住说话」与点击聆听共用；识别期间文案切换，点击模式提示再点一下结束。 */
 @Composable
-private fun VoiceHoldOverlay(processing: Boolean, modifier: Modifier = Modifier) {
+private fun VoiceHoldOverlay(processing: Boolean, tapMode: Boolean = false, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -1466,7 +1416,11 @@ private fun VoiceHoldOverlay(processing: Boolean, modifier: Modifier = Modifier)
             )
             Text(
                 text = stringResource(
-                    if (processing) R.string.chat_voice_processing else R.string.chat_voice_release_send
+                    when {
+                        processing -> R.string.chat_voice_processing
+                        tapMode -> R.string.chat_voice_listening_hint
+                        else -> R.string.chat_voice_release_send
+                    }
                 ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,

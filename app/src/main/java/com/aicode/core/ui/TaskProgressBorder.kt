@@ -1,6 +1,6 @@
 package com.aicode.core.ui
 
-import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -55,17 +55,18 @@ fun TaskProgressBorder(
     pendingColor: Color,
     trackColor: Color
 ) {
-    // 进度变化时弧长平滑过渡
+    // 进度变化时弧长缓慢平滑过渡（放慢到 900ms，缓入缓出）
     val animatedProgress by animateFloatAsState(
         targetValue = progress.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 400),
+        animationSpec = tween(durationMillis = 900, easing = FastOutSlowInEasing),
         label = "task-progress-arc"
     )
     val breath = rememberInfiniteTransition(label = "task-progress-breath")
+    // 呼吸放慢、幅度收窄：长时间工作中的提示要安静，不能闪眼
     val breathAlpha by breath.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        initialValue = 0.45f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(tween(1800), RepeatMode.Reverse),
         label = "task-progress-breath-alpha"
     )
 
@@ -91,9 +92,9 @@ fun TaskProgressBorder(
         val total = measure.length
 
         // 底轨：一圈淡色细线，标示进度环的完整轨迹
-        drawPath(path, trackColor, style = Stroke(1.5.dp.toPx()))
+        drawPath(path, trackColor, style = Stroke(1.2.dp.toPx()))
 
-        val strokeWidth = 2.5.dp.toPx()
+        val strokeWidth = 2.2.dp.toPx()
         // 弧长 = 完成比例，从路径起点顺时针点亮（无 todo 时调用方不渲染本组件，不做假进度）
         val seg = Path()
         if (animatedProgress > 0.001f) {
@@ -114,8 +115,8 @@ fun TaskProgressBorder(
                     )
                     ProgressNodeState.ACTIVE -> {
                         drawCircle(
-                            color = activeColor.copy(alpha = breathAlpha * 0.35f),
-                            radius = 8.dp.toPx(),
+                            color = activeColor.copy(alpha = breathAlpha * 0.22f),
+                            radius = 6.5.dp.toPx(),
                             center = pos
                         )
                         drawCircle(

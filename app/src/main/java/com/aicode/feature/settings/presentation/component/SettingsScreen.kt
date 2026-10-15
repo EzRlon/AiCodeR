@@ -65,7 +65,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Spacing
-import com.aicode.core.theme.isDynamicColorSupported
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
@@ -705,15 +704,42 @@ fun SettingsScreen(
                 val storeViewModel: com.aicode.feature.store.presentation.StoreViewModel =
                     androidx.hilt.navigation.compose.hiltViewModel()
                 val storeState by storeViewModel.state.collectAsStateWithLifecycle()
-                com.aicode.feature.store.presentation.component.StoreScreen(
-                    state = storeState,
-                    onTab = { storeViewModel.setTab(it) },
-                    onQueryChange = { storeViewModel.updateQuery(it) },
-                    onSearch = { storeViewModel.search() },
-                    onLoadMore = { storeViewModel.loadMore() },
-                    onInstall = { storeViewModel.install(it) },
-                    onConsumeMessage = { storeViewModel.consumeMessage() }
-                )
+                // 该页独立于下方共享 Scaffold：自带顶栏，内容区避开系统栏，窄窗占整屏、大屏占右栏。
+                Scaffold(
+                    containerColor = settingsPageBackground(),
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(stringResource(R.string.store_title)) },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = settingsPageBackground(),
+                                titleContentColor = MaterialTheme.colorScheme.onBackground
+                            ),
+                            navigationIcon = {
+                                // 大屏一级分区页不给返回箭头：左栏菜单随时可切，退出设置的入口在左栏顶部。
+                                if (!expanded || parentSection != null) {
+                                    IconButton(onClick = {
+                                        val parent = parentSection
+                                        if (parent != null) section = parent else onNavigateBack()
+                                    }) {
+                                        Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
+                                    }
+                                }
+                            }
+                        )
+                    }
+                ) { padding ->
+                    Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+                        com.aicode.feature.store.presentation.component.StoreScreen(
+                            state = storeState,
+                            onTab = { storeViewModel.setTab(it) },
+                            onQueryChange = { storeViewModel.updateQuery(it) },
+                            onSearch = { storeViewModel.search() },
+                            onLoadMore = { storeViewModel.loadMore() },
+                            onInstall = { storeViewModel.install(it) },
+                            onConsumeMessage = { storeViewModel.consumeMessage() }
+                        )
+                    }
+                }
             }
 
             current == SettingsSection.Backup ->
@@ -1730,7 +1756,7 @@ internal fun SettingsMenu(
                 title = stringResource(R.string.settings_theme_title),
                 onClick = onOpenThemeSheet,
                 trailing = {
-                    val colorLabel = if (dynamicColorEnabled && isDynamicColorSupported) {
+                    val colorLabel = if (dynamicColorEnabled) {
                         stringResource(R.string.theme_dynamic_color)
                     } else {
                         stringResource(AppThemePreset.findById(themePresetId).nameRes)
@@ -1932,8 +1958,18 @@ internal fun SettingsMenu(
             SettingsDivider()
             SettingsRow(
                 icon = FeatherIcons.Zap,
-                title = stringResource(R.string.settings_rerun_onboarding),
-                onClick = onRerunOnboarding
+                title = stringResource(R.string.settings_onboarding),
+                trailing = {
+                    // 重跑动作收进行尾刷新按钮：整行不再「点击即重跑」，避免误触（用户 2026-10-15 反馈）。
+                    IconButton(onClick = onRerunOnboarding, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            FeatherIcons.RefreshCw,
+                            contentDescription = stringResource(R.string.settings_rerun_onboarding),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             )
             SettingsDivider()
             SettingsRow(

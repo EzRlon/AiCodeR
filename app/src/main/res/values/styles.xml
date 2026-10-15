@@ -2,6 +2,8 @@
 <resources>
     <style name="Theme.AICode" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:colorPrimary">@color/primary</item>
+        <!-- 窗口底色与 Compose 内容背景一致（浅色默认 #FFFFFF）：任何露出窗口的瞬间不闪色。深色见 values-night。 -->
+        <item name="android:windowBackground">@color/window_background_color</item>
     </style>
 
     <!-- 内置浏览器 WebView 专用主题：WebView 依据所在主题的 android:isLightTheme 决定向网页
@@ -22,4 +24,5 @@
 
     <color name="primary">#007ACC</color>
     <color name="splash_background_color">#F9FAFA</color>
+    <color name="window_background_color">#FFFFFF</color>
 </resources>

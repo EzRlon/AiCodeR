@@ -1,6 +1,6 @@
 package com.aicode.core.theme
 
-import android.os.Build
+import android.content.Context
 import androidx.annotation.StringRes
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
@@ -8,7 +8,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import com.aicode.R
+import com.aicode.core.util.FileLogger
 
 /** 一套主题在某个明暗模式下的完整配色。 */
 data class AppThemeColors(
@@ -170,10 +172,6 @@ data class AppThemePreset(
     }
 }
 
-/** 系统级动态取色（莫奈）自 Android 12 起提供，低版本设备读不到壁纸调色板。 */
-val isDynamicColorSupported: Boolean
-    get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-
 /** 功能色基准：success / warning / info 的色相跨主题固定，只随明暗切换，避免"成功"在某套主题里变成别的颜色。 */
 private object FunctionalHues {
     val LightSuccess = Color(0xFF22C55E)
@@ -216,6 +214,85 @@ fun deriveDynamicThemeColors(scheme: ColorScheme, dark: Boolean): AppThemeColors
         colorScheme = scheme.copy(surfaceTint = if (dark) Color.Transparent else scheme.surface),
         semanticColors = deriveSemanticColors(seed, dark)
     )
+}
+
+/**
+ * 低版本（Android 12 以下）的动态取色：系统没有莫奈调色板，但壁纸调色板
+ * （[android.app.WallpaperManager.getWallpaperColors]，API 24+）能拿到系统从壁纸采样的
+ * 主/次/三级色。取这三色作为种子、用与预设主题相同的推导管线生成整套配色；
+ * 中性槽（背景/表面/文字）沿用默认主题，保证可读性不随壁纸失控。
+ *
+ * 壁纸调色板读取是系统调用，结果按进程缓存（读到非空即缓存；取不到时本次进程内不再重试，
+ * 由调用方回退预设主题）。
+ */
+fun deriveWallpaperThemeColors(context: Context, dark: Boolean): AppThemeColors? =
+    WallpaperSeedCache.buildSeed(context, dark)?.let { deriveThemeColors(it, dark) }
+
+private object WallpaperSeedCache {
+    private const val TAG = "WallpaperSeed"
+
+    private class Raw(val primary: Color, val secondary: Color?, val tertiary: Color?)
+
+    @Volatile private var raw: Raw? = null
+    @Volatile private var failed = false
+
+    fun buildSeed(context: Context, dark: Boolean): AppThemeSeed? {
+        val colors = load(context) ?: return null
+        val baseScheme = if (dark) {
+            AppThemePreset.DEFAULT.dark.colorScheme
+        } else {
+            AppThemePreset.DEFAULT.light.colorScheme
+        }
+        return AppThemeSeed(
+            primary = sanitizeSeedColor(colors.primary, dark),
+            secondary = sanitizeSeedColor(colors.secondary ?: colors.primary, dark),
+            tertiary = sanitizeSeedColor(colors.tertiary ?: colors.secondary ?: colors.primary, dark),
+            background = baseScheme.background,
+            surface = baseScheme.surface,
+            surfaceVariant = baseScheme.surfaceVariant,
+            onSurface = baseScheme.onSurface,
+            onSurfaceVariant = baseScheme.onSurfaceVariant,
+            outline = baseScheme.outline,
+            outlineVariant = baseScheme.outlineVariant
+        )
+    }
+
+    private fun load(context: Context): Raw? {
+        raw?.let { return it }
+        if (failed) return null
+        synchronized(this) {
+            raw?.let { return it }
+            if (failed) return null
+            val colors = runCatching {
+                context.getSystemService(android.app.WallpaperManager::class.java)
+                    ?.getWallpaperColors(android.app.WallpaperManager.FLAG_SYSTEM)
+            }.onFailure { FileLogger.w(TAG, "读取壁纸调色板失败", it) }.getOrNull()
+            if (colors == null) {
+                // 部分 ROM 实现缺失或返回空：标记后不再重试，回退预设主题
+                failed = true
+                return null
+            }
+            val loaded = Raw(
+                primary = Color(colors.primaryColor.toArgb()),
+                secondary = colors.secondaryColor?.let { Color(it.toArgb()) },
+                tertiary = colors.tertiaryColor?.let { Color(it.toArgb()) }
+            )
+            raw = loaded
+            return loaded
+        }
+    }
+
+    /** 种子色亮度安全化：壁纸接近纯黑/纯白时，把种子亮度压进可读区间。 */
+    private fun sanitizeSeedColor(color: Color, dark: Boolean): Color {
+        val lum = color.luminance()
+        val minL = if (dark) 0.38f else 0.16f
+        val maxL = if (dark) 0.82f else 0.66f
+        return when {
+            lum < minL -> lerp(color, Color.White, ((minL - lum) / (1f - lum + 1e-4f)).coerceIn(0f, 0.85f))
+            lum > maxL -> lerp(color, Color.Black, ((lum - maxL) / (lum + 1e-4f)).coerceIn(0f, 0.85f))
+            else -> color
+        }
+    }
 }
 
 private fun deriveColorScheme(seed: AppThemeSeed, dark: Boolean): ColorScheme {
