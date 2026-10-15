@@ -129,6 +129,44 @@
     <string name="settings_token_stats_provider_keys">%1$d keys</string>
     <string name="settings_token_stats_requests_unit">requests</string>
 
+    <!-- Key Management page -->
+    <string name="settings_dev_keys">Key Management</string>
+    <string name="dev_keys_intro">Browse signing (*.jks / *.keystore), SSH, and other key files. This page is read-only and never shows or includes passwords.</string>
+    <string name="dev_keys_import">Import keys</string>
+    <string name="dev_keys_import_desc">Pick files from your device and copy them into the key library</string>
+    <string name="dev_keys_import_running">Importing…</string>
+    <string name="dev_keys_import_success">Imported %1$d file(s)</string>
+    <string name="dev_keys_import_partial">Imported %1$d, %2$d failed</string>
+    <string name="dev_keys_import_failed">Import failed (%1$d not imported)</string>
+    <string name="dev_keys_export_all">Export all (zip)</string>
+    <string name="dev_keys_export_all_desc">Bundle all key files with a fingerprint manifest</string>
+    <string name="dev_keys_export_running">Packaging…</string>
+    <string name="dev_keys_export_success">Exported</string>
+    <string name="dev_keys_export_failed">Export failed</string>
+    <string name="dev_keys_export_confirm_title">Export all keys?</string>
+    <string name="dev_keys_export_confirm_body">This will bundle %1$d key files (may include private and signing keys). Save to a safe location; no passwords are included.</string>
+    <string name="dev_keys_export_confirm_action">Export</string>
+    <string name="dev_keys_source_library">Key library (~/.aicode/keys)</string>
+    <string name="dev_keys_source_ssh">SSH keys (~/.ssh)</string>
+    <string name="dev_keys_source_workspace">Workspace key files</string>
+    <string name="dev_keys_category_release">Release</string>
+    <string name="dev_keys_category_ssh">SSH</string>
+    <string name="dev_keys_category_other">Other</string>
+    <string name="dev_keys_action_export">Export</string>
+    <string name="dev_keys_action_copy_path">Copy path</string>
+    <string name="dev_keys_action_detail">Details</string>
+    <string name="dev_keys_copied">Path copied</string>
+    <string name="dev_keys_detail_path">Path</string>
+    <string name="dev_keys_detail_size">Size</string>
+    <string name="dev_keys_detail_modified">Modified</string>
+    <string name="dev_keys_detail_category">Category</string>
+    <string name="dev_keys_detail_fingerprint">Fingerprint (SHA-256)</string>
+    <string name="dev_keys_fingerprint_skipped">File too large; fingerprint skipped</string>
+    <string name="dev_keys_scanning">Scanning…</string>
+    <string name="dev_keys_empty">No key files found</string>
+    <string name="dev_keys_empty_hint">Use "Import keys" above to copy signing or SSH keys into the library</string>
+    <string name="dev_keys_footer">Read-only: key files are never modified or deleted here; exported archives contain no passwords.</string>
+
     <!-- Storage page -->
     <string name="settings_storage">Storage</string>
     <string name="storage_refresh">Rescan</string>

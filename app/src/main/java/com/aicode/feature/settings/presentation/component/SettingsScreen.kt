@@ -112,6 +112,7 @@ import compose.icons.feathericons.Globe
 import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Info
+import compose.icons.feathericons.Key
 import compose.icons.feathericons.Lock
 import compose.icons.feathericons.Moon
 import compose.icons.feathericons.MessageSquare
@@ -181,6 +182,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     RemoteServers(R.string.settings_remote_servers),
     Storage(R.string.settings_storage),
     TokenStats(R.string.settings_token_stats_title),
+    DevKeys(R.string.settings_dev_keys),
     Backup(R.string.settings_backup),
     About(R.string.settings_about)
 }
@@ -755,6 +757,9 @@ fun SettingsScreen(
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
                 if (current == SettingsSection.Storage) androidx.hilt.navigation.compose.hiltViewModel() else null
+            // 密钥管理页同理：独立 ViewModel 仅进入该分区时创建（构造即触发一次扫描）。
+            val keysViewModel: com.aicode.feature.settings.presentation.KeysViewModel? =
+                if (current == SettingsSection.DevKeys) androidx.hilt.navigation.compose.hiltViewModel() else null
             Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
@@ -1298,6 +1303,9 @@ fun SettingsScreen(
                 )
                 SettingsSection.Storage -> storageViewModel?.let {
                     StorageSectionHost(viewModel = it, onRevealInTree = onRevealInTree)
+                }
+                SettingsSection.DevKeys -> keysViewModel?.let {
+                    DevKeysSectionHost(viewModel = it)
                 }
                 SettingsSection.ProviderEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SkillEditor -> {} // 已在上方 early return 处理
@@ -1946,6 +1954,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.PieChart,
                 title = stringResource(SettingsSection.Storage.titleRes),
                 onClick = { onOpen(SettingsSection.Storage) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Key,
+                title = stringResource(SettingsSection.DevKeys.titleRes),
+                onClick = { onOpen(SettingsSection.DevKeys) }
             )
             SettingsDivider()
             SettingsRow(

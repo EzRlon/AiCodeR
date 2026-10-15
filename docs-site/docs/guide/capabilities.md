@@ -52,6 +52,7 @@ AI 在任务中会对照本页选择与组合能力；你也可以用它了解 A
 - **AI 智能体（终端 CLI）**——一键安装并运行 Claude Code / Codex / OpenCode。→ [AI 智能体](/guide/agent-cli)
 - **容器与镜像**——Linux 容器是一切命令的执行环境；可自定义镜像、挂载手机目录。→ [容器与镜像](/guide/container)
 - **基础工作区**——代码编辑、Git 版本管理、多标签终端。→ [文件](/guide/files) · [Git](/guide/git) · [终端](/guide/terminal)
+- **密钥管理**——集中查看发布签名（`*.jks` / `*.keystore`）、SSH 与其他密钥文件（统一密钥库 `~/.aicode/keys`、`~/.ssh`、当前工作区）；导入复制进统一密钥库、导出打包 zip（附指纹清单，不含密码）。只读展示，不做删除。→ [密钥管理](/guide/keys)
 
 ## 组合菜谱（典型套路）
 
