@@ -106,6 +106,7 @@ import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
 import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Globe
@@ -168,6 +169,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
     Teams(R.string.settings_teams),
+    Store(R.string.store_title),
     ScheduledTasks(R.string.schedule_title),
     ScheduledTaskEditor(R.string.schedule_title),
     Container(R.string.settings_container),
@@ -697,6 +699,22 @@ fun SettingsScreen(
                 com.aicode.feature.workspace.presentation.remote.RemoteServerScreen(
                     onNavigateBack = { section = SettingsSection.Menu }
                 )
+
+            current == SettingsSection.Store -> {
+                // 在线商店：技能（claudemarket.ai）+ MCP（官方 Registry），安装 ≠ 启用
+                val storeViewModel: com.aicode.feature.store.presentation.StoreViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val storeState by storeViewModel.state.collectAsStateWithLifecycle()
+                com.aicode.feature.store.presentation.component.StoreScreen(
+                    state = storeState,
+                    onTab = { storeViewModel.setTab(it) },
+                    onQueryChange = { storeViewModel.updateQuery(it) },
+                    onSearch = { storeViewModel.search() },
+                    onLoadMore = { storeViewModel.loadMore() },
+                    onInstall = { storeViewModel.install(it) },
+                    onConsumeMessage = { storeViewModel.consumeMessage() }
+                )
+            }
 
             current == SettingsSection.Backup ->
                 BackupScreen(
@@ -1257,6 +1275,7 @@ fun SettingsScreen(
                 SettingsSection.SkillEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SubAgentEditor -> {} // 已在上方 early return 处理
                 SettingsSection.RemoteServers -> {} // 已在上方 early return 处理
+                SettingsSection.Store -> {} // 已在上方 early return 处理
                 SettingsSection.Backup -> {} // 已在上方 early return 处理
                 SettingsSection.About -> AboutSection(
                     updateCheckEnabled = updateCheckEnabled,
@@ -1803,6 +1822,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Layers,
                 title = stringResource(SettingsSection.Teams.titleRes),
                 onClick = { onOpen(SettingsSection.Teams) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Package,
+                title = stringResource(SettingsSection.Store.titleRes),
+                onClick = { onOpen(SettingsSection.Store) }
             )
             SettingsDivider()
             SettingsRow(
