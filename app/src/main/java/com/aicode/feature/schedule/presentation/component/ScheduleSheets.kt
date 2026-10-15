@@ -58,7 +58,7 @@ enum class QuickSchedule(val labelRes: Int) {
 }
 
 /**
- * 「定时任务」创建面板（长按模式胶囊 / 顶栏长按选择层进入）：
+ * 「定时任务」创建面板（长按模式图标 / 顶栏长按选择层进入）：
  * 内容（预填输入草稿）、快捷时间、运行模式、预授权范围、自动档风险确认。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -258,7 +258,7 @@ internal fun ScheduleExecutionSheet(
 }
 
 /**
- * 「定时 Plan · 长任务」入口面板（长按 Plan 胶囊 / 顶栏长按选择层进入）：
+ * 「定时 Plan · 长任务」入口面板（长按 Plan 图标 / 顶栏长按选择层进入）：
  * 输入目标后进入「计划先行」流程——新开 PLAN 会话聊完整，再由审批面板排期。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -371,7 +371,7 @@ private fun AuthChip(label: String, checked: Boolean, onChange: (Boolean) -> Uni
     )
 }
 
-/** 三个面板共用的模式名映射（与底部胶囊文案一致）。 */
+/** 三个面板共用的模式名映射（与底部模式图标文案一致）。 */
 internal fun modeLabelResForSheet(mode: AgentMode): Int = when (mode) {
     AgentMode.BUILD -> R.string.agent_mode_build
     AgentMode.PLAN -> R.string.agent_mode_plan

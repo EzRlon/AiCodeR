@@ -323,6 +323,8 @@ fun SettingsScreen(
     var showMcpAddSheet by remember { mutableStateOf(false) }
     var showMcpJsonImport by remember { mutableStateOf(false) }
     var mcpAddScope by remember { mutableStateOf(McpScope.PROJECT) }
+    // 「推荐」条目预填：进入手动添加弹窗时把 Context7 的 URL 等带入表单（仅新增时生效）。
+    var mcpEditorPrefill by remember { mutableStateOf<McpServerConfig?>(null) }
 
     LaunchedEffect(onboardingStep) {
         when (onboardingStep) {
@@ -1328,11 +1330,19 @@ fun SettingsScreen(
             onManual = {
                 showMcpAddSheet = false
                 editingMcp = null
+                mcpEditorPrefill = null
                 showMcpDialog = true
             },
             onImportJson = {
                 showMcpAddSheet = false
                 showMcpJsonImport = true
+            },
+            onSelectContext7 = {
+                // 推荐条目：走手动添加流程并预填；默认不启用，与商店「安装 ≠ 启用」语义一致。
+                showMcpAddSheet = false
+                editingMcp = null
+                mcpEditorPrefill = RecommendedContext7Config
+                showMcpDialog = true
             },
             onDismiss = { showMcpAddSheet = false }
         )
@@ -1359,7 +1369,9 @@ fun SettingsScreen(
     if (showMcpDialog) {
         McpServerEditDialog(
             initial = editingMcp?.server,
-            initialScope = editingMcp?.scope,
+            // 新增时沿用添加面板已选的作用域（推荐 / 手动入口一致）；编辑时保持原作用域。
+            initialScope = editingMcp?.scope ?: mcpAddScope,
+            prefill = mcpEditorPrefill,
             tools = viewModel.getMcpServerTools(editingMcp?.server?.name),
             authState = mcpAuthState,
             needsAuth = mcpStatuses.firstOrNull { it.name == editingMcp?.server?.name }
@@ -1382,11 +1394,13 @@ fun SettingsScreen(
             onCancel = { viewModel.cancelMcpAuthorize(it) },
             onDismiss = {
                 showMcpDialog = false
+                mcpEditorPrefill = null
                 viewModel.clearMcpAuthState()
             },
             onSave = { config, scope ->
                 viewModel.upsertMcpServer(editingMcp?.server?.name, editingMcp?.scope, config, scope)
                 showMcpDialog = false
+                mcpEditorPrefill = null
             }
         )
     }

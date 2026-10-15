@@ -75,6 +75,8 @@ import com.aicode.R
 fun McpServerEditDialog(
     initial: McpServerConfig?,
     initialScope: McpScope? = null,
+    /** 新增时的预填配置（如推荐条目的 URL）；仅当 [initial] 为 null 时生效，各字段仍可编辑。 */
+    prefill: McpServerConfig? = null,
     tools: List<McpToolDescriptor> = emptyList(),
     authState: McpAuthUiState = McpAuthUiState(),
     needsAuth: Boolean = false,
@@ -89,33 +91,35 @@ fun McpServerEditDialog(
 ) {
     var selectedTab by remember { mutableIntStateOf(0) } // 0: 基础设置, 1: 工具
 
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var enabled by remember { mutableStateOf(initial?.enabled ?: true) }
-    var isStdio by remember { mutableStateOf(initial?.isStdio ?: false) }
+    // 预填仅用于新增：编辑（initial 非空）时忽略 prefill，避免两者混用时字段串值。
+    val prefillConfig = if (initial == null) prefill else null
+    var name by remember { mutableStateOf(initial?.name ?: prefillConfig?.name ?: "") }
+    var enabled by remember { mutableStateOf(initial?.enabled ?: prefillConfig?.enabled ?: true) }
+    var isStdio by remember { mutableStateOf(initial?.isStdio ?: prefillConfig?.isStdio ?: false) }
     // 作用域：新增默认当前项目，编辑保持原作用域。
     var scope by remember { mutableStateOf(initialScope ?: McpScope.PROJECT) }
 
     // HTTP 形态字段
-    var url by remember { mutableStateOf(initial?.url ?: "") }
+    var url by remember { mutableStateOf(initial?.url ?: prefillConfig?.url ?: "") }
     val headers = remember {
         mutableStateListOf<Pair<String, String>>().apply {
-            addAll(initial?.headers?.toList() ?: emptyList())
+            addAll(initial?.headers?.toList() ?: prefillConfig?.headers?.toList() ?: emptyList())
         }
     }
 
     // OAuth 认证字段（仅 HTTP 形态）
-    var authEnabled by remember { mutableStateOf(initial?.auth != null || needsAuth) }
-    var clientId by remember { mutableStateOf(initial?.auth?.clientId ?: "") }
-    var authServer by remember { mutableStateOf(initial?.auth?.authServer ?: "") }
+    var authEnabled by remember { mutableStateOf(initial?.auth != null || prefillConfig?.auth != null || needsAuth) }
+    var clientId by remember { mutableStateOf(initial?.auth?.clientId ?: prefillConfig?.auth?.clientId ?: "") }
+    var authServer by remember { mutableStateOf(initial?.auth?.authServer ?: prefillConfig?.auth?.authServer ?: "") }
 
     // stdio 形态字段
-    var command by remember { mutableStateOf(initial?.command ?: "") }
+    var command by remember { mutableStateOf(initial?.command ?: prefillConfig?.command ?: "") }
     val argsList = remember {
-        mutableStateListOf<String>().apply { addAll(initial?.args ?: emptyList()) }
+        mutableStateListOf<String>().apply { addAll(initial?.args ?: prefillConfig?.args ?: emptyList()) }
     }
     val envList = remember {
         mutableStateListOf<Pair<String, String>>().apply {
-            addAll(initial?.env?.toList() ?: emptyList())
+            addAll(initial?.env?.toList() ?: prefillConfig?.env?.toList() ?: emptyList())
         }
     }
 

@@ -250,6 +250,11 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             ContainerInstaller.extractPrompts(this@AIEditorApp)
         }
+        // 启动即把内置技能释放到 ~/.aicode/skills/（覆盖式，随 App 升级自动更新；
+        // 内置技能请勿直接修改，同名用户技能会被内置版覆盖）。
+        appScope.launch {
+            ContainerInstaller.extractBuiltinSkills(this@AIEditorApp)
+        }
         // 启动即释放套餐余量示例脚本等内置脚本到 ~/.aicode/scripts/
         appScope.launch {
             ContainerInstaller.extractScripts(this@AIEditorApp)

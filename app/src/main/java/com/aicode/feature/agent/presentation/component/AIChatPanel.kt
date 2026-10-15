@@ -17,6 +17,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -60,8 +61,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -142,6 +145,9 @@ private const val SCROLL_TO_BOTTOM_BTN_SIZE = 34
 private const val MESSAGE_ENTRY_STAGGER_MS = 90L
 private const val MESSAGE_ENTRY_MAX_STAGGER_MS = 360L
 
+/** 轮内「结果置前」翻转时，相关 item 换位的 placement 动画时长（ms）。 */
+private const val CHAT_ITEM_PLACEMENT_ANIM_MS = 220
+
 /** 消息未就绪时延迟多久才显示加载提示（ms）：本地读库很快，立即显示反而闪。 */
 private const val MESSAGES_LOADING_HINT_DELAY_MS = 220L
 
@@ -220,6 +226,13 @@ internal data class TurnHeaderState(
 )
 
 /**
+ * 消息操作 mini 悬浮窗的打开状态。
+ *
+ * [anchor] 是锚点矩形（窗口坐标）：长按消息时为长按触点（零尺寸矩形），点「更多」时为按钮 bounds。
+ */
+private data class MessageMenuState(val message: AgentUIMessage, val anchor: Rect)
+
+/**
  * 分组展开时成员行的左缩进：分组头与成员行行首元素原本左右完全对齐（同一格 16dp 图标 + 同一间距），
  * 看不出从属关系；给成员整行缩进一级，分组头是父、成员行是子，层级一眼可辨。
  * 固定取 16dp（不用 [Spacing.lg]：紧凑密度下它只有 14dp，缩进会随屏幕形态忽大忽小）。
@@ -295,12 +308,14 @@ private fun messageRenderItems(message: AgentUIMessage): List<ChatRenderItem> {
  * 三件事：**整轮任务折叠**、长文拆块、**连续工具调用分组**。
  *
  * 先按「用户消息 → 下一个用户消息之前」切成轮（见 [splitChatTurns]）：每轮依次产出「用户消息 →
- * 轮头（携带过程项，仅当该轮有过程或正在运行）→ 常显项与结果」。过程项挂在轮头 item 内，整轮展开时
- * 随折叠头一起平滑展开；压缩摘要/后台通知/带附件工具等常显项不参与折叠。
+ * 结果区（常显项与结果 + 产物聚合块）→ 过程区（轮头，携带过程项；仅当该轮有过程或正在运行）」。
+ * 结果在前、过程在后是「结果置前」结构：轮完成后先看到结论、过程收在轮末；流式期间正文由流式
+ * 尾巴渲染（不经过这里），完成后落库重排即翻转。过程项挂在轮头 item 内，整轮展开时随折叠头一起
+ * 平滑展开；压缩摘要/后台通知/带附件工具等常显项不参与折叠。
  * 结果 = 轮内最后一条有可见正文的普通助手消息（其思考抽为过程项）。
  *
- * 轮头展开态：没手动记录时「末轮且 agent 忙」默认展开、其余默认收起（[activeTurnKey]）；
- * 一旦用户在 [turnOverrides] 里点过，就以其选择为准，任务完成自动收起不会覆盖它。
+ * 轮头展开态：没手动记录时「运行中或最新一轮」默认展开、更早的轮默认收起（[activeTurnKey]）；
+ * 一旦用户在 [turnOverrides] 里点过，就以其选择为准，有更新的轮接手后自动收起不会覆盖它。
  *
  * 工具调用分组仍**默认收起**，只认 [groupOverrides] 的手动选择。
  */
@@ -314,7 +329,7 @@ internal fun buildChatItems(
     val (leading, turns) = splitChatTurns(messages)
     // 轮首之前的散消息（会话开头就出现的助手/工具输出，罕见）不折叠，原样常显。
     leading.forEach { items += messageRenderItems(it) }
-    for (turn in turns) {
+    for ((turnIndex, turn) in turns.withIndex()) {
         items += messageRenderItems(turn.userMessage)
         val endAssistant = turn.messages.lastOrNull {
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
@@ -323,7 +338,23 @@ internal fun buildChatItems(
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
         // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
         val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides)
-        val expanded = turnOverrides[turn.key] ?: running
+        // 展开态：手动覆盖优先；默认「运行中或最新一轮（含刚完成的）」展开——收工后最新轮的过程
+        // 保持可见（过程不再整轮消失），更早的轮收起（有更新的轮接手时自动收起）。
+        val expanded = turnOverrides[turn.key] ?: (running || turnIndex == turns.lastIndex)
+        // 结果置前：常显项与结果先排（结论先看），过程区（轮头 + 过程项）整体排到轮末。
+        items += buildTurnPersistentItems(turn.messages, resultId)
+        // 本轮产物聚合块跟随结果区（提示型工具逐条展示之外，给交付物一个统一位置；双份展示是有意设计）
+        val turnArtifacts = turn.messages
+            .flatMap { it.attachments }
+            .distinctBy { it.containerPath }
+        if (turnArtifacts.isNotEmpty()) {
+            items += ChatRenderItem(
+                message = turn.userMessage,
+                key = "${turn.key}#artifacts",
+                contentType = TURN_ARTIFACTS_CONTENT_TYPE,
+                turnArtifacts = turnArtifacts,
+            )
+        }
         if (process.isNotEmpty() || running) {
             items += ChatRenderItem(
                 message = turn.userMessage,
@@ -336,19 +367,6 @@ internal fun buildChatItems(
                     expanded = expanded,
                 ),
                 turnProcess = process,
-            )
-        }
-        items += buildTurnPersistentItems(turn.messages, resultId)
-        // 本轮产物聚合块追加在轮末（提示型工具逐条展示之外，给交付物一个统一位置；双份展示是有意设计）
-        val turnArtifacts = turn.messages
-            .flatMap { it.attachments }
-            .distinctBy { it.containerPath }
-        if (turnArtifacts.isNotEmpty()) {
-            items += ChatRenderItem(
-                message = turn.userMessage,
-                key = "${turn.key}#artifacts",
-                contentType = TURN_ARTIFACTS_CONTENT_TYPE,
-                turnArtifacts = turnArtifacts,
             )
         }
     }
@@ -383,6 +401,42 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
     }
     user?.let { turns += ChatTurn(turnKeyOf(it.id), it, body?.toList().orEmpty()) }
     return leading to turns
+}
+
+/**
+ * 会话消息 → 右侧时间线（对话鸟瞰）节点。
+ *
+ * 口径与 [buildChatItems] 一致：①用户提问取轮首用户消息 item（轮头 item 的 message 也是用户
+ * 消息，靠 contentType 区分）；②每轮只取「结果」正文的第一块（长文拆块不产生多个节点）；
+ * ③验收报告单独标出。itemIndex 即该 item 在 [chatItems] 中的下标，点击节点据此定位。
+ */
+internal fun buildTimelineNodes(
+    messages: List<AgentUIMessage>,
+    chatItems: List<ChatRenderItem>,
+): List<TimelineNode> {
+    val (_, turns) = splitChatTurns(messages)
+    val resultIds = turns
+        .mapNotNull { turn -> turn.messages.lastOrNull { it.isResultCandidate() }?.id }
+        .toHashSet()
+    val nodes = ArrayList<TimelineNode>()
+    val seenResults = HashSet<String>()
+    val seenReports = HashSet<String>()
+    chatItems.forEachIndexed { index, item ->
+        val message = item.message
+        when {
+            item.contentType == MessageRole.USER.name &&
+                !message.isBackgroundNotification && !message.isCompactionMarker ->
+                nodes += TimelineNode(index, TimelineNodeType.USER)
+            // 思考项与结果正文同属一条消息：跳过，避免抢占「结果」节点的首块口径
+            item.contentType == REASONING_CONTENT_TYPE -> Unit
+            message.isVerificationReport -> {
+                if (seenReports.add(message.id)) nodes += TimelineNode(index, TimelineNodeType.VERIFICATION)
+            }
+            message.id in resultIds && seenResults.add(message.id) ->
+                nodes += TimelineNode(index, TimelineNodeType.ASSISTANT_RESULT)
+        }
+    }
+    return nodes
 }
 
 /** 该消息在整轮折叠里是否「常显」——不参与过程折叠，无论轮展开与否都显示。 */
@@ -686,8 +740,10 @@ fun AIChatPanel(
         }
     }
     var uploadingCount by remember { mutableStateOf(0) }
-    var messageForMenu by remember { mutableStateOf<AgentUIMessage?>(null) }
-    var contextMenuMessage by remember { mutableStateOf<AgentUIMessage?>(null) }
+    // 消息操作 mini 悬浮窗：长按消息与点「更多」共用一套打开状态（含锚点，见 MessageMenuState）。
+    var messageMenuState by remember { mutableStateOf<MessageMenuState?>(null) }
+    // 根容器（Scaffold 内容区）在窗口中的位置：mini 悬浮窗按窗口坐标锚定，渲染前换算到容器局部。
+    var panelRootInWindow by remember { mutableStateOf(Offset.Zero) }
     var textSelectMessageId by remember { mutableStateOf<String?>(null) }
     var editingMessage by remember { mutableStateOf<AgentUIMessage?>(null) }
     // 切换会话退出选字模式，避免跨会话残留
@@ -767,6 +823,14 @@ fun AIChatPanel(
             turnOverrides = turnOverrideSnapshot,
             activeTurnKey = activeTurnKey,
         )
+    }
+    // 右侧时间线节点（对话鸟瞰）：随 chatItems 重建，点击节点跳转定位。
+    val timelineNodes = remember(messages, chatItems) {
+        buildTimelineNodes(messages, chatItems)
+    }
+    // 最新一轮「结果区」首 item 下标：轮完成翻转后作为视角落点目标（见下方翻转落点 effect）。
+    val lastResultItemIndex = remember(timelineNodes) {
+        timelineNodes.lastOrNull { it.type == TimelineNodeType.ASSISTANT_RESULT }?.itemIndex
     }
     // 每轮任务的总耗时（用户发送 → 本轮 AI 收工）与 token 合计，都只挂在轮末助手气泡下方
     val taskDurations = remember(messages, isBusy) {
@@ -1285,6 +1349,43 @@ fun AIChatPanel(
         }.collect { calibrateToAnchor() }
     }
 
+    // ── 翻转视角落点：轮完成后「结果置前」重排，若用户视口仍在底部附近，平滑滚到该轮
+    // 「结果区」顶部——「先看结论」正合产品意图；用户在别处回看历史则不打扰。落点会关闭
+    // 贴底跟随（视口不再贴底），用户滚回底部时由既有监测自动恢复跟随。──
+    var flipLandingArmed by remember { mutableStateOf(false) }
+    // 武装时刻的旧结果消息 id：收工后只有出现「新结果」才算本轮翻转，避免旧值误触发。
+    var flipLandingBaseResultId by remember { mutableStateOf<String?>(null) }
+    val lastResultMessageId = remember(lastResultItemIndex, chatItems) {
+        lastResultItemIndex?.let { chatItems.getOrNull(it)?.message?.id }
+    }
+    LaunchedEffect(currentSessionId) {
+        flipLandingArmed = false
+        flipLandingBaseResultId = null
+    }
+    LaunchedEffect(currentSessionId, isBusy, messagesReady) {
+        // 运行中且「当前会话消息已就绪」才武装：messagesReady 防切会话过渡帧用旧会话数据武装
+        // （就绪前 messages 仍属上一个会话，base 取错会误滚动）；就绪后本 effect 重跑，再按当时 isBusy 判定。
+        if (isBusy && messagesReady) {
+            flipLandingArmed = true
+            flipLandingBaseResultId = lastResultMessageId
+        }
+    }
+    LaunchedEffect(isBusy, lastResultMessageId, chatItems) {
+        if (isBusy || !flipLandingArmed) return@LaunchedEffect
+        // 结果 item 还没出现（落库稍晚于状态翻转）：保持武装，等它出现后的下一轮触发。
+        val target = lastResultItemIndex ?: return@LaunchedEffect
+        val targetId = lastResultMessageId ?: return@LaunchedEffect
+        if (targetId == flipLandingBaseResultId) return@LaunchedEffect
+        flipLandingArmed = false
+        // 视口靠近列表底部才落点：贴底跟随时（短 item 一屏多条的贴底场景首可见项可能距末尾 >3 项），
+        // 或首可见 item 距末尾 ≤3 个；翻了历史则不打扰。
+        val nearBottom = followBottom || listState.firstVisibleItemIndex >= chatItems.size - 4
+        if (!nearBottom) return@LaunchedEffect
+        followBottom = false
+        withFrameNanos { }
+        listState.animateScrollToItem(target)
+    }
+
     // ── 语音输入（应用内识别）：长按发送键为「按住说话」（松手直接发送）；
     // 点击麦克风为点击聆听（再点一下结束，识别结果追加进输入框草稿）。──
     val voiceController = remember { VoiceInputController(context.applicationContext) }
@@ -1534,7 +1635,7 @@ fun AIChatPanel(
                                 liveOutput = live,
                                 markdownCache = markdownCache,
                                 onRewindClick = { viewModel.openRewindMenu(it) },
-                                onMoreClick = { messageForMenu = it },
+                                onMoreClick = { msg, anchor -> messageMenuState = MessageMenuState(msg, anchor) },
                                 toolExpandedOverride = toolGroupOverrideSnapshot[member.id],
                                 onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(member.id, isExpanded) },
                                 onToolToggle = onToolItemToggled,
@@ -1559,7 +1660,7 @@ fun AIChatPanel(
                     isChunkFooter = item.isChunkFooter,
                     reasoningVisible = item.reasoningVisible,
                     onRewindClick = { viewModel.openRewindMenu(it) },
-                    onMoreClick = { messageForMenu = it },
+                    onMoreClick = { msg, anchor -> messageMenuState = MessageMenuState(msg, anchor) },
                     toolExpandedOverride = toolGroupOverrideSnapshot[message.id],
                     onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(message.id, isExpanded) },
                     onToolToggle = onToolItemToggled,
@@ -1569,7 +1670,7 @@ fun AIChatPanel(
                     taskDurationMs = taskDurations[message.id],
                     turnUsage = turnUsages[message.id],
                     entryDelayMs = messageEntryDelays[message.id],
-                    onMessageLongPress = { contextMenuMessage = it },
+                    onMessageLongPress = { msg, anchor -> messageMenuState = MessageMenuState(msg, anchor) },
                     selectTextMode = textSelectMessageId == message.id,
                     onSelectTextDone = { textSelectMessageId = null }
                 )
@@ -1616,6 +1717,7 @@ fun AIChatPanel(
             modifier = modifier
                 .fillMaxSize()
                 .padding(padding)
+                .onGloballyPositioned { panelRootInWindow = it.boundsInWindow().topLeft }
         ) {
         // 大屏正文列限宽居中：铺满整个平板宽度会让一行文字过长、气泡横跨全屏，读起来很累。
         // 窄窗下 readableContentMaxWidth() 返回 Dp.Unspecified，widthIn 不产生任何约束。
@@ -1674,7 +1776,22 @@ fun AIChatPanel(
                         )
                     ) {
                         itemsIndexed(chatItems, key = { _, item -> item.key }, contentType = { _, item -> item.contentType }) { _, item ->
-                            RenderChatItem(item)
+                            // 轮完成「结果置前」翻转时，轮头与结果区换位：placement 动画平滑过渡。
+                            // fade 关闭——出现/消失保持原样（TOOL 卡片另有自己的入场动画，避免叠加）。
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .animateItem(
+                                        fadeInSpec = null,
+                                        fadeOutSpec = null,
+                                        placementSpec = tween(
+                                            durationMillis = CHAT_ITEM_PLACEMENT_ANIM_MS,
+                                            easing = FastOutSlowInEasing
+                                        )
+                                    )
+                            ) {
+                                RenderChatItem(item)
+                            }
                         }
                         val reasoning = displayStreamingReasoning
                         val showReasoning = reasoning?.hasVisibleContent() == true
@@ -1731,6 +1848,19 @@ fun AIChatPanel(
                             }
                         }
                     }
+                }
+                // 右侧时间线（对话鸟瞰）：覆在消息列表容器右缘，不占布局宽度；点击节点平滑
+                // 跳到对应消息（跳转视为主动离开底部，关闭贴底跟随）。
+                if (timelineNodes.isNotEmpty()) {
+                    TimelineRail(
+                        nodes = timelineNodes,
+                        listState = listState,
+                        onNodeClick = { node ->
+                            followBottom = false
+                            scope.launch { listState.animateScrollToItem(node.itemIndex) }
+                        },
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    )
                 }
             }
             } // 内容层结束
@@ -2074,86 +2204,6 @@ fun AIChatPanel(
                 )
             }
 
-            messageForMenu?.let { message ->
-                val clipboard = LocalClipboard.current
-                val copyScope = rememberCoroutineScope()
-                MessageActionsBottomSheet(
-                    message = message,
-                    onDismiss = { messageForMenu = null },
-                    onEditClick = { editingMessage = message },
-                    onCopyClick = {
-                        copyScope.launch {
-                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content)))
-                        }
-                    },
-                    onShareClick = {
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, message.content)
-                        }
-                        runCatching {
-                            context.startActivity(Intent.createChooser(send, context.getString(R.string.chat_action_share)))
-                        }.onFailure {
-                            Toast.makeText(context, context.getString(R.string.chat_share_failed), Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onDeleteClick = { viewModel.deleteMessage(message.id) }
-                )
-            }
-
-            contextMenuMessage?.let { message ->
-                val menuClipboard = LocalClipboard.current
-                val menuCopyScope = rememberCoroutineScope()
-
-                // 整条消息转引用块（超长截断），供「引用追问 / 解释 / 工作区查找」预填输入框。
-                fun quoteBlock(content: String, maxChars: Int): String {
-                    val trimmed = content.trim()
-                    val clipped = if (trimmed.length > maxChars) trimmed.take(maxChars) + " …" else trimmed
-                    return clipped.lines().joinToString("\n") { "> $it" }
-                }
-
-                MessageContextMenuSheet(
-                    message = message,
-                    onDismiss = { contextMenuMessage = null },
-                    onCopy = {
-                        menuCopyScope.launch {
-                            menuClipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content)))
-                        }
-                    },
-                    onQuote = {
-                        viewModel.queueExternalText(quoteBlock(message.content, 500))
-                    },
-                    onExplain = {
-                        viewModel.queueExternalText(
-                            context.getString(R.string.chat_explain_prefix) + "\n\n" + quoteBlock(message.content, 1500)
-                        )
-                    },
-                    onSearchWorkspace = {
-                        viewModel.queueExternalText(
-                            context.getString(R.string.chat_search_workspace_prefix) + "\n\n" + quoteBlock(message.content, 800)
-                        )
-                    },
-                    onShare = {
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, message.content)
-                        }
-                        runCatching {
-                            context.startActivity(Intent.createChooser(send, context.getString(R.string.chat_action_share)))
-                        }.onFailure {
-                            Toast.makeText(context, context.getString(R.string.chat_share_failed), Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onSelectText = { textSelectMessageId = message.id },
-                    onEditClick = if (message.role == MessageRole.USER) {
-                        { editingMessage = message }
-                    } else null,
-                    onDeleteClick = if (message.role == MessageRole.USER) {
-                        { viewModel.deleteMessage(message.id) }
-                    } else null,
-                )
-            }
-
             editingMessage?.let { message ->
                 EditMessageDialog(
                     initialText = message.content,
@@ -2175,6 +2225,62 @@ fun AIChatPanel(
                     }
                 )
             }
+        }
+        // 消息操作 mini 悬浮窗：挂在根 Box（限宽正文列之外）——全屏 scrim 与窗口坐标锚定不受
+        // 正文列限宽影响；锚点由长按触点 /「更多」按钮位置带出（见 MessageMenuState）。
+        messageMenuState?.let { state ->
+            val message = state.message
+            val menuClipboard = LocalClipboard.current
+            val menuCopyScope = rememberCoroutineScope()
+
+            // 整条消息转引用块（超长截断），供「引用追问 / 解释 / 工作区查找」预填输入框。
+            fun quoteBlock(content: String, maxChars: Int): String {
+                val trimmed = content.trim()
+                val clipped = if (trimmed.length > maxChars) trimmed.take(maxChars) + " …" else trimmed
+                return clipped.lines().joinToString("\n") { "> $it" }
+            }
+
+            MessageContextMenuPopup(
+                message = message,
+                anchorInWindow = state.anchor,
+                containerOriginInWindow = panelRootInWindow,
+                onDismiss = { messageMenuState = null },
+                onCopy = {
+                    menuCopyScope.launch {
+                        menuClipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content)))
+                    }
+                },
+                onQuote = {
+                    viewModel.queueExternalText(quoteBlock(message.content, 500))
+                },
+                onExplain = {
+                    viewModel.queueExternalText(
+                        context.getString(R.string.chat_explain_prefix) + "\n\n" + quoteBlock(message.content, 1500)
+                    )
+                },
+                onSearchWorkspace = {
+                    viewModel.queueExternalText(
+                        context.getString(R.string.chat_search_workspace_prefix) + "\n\n" + quoteBlock(message.content, 800)
+                    )
+                },
+                onShare = {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, message.content)
+                    }
+                    runCatching {
+                        context.startActivity(Intent.createChooser(send, context.getString(R.string.chat_action_share)))
+                    }.onFailure {
+                        Toast.makeText(context, context.getString(R.string.chat_share_failed), Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onSelectText = { textSelectMessageId = message.id },
+                onEditClick = if (message.role == MessageRole.USER) {
+                    { editingMessage = message }
+                } else null,
+                // 删除不限角色：对齐原「更多」菜单的能力集（助手回复也能删）。
+                onDeleteClick = { viewModel.deleteMessage(message.id) }
+            )
         }
         }
     }

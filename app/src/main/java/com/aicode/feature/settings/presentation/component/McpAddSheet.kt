@@ -17,13 +17,25 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.agent.domain.mcp.McpScope
+import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Globe
 
 /**
- * 「添加 MCP 服务器」底部弹层：顶部选作用域（全局 / 当前项目），下方两种添加方式——
- * 手动填写、粘贴标准 mcpServers JSON 批量导入。
+ * 「推荐」区条目：Context7 远程 HTTP 服务器（免安装、免登录，提供最新库/框架文档检索）。
+ * 默认不启用——与在线商店「安装 ≠ 启用」语义一致；点击后走手动添加流程并预填本配置。
+ */
+internal val RecommendedContext7Config: McpServerConfig = McpServerConfig(
+    name = "context7",
+    url = "https://mcp.context7.com/mcp",
+    enabled = false
+)
+
+/**
+ * 「添加 MCP 服务器」底部弹层：顶部选作用域（全局 / 当前项目）；
+ * 下方「推荐」区（Context7 一键预填）+ 两种添加方式——手动填写、粘贴标准 mcpServers JSON 批量导入。
  */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,6 +44,7 @@ internal fun McpAddSheet(
     onScopeChange: (McpScope) -> Unit,
     onManual: () -> Unit,
     onImportJson: () -> Unit,
+    onSelectContext7: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val scopes = listOf(McpScope.GLOBAL, McpScope.PROJECT)
@@ -68,6 +81,27 @@ internal fun McpAddSheet(
                         stringResource(R.string.mcp_scope_project)
                     ),
                     onSelect = { onScopeChange(scopes[it]) }
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Text(
+                    text = stringResource(R.string.mcp_recommended_section),
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                SettingsGroup {
+                    SettingsRow(
+                        icon = FeatherIcons.Globe,
+                        title = "Context7",
+                        subtitle = stringResource(R.string.mcp_recommended_context7_desc),
+                        onClick = onSelectContext7
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.mcp_recommended_footer),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 

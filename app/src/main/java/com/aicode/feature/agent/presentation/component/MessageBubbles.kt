@@ -50,10 +50,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
@@ -217,7 +221,8 @@ internal fun AgentMessageItem(
     liveOutput: String? = null,
     markdownCache: MarkdownRenderCache? = null,
     onRewindClick: ((String) -> Unit)? = null,
-    onMoreClick: ((AgentUIMessage) -> Unit)? = null,
+    /** 「更多」按钮回调：带出按钮 bounds（窗口坐标）供 mini 悬浮窗锚定；null = 不挂该按钮。 */
+    onMoreClick: ((AgentUIMessage, Rect) -> Unit)? = null,
     onToolToggle: (() -> Unit)? = null,
     /** 工具行展开态的持久化覆盖（null = 尚未手动开关过，按内容类型取默认）；见 [ToolMessageBody]。 */
     toolExpandedOverride: Boolean? = null,
@@ -246,8 +251,8 @@ internal fun AgentMessageItem(
     reasoningExpandedOverride: Boolean? = null,
     /** in-message 思考块手动展开/收起时回传新状态，由上层持久化。 */
     onReasoningExpandedChange: ((Boolean) -> Unit)? = null,
-    /** 长按消息内容回调（弹「消息操作」菜单）；null = 不启用（如工具消息）。 */
-    onMessageLongPress: ((AgentUIMessage) -> Unit)? = null,
+    /** 长按消息内容回调（弹「消息操作」mini 悬浮窗），带出长按触点的窗口坐标供锚定；null = 不启用（如工具消息）。 */
+    onMessageLongPress: ((AgentUIMessage, Rect) -> Unit)? = null,
     /** 「选择文本」模式：正文挂 SelectionContainer 进入选字；false 时长按走操作菜单。 */
     selectTextMode: Boolean = false,
     /** 「选择文本」模式的完成/退出回调。 */
@@ -285,16 +290,26 @@ internal fun AgentMessageItem(
     if (message.role == MessageRole.ASSISTANT && !hasContent && !hasReasoning && !hasAttachments) return
 
     val isUser = message.role == MessageRole.USER
-    // 长按弹「消息操作」菜单的手势；未启用时为空 Modifier。只监听长按、不拦截点击：
+    // 长按弹「消息操作」mini 悬浮窗的手势；未启用时为空 Modifier。只监听长按、不拦截点击：
     // 正文内的链接点击（更内层 clickable）优先命中，长按空白/正文处才弹菜单。
+    // 锚点 = 长按触点：detectTapGestures 回调给的是节点局部坐标，配合 onGloballyPositioned
+    // 记录的节点窗口 bounds 换算成窗口坐标（零尺寸矩形），弹窗贴触点升起。
     val latestMessage = rememberUpdatedState(message)
+    var nodeBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
     val longPressModifier = remember(message.id, onMessageLongPress) {
         if (onMessageLongPress == null) {
             Modifier
         } else {
-            Modifier.pointerInput(message.id) {
-                detectTapGestures(onLongPress = { onMessageLongPress(latestMessage.value) })
-            }
+            Modifier
+                .onGloballyPositioned { nodeBoundsInWindow = it.boundsInWindow() }
+                .pointerInput(message.id) {
+                    detectTapGestures(onLongPress = { offset ->
+                        onMessageLongPress(
+                            latestMessage.value,
+                            Rect(nodeBoundsInWindow.topLeft + offset, Size.Zero)
+                        )
+                    })
+                }
         }
     }
     // 分块消息：块间只留一个段落间距，视觉上仍是连续的一段正文（DSH 扁平文档流下不再有描边接缝）。
@@ -573,14 +588,24 @@ internal fun AgentMessageItem(
                         }
                         // 「更多选项」排在这一行的**最后**：助手消息里它跟在复制按钮后面（先给信息，
                         // 再给操作入口）；用户消息没有统计项，它自然接着回退按钮，间距与按钮组一致。
-                        if (actionsVisible && onMoreClick != null) {
+                        // 助手消息无可见正文（纯附件）时不挂：mini 悬浮窗对助手只提供文本类操作，
+                        // 打开会是空菜单（用户消息的编辑/删除不受此限）。
+                        if (actionsVisible && onMoreClick != null && (isUser || hasContent)) {
                             if (emitted) Spacer(Modifier.width(Spacing.xs))
-                            MessageActionIconButton(
-                                icon = FeatherIcons.MoreHorizontal,
-                                contentDescription = stringResource(R.string.chat_more_options),
-                                tint = iconTint,
-                                onClick = { onMoreClick(message) }
-                            )
+                            // 记录按钮 bounds（窗口坐标）作为 mini 悬浮窗锚点：贴按钮上方升起。
+                            var moreButtonBounds by remember { mutableStateOf(Rect.Zero) }
+                            Box(
+                                modifier = Modifier.onGloballyPositioned {
+                                    moreButtonBounds = it.boundsInWindow()
+                                }
+                            ) {
+                                MessageActionIconButton(
+                                    icon = FeatherIcons.MoreHorizontal,
+                                    contentDescription = stringResource(R.string.chat_more_options),
+                                    tint = iconTint,
+                                    onClick = { onMoreClick(message, moreButtonBounds) }
+                                )
+                            }
                         }
                     }
                     // 复制成功 1.5s 后恢复图标

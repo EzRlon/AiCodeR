@@ -772,6 +772,7 @@
     <string name="editor_save_conflict_discarded">已放弃修改并重新载入磁盘内容</string>
 
     <!-- Chat Message Bubbles -->
+    <string name="timeline_rail_desc">对话时间线导航</string>
     <string name="chat_copied">已复制</string>
     <string name="chat_copy">复制</string>
     <string name="chat_task_duration">本轮总耗时 %1$s</string>
@@ -1217,6 +1218,9 @@
     <string name="mcp_tools_enable_all">全部启用</string>
     <string name="mcp_tools_disable_all">全部禁用</string>
     <string name="mcp_add_sheet_title">添加 MCP 服务器</string>
+    <string name="mcp_recommended_section">推荐</string>
+    <string name="mcp_recommended_context7_desc">免安装免登录，提供最新库/框架文档检索</string>
+    <string name="mcp_recommended_footer">点击进入添加流程并预填配置；添加后默认禁用，可随时启用</string>
     <string name="mcp_add_manual">手动填写</string>
     <string name="mcp_add_manual_desc">逐个填写地址、请求头或启动命令</string>
     <string name="mcp_add_from_json">从 JSON 导入</string>
@@ -1292,7 +1296,7 @@
     <string name="schedule_page_hint_title">自动执行命令</string>
     <string name="schedule_page_hint">到点在容器里执行指定命令，结果可逐条查看。受系统调度，触发时间可能略有延迟。</string>
     <string name="schedule_group_tasks">任务</string>
-    <string name="schedule_empty">还没有定时任务；点右上角「+」新建，或长按会话界面的模式胶囊创建</string>
+    <string name="schedule_empty">还没有定时任务；点右上角「+」新建，或长按会话界面的模式图标创建</string>
     <string name="schedule_daily_at">每天 %1$s</string>
     <string name="schedule_once_at">仅一次 · %1$s</string>
     <string name="schedule_every_minutes">每 %1$d 分钟</string>
@@ -1368,7 +1372,7 @@
     <string name="chat_new_session_sheet_now">立即开始一段新对话</string>
     <string name="chat_new_session_sheet_scheduled">到点执行一条指令（定时任务）</string>
     <string name="chat_new_session_sheet_plan">先备计划，定时自主执行（长任务）</string>
-    <string name="chat_mode_longpress_hint">长按胶囊：创建定时任务</string>
+    <string name="chat_mode_longpress_hint">长按模式图标：创建定时任务</string>
     <string name="prompts_disable_builtin">完全禁用内置提示词</string>
     <string name="prompts_disable_builtin_hint">只保留你的片段；需要自己补全全部规则，谨慎开启</string>
 

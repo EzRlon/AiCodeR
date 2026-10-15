@@ -14,11 +14,11 @@ import org.junit.Test
  * 分组展开与否 = **上层持久化的手动选择**（[AIAgentViewModel.toolExpansionOverrides]，按 [toolGroupKey] 取）：
  * 没有手动记录就一律收起——工具调用统一默认不展开。
  *
- * 整轮折叠（最外层）只认 [AIAgentViewModel.turnExpansionOverrides]；没记录时「末轮运行中默认展开、
- * 其余默认收起」，任务收工由 activeTurnKey 归 null 自动收起。
+ * 整轮折叠（最外层）只认 [AIAgentViewModel.turnExpansionOverrides]；没记录时「运行中或最新一轮
+ * （含刚完成的）默认展开、更早的轮默认收起」——收工后最新轮过程保持可见，有更新的轮接手后自动收起。
  *
  * 结构：工具分组与过程项都挂在轮头 item 的 [ChatRenderItem.turnProcess] 里（与折叠头同一 Composable，
- * 展开时整体动画）；顶层 items 只有「用户消息 / 轮头 / 常显项与结果」。
+ * 展开时整体动画）；顶层 items 的顺序为「用户消息 / 结果区（常显项与结果 + 产物块）/ 轮头（过程区）」。
  */
 class ToolGroupExpansionTest {
 
@@ -192,13 +192,91 @@ class ToolGroupExpansionTest {
     }
 
     @Test
-    fun finishedTurn_autoCollapses() {
-        // 收工（activeTurnKey 归 null）：折叠头转为「已完成」并默认收起；过程数据仍在，由动画收起
+    fun finishedLastTurn_staysExpanded() {
+        // 收工（activeTurnKey 归 null）：最新完成轮的过程保持展开显示（「过程不再整轮消失」），
+        // 折叠头转为「已完成」且过程数据仍在
         val items = items(listOf(user("u0"), tool("t1"), tool("t2")), activeTurnKey = null)
         val header = items.header().turnHeader!!
         assertFalse(header.running)
-        assertFalse(header.expanded)
+        assertTrue("最新完成轮默认展开", header.expanded)
         assertEquals(1, items.groupItems().size)
+    }
+
+    @Test
+    fun finishedEarlierTurn_autoCollapses() {
+        // 更早的完成轮：有更新的轮接手后默认收起，只有最新一轮保持展开
+        val messages = listOf(
+            user("u0"), tool("t1"), tool("t2"),
+            user("u1"), tool("t3"), tool("t4"),
+        )
+        val items = items(messages, activeTurnKey = null)
+        val headers = items.filter { it.turnHeader != null }
+        assertEquals(2, headers.size)
+        assertFalse("更早的轮收起", headers[0].turnHeader!!.expanded)
+        assertTrue("最新轮保持展开", headers[1].turnHeader!!.expanded)
+    }
+
+    @Test
+    fun resultPrecedesProcessArea() {
+        // 结果置前：常显项与结果排在轮头（过程区）之前，轮末才是折叠头
+        val messages = listOf(
+            user("u0"),
+            AgentUIMessage(id = "a1", role = MessageRole.ASSISTANT, content = "想一下", reasoning = "思考"),
+            AgentUIMessage(id = "a2", role = MessageRole.ASSISTANT, content = "最终答案"),
+        )
+        val items = items(messages, turnOverrides = mapOf("turn:u0" to true), activeTurnKey = null)
+        val resultIndex = items.indexOfFirst { it.key == "a2" }
+        val headerIndex = items.indexOfFirst { it.turnHeader != null }
+        assertTrue(resultIndex >= 0 && headerIndex >= 0)
+        assertTrue("结果排在过程区（轮头）之前", resultIndex < headerIndex)
+    }
+
+    // ---- 右侧时间线节点 ----
+
+    @Test
+    fun timelineNodes_carryChatItemIndices() {
+        // 时间线节点：提问 / 结果各一个；轮头 item 不是节点；itemIndex 指向 chatItems 下标
+        val messages = listOf(
+            user("u0"),
+            AgentUIMessage(id = "a1", role = MessageRole.ASSISTANT, content = "答案一", reasoning = "思考一"),
+            user("u1"),
+            AgentUIMessage(id = "a2", role = MessageRole.ASSISTANT, content = "答案二"),
+        )
+        val chatItems = items(messages, activeTurnKey = null)
+        val nodes = buildTimelineNodes(messages, chatItems)
+        assertEquals(
+            listOf(
+                TimelineNodeType.USER,
+                TimelineNodeType.ASSISTANT_RESULT,
+                TimelineNodeType.USER,
+                TimelineNodeType.ASSISTANT_RESULT,
+            ),
+            nodes.map { it.type }
+        )
+        nodes.forEach { node ->
+            assertTrue("节点不能锚在轮头 item 上", chatItems[node.itemIndex].turnHeader == null)
+        }
+        assertEquals("u0", chatItems[nodes[0].itemIndex].key)
+        assertEquals("a1", chatItems[nodes[1].itemIndex].key)
+    }
+
+    @Test
+    fun timelineNodes_includeVerificationReport() {
+        // 验收报告单独成节点（特标色）
+        val report = AgentUIMessage(
+            id = "v1", role = MessageRole.TOOL, content = "验收：通过", isVerificationReport = true
+        )
+        val messages = listOf(
+            user("u0"),
+            AgentUIMessage(id = "a1", role = MessageRole.ASSISTANT, content = "答案"),
+            report,
+        )
+        val chatItems = items(messages, activeTurnKey = null)
+        val nodes = buildTimelineNodes(messages, chatItems)
+        assertEquals(
+            listOf(TimelineNodeType.USER, TimelineNodeType.ASSISTANT_RESULT, TimelineNodeType.VERIFICATION),
+            nodes.map { it.type }
+        )
     }
 
     @Test

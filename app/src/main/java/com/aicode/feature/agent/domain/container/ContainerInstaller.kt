@@ -70,6 +70,70 @@ class ContainerInstaller @Inject constructor(
             }
         }
 
+        /**
+         * 从 assets 提取内置技能到 ~/.aicode/skills/，每个技能按目录整体重写（先删同名目录再释放），
+         * 使内置技能随 App 升级自动更新——内置技能视为随版本分发的只读内容，直接改动会被升级覆盖。
+         *
+         * 与用户自装技能共存：只处理 assets 中存在的技能名，其余目录不触碰；但**同名**的用户技能
+         * 会被内置版覆盖（自动更新机制的代价，属已知取舍）。技能列表由
+         * [com.aicode.feature.agent.domain.skill.SkillDirectoryScanner] 实时扫描本目录得到，释放后无需额外注册。
+         */
+        fun extractBuiltinSkills(context: Context) {
+            val destDir = File(File(context.filesDir, "aicode"), "skills")
+            runCatching {
+                destDir.mkdirs()
+                val entries = context.assets.list("skills") ?: return@runCatching
+                for (entry in entries) {
+                    val dest = File(destDir, entry)
+                    // 先删再释放：内置技能随版本可能删减/移动文件，只覆盖不清理会残留旧文件。
+                    // 用 deleteTree 而非 File.deleteRecursively：skills 与用户内容共享，符号链接只删链接、不下钻。
+                    deleteTree(dest, 0) {}
+                    extractAssetsRecursive(context, "skills/$entry", dest)
+                }
+            }.onFailure {
+                FileLogger.w(TAG, "提取内置技能失败: ${it.message}", it)
+            }
+        }
+
+        /**
+         * 递归删除 [root]（符号链接安全：链接只删链接本身、不跟随下钻），返回从 [startCount] 起算的
+         * 累计已删条目数，每 [DELETE_PROGRESS_STEP] 项回调一次。rootfs 清理与内置技能目录清理
+         * （[extractBuiltinSkills]）共用。
+         *
+         * 不用 [File.deleteRecursively]：它按 `File.isDirectory` 判断，会跟随符号链接下钻——rootfs 的
+         * /bin、/usr/lib 下满是 symlink，跟随不仅白跑一遍链接目标（大容器上慢出好几倍），指向自身祖先时
+         * 还会一路下钻到路径超长才停，更别说链接指向 rootfs 外面时会删掉别处的数据。这里用
+         * NOFOLLOW_LINKS 判定目录，符号链接一律当普通条目 unlink。技能目录与用户内容共享，同理必须
+         * NOFOLLOW，避免跟随链接误删目录外数据。
+         */
+        private fun deleteTree(root: File, startCount: Int, onProgress: (Int) -> Unit): Int {
+            var count = startCount
+            val pending = ArrayDeque<File>()
+            val dirs = ArrayDeque<File>()
+            pending.addLast(root)
+            while (pending.isNotEmpty()) {
+                val entry = pending.removeLast()
+                if (isRealDirectory(entry)) {
+                    dirs.addLast(entry)
+                    entry.listFiles()?.forEach { pending.addLast(it) }
+                } else if (entry.delete()) {
+                    count++
+                    if (count % DELETE_PROGRESS_STEP == 0) onProgress(count)
+                }
+            }
+            // 目录得等自己空了才删得掉：dirs 按自浅入深的发现顺序入队，从队尾往回删即先深后浅。
+            while (dirs.isNotEmpty()) {
+                if (dirs.removeLast().delete()) count++
+            }
+            onProgress(count)
+            return count
+        }
+
+        /** 是否真目录：符号链接即便指向目录也返回 false，防止删除时跟着链接下钻。 */
+        private fun isRealDirectory(file: File): Boolean = runCatching {
+            Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory
+        }.getOrDefault(false)
+
         /** 递归复制 assets 下的目录到目标目录，支持子目录（如 prompts/agent/、docs/guide/）。 */
         private fun extractAssetsRecursive(context: Context, assetDir: String, destDir: File) {
             val entries = context.assets.list(assetDir) ?: return
@@ -562,42 +626,6 @@ class ContainerInstaller @Inject constructor(
         val count = deleteTree(dir, 0, onProgress)
         FileLogger.i(TAG, "已删除 rootfs ${dir.name}，共 $count 项")
     }
-
-    /**
-     * 递归删除 [root]，返回从 [startCount] 起算的累计已删条目数，每 [DELETE_PROGRESS_STEP] 项回调一次。
-     *
-     * 不用 [File.deleteRecursively]：它按 `File.isDirectory` 判断，会跟随符号链接下钻——rootfs 的
-     * /bin、/usr/lib 下满是 symlink，跟随不仅白跑一遍链接目标（大容器上慢出好几倍），指向自身祖先时
-     * 还会一路下钻到路径超长才停，更别说链接指向 rootfs 外面时会删掉别处的数据。这里用
-     * NOFOLLOW_LINKS 判定目录，符号链接一律当普通条目 unlink。
-     */
-    private fun deleteTree(root: File, startCount: Int, onProgress: (Int) -> Unit): Int {
-        var count = startCount
-        val pending = ArrayDeque<File>()
-        val dirs = ArrayDeque<File>()
-        pending.addLast(root)
-        while (pending.isNotEmpty()) {
-            val entry = pending.removeLast()
-            if (isRealDirectory(entry)) {
-                dirs.addLast(entry)
-                entry.listFiles()?.forEach { pending.addLast(it) }
-            } else if (entry.delete()) {
-                count++
-                if (count % DELETE_PROGRESS_STEP == 0) onProgress(count)
-            }
-        }
-        // 目录得等自己空了才删得掉：dirs 按自浅入深的发现顺序入队，从队尾往回删即先深后浅。
-        while (dirs.isNotEmpty()) {
-            if (dirs.removeLast().delete()) count++
-        }
-        onProgress(count)
-        return count
-    }
-
-    /** 是否真目录：符号链接即便指向目录也返回 false，防止删除时跟着链接下钻。 */
-    private fun isRealDirectory(file: File): Boolean = runCatching {
-        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory
-    }.getOrDefault(false)
 
     init {
         CoroutineScope(Dispatchers.IO).launch {

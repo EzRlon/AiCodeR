@@ -772,6 +772,7 @@
     <string name="editor_save_conflict_discarded">Edits discarded; reloaded from disk</string>
 
     <!-- Chat Message Bubbles -->
+    <string name="timeline_rail_desc">Conversation timeline navigation</string>
     <string name="chat_copied">Copied</string>
     <string name="chat_copy">Copy</string>
     <string name="chat_task_duration">Total time %1$s</string>
@@ -1217,6 +1218,9 @@
     <string name="mcp_tools_enable_all">Enable all</string>
     <string name="mcp_tools_disable_all">Disable all</string>
     <string name="mcp_add_sheet_title">Add MCP server</string>
+    <string name="mcp_recommended_section">Recommended</string>
+    <string name="mcp_recommended_context7_desc">No install or sign-in — latest library/framework docs lookup</string>
+    <string name="mcp_recommended_footer">Opens the add flow with the config prefilled; disabled by default — enable anytime</string>
     <string name="mcp_add_manual">Fill in manually</string>
     <string name="mcp_add_manual_desc">Enter URL, headers, or launch command one by one</string>
     <string name="mcp_add_from_json">Import from JSON</string>
@@ -1292,7 +1296,7 @@
     <string name="schedule_page_hint_title">Run commands automatically</string>
     <string name="schedule_page_hint">Runs the given command inside the container on schedule; each run\'s result can be reviewed. Trigger time may be slightly delayed by the system.</string>
     <string name="schedule_group_tasks">Tasks</string>
-    <string name="schedule_empty">No scheduled tasks yet. Tap "+" in the top right, or long-press the mode chip in chat.</string>
+    <string name="schedule_empty">No scheduled tasks yet. Tap "+" in the top right, or long-press a mode icon in chat.</string>
     <string name="schedule_daily_at">Daily at %1$s</string>
     <string name="schedule_once_at">Once · %1$s</string>
     <string name="schedule_every_minutes">Every %1$d min</string>
@@ -1368,7 +1372,7 @@
     <string name="chat_new_session_sheet_now">Start a new conversation now</string>
     <string name="chat_new_session_sheet_scheduled">Run an instruction on schedule (scheduled task)</string>
     <string name="chat_new_session_sheet_plan">Plan first, run unattended on schedule (long task)</string>
-    <string name="chat_mode_longpress_hint">Long-press the mode chip: create a scheduled task</string>
+    <string name="chat_mode_longpress_hint">Long-press a mode icon: create a scheduled task</string>
     <string name="prompts_disable_builtin">Disable all built-in prompts</string>
     <string name="prompts_disable_builtin_hint">Keep only your own fragments; you must supply every rule yourself</string>
 
