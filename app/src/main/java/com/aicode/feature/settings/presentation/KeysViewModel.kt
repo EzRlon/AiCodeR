@@ -156,7 +156,7 @@ class KeysViewModel @Inject constructor(
     }
 
     private fun uniqueLibraryPath(name: String, usedNames: MutableSet<String>): String {
-        val dir = KeyFilesScanner.LIBRARY_DIR
+        val dir = scanner.libraryDir()
         fun taken(candidate: String) = candidate in usedNames || fileAccess.exists(candidate)
         var candidate = "$dir/$name"
         if (!taken(candidate)) {

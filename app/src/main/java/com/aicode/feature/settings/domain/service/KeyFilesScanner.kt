@@ -14,8 +14,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 密钥文件扫描：统一密钥库（`~/.aicode/keys/`）、SSH 目录（`/root/.ssh/`）与当前工作区中的
+ * 密钥文件扫描：统一密钥库（`~/.aicode/keys/`）、SSH 目录（`~/.ssh/`）与当前工作区中的
  * 签名密钥文件（[KEY_FILE_SUFFIXES]）。走 [FileAccessProvider]，本地 / 远程模式路径语义一致。
+ *
+ * 两个目录以 `~` 形式交给 [FileAccessProvider] 按当前执行环境展开（先例
+ * [com.aicode.feature.agent.domain.skill.GlobalDirectorySkillSource]）：本地映射宿主
+ * filesDir（容器内即 `/root/.aicode/keys`、`/root/.ssh`），远程为服务器用户 home 下同名
+ * 路径——不能写死 `/root`，否则远程非 root 用户扫不到任何密钥。
  *
  * 各目录级的读取失败（目录不存在、权限不足）按「该来源为空」处理，不阻断整体扫描。
  */
@@ -24,13 +29,13 @@ class KeyFilesScanner @Inject constructor(
     private val fileAccess: FileAccessProvider,
     private val executionModeHolder: ExecutionModeHolder,
 ) {
-    companion object {
-        /** 统一密钥库（容器路径 `/root/.aicode/keys`；映射宿主 filesDir/aicode/keys，独立于 rootfs）。 */
-        const val LIBRARY_DIR = "/root/.aicode/keys"
+    /** 统一密钥库（`~/.aicode/keys`；映射宿主 filesDir/aicode/keys，独立于 rootfs）。导入密钥也写到这里。 */
+    internal fun libraryDir(): String = "~/.aicode/keys"
 
-        /** SSH 密钥目录（rootfs 内 root 家目录）。 */
-        const val SSH_DIR = "/root/.ssh"
+    /** SSH 密钥目录（当前执行环境 home 下的 `.ssh`）。 */
+    private fun sshDir(): String = "~/.ssh"
 
+    private companion object {
         /**
          * 工作区扫描深度与排除目录：密钥一般在项目浅层；深扫依赖/构建/元数据目录
          * 又慢又无意义（远程模式下更会放大 SFTP 往返）。
@@ -48,8 +53,8 @@ class KeyFilesScanner @Inject constructor(
     /** 扫描三处来源，按「来源 → 名称」升序返回。 */
     suspend fun scan(): List<KeyFile> = withContext(Dispatchers.IO) {
         buildList {
-            addAll(scanDirectory(LIBRARY_DIR, KeySource.LIBRARY))
-            addAll(scanDirectory(SSH_DIR, KeySource.SSH))
+            addAll(scanDirectory(libraryDir(), KeySource.LIBRARY))
+            addAll(scanDirectory(sshDir(), KeySource.SSH))
             addAll(scanWorkspace())
         }
     }

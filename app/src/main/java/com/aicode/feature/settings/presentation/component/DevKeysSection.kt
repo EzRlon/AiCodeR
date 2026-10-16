@@ -89,13 +89,14 @@ internal fun DevKeysSection(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lg)
             .padding(bottom = Spacing.xl)
     ) {
         Text(
             text = stringResource(R.string.dev_keys_intro),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.semanticColors.subtleText,
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            modifier = Modifier.padding(vertical = Spacing.md)
         )
 
         SettingsGroup {
@@ -186,7 +187,7 @@ internal fun DevKeysSection(
             text = stringResource(R.string.dev_keys_footer),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.semanticColors.subtleText,
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            modifier = Modifier.padding(vertical = Spacing.md)
         )
     }
 
