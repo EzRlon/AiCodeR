@@ -512,6 +512,7 @@ internal fun ChatInputBar(
                     items = todoItems,
                     sessionId = sessionId,
                     forceCollapse = forceCollapseDashboard,
+                    animateInProgress = isBusy,
                     onExpandedChange = onTodoExpandedChange
                 )
             }
@@ -606,14 +607,23 @@ internal fun ChatInputBar(
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(modeBannerRes(currentMode)),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(modeBannerRes(currentMode)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = stringResource(
+                                        if (currentMode == AgentMode.BUILD) R.string.chat_mode_longpress_hint_build
+                                        else R.string.chat_mode_longpress_hint
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
                             IconButton(
                                 onClick = {
                                     if (currentMode == AgentMode.BUILD) modeInfoVisible = false

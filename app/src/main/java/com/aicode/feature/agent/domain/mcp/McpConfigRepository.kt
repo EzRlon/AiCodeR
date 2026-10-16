@@ -98,8 +98,11 @@ class McpConfigRepository @Inject constructor(
      * 才由 [FileChangeHub] 监听两个配置文件所在目录，无人订阅时零开销。
      */
     val externalChanges: SharedFlow<Unit> = merge(
-        fileChangeHub.watchAicode(),
-        fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME")
+        fileChangeHub.watchAicode(pollIntervalMs = FileChangeHub.CONFIG_POLL_INTERVAL_MS),
+        fileChangeHub.watchWorkspace(
+            "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME",
+            pollIntervalMs = FileChangeHub.CONFIG_POLL_INTERVAL_MS
+        )
     ).mapNotNull { batch ->
         val globalPath = globalFile.absolutePath
         val projectPath = projectFileForPath(workspaceRepository.currentPath()).absolutePath

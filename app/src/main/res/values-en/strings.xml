@@ -313,9 +313,9 @@
     <string name="permission_notification_reject">Reject</string>
 
     <!-- Screenshot annotation ledger -->
-    <string name="annotation_capture_entry">Screenshot annotation</string>
-    <string name="annotation_live_entry">Live annotation</string>
-    <string name="annotation_ledger_title">Annotation ledger</string>
+    <string name="annotation_capture_entry">Screenshot</string>
+    <string name="annotation_live_entry">Annotate</string>
+    <string name="annotation_ledger_title">Annotations</string>
     <string name="annotation_type_bug">Bug</string>
     <string name="annotation_type_to_change">To change</string>
     <string name="annotation_type_dont">Don\'t</string>
@@ -1433,6 +1433,7 @@
     <string name="chat_new_session_sheet_scheduled">Run an instruction on schedule (scheduled task)</string>
     <string name="chat_new_session_sheet_plan">Plan first, run unattended on schedule (long task)</string>
     <string name="chat_mode_longpress_hint">Long-press a mode icon: create a scheduled task</string>
+    <string name="chat_mode_longpress_hint_build">Long-press a mode icon: schedule a Plan</string>
     <string name="prompts_disable_builtin">Disable all built-in prompts</string>
     <string name="prompts_disable_builtin_hint">Keep only your own fragments; you must supply every rule yourself</string>
 
@@ -2028,8 +2029,6 @@
     <string name="agent_mode_plan">Plan</string>
     <string name="agent_mode_auto">Auto</string>
     <string name="agent_mode_build_desc">Normal execution: regular operations proceed; permissions per settings</string>
-    <string name="agent_mode_plan_desc">Read-only exploration: produces a plan; edits blocked until approved</string>
-    <string name="agent_mode_auto_desc">Full access: all operations auto-approved (catastrophic deletes still blocked)</string>
     <string name="agent_mode_plan_banner">Plan mode: read-only exploration; plan requires your approval</string>
     <string name="agent_mode_auto_banner">Auto mode: operations auto-approved (catastrophic deletes still blocked)</string>
     <string name="agent_mode_back_to_build">Back to Build mode</string>
@@ -2205,7 +2204,6 @@
     <string name="perm_glossary_apk">Install system packages (Alpine)</string>
     <string name="perm_glossary_apt">Install system packages (Debian/Ubuntu)</string>
     <string name="perm_glossary_echo">Print text</string>
-    <string name="chat_mode_switched">Switched to %1$s mode</string>
     <string name="chat_edit_dialog_title">Edit Message</string>
     <string name="chat_edit_dialog_hint">Enter message content</string>
 

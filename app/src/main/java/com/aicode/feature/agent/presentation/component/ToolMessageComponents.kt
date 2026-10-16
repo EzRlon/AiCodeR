@@ -386,7 +386,7 @@ internal fun ToolMessageBody(
                 ) {
                 if (todoData != null && todoData.items.isNotEmpty()) {
                     Spacer(Modifier.height(Spacing.xs))
-                    TodoCard(items = todoData.items)
+                    TodoCard(items = todoData.items, animateInProgress = false)
                 } else if (webSearchData != null) {
                     Spacer(Modifier.height(Spacing.xs))
                     WebSearchResultCard(result = webSearchData)

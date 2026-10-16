@@ -1174,78 +1174,78 @@ private fun FileBrowserTab(
             }
         }
         Box(modifier = Modifier.fillMaxSize()) {
-        when (state) {
-            is FileBrowseState.Loading -> Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp))
-            }
-
-            is FileBrowseState.Error -> Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = state.detail ?: stringResource(R.string.file_browser_error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = Spacing.md)
-                )
-            }
-
-            is FileBrowseState.Success -> {
-                val listState = rememberLazyListState()
-                val textMeasurer = rememberTextMeasurer()
-                val textStyle = MaterialTheme.typography.bodyMedium
-                val density = LocalDensity.current
-                // 预算最宽一行的内容宽度（固定开销 + 缩进 + 文本），供所有行取统一宽度，
-                // 以实现整棵树统一横向平移（而非每行各自滚动）。
-                // 逐个 measure 在大目录下会在组合期同步跑上千次文本测量；先按「缩进 + 字符宽度权重」
-                // 挑出最宽的那一行，只对它做一次真实测量。估算不精确，但这里只用来给横向滚动留够宽度。
-                val maxContentPx = remember(state.nodes, textStyle) {
-                    with(density) {
-                        val widest = state.nodes.maxByOrNull { node ->
-                            val label = if (node.isRoot) WORKSPACE_LABEL else node.entry.name
-                            node.depth * 4 + label.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
-                        } ?: return@with 0
-                        val label = if (widest.isRoot) WORKSPACE_LABEL else widest.entry.name
-                        val textW = textMeasurer.measure(label, textStyle).size.width
-                        (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
-                    }
+            when (state) {
+                is FileBrowseState.Loading -> Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val rowWidthPx = maxOf(constraints.maxWidth, maxContentPx)
-                    val rowWidth = with(density) { rowWidthPx.toDp() }
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .horizontalScroll(hScroll)
-                    ) {
-                        items(state.nodes, key = { it.path }) { node ->
-                            FileTreeRow(
-                                node = node,
-                                rowWidth = rowWidth,
-                                expanding = node.entry.isDirectory && node.path == expandingPath,
-                                busy = node.path in fileOpPaths,
-                                onClick = {
-                                    if (node.entry.isDirectory) onToggleExpand(node.path)
-                                    else onOpenFile(node.path)
-                                },
-                                onLongClick = { menuNode = node },
-                                modifier = Modifier.animateItem(
-                                    fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-                                    fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                                    placementSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+
+                is FileBrowseState.Error -> Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = state.detail ?: stringResource(R.string.file_browser_error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = Spacing.md)
+                    )
+                }
+
+                is FileBrowseState.Success -> {
+                    val listState = rememberLazyListState()
+                    val textMeasurer = rememberTextMeasurer()
+                    val textStyle = MaterialTheme.typography.bodyMedium
+                    val density = LocalDensity.current
+                    // 预算最宽一行的内容宽度（固定开销 + 缩进 + 文本），供所有行取统一宽度，
+                    // 以实现整棵树统一横向平移（而非每行各自滚动）。
+                    // 逐个 measure 在大目录下会在组合期同步跑上千次文本测量；先按「缩进 + 字符宽度权重」
+                    // 挑出最宽的那一行，只对它做一次真实测量。估算不精确，但这里只用来给横向滚动留够宽度。
+                    val maxContentPx = remember(state.nodes, textStyle) {
+                        with(density) {
+                            val widest = state.nodes.maxByOrNull { node ->
+                                val label = if (node.isRoot) WORKSPACE_LABEL else node.entry.name
+                                node.depth * 4 + label.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
+                            } ?: return@with 0
+                            val label = if (widest.isRoot) WORKSPACE_LABEL else widest.entry.name
+                            val textW = textMeasurer.measure(label, textStyle).size.width
+                            (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
+                        }
+                    }
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val rowWidthPx = maxOf(constraints.maxWidth, maxContentPx)
+                        val rowWidth = with(density) { rowWidthPx.toDp() }
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .horizontalScroll(hScroll)
+                        ) {
+                            items(state.nodes, key = { it.path }) { node ->
+                                FileTreeRow(
+                                    node = node,
+                                    rowWidth = rowWidth,
+                                    expanding = node.entry.isDirectory && node.path == expandingPath,
+                                    busy = node.path in fileOpPaths,
+                                    onClick = {
+                                        if (node.entry.isDirectory) onToggleExpand(node.path)
+                                        else onOpenFile(node.path)
+                                    },
+                                    onLongClick = { menuNode = node },
+                                    modifier = Modifier.animateItem(
+                                        fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                        fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                                        placementSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
                 }
             }
-        }
 
         }
     }

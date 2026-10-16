@@ -63,6 +63,7 @@ fun TodoDashboardBar(
     sessionId: String,
     modifier: Modifier = Modifier,
     forceCollapse: Boolean = false,
+    animateInProgress: Boolean = true,
     onExpandedChange: (Boolean) -> Unit = {}
 ) {
     if (items.isEmpty()) return
@@ -182,7 +183,7 @@ fun TodoDashboardBar(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         items.forEach { todo ->
-                            TodoItemRow(item = todo.toParsedItem())
+                            TodoItemRow(item = todo.toParsedItem(), animateInProgress = animateInProgress)
                         }
                     }
                 }

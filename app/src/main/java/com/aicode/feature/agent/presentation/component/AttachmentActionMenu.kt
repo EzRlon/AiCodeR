@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
 /**
  * 构建附件操作菜单条目（聊天文件卡片 / 测试包页共用）：
  * 打开或安装（APK）、用 MT 管理器打开（已安装时）、在文件管理器中查看、
- * 保存到手机（下载/AiCode）、分享、复制路径。
+ * 保存到手机（下载/AiCodeR）、分享、复制路径。
  *
  * 动作内自行解析本地文件（失效路径经 [resolveLocalFile] 重取），需要宿主可见的
  * 动作自动经 [ExternalFileActions.prepareShareable] 走缓存兜底。
@@ -83,7 +83,7 @@ internal fun attachmentActionEntries(
                 }
             }
         )
-        // 保存到手机（下载/AiCode）
+        // 保存到手机（下载/AiCodeR）
         add(
             AnchorMenuEntry(icon = FeatherIcons.Download, labelRes = R.string.file_action_save) {
                 scope.launch {

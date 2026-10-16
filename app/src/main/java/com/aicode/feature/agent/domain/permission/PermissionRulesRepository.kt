@@ -93,8 +93,11 @@ class PermissionRulesRepository @Inject constructor(
     fun startWatching() {
         watchScope.launch {
             merge(
-                fileChangeHub.watchAicode(),
-                fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME")
+                fileChangeHub.watchAicode(pollIntervalMs = FileChangeHub.CONFIG_POLL_INTERVAL_MS),
+                fileChangeHub.watchWorkspace(
+                    "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME",
+                    pollIntervalMs = FileChangeHub.CONFIG_POLL_INTERVAL_MS
+                )
             ).collect { batch -> refreshFromDisk(batch) }
         }
     }

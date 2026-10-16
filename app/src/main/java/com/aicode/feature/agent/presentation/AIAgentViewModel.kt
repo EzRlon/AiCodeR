@@ -73,6 +73,7 @@ import com.aicode.feature.workspace.domain.FileEntry
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.feature.agent.domain.workflow.AgentEvent
+import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
@@ -2222,6 +2223,10 @@ class AIAgentViewModel @Inject constructor(
 
     /** 停止当前工作区所有正在运行的 AI 会话（切换工作区前调用）。 */
     fun stopAllAgents() {
+        // 取消前先抓快照：cancel 后内存态即被清空，未完成工具/流式文本需落库收尾
+        // （与 stopAgentSession 同语义），否则同进程内切回该会话仍显示「执行中」。
+        val stoppedStates = sessionJobs.filterValues { it.isActive }.keys
+            .mapNotNull { snapshotStoppedState(it) }
         val jobs = sessionJobs.values.filter { it.isActive }
         jobs.forEach { it.cancel() }
         sessionJobs.clear()
@@ -2235,6 +2240,7 @@ class AIAgentViewModel @Inject constructor(
         _runningTools.value = emptyMap()
         _retryStates.value = emptyMap()
         releaseKeepalive()
+        stoppedStates.forEach { state -> viewModelScope.launch { persistStoppedContent(state) } }
     }
 
     /**
@@ -2271,13 +2277,9 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
         }
-        val runningTools = _runningTools.value[sessionId]?.values?.toList() ?: emptyList()
-        val streamingText = _streamingTexts.value[sessionId]
-        val streamingReasoning = _streamingReasonings.value[sessionId]
-        val pendingPermission = toolPermissionManager.pendingForSession(sessionId)
-        val stoppedText = context.getString(R.string.agent_stopped_by_user)
+        val stoppedState = snapshotStoppedState(sessionId)
         val pendingNotifs = agentNotificationCenter.pendingCount(sessionId)
-        FileLogger.d(TAG, "stopAgent: sid=$sessionId runningTools=${runningTools.size} pendingPerm=${pendingPermission?.id} pendingNotifs=$pendingNotifs state=${_agentStates.value[sessionId]}")
+        FileLogger.d(TAG, "stopAgent: sid=$sessionId runningTools=${stoppedState?.runningTools?.size ?: 0} pendingPerm=${stoppedState?.pendingPermission?.id} pendingNotifs=$pendingNotifs state=${_agentStates.value[sessionId]}")
         // cancel() 在 Dispatchers.Main.immediate 上可能立即恢复挂起协程
         // （如 awaitApproval 的 CompletableDeferred.await），旧 job 的 finally →
         // flushPendingNotifications 在 cancel() 调用栈内同步执行并可能启动新 job。
@@ -2295,50 +2297,7 @@ class AIAgentViewModel @Inject constructor(
         setCompacting(sessionId, false)
         setRetryState(sessionId, null)
         viewModelScope.launch {
-            if (runningTools.isNotEmpty()) {
-                // 并行执行被中止：所有未完成的工具都落库为「已停止」
-                runningTools.forEach { running ->
-                    val partial = running.text.trimEnd()
-                    val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
-                    messagePersistenceUseCase.persist(
-                        sessionId = sessionId,
-                        role = MessageRole.TOOL,
-                        content = content,
-                        id = running.messageId,
-                        toolCallId = running.messageId.removePrefix("tool_"),
-                        toolName = running.toolName.ifBlank { null },
-                        toolArgs = running.toolArgs.ifBlank { toolArgsByMsgId[running.messageId] },
-                        isError = true
-                    )
-                    toolArgsByMsgId.remove(running.messageId)
-                }
-            } else if (!streamingText.isNullOrEmpty() || !streamingReasoning.isNullOrEmpty()) {
-                val partial = (streamingText ?: "").trimEnd()
-                val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
-                val reasoning = streamingReasoning?.takeIf { it.hasVisibleContent() }
-                messagePersistenceUseCase.persist(
-                    sessionId = sessionId,
-                    role = MessageRole.ASSISTANT,
-                    content = content,
-                    reasoning = reasoning
-                )
-            }
-            // 授权弹窗挂起中的工具调用：awaitApproval 挂起期间 _runningTools 为空
-            // （ToolCallStarted 在授权通过后才发出），但 AssistantText 已落库了带
-            // tool_call 声明的 assistant 消息。不补结果会导致该 tool_call 成为
-            // 孤立记录，被 buildHistory 的 validIds 交集过滤掉，AI 不知道自己曾调用过。
-            if (pendingPermission != null) {
-                val msgId = "tool_${pendingPermission.id}"
-                messagePersistenceUseCase.persist(
-                    sessionId = sessionId,
-                    role = MessageRole.TOOL,
-                    content = stoppedText,
-                    id = msgId,
-                    toolCallId = pendingPermission.id,
-                    toolName = pendingPermission.toolName,
-                    isError = true
-                )
-            }
+            if (stoppedState != null) persistStoppedContent(stoppedState)
             setStreamingText(sessionId, null)
             setStreamingReasoning(sessionId, null)
             setCompacting(sessionId, false)
@@ -2347,6 +2306,80 @@ class AIAgentViewModel @Inject constructor(
             processNextInQueue(sessionId)
         }
     }
+
+    /**
+     * 停止收尾快照（须在 cancel 前抓取）：cancel 后内存态即被清空，未完成工具/流式文本/
+     * 待授权调用需用快照落库收尾；无任何未完成状态时返回 null。
+     */
+    private fun snapshotStoppedState(sessionId: String): StoppedSessionState? {
+        val runningTools = _runningTools.value[sessionId]?.values?.toList() ?: emptyList()
+        val streamingText = _streamingTexts.value[sessionId]
+        val streamingReasoning = _streamingReasonings.value[sessionId]
+        val pendingPermission = toolPermissionManager.pendingForSession(sessionId)
+        if (runningTools.isEmpty() && streamingText.isNullOrEmpty() &&
+            streamingReasoning.isNullOrEmpty() && pendingPermission == null
+        ) {
+            return null
+        }
+        return StoppedSessionState(sessionId, runningTools, streamingText, streamingReasoning, pendingPermission)
+    }
+
+    /** 把被停止会话的未完成工具/流式文本/待授权调用落库为终态（UI 状态清理由调用方负责）。 */
+    private suspend fun persistStoppedContent(state: StoppedSessionState) {
+        val stoppedText = context.getString(R.string.agent_stopped_by_user)
+        if (state.runningTools.isNotEmpty()) {
+            // 并行执行被中止：所有未完成的工具都落库为「已停止」
+            state.runningTools.forEach { running ->
+                val partial = running.text.trimEnd()
+                val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
+                messagePersistenceUseCase.persist(
+                    sessionId = state.sessionId,
+                    role = MessageRole.TOOL,
+                    content = content,
+                    id = running.messageId,
+                    toolCallId = running.messageId.removePrefix("tool_"),
+                    toolName = running.toolName.ifBlank { null },
+                    toolArgs = running.toolArgs.ifBlank { toolArgsByMsgId[running.messageId] },
+                    isError = true
+                )
+                toolArgsByMsgId.remove(running.messageId)
+            }
+        } else if (!state.streamingText.isNullOrEmpty() || !state.streamingReasoning.isNullOrEmpty()) {
+            val partial = (state.streamingText ?: "").trimEnd()
+            val content = if (partial.isNotEmpty()) "$partial\n\n$stoppedText" else stoppedText
+            val reasoning = state.streamingReasoning?.takeIf { it.hasVisibleContent() }
+            messagePersistenceUseCase.persist(
+                sessionId = state.sessionId,
+                role = MessageRole.ASSISTANT,
+                content = content,
+                reasoning = reasoning
+            )
+        }
+        // 授权弹窗挂起中的工具调用：awaitApproval 挂起期间 _runningTools 为空
+        // （ToolCallStarted 在授权通过后才发出），但 AssistantText 已落库了带
+        // tool_call 声明的 assistant 消息。不补结果会导致该 tool_call 成为
+        // 孤立记录，被 buildHistory 的 validIds 交集过滤掉，AI 不知道自己曾调用过。
+        if (state.pendingPermission != null) {
+            val msgId = "tool_${state.pendingPermission.id}"
+            messagePersistenceUseCase.persist(
+                sessionId = state.sessionId,
+                role = MessageRole.TOOL,
+                content = stoppedText,
+                id = msgId,
+                toolCallId = state.pendingPermission.id,
+                toolName = state.pendingPermission.toolName,
+                isError = true
+            )
+        }
+    }
+
+    private data class StoppedSessionState(
+        val sessionId: String,
+        val runningTools: List<RunningToolOutput>,
+        val streamingText: String?,
+        val streamingReasoning: String?,
+        val pendingPermission: PendingToolPermission?
+    )
 
     // region 会话管理
 

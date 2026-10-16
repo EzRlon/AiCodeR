@@ -4,8 +4,11 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import java.net.InetSocketAddress
+import java.net.Socket
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** VNC 容器侧服务的生命周期状态，供小窗状态灯与提示文案使用。 */
 sealed interface VncServiceState {
@@ -50,13 +54,18 @@ class VncServiceController @Inject constructor(
         executionModeHolder.currentMode() == ExecutionMode.LOCAL_PROOT
 
     /**
-     * 轻量探测服务是否在跑（websockify 活着即认为整套可用）。容器未就绪/远程模式
-     * 返回 false，不会触发 rootfs 解压等初始化，供自动弹出轮询高频调用。
+     * 轻量探测服务是否在跑。websockify 是本机回环 6080 的唯一预期监听者（PRoot 与 App
+     * 共享网络命名空间），用本地 TCP 连接探测代替每轮一次的容器内 pgrep：语义等价，
+     * 聊天页存续期间的高频自动弹出探测不再唤醒容器执行命令。容器未就绪/远程模式
+     * 连不上，返回 false，不会触发 rootfs 解压等初始化。
      */
     suspend fun probeRunning(): Boolean {
         if (!isSupported()) return false
-        val result = commandEngine.runCommandSyncIfReady(command = PROBE_COMMAND)
-        return result?.exitCode == 0
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                Socket().use { it.connect(InetSocketAddress(LOOPBACK, VNC_WS_PORT), PROBE_TIMEOUT_MS) }
+            }.isSuccess
+        }
     }
 
     /** 幂等拉起整套 VNC 服务；首次按容器包管理器补装 xvfb/x11vnc/websockify，耗时视网络而定。 */
@@ -86,8 +95,11 @@ class VncServiceController @Inject constructor(
         private const val OUTPUT_TAIL_CHARS = 300
         private const val ENSURE_TIMEOUT_MS = 600_000L
 
-        // pgrep -f 模式用 [w] 方括号技巧，避免匹配到承载本脚本的 shell 自身。
-        private const val PROBE_COMMAND = "pgrep -f \"[w]ebsockify\" >/dev/null 2>&1"
+        /** websockify 在本机回环的监听端口（App 内 WebView 直连 127.0.0.1:6080）。 */
+        private const val VNC_WS_PORT = 6080
+        private const val PROBE_TIMEOUT_MS = 800
+        private const val LOOPBACK = "127.0.0.1"
+
         private val ENSURE_SCRIPT = """
             pgrep -f "[w]ebsockify" >/dev/null 2>&1 && echo $READY_MARKER && exit 0
             if ! command -v websockify >/dev/null 2>&1; then

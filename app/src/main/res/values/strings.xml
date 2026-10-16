@@ -1433,6 +1433,7 @@
     <string name="chat_new_session_sheet_scheduled">到点执行一条指令（定时任务）</string>
     <string name="chat_new_session_sheet_plan">先备计划，定时自主执行（长任务）</string>
     <string name="chat_mode_longpress_hint">长按模式图标：创建定时任务</string>
+    <string name="chat_mode_longpress_hint_build">长按模式图标：创建定时 Plan</string>
     <string name="prompts_disable_builtin">完全禁用内置提示词</string>
     <string name="prompts_disable_builtin_hint">只保留你的片段；需要自己补全全部规则，谨慎开启</string>
 
@@ -2027,8 +2028,6 @@
     <string name="agent_mode_plan">计划</string>
     <string name="agent_mode_auto">自动</string>
     <string name="agent_mode_build_desc">正常执行：常规操作直接进行，权限按设置确认</string>
-    <string name="agent_mode_plan_desc">只读探索：先读代码给方案，修改类操作会被拦截，待你批准后执行</string>
-    <string name="agent_mode_auto_desc">全放行：所有操作自动执行（灾难性删除仍被拦截）</string>
     <string name="agent_mode_plan_banner">计划模式：只读探索，产出方案待你批准后执行</string>
     <string name="agent_mode_auto_banner">自动模式：操作已全放行（灾难性删除仍被拦截）</string>
     <string name="agent_mode_back_to_build">返回构建模式</string>
@@ -2204,7 +2203,6 @@
     <string name="perm_glossary_apk">安装系统包（Alpine）</string>
     <string name="perm_glossary_apt">安装系统包（Debian/Ubuntu）</string>
     <string name="perm_glossary_echo">输出文本</string>
-    <string name="chat_mode_switched">已切换到「%1$s」模式</string>
     <string name="chat_edit_dialog_title">编辑消息</string>
     <string name="chat_edit_dialog_hint">请输入消息内容</string>
 

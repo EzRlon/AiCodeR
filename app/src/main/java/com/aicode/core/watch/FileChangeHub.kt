@@ -62,8 +62,15 @@ class FileChangeHub @Inject constructor(
         /** 单批明细上限，超出即截断（只保留「有变更」信号）。 */
         private const val MAX_BATCH_SIZE = 512
 
-        /** 快照轮询兜底间隔。 */
+        /** 快照轮询兜底默认间隔。 */
         private const val POLL_INTERVAL_MS = 2000L
+
+        /**
+         * 配置类订阅（权限规则 / MCP 配置等 24 小时常驻且目录很小的订阅）的兜底轮询间隔：
+         * 这些订阅在 App 进程存活期间一直跑（含切后台），单层扫描虽小，但按「禁止无谓唤醒」
+         * 纪律不必 2 秒一问——inotify 主通道不受影响，间隔只影响兜底发现速度。
+         */
+        const val CONFIG_POLL_INTERVAL_MS = 15_000L
 
         /** 订阅根尚不存在时的探测间隔。 */
         private const val ROOT_WAIT_INTERVAL_MS = 2000L
@@ -139,7 +146,8 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        pollIntervalMs: Long = POLL_INTERVAL_MS
     ): Flow<FileChangeBatch> = workspaceRepository.current
         .map { workspaceRepository.currentPath() }
         .distinctUntilChanged()
@@ -154,7 +162,8 @@ class FileChangeHub @Inject constructor(
                     recursive = recursive,
                     filter = filter,
                     fallbackPoll = fallbackPoll,
-                    batchWindowMs = batchWindowMs
+                    batchWindowMs = batchWindowMs,
+                    pollIntervalMs = pollIntervalMs
                 )
             }
         }
@@ -165,7 +174,8 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        pollIntervalMs: Long = POLL_INTERVAL_MS
     ): Flow<FileChangeBatch> {
         val sub = containerSubPath.trim('/')
         return watchHostDir(
@@ -175,7 +185,8 @@ class FileChangeHub @Inject constructor(
             recursive = recursive,
             filter = filter,
             fallbackPoll = fallbackPoll,
-            batchWindowMs = batchWindowMs
+            batchWindowMs = batchWindowMs,
+            pollIntervalMs = pollIntervalMs
         )
     }
 
@@ -191,7 +202,8 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        pollIntervalMs: Long = POLL_INTERVAL_MS
     ): Flow<FileChangeBatch> = flow {
         val subscription = Subscription(
             rootDir = hostDir,
@@ -200,7 +212,8 @@ class FileChangeHub @Inject constructor(
             recursive = recursive,
             filter = filter,
             fallbackPoll = fallbackPoll,
-            windowMs = batchWindowMs
+            windowMs = batchWindowMs,
+            pollIntervalMs = pollIntervalMs
         )
         try {
             subscription.start()
@@ -220,7 +233,8 @@ class FileChangeHub @Inject constructor(
         private val recursive: Boolean,
         private val filter: WatchFilter,
         private val fallbackPoll: Boolean,
-        private val windowMs: Int
+        private val windowMs: Int,
+        private val pollIntervalMs: Long
     ) {
         private val events = Channel<RawEvent>(
             capacity = MAX_PENDING_EVENTS,
@@ -351,7 +365,7 @@ class FileChangeHub @Inject constructor(
             pollJob = ioScope.launch {
                 var last = snapshotOfScope()
                 while (isActive) {
-                    delay(POLL_INTERVAL_MS)
+                    delay(pollIntervalMs)
                     val now = snapshotOfScope()
                     val diff = diffSnapshot(last, now)
                     last = now
