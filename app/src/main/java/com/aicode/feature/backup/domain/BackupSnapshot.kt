@@ -2,6 +2,8 @@ package com.aicode.feature.backup.domain
 
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.permission.PermissionRule
+import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.settings.data.repository.ContainerSettingsSnapshot
 import com.aicode.feature.settings.data.repository.SyncSettingsSnapshot
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -87,6 +89,14 @@ data class BackupMetadata(
     val compactionProviderId: String = "",
     val compactionModel: String = "",
     val syncSettings: SyncSettingsSnapshot? = null,
+    /** 定时任务表（含上次执行结果）；空列表 = 备份未包含此段（旧备份或未勾选）。 */
+    val scheduledTasks: List<ScheduledTask> = emptyList(),
+    /** 工具授权档位的显式设置（toolName → tier.key）；空 = 未包含或不含显式档位（恢复侧均为不动作）。 */
+    val toolPermissionTiers: Map<String, String> = emptyMap(),
+    /** 守夜守护开关；null = 未包含（旧备份或未勾选授权规则段）。 */
+    val watchModeArmed: Boolean? = null,
+    /** 容器与镜像设置（当前 profile / 远程默认容器 / 自定义 profile 列表）；null = 未包含。 */
+    val containerSettings: ContainerSettingsSnapshot? = null,
     val workspaces: List<WorkspaceBackupMeta> = emptyList(),
     val includesAppSettings: Boolean = themeMode != null
 )

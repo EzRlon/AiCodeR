@@ -14,6 +14,9 @@ import com.aicode.feature.agent.data.local.entity.TodoItemEntity
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.permission.PermissionRulesRepository
+import com.aicode.feature.agent.domain.permission.ToolPermissionTier
+import com.aicode.feature.agent.domain.permission.ToolPermissionTierRepository
+import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
 import com.aicode.feature.backup.domain.AgentMessageDto
 import com.aicode.feature.backup.domain.BackupCrypto
 import com.aicode.feature.backup.domain.BackupDecryptionException
@@ -30,9 +33,14 @@ import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.toMetadata
+import com.aicode.feature.credentials.data.repository.FileCredentialRepository
+import com.aicode.feature.schedule.data.ScheduledTaskRepository
+import com.aicode.feature.schedule.domain.ScheduledTask
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
+import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
+import com.aicode.feature.settings.data.repository.ContainerSettingsSnapshot
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
@@ -90,6 +98,11 @@ class BackupManagerImpl @Inject constructor(
     private val visionModelSettingsRepository: VisionModelSettingsRepository,
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val syncSettingsRepository: SyncSettingsRepository,
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val watchModeSettingsRepository: WatchModeSettingsRepository,
+    private val toolPermissionTierRepository: ToolPermissionTierRepository,
+    private val scheduledTaskRepository: ScheduledTaskRepository,
+    private val fileCredentialRepository: FileCredentialRepository,
     private val workspaceRepository: WorkspaceRepository
 ) : BackupManager {
 
@@ -292,6 +305,12 @@ class BackupManagerImpl @Inject constructor(
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
                     writeMetadataEntry(tar, buildMetadata(options))
+                    if (options.aiAssets) {
+                        writeAicodeEntries(tar, AI_ASSET_DIRS, AI_ASSET_FILES)
+                    }
+                    if (options.keys) {
+                        writeAicodeEntries(tar, listOf(AICODE_KEYS_DIR), emptyList())
+                    }
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar)
                     }
@@ -367,6 +386,14 @@ class BackupManagerImpl @Inject constructor(
         compactionProviderId = if (options.appSettings) compactionModelSettingsRepository.getCompactionProviderId() else "",
         compactionModel = if (options.appSettings) compactionModelSettingsRepository.getCompactionModel() else "",
         syncSettings = if (options.appSettings) syncSettingsRepository.snapshot() else null,
+        scheduledTasks = if (options.appSettings) scheduledTaskRepository.tasksFlow.first() else emptyList(),
+        toolPermissionTiers = if (options.permissionRules) {
+            toolPermissionTierRepository.tiersFlow.first().mapValues { it.value.key }
+        } else {
+            emptyMap()
+        },
+        watchModeArmed = if (options.permissionRules) watchModeSettingsRepository.isArmed() else null,
+        containerSettings = if (options.appSettings) containerSettingsRepository.snapshot() else null,
         workspaces = if (options.workspaceFiles) collectWorkspaceMetas() else emptyList(),
         includesAppSettings = options.appSettings
     )
@@ -468,6 +495,37 @@ class BackupManagerImpl @Inject constructor(
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .map { it.trim().removeSuffix("/") }
 
+    // ── AI 资产（~/.aicode 全局目录）备份 ──────────────────────
+
+    /**
+     * 把 ~/.aicode 下的白名单资产写入 tar（条目名 `aicode/<相对路径>`）：
+     * [dirs] 为目录白名单（递归、跳过符号链接），[files] 为根级文件白名单。不存在的项静默跳过。
+     */
+    private fun writeAicodeEntries(tar: TarArchiveOutputStream, dirs: List<String>, files: List<String>) {
+        val root = File(context.filesDir, AICODE_DIR)
+        dirs.forEach { dirName ->
+            val dir = File(root, dirName)
+            if (dir.isDirectory) {
+                walkAicodeFiles(dir, dirName) { file, rel ->
+                    writeTarFileEntry(tar, "$AICODE_PREFIX$rel", file)
+                }
+            }
+        }
+        files.forEach { fileName ->
+            val file = File(root, fileName)
+            if (file.isFile) writeTarFileEntry(tar, "$AICODE_PREFIX$fileName", file)
+        }
+    }
+
+    /** 递归遍历 ~/.aicode 资产目录（跳过符号链接防循环）；[relPrefix] 为相对 aicode 根的前缀。 */
+    private fun walkAicodeFiles(dir: File, relPrefix: String, onFile: (File, String) -> Unit) {
+        dir.listFiles()?.forEach { f ->
+            if (java.nio.file.Files.isSymbolicLink(f.toPath())) return@forEach
+            val rel = if (relPrefix.isEmpty()) f.name else "$relPrefix/${f.name}"
+            if (f.isDirectory) walkAicodeFiles(f, rel, onFile) else onFile(f, rel)
+        }
+    }
+
     private fun writeTarFileEntry(tar: TarArchiveOutputStream, name: String, file: File) {
         val entry = TarArchiveEntry(name).apply { size = file.length() }
         tar.putArchiveEntry(entry)
@@ -525,6 +583,8 @@ class BackupManagerImpl @Inject constructor(
                 else -> {
                     if (entry.name.startsWith(WORKSPACE_PREFIX)) {
                         stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
+                    } else if (entry.name.startsWith(AICODE_PREFIX)) {
+                        stats += restoreAicodeEntry(tar, entry)
                     }
                 }
             }
@@ -637,6 +697,13 @@ class BackupManagerImpl @Inject constructor(
         if (meta.globalPermissionRules.isNotEmpty()) {
             permissionRulesRepository.setGlobalRules(meta.globalPermissionRules)
         }
+        if (meta.toolPermissionTiers.isNotEmpty()) {
+            val tiers = meta.toolPermissionTiers.mapNotNull { (tool, key) ->
+                ToolPermissionTier.fromKey(key)?.let { tool to it }
+            }.toMap()
+            if (tiers.isNotEmpty()) toolPermissionTierRepository.restoreTiers(tiers)
+        }
+        meta.watchModeArmed?.let { watchModeSettingsRepository.setArmed(it) }
         if (meta.includesAppSettings) {
             meta.themeMode?.let { themeSettingsRepository.restore(it) }
             themeSettingsRepository.restoreColors(meta.themePresetId, meta.dynamicColorEnabled)
@@ -662,6 +729,10 @@ class BackupManagerImpl @Inject constructor(
                 compactionModelSettingsRepository.setCompactionModel(meta.compactionProviderId, meta.compactionModel)
             }
             meta.syncSettings?.let { syncSettingsRepository.restore(it) }
+            meta.containerSettings?.let { containerSettingsRepository.restore(it) }
+            if (meta.scheduledTasks.isNotEmpty()) {
+                scheduledTaskRepository.upsertAll(meta.scheduledTasks)
+            }
         }
 
         return RestoreStats(
@@ -669,7 +740,8 @@ class BackupManagerImpl @Inject constructor(
             remoteConnections = meta.remoteConnections.size,
             remoteMounts = meta.remoteMounts.size,
             mcpServers = meta.mcpServers.size,
-            globalPermissionRules = meta.globalPermissionRules.size
+            globalPermissionRules = meta.globalPermissionRules.size,
+            scheduledTasks = meta.scheduledTasks.size
         )
     }
 
@@ -698,6 +770,47 @@ class BackupManagerImpl @Inject constructor(
         FileOutputStream(target).use { out -> tar.copyTo(out) }
         FileLogger.i(TAG, "恢复工作区文件：${ws.name}/${segments[2]}")
         return RestoreStats(workspaceFiles = 1)
+    }
+
+    /**
+     * 还原单个 ~/.aicode 资产条目：`aicode/<相对路径>`。
+     * 防御：白名单（[isAllowedAicodeAsset]）+ ~/.aicode 非符号链接 + 规范化路径仍在根内（防目录穿越）；
+     * 目录条目只建目录；单文件超过 [MAX_AICODE_ENTRY_BYTES] 视为异常跳过（防恶意超大条目写满磁盘）。
+     * git-credentials 写出后刷新凭据缓存，使导入立即生效；其余资产由各自 watch / 扫描机制处理。
+     */
+    private fun restoreAicodeEntry(tar: TarArchiveInputStream, entry: TarArchiveEntry): RestoreStats {
+        val rel = entry.name.removePrefix(AICODE_PREFIX)
+        if (!isAllowedAicodeAsset(rel)) {
+            FileLogger.w(TAG, "跳过不在白名单的 AI 资产条目：${entry.name}")
+            return RestoreStats()
+        }
+        val root = File(context.filesDir, AICODE_DIR)
+        root.mkdirs()
+        if (java.nio.file.Files.isSymbolicLink(root.toPath())) {
+            FileLogger.w(TAG, "跳过 AI 资产导入：~/.aicode 是符号链接")
+            return RestoreStats()
+        }
+        val target = File(root, rel)
+        val rootPath = root.canonicalPath
+        val targetPath = target.canonicalPath
+        if (targetPath != rootPath && !targetPath.startsWith(rootPath + File.separator)) {
+            FileLogger.w(TAG, "跳过越界的 AI 资产条目：${entry.name}")
+            return RestoreStats()
+        }
+        if (entry.isDirectory) {
+            target.mkdirs()
+            return RestoreStats()
+        }
+        if (entry.size > MAX_AICODE_ENTRY_BYTES) {
+            FileLogger.w(TAG, "跳过超大的 AI 资产条目：${entry.name}（${entry.size} 字节）")
+            return RestoreStats()
+        }
+        target.parentFile?.mkdirs()
+        FileOutputStream(target).use { out -> tar.copyTo(out) }
+        if (rel == AICODE_GIT_CREDENTIALS) fileCredentialRepository.reload()
+        FileLogger.i(TAG, "恢复 AI 资产：$rel")
+        val isKey = rel == AICODE_KEYS_DIR || rel.startsWith("$AICODE_KEYS_DIR/")
+        return RestoreStats(aiAssetFiles = if (isKey) 0 else 1, keyFiles = if (isKey) 1 else 0)
     }
 
     /**
@@ -881,8 +994,8 @@ class BackupManagerImpl @Inject constructor(
     private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
     private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
 
-    private companion object {
-        const val TAG = "BackupManager"
+    internal companion object {
+        private const val TAG = "BackupManager"
         const val PAGE_SIZE = 500
         const val FILE_METADATA = "metadata.json"
         const val FILE_SESSIONS = "chatSessions.jsonl"
@@ -890,6 +1003,33 @@ class BackupManagerImpl @Inject constructor(
         const val FILE_TODOS = "todoItems.jsonl"
         const val FILE_LEGACY_SNAPSHOT = "snapshot.json"
         const val WORKSPACE_PREFIX = "workspaces/"
+        const val AICODE_DIR = "aicode"
+        const val AICODE_PREFIX = "aicode/"
+        const val AICODE_GIT_CREDENTIALS = "git-credentials"
+        const val AICODE_KEYS_DIR = "keys"
+
+        /**
+         * AI 资产单文件上限（防恶意超大条目写满磁盘；技能/记忆/密钥等正常文件远小于此值）。
+         * 多条目「总量」不设限：与工作区段/消息段同级的既有一致性设计——导入他人备份即视为信任该文件。
+         */
+        const val MAX_AICODE_ENTRY_BYTES = 64L * 1024 * 1024
+
+        /** AI 资产目录白名单（递归打包）；keys 为独立勾选段，不在此列。 */
+        val AI_ASSET_DIRS = listOf("skills", "agents", "teams", "prompts.custom", "memory", "notes")
+
+        /** AI 资产根级文件白名单。 */
+        val AI_ASSET_FILES = listOf("agents.json", "skills.json", "git-credentials", "hooks.json")
+
+        /**
+         * AI 资产条目白名单校验（导入侧防穿越第一道闸）：目录白名单下的任意文件，或根级文件白名单；
+         * 拒绝空段与 `.` / `..` 段（第二道闸为 [restoreAicodeEntry] 里的规范化路径前缀校验）。
+         */
+        internal fun isAllowedAicodeAsset(rel: String): Boolean {
+            val segments = rel.split('/')
+            if (segments.any { it.isEmpty() || it == "." || it == ".." }) return false
+            if (segments.size == 1) return segments[0] in AI_ASSET_FILES
+            return segments[0] in AI_ASSET_DIRS || segments[0] == AICODE_KEYS_DIR
+        }
     }
 }
 

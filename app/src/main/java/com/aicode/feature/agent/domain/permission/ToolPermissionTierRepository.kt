@@ -60,4 +60,19 @@ class ToolPermissionTierRepository @Inject constructor(
             }
         }
     }
+
+    /**
+     * 从备份还原显式档位：清空现有显式设置后写入给定集合（空 map = 回到全默认）。
+     * 与 [applyProfile] 同语义；备份还原调用方只在备份含非空档位时调用，避免误清本地设置。
+     */
+    suspend fun restoreTiers(tiers: Map<String, ToolPermissionTier>) {
+        context.toolTierDataStore.edit { prefs ->
+            prefs.asMap().keys
+                .filter { it.name.startsWith(KEY_PREFIX) }
+                .forEach { prefs.remove(it) }
+            tiers.forEach { (tool, tier) ->
+                prefs[stringPreferencesKey(KEY_PREFIX + tool)] = tier.key
+            }
+        }
+    }
 }

@@ -617,6 +617,10 @@
     <string name="backup_data_mcp">MCP 服务器</string>
     <string name="backup_data_permissions">授权规则</string>
     <string name="backup_data_app_settings">应用设置</string>
+    <string name="backup_data_ai_assets">AI 资产（技能/子代理/记忆/笔记）</string>
+    <string name="backup_data_ai_assets_hint">全局 ~/.aicode 自定义内容，含 git 凭据与工具钩子</string>
+    <string name="backup_data_keys">密钥库（含私钥）</string>
+    <string name="backup_data_keys_hint">含发布签名与 SSH 私钥；请配合口令加密并妥善保管备份</string>
     <string name="backup_data_workspace">工作区文件</string>
     <string name="backup_workspace_git_hint">工作区文件建议通过 Git 提交备份，导出备份仅作备用</string>
     <string name="backup_password_label">口令（可选）</string>
@@ -632,6 +636,10 @@
     <string name="backup_stat_mcp_servers">· MCP 服务器 %1$s 个</string>
     <string name="backup_stat_permission_rules">· 全局授权规则 %1$s 条</string>
     <string name="backup_stat_workspace_files">· 工作区文件 %1$s 个</string>
+    <string name="backup_stat_ai_assets">· AI 资产文件 %1$s 个</string>
+    <string name="backup_stat_keys">· 密钥文件 %1$s 个</string>
+    <string name="backup_stat_scheduled_tasks">· 定时任务 %1$s 条</string>
+    <string name="backup_keys_password_warning">备份包含密钥私钥，强烈建议设置口令（留空将明文导出）</string>
     <string name="backup_settings_covered">主题、保活、日志、识图、同步偏好已覆盖</string>
     <string name="backup_restore_workspaces_title">恢复工作区</string>
     <string name="backup_restore_workspaces_warning">将直接覆盖本地同名工作区中的文件，且无法撤销，请谨慎勾选</string>

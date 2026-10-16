@@ -74,6 +74,21 @@ class ScheduledTaskRepository @Inject constructor(
         }
     }
 
+    /**
+     * 批量导入（备份还原用）：按 id 覆盖现有任务，备份里没有的任务保留。
+     * 与 [upsert] 不同，这里忠实还原备份快照（含上次执行结果），不做执行结果的本地保留。
+     */
+    suspend fun upsertAll(tasks: List<ScheduledTask>) {
+        if (tasks.isEmpty()) return
+        context.scheduleDataStore.edit { prefs ->
+            val current = decode(prefs[TASKS_KEY])
+            val incoming = tasks.associateBy { it.id }
+            val merged = current.map { existing -> incoming[existing.id] ?: existing } +
+                tasks.filterNot { task -> current.any { it.id == task.id } }
+            prefs[TASKS_KEY] = json.encodeToString(merged)
+        }
+    }
+
     /** 写回一次执行结果（保留任务其余字段）。 */
     suspend fun updateLastRun(id: String, exitCode: Int?, output: String) {
         context.scheduleDataStore.edit { prefs ->

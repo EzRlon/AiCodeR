@@ -617,6 +617,10 @@
     <string name="backup_data_mcp">MCP Servers</string>
     <string name="backup_data_permissions">Permission Rules</string>
     <string name="backup_data_app_settings">App Settings</string>
+    <string name="backup_data_ai_assets">AI Assets (skills/subagents/memory/notes)</string>
+    <string name="backup_data_ai_assets_hint">Custom content under global ~/.aicode, incl. git credentials and tool hooks</string>
+    <string name="backup_data_keys">Key Library (incl. private keys)</string>
+    <string name="backup_data_keys_hint">Contains release signing and SSH private keys; encrypt with a password and store the backup safely</string>
     <string name="backup_data_workspace">Workspace Files</string>
     <string name="backup_workspace_git_hint">Workspace files are best backed up via Git; the export here is only a fallback</string>
     <string name="backup_password_label">Password (optional)</string>
@@ -632,6 +636,10 @@
     <string name="backup_stat_mcp_servers">· MCP Servers: %1$s</string>
     <string name="backup_stat_permission_rules">· Global Permission Rules: %1$s</string>
     <string name="backup_stat_workspace_files">· Workspace Files: %1$s</string>
+    <string name="backup_stat_ai_assets">· AI Asset Files: %1$s</string>
+    <string name="backup_stat_keys">· Key Files: %1$s</string>
+    <string name="backup_stat_scheduled_tasks">· Scheduled Tasks: %1$s</string>
+    <string name="backup_keys_password_warning">The backup contains private keys. Strongly recommended to set a password (empty exports in plain text)</string>
     <string name="backup_settings_covered">Theme, keepalive, logging, vision, and sync preferences covered</string>
     <string name="backup_restore_workspaces_title">Restore workspaces</string>
     <string name="backup_restore_workspaces_warning">Files in local workspaces with the same name will be overwritten and cannot be undone. Select carefully.</string>

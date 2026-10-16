@@ -237,11 +237,15 @@ internal fun BackupScreen(
         }
     }
 
-    // 导出：输口令（可留空）
+    // 导出：输口令（可留空）；勾选了密钥库时给出额外警示
     if (pendingAction == PendingAction.ExportPassword) {
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = if (exportOptions.keys) {
+                stringResource(R.string.backup_keys_password_warning)
+            } else {
+                stringResource(R.string.backup_password_hint)
+            },
             confirmText = stringResource(R.string.backup_export_btn),
             password = password,
             onPasswordChange = { password = it },
@@ -517,6 +521,28 @@ private fun LocalBackupTab(
                     AppSwitch(
                         checked = exportOptions.appSettings,
                         onCheckedChange = { onUpdateOptions(exportOptions.copy(appSettings = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_ai_assets),
+                subtitle = stringResource(R.string.backup_data_ai_assets_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.aiAssets,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(aiAssets = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_keys),
+                subtitle = stringResource(R.string.backup_data_keys_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.keys,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(keys = it)) }
                     )
                 }
             )
@@ -914,6 +940,9 @@ private fun buildImportSummary(context: android.content.Context, stats: RestoreS
     if (stats.todoItems > 0) appendLine(context.getString(R.string.backup_stat_todo_items, stats.todoItems))
     if (stats.mcpServers > 0) appendLine(context.getString(R.string.backup_stat_mcp_servers, stats.mcpServers))
     if (stats.globalPermissionRules > 0) appendLine(context.getString(R.string.backup_stat_permission_rules, stats.globalPermissionRules))
+    if (stats.scheduledTasks > 0) appendLine(context.getString(R.string.backup_stat_scheduled_tasks, stats.scheduledTasks))
     if (stats.workspaceFiles > 0) appendLine(context.getString(R.string.backup_stat_workspace_files, stats.workspaceFiles))
+    if (stats.aiAssetFiles > 0) appendLine(context.getString(R.string.backup_stat_ai_assets, stats.aiAssetFiles))
+    if (stats.keyFiles > 0) appendLine(context.getString(R.string.backup_stat_keys, stats.keyFiles))
     append(context.getString(R.string.backup_settings_covered))
 }

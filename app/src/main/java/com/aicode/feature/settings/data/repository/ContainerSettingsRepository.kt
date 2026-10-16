@@ -9,6 +9,7 @@ import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -206,4 +207,35 @@ class ContainerSettingsRepository @Inject constructor(
                 json.encodeToString(profileSerializer, current.filterNot { it.id == id })
         }
     }
+
+    /** 备份快照：当前选中 profile、远程默认容器、自定义 profile 列表（下载记录与本机路径相关，不纳入备份）。 */
+    suspend fun snapshot(): ContainerSettingsSnapshot = ContainerSettingsSnapshot(
+        activeProfileId = activeProfileIdFlow.first(),
+        defaultContainerId = defaultContainerIdFlow.first(),
+        customProfiles = customProfilesFlow.first()
+    )
+
+    /**
+     * 从备份还原容器设置：自定义 profile 整体替换（顺序沿用备份中的顺序），并写回两个选中项。
+     * 选中项指向可用列表（自定义 + 内置）之外的 id 时回落内置 Alpine，避免损坏/手工构造的备份
+     * 让选中项悬空。
+     */
+    suspend fun restore(snapshot: ContainerSettingsSnapshot) {
+        val known = snapshot.customProfiles.map { it.id }.toSet() + ContainerProfile.BUILTIN_ID
+        val activeId = snapshot.activeProfileId.takeIf { it in known } ?: ContainerProfile.BUILTIN_ID
+        val defaultId = snapshot.defaultContainerId.takeIf { it in known } ?: ContainerProfile.BUILTIN_ID
+        context.containerDataStore.edit { prefs ->
+            prefs[ACTIVE_PROFILE_ID_KEY] = activeId
+            prefs[DEFAULT_CONTAINER_ID_KEY] = defaultId
+            prefs[CUSTOM_PROFILES_KEY] = json.encodeToString(profileSerializer, snapshot.customProfiles)
+        }
+    }
 }
+
+/** 容器设置的备份快照。 */
+@Serializable
+data class ContainerSettingsSnapshot(
+    val activeProfileId: String,
+    val defaultContainerId: String,
+    val customProfiles: List<ContainerProfile>
+)
