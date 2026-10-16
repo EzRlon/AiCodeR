@@ -416,8 +416,8 @@ class SettingsViewModel @Inject constructor(
     private companion object {
         const val MAX_LOG_LINES = 1200
 
-        /** 正式包的 applicationId：只有它能应用内覆盖安装 GitHub Releases 里的包。 */
-        const val RELEASE_APPLICATION_ID = "com.aicode"
+        /** 本分支正式包的 applicationId：只有它能应用内覆盖安装更新源里的包。 */
+        const val RELEASE_APPLICATION_ID = "com.aicoder"
         const val CALLS_PAGE_SIZE = 10
         const val STATS_PAGE_SIZE = 5
         /** 背景透明度停止拖动后的落盘延迟。 */

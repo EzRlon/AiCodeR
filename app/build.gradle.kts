@@ -105,7 +105,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.aicode"
+        // 独立分支标识：不复用官方 AiCode 的包名（com.aicode），避免与官方版互相干扰
+        //（同包名不同签名时无法覆盖安装、升级判定互相冲突）。debug/beta 后缀自动跟随。
+        applicationId = "com.aicoder"
         minSdk = 26
         // 仍锁 targetSdk 28，但阻塞项已不是 PRoot：proot 全套改由 jniLibs 装到 nativeLibraryDir
         // （见 sourceSets 与 packaging.jniLibs 注释），W^X 不再挡容器启动。升级前待解决：
@@ -197,7 +199,7 @@ android {
             }
         }
         // beta 测试版：继承 release 的全部配置（签名/R8/资源压缩/proguard），仅包名后缀 .beta
-        // → applicationId 变 com.aicode.beta，可与正式版同机共存、互不覆盖。
+        // → applicationId 变 com.aicoder.beta，可与正式版同机共存、互不覆盖。
         // 由 .github/workflows/beta.yml 在 push main 时构建并上传 Artifacts，供测机验证。
         create("beta") {
             initWith(getByName("release"))
