@@ -67,6 +67,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipParameters
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -158,7 +159,7 @@ class BackupManagerImpl @Inject constructor(
             val temp = createTempFile()
             try {
                 FileOutputStream(temp).use { fos ->
-                    GzipCompressorOutputStream(fos).use { gz ->
+                    GzipCompressorOutputStream(fos, backupGzipParameters()).use { gz ->
                         TarArchiveOutputStream(gz).use { tar ->
                             tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
                             writeMetadataEntry(tar, BackupMetadata(
@@ -290,6 +291,16 @@ class BackupManagerImpl @Inject constructor(
 
     // ── 导出辅助 ──────────────────────────────────────────────
 
+    /**
+     * 备份导出的 gzip 参数：压缩级别 [BACKUP_GZIP_LEVEL]（fast 档）。
+     * 实测（本机 aarch64，23MB 典型文本）：级别 6→9 体积几乎无差（12.3%→12.2%）但耗时 +65%；
+     * 6→4 耗时约降到 1/3、体积 +~1/4（12.3%→15.5%）。备份是导出-上传低频路径，
+     * 手机 CPU 上导出更快更省电优先，体积代价有界。
+     */
+    private fun backupGzipParameters() = GzipParameters().apply {
+        compressionLevel = BACKUP_GZIP_LEVEL
+    }
+
     private suspend fun writeTarGz(output: OutputStream, options: BackupOptions) {
         val stream = object : FilterOutputStream(output) {
             override fun write(bytes: ByteArray, offset: Int, length: Int) {
@@ -301,7 +312,7 @@ class BackupManagerImpl @Inject constructor(
             }
         }
         stream.buffered().use { fos ->
-            GzipCompressorOutputStream(fos).use { gz ->
+            GzipCompressorOutputStream(fos, backupGzipParameters()).use { gz ->
                 TarArchiveOutputStream(gz).use { tar ->
                     tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
                     writeMetadataEntry(tar, buildMetadata(options))
@@ -1007,6 +1018,9 @@ class BackupManagerImpl @Inject constructor(
         const val AICODE_PREFIX = "aicode/"
         const val AICODE_GIT_CREDENTIALS = "git-credentials"
         const val AICODE_KEYS_DIR = "keys"
+
+        /** 备份 gzip 压缩级别（fast 档；取舍依据见 [backupGzipParameters]）。 */
+        const val BACKUP_GZIP_LEVEL = 4
 
         /**
          * AI 资产单文件上限（防恶意超大条目写满磁盘；技能/记忆/密钥等正常文件远小于此值）。
