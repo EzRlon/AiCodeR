@@ -137,6 +137,7 @@ import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
@@ -305,6 +306,7 @@ fun ChatDrawerContent(
     onNavigateToAnnotations: (() -> Unit)? = null,
     /** 测试包入口：打开工作区 APK 列表；null 则隐藏该入口。 */
     onNavigateToTestBuilds: (() -> Unit)? = null,
+    onNavigateToRea: (() -> Unit)? = null,
     /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
     onNavigateToPreview: (() -> Unit)? = null,
     /** 远程管理入口：与 Web 预览同行弹出选择；null 则隐藏该选项。 */
@@ -544,6 +546,15 @@ fun ChatDrawerContent(
                     icon = FeatherIcons.Globe,
                     title = stringResource(R.string.browser_title),
                     onClick = onNavigateToBrowser,
+                    compact = true
+                )
+                SettingsDivider()
+            }
+            if (onNavigateToRea != null) {
+                SettingsRow(
+                    icon = FeatherIcons.Cpu,
+                    title = stringResource(R.string.rea_entry_title),
+                    onClick = onNavigateToRea,
                     compact = true
                 )
                 SettingsDivider()

@@ -117,6 +117,26 @@ env_install_menu() {
     done
 }
 
+# ══ App 工作台调用入口：provision.sh --install <场景id> → 非交互直接安装单个场景（如 App「逆向分析」工作台一键安装）══
+#    仅适用于安装流程本身无交互输入的场景；进度直接打印到 stdout（App 侧收集展示）；失败返回非零。
+if [ "$1" = "--install" ]; then
+    scenario_id="$2"
+    if [ -z "$scenario_id" ]; then
+        echo "用法：provision.sh --install <场景id>" >&2
+        exit 2
+    fi
+    plog "App 调用：非交互安装场景 $scenario_id"
+    install_scenario "$scenario_id"
+    rc=$?
+    if [ "$rc" = "0" ]; then
+        echo ""
+        echo "${C_GREEN}✓ 场景安装完成：$(scenario_name "$scenario_id")${C_RESET}"
+    else
+        echo "${C_RED}场景安装未完成（exit=$rc），可在终端手动重试：aicode${C_RESET}"
+    fi
+    exit $rc
+fi
+
 # ══ 入口 2：`aicode`（provision.sh --env）→ 直接打开环境安装菜单，不受初始化标记影响 ══
 if [ "$1" = "--env" ]; then
     plog "aicode 打开环境安装菜单：PMGR=${PMGR:-未识别}"
