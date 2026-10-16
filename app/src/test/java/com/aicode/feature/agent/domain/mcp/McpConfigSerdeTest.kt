@@ -54,8 +54,8 @@ class McpConfigSerdeTest {
         val whitelist = setOf("a", "c")
         val disabled = setOf("c")
         val effective = all.filter { (whitelist.isEmpty() || it.name in whitelist) && it.name !in disabled }
-        assertEquals(listOf("a"), effective)
+        assertEquals(listOf("a"), effective.map { it.name })
         val noWhitelist = all.filter { (emptySet<String>().isEmpty() || it.name in emptySet<String>()) && it.name !in disabled }
-        assertEquals(listOf("a", "b"), noWhitelist)
+        assertEquals(listOf("a", "b"), noWhitelist.map { it.name })
     }
 }
