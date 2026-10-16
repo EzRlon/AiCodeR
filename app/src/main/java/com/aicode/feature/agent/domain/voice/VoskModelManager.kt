@@ -252,11 +252,13 @@ class VoskModelManager @Inject constructor(
         const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip"
 
         /**
-         * 下载源列表（顺序尝试）：官方源 + Internet Archive 镜像（已核实为同一文件）。
-         * 无权威国内镜像（魔搭无此模型、HF 仅有词表/超大版），国内可达性以多源自动切换兼顾；
-         * 列表保持可追加（如后续自建 Gitee Release 镜像）。
+         * 下载源列表（顺序尝试）：
+         * 1. 项目自有站点（国内直连，Vercel 部署，速度快——验收反馈：官方源下载缓慢/易失败）；
+         * 2. 官方源；3. Internet Archive 镜像（与官方同一文件）。
+         * 站点尚未部署该文件时源 1 会 404 并自动回落到后续源，不影响可用性。
          */
         val MODEL_URLS = listOf(
+            "https://aicode.murk.top/vosk-model-small-cn-0.22.zip",
             MODEL_URL,
             "https://archive.org/download/vosk-models-small/vosk-model-small-cn-0.22.zip",
         )
