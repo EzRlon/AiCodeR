@@ -1,7 +1,7 @@
 package com.aicode.feature.preview.presentation.component
 
 import android.annotation.SuppressLint
-import android.graphics.Color as AndroidColor
+import android.view.ContextThemeWrapper
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -9,6 +9,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +42,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -68,6 +72,11 @@ internal fun PreviewScreen(
     var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var webView by remember { mutableStateOf<WebView?>(null) }
+
+    // 深色适配：WebView 底色与原生控件主题跟随 App 主题（网页自身配色不干预）。
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val bgColor = MaterialTheme.colorScheme.background
+    val bgArgb = bgColor.toArgb()
 
     Column(
         modifier = Modifier
@@ -147,15 +156,15 @@ internal fun PreviewScreen(
         }
 
         // ── 页面区 ──
-        Box(modifier = Modifier.weight(1f)) {
+        Box(modifier = Modifier.weight(1f).background(bgColor)) {
             AndroidView(
                 factory = { ctx ->
-                    WebView(ctx).apply {
+                    WebView(ContextThemeWrapper(ctx, webViewThemeRes(dark))).apply {
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        setBackgroundColor(AndroidColor.WHITE)
+                        setBackgroundColor(bgArgb)
                         settings.apply {
                             @SuppressLint("SetJavaScriptEnabled")
                             javaScriptEnabled = true
@@ -232,6 +241,14 @@ internal fun PreviewScreen(
         }
     }
 
+    // 主题切换时同步 WebView 原生配色（滚动条等）与底色。
+    LaunchedEffect(dark, webView) {
+        webView?.let { view ->
+            (view.context as? ContextThemeWrapper)?.setTheme(webViewThemeRes(dark))
+            view.setBackgroundColor(bgArgb)
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             webView?.apply {
@@ -243,6 +260,10 @@ internal fun PreviewScreen(
         }
     }
 }
+
+/** WebView 原生控件的深浅配色主题（与 Markdown 预览同款资源）。 */
+private fun webViewThemeRes(dark: Boolean): Int =
+    if (dark) R.style.Theme_AICode_WebView_Dark else R.style.Theme_AICode_WebView
 
 /** 常见 dev server 端口快选。 */
 private val COMMON_PORTS = listOf(3000, 5173, 8080)
