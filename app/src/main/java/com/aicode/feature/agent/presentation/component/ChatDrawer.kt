@@ -375,11 +375,12 @@ fun ChatDrawerContent(
     ) {
         Row(
             // 标签列「停靠在卡片边缘」（用户三次反馈定稿）：直边吸附内容列表（卡片区）右缘、圆角朝右，
-            // 右侧留出与面板边缘的间距；垂直起点下移对齐会话条目（见 drawerTabsTopPadding）。
+            // 右侧留出与面板边缘的小间隙（悬空感）。2026-10-17 验收反馈：整列向右移动——
+            // 与面板边缘间距 lg(16dp)→xs(4dp)，标签列随内容区右移 12dp；垂直起点下移对齐会话条目。
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(end = Spacing.lg)
+                .padding(end = Spacing.xs)
         ) {
             Column(
                 modifier = Modifier
@@ -540,7 +541,7 @@ fun ChatDrawerContent(
         }
 
         // 底部卡片右缘与标签列右缘对齐（"底部镜像"——统一右边距；功能图标仅随布局移位、不翻转）。
-        SettingsGroup(modifier = Modifier.padding(end = Spacing.lg)) {
+        SettingsGroup(modifier = Modifier.padding(end = Spacing.xs)) {
             if (onNavigateToBrowser != null) {
                 SettingsRow(
                     icon = FeatherIcons.Globe,

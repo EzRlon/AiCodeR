@@ -2,6 +2,7 @@ package com.aicode.feature.settings.presentation.component
 
 import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -44,6 +45,8 @@ import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
+import com.aicode.feature.settings.data.repository.ExecutionMode
+import com.aicode.feature.settings.data.repository.ExecutionModeHolder
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -68,6 +71,7 @@ class ReaWorkbenchViewModel @Inject constructor(
     private val commandEngine: CommandEngine,
     private val mcpConfigRepository: McpConfigRepository,
     private val mcpManager: McpManager,
+    private val modeHolder: ExecutionModeHolder,
 ) : ViewModel() {
 
     enum class EnvState { Checking, NotProvisioned, NotInstalled, Installed, Unsupported }
@@ -80,6 +84,8 @@ class ReaWorkbenchViewModel @Inject constructor(
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private val _mcpBusy = MutableStateFlow(false)
 
     val mcpConfigured: StateFlow<Boolean> = mcpConfigRepository.effectiveEntriesFlow
         .map { entries -> entries.any { it.server.name == REA_SERVER_NAME && it.server.enabled } }
@@ -98,8 +104,10 @@ class ReaWorkbenchViewModel @Inject constructor(
     }
 
     private suspend fun checkEnv(): EnvState {
-        if (!commandEngine.isContainerInstalled()) return EnvState.Unsupported
-        if (!commandEngine.isProvisioned()) return EnvState.NotProvisioned
+        // 远程 SSH 模式不支持：REA 场景与 provision.sh 均属本地容器（assets 提取），远程无此链路
+        if (modeHolder.currentMode() == ExecutionMode.REMOTE_SSH) return EnvState.Unsupported
+        // 本地容器未就绪（rootfs 未解压 / 未完成初始化）→ 引导先打开终端
+        if (!commandEngine.isContainerInstalled() || !commandEngine.isProvisioned()) return EnvState.NotProvisioned
         val r = commandEngine.runCommandSyncIfReady("test -f /opt/rea/.installed && echo REA_READY")
             ?: return EnvState.NotInstalled
         return if (r.exitCode == 0 && r.output.contains("REA_READY")) EnvState.Installed else EnvState.NotInstalled
@@ -110,6 +118,18 @@ class ReaWorkbenchViewModel @Inject constructor(
         viewModelScope.launch {
             _installing.value = true
             _message.value = null
+            // 防重：上次进入本页发起的安装在页面销毁后仍会在后台跑——先探测是否已有安装进程
+            val runningElsewhere = runCatching {
+                commandEngine.runCommandSyncIfReady(
+                    // [p] 防自匹配：探针命令行自身含该字符串，pgrep -f 会匹配到外层 shell
+                    "pgrep -f '[p]rovision.sh --install rea' >/dev/null 2>&1 && echo RUNNING"
+                )?.output?.contains("RUNNING") == true
+            }.getOrDefault(false)
+            if (runningElsewhere) {
+                _installing.value = false
+                _message.value = context.getString(R.string.rea_install_running_elsewhere)
+                return@launch
+            }
             val ok = runCatching {
                 commandEngine.runCommandSyncWithExit(
                     command = "sh ~/.aicode/provision.sh --install rea",
@@ -123,8 +143,15 @@ class ReaWorkbenchViewModel @Inject constructor(
     }
 
     fun setupMcp() {
+        if (_mcpBusy.value) return
         viewModelScope.launch {
+            _mcpBusy.value = true
             val ok = runCatching {
+                // 项目级同名会覆盖全局预设（导致「已接入」却不生效）——一并清理
+                val project = mcpConfigRepository.getProjectServers()
+                if (project.any { it.name == REA_SERVER_NAME }) {
+                    mcpConfigRepository.setProjectServers(project.filterNot { it.name == REA_SERVER_NAME })
+                }
                 val servers = mcpConfigRepository.getGlobalServers().toMutableList()
                 servers.removeIf { it.name == REA_SERVER_NAME }
                 servers.add(RecommendedReaConfig)
@@ -132,6 +159,7 @@ class ReaWorkbenchViewModel @Inject constructor(
                 mcpManager.reloadServer(REA_SERVER_NAME)
             }.isSuccess
             _message.value = context.getString(if (ok) R.string.rea_mcp_added else R.string.rea_mcp_add_failed)
+            _mcpBusy.value = false
         }
     }
 
@@ -152,6 +180,11 @@ fun ReaWorkbenchScreen(
     val mcpConfigured by viewModel.mcpConfigured.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // 安装中退出页面不中止安装（进程在后台继续）——拦截返回时明确告知
+    BackHandler(enabled = installing) {
+        Toast.makeText(context, context.getString(R.string.rea_install_bg_hint), Toast.LENGTH_LONG).show()
+        onBack()
+    }
     LaunchedEffect(message) {
         val m = message ?: return@LaunchedEffect
         Toast.makeText(context, m, Toast.LENGTH_LONG).show()

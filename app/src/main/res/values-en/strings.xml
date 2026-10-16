@@ -1293,13 +1293,15 @@
     <string name="rea_status_installed">Installed</string>
     <string name="rea_status_connected">Connected</string>
     <string name="rea_status_not_connected">Not connected</string>
-    <string name="rea_status_not_provisioned">Container not initialized (open the terminal once)</string>
+    <string name="rea_status_not_provisioned">Container not initialized: open the terminal to initialize (or run `aicode`)</string>
     <string name="rea_status_unsupported">Local container mode only</string>
     <string name="rea_install_button">Install environment</string>
     <string name="rea_installing">Installing (a few minutes; keep the app in the foreground)…</string>
     <string name="rea_setup_mcp_button">Add to MCP</string>
     <string name="rea_install_done">Environment installed</string>
     <string name="rea_install_failed">Install did not finish; check the network and retry</string>
+    <string name="rea_install_bg_hint">Installation will continue in the background; reopen this page later to check</string>
+    <string name="rea_install_running_elsewhere">An installation is already running; reopen this page later</string>
     <string name="rea_mcp_added">Connected — in chat, ask: analyze xxx.apk</string>
     <string name="rea_mcp_add_failed">Failed to add; please retry</string>
     <string name="rea_ready_hint">Ready — in chat, ask: how does xxx.apk work?</string>

@@ -27,6 +27,8 @@ if [ ! -f "$LIB_FILE" ]; then
 fi
 if [ ! -f "$LIB_FILE" ]; then
     echo "环境工具未就绪，请重启 App 后重新进入终端" >&2
+    # --install 是 App 工作台入口，需以非零码显式失败（否则 App 误判安装成功）
+    [ "$1" = "--install" ] && exit 3
     exit 0
 fi
 . "$LIB_FILE"
@@ -118,7 +120,7 @@ env_install_menu() {
 }
 
 # ══ App 工作台调用入口：provision.sh --install <场景id> → 非交互直接安装单个场景（如 App「逆向分析」工作台一键安装）══
-#    仅适用于安装流程本身无交互输入的场景；进度直接打印到 stdout（App 侧收集展示）；失败返回非零。
+#    仅适用于安装流程本身无交互输入的场景；进度打印到 stdout（供终端/日志排查；App 侧当前仅取退出码）；失败返回非零。
 if [ "$1" = "--install" ]; then
     scenario_id="$2"
     if [ -z "$scenario_id" ]; then
