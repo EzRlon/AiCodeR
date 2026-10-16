@@ -161,7 +161,10 @@ class McpManager @Inject constructor(
             client.connect()
 
             val tools = client.tools.map { McpTool(client, it) }
-            val enabledTools = tools.filter { it.remoteName !in cfg.disabledTools }
+            val enabledTools = tools.filter {
+                (cfg.enabledTools.isEmpty() || it.remoteName in cfg.enabledTools) &&
+                    it.remoteName !in cfg.disabledTools
+            }
             synchronized(activeClients) {
                 activeClients[cfg.name] = client
                 enabledTools.forEach { tool ->

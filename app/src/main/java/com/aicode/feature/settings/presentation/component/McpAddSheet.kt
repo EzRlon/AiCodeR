@@ -19,6 +19,7 @@ import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.agent.domain.mcp.McpScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Globe
@@ -33,6 +34,30 @@ internal val RecommendedContext7Config: McpServerConfig = McpServerConfig(
     enabled = false
 )
 
+/** REA 工具白名单：从 207 个工具中只放行核心只读分析集（防 prompt 预算爆炸），二期可按需扩充。 */
+internal val ReaEnabledTools: Set<String> = setOf(
+    "binary_session", "open_binary", "close_binary", "binary_overview", "inspect_artifact",
+    "inspect_android_package", "inspect_android_class", "inspect_android_method",
+    "search_android_classes", "trace_android_references", "analyze_javascript_application",
+    "identify_flutter_build", "list_strings", "search_strings", "find_xrefs_to_name",
+    "analyze_function", "procedure_pseudo_code", "procedure_callers", "batch_decompile",
+    "list_unknowns", "export_evidence_bundle"
+)
+
+/**
+ * 「推荐」区条目：REA（Reverse Engineer Anything）逆向分析。
+ * 本地 stdio（npx），依赖容器「逆向分析」环境（jadx 引擎路径经 env 传入）；
+ * 预填带工具白名单与 enabled=true（保存即用，配合「零门槛」定位）。
+ */
+internal val RecommendedReaConfig: McpServerConfig = McpServerConfig(
+    name = "rea",
+    command = "npx",
+    args = listOf("-y", "rea-agents@6.5.0", "mcp"),
+    env = mapOf("REA_JADX_MCP_JAR" to "/opt/rea/jadx-headless-mcp-0.7.1-all.jar"),
+    enabled = true,
+    enabledTools = ReaEnabledTools
+)
+
 /**
  * 「添加 MCP 服务器」底部弹层：顶部选作用域（全局 / 当前项目）；
  * 下方「推荐」区（Context7 一键预填）+ 两种添加方式——手动填写、粘贴标准 mcpServers JSON 批量导入。
@@ -44,6 +69,7 @@ internal fun McpAddSheet(
     onScopeChange: (McpScope) -> Unit,
     onManual: () -> Unit,
     onImportJson: () -> Unit,
+    onSelectRea: () -> Unit,
     onSelectContext7: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -91,6 +117,13 @@ internal fun McpAddSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 SettingsGroup {
+                    SettingsRow(
+                        icon = FeatherIcons.Cpu,
+                        title = stringResource(R.string.mcp_recommended_rea_title),
+                        subtitle = stringResource(R.string.mcp_recommended_rea_desc),
+                        onClick = onSelectRea
+                    )
+                    SettingsDivider()
                     SettingsRow(
                         icon = FeatherIcons.Globe,
                         title = "Context7",

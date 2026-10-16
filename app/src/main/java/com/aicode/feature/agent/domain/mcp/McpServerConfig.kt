@@ -13,6 +13,8 @@ data class McpServerConfig(
     val env: Map<String, String> = emptyMap(),
     val enabled: Boolean = true,
     val disabledTools: Set<String> = emptySet(),
+    /** 工具白名单：非空时只注册名单内工具（用于 REA 等工具量极大的服务器，防 prompt 预算爆炸）；与 disabledTools 叠加生效。 */
+    val enabledTools: Set<String> = emptySet(),
     val auth: McpAuthConfig? = null
 ) {
     val isStdio: Boolean get() = !command.isNullOrBlank()

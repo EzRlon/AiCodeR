@@ -128,6 +128,10 @@ fun McpServerEditDialog(
         mutableStateListOf<String>().apply { addAll(initial?.disabledTools ?: emptyList()) }
     }
 
+    // 白名单（REA 等预设配置携带）：非空时仅名单内工具会被注册。
+    // 本编辑界面不改动白名单本身，但启用计数与行状态需按真实生效集显示（保存时透传）。
+    val whitelistTools = initial?.enabledTools ?: prefillConfig?.enabledTools ?: emptySet()
+
     var toolSearchQuery by remember { mutableStateOf("") }
 
     // 名称会拼进 `mcp__<名称>__<工具名>` 送给模型，必须符合 function-calling 命名规范。
@@ -146,7 +150,8 @@ fun McpServerEditDialog(
                     .filter { it.first.isNotEmpty() }
                     .toMap(),
                 enabled = enabled,
-                disabledTools = disabledToolsSet.toSet()
+                disabledTools = disabledToolsSet.toSet(),
+                enabledTools = whitelistTools
             )
         } else {
             McpServerConfig(
@@ -158,6 +163,7 @@ fun McpServerEditDialog(
                     .toMap(),
                 enabled = enabled,
                 disabledTools = disabledToolsSet.toSet(),
+                enabledTools = whitelistTools,
                 auth = if (authEnabled) {
                     McpAuthConfig(
                         type = McpAuthConfig.TYPE_OAUTH,
@@ -437,7 +443,9 @@ fun McpServerEditDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                val enabledCount = tools.count { it.name !in disabledToolsSet }
+                                val enabledCount = tools.count {
+                                    (whitelistTools.isEmpty() || it.name in whitelistTools) && it.name !in disabledToolsSet
+                                }
                                 Text(
                                     text = stringResource(R.string.mcp_tools_summary, enabledCount, tools.size),
                                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
@@ -495,7 +503,7 @@ fun McpServerEditDialog(
                                 }
                             } else {
                                 filteredTools.forEach { tool ->
-                                    val isToolEnabled = tool.name !in disabledToolsSet
+                                    val isToolEnabled = (whitelistTools.isEmpty() || tool.name in whitelistTools) && tool.name !in disabledToolsSet
                                     var descriptionExpanded by remember(tool.name) { mutableStateOf(false) }
 
                                     Card(

@@ -272,6 +272,9 @@ class McpConfigRepository @Inject constructor(
                     if (server.disabledTools.isNotEmpty()) {
                         putJsonArray("disabledTools") { server.disabledTools.forEach { add(it) } }
                     }
+                    if (server.enabledTools.isNotEmpty()) {
+                        putJsonArray("enabledTools") { server.enabledTools.forEach { add(it) } }
+                    }
                 }
             }
         }
@@ -297,6 +300,10 @@ class McpConfigRepository @Inject constructor(
                 (it as? JsonPrimitive)?.contentOrNull
             }?.toSet() ?: emptySet()
 
+            val enabledTools = (obj["enabledTools"] as? JsonArray)?.mapNotNull {
+                (it as? JsonPrimitive)?.contentOrNull
+            }?.toSet() ?: emptySet()
+
             when {
                 !command.isNullOrBlank() -> {
                     val args = (obj["args"] as? JsonArray)?.mapNotNull {
@@ -311,7 +318,8 @@ class McpConfigRepository @Inject constructor(
                         args = args,
                         env = env,
                         enabled = enabled,
-                        disabledTools = disabledTools
+                        disabledTools = disabledTools,
+                        enabledTools = enabledTools
                     )
                 }
                 !url.isNullOrBlank() -> {
@@ -332,6 +340,7 @@ class McpConfigRepository @Inject constructor(
                         headers = headers,
                         enabled = enabled,
                         disabledTools = disabledTools,
+                        enabledTools = enabledTools,
                         auth = auth
                     )
                 }

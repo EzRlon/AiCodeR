@@ -1351,6 +1351,13 @@ fun SettingsScreen(
                 showMcpAddSheet = false
                 showMcpJsonImport = true
             },
+            onSelectRea = {
+                // 推荐条目：走手动添加流程并预填；预填 enabled=true（保存即可用）。
+                showMcpAddSheet = false
+                editingMcp = null
+                mcpEditorPrefill = RecommendedReaConfig
+                showMcpDialog = true
+            },
             onSelectContext7 = {
                 // 推荐条目：走手动添加流程并预填；默认不启用，与商店「安装 ≠ 启用」语义一致。
                 showMcpAddSheet = false

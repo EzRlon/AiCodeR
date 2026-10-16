@@ -118,6 +118,7 @@ export default defineConfig({
             { text: '终端', link: '/guide/terminal' },
             { text: '内置浏览器', link: '/guide/browser' },
             { text: 'VNC 悬浮窗', link: '/guide/vnc' },
+            { text: '逆向分析（REA）', link: '/guide/reverse-engineering' },
             { text: 'AI 智能体（终端 CLI）', link: '/guide/agent-cli' },
             { text: '界面标注（标注账本）', link: '/guide/annotations' },
             { text: '测试包与一键安装', link: '/guide/test-builds' },

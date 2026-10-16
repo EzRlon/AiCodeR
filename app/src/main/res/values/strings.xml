@@ -1279,8 +1279,10 @@
     <string name="mcp_tools_disable_all">全部禁用</string>
     <string name="mcp_add_sheet_title">添加 MCP 服务器</string>
     <string name="mcp_recommended_section">推荐</string>
+    <string name="mcp_recommended_rea_title">REA 逆向工程</string>
+    <string name="mcp_recommended_rea_desc">分析 App / APK / JS 包是怎么实现的（需先在「环境安装」装好「逆向分析」）</string>
     <string name="mcp_recommended_context7_desc">免安装免登录，提供最新库/框架文档检索</string>
-    <string name="mcp_recommended_footer">点击进入添加流程并预填配置；添加后默认禁用，可随时启用</string>
+    <string name="mcp_recommended_footer">点击进入添加流程并预填配置</string>
     <string name="mcp_add_manual">手动填写</string>
     <string name="mcp_add_manual_desc">逐个填写地址、请求头或启动命令</string>
     <string name="mcp_add_from_json">从 JSON 导入</string>
