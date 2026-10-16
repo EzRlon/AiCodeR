@@ -36,6 +36,8 @@ import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
 import com.aicode.feature.settings.data.repository.StartupSessionMode
+import com.aicode.feature.settings.data.repository.VoiceEngine
+import com.aicode.feature.settings.data.repository.VoiceSettingsRepository
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
@@ -174,10 +176,15 @@ class AIAgentViewModel @Inject constructor(
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
     private val scheduledTaskRepository: com.aicode.feature.schedule.data.ScheduledTaskRepository,
+    private val voiceSettingsRepository: VoiceSettingsRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
     private val sessionJobs = mutableMapOf<String, Job>()
+
+    /** 语音输入引擎（设置里可切换；下一次录音生效）。 */
+    val voiceEngine: StateFlow<VoiceEngine> = voiceSettingsRepository.engineFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VoiceEngine.SYSTEM)
 
     private val _handoffPrompt = MutableStateFlow<HandoffPrompt?>(null)
     val handoffPrompt: StateFlow<HandoffPrompt?> = _handoffPrompt.asStateFlow()

@@ -399,6 +399,9 @@ dependencies {
     // Android WebKit 扩展（提供现代深色模式 WebSettingsCompat / ForceDark 支持）
     implementation("androidx.webkit:webkit:1.12.1")
 
+    // 离线语音识别（Vosk；中文模型按需下载，不随 APK 分发）
+    implementation("com.alphacephei:vosk-android:0.3.75")
+
     // Shizuku：以 adb shell（uid 2000）身份执行命令。api 提供 Shizuku 类与 UserService 绑定，
     // provider 注册 ShizukuProvider（见 AndroidManifest）以跨进程获取 binder。
     implementation("dev.rikka.shizuku:api:13.1.5")

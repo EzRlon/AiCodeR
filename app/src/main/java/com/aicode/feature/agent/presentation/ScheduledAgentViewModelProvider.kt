@@ -30,6 +30,7 @@ import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepositor
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
+import com.aicode.feature.settings.data.repository.VoiceSettingsRepository
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.terminal.domain.TerminalSessionManager
@@ -85,6 +86,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
     private val scheduledTaskRepository: ScheduledTaskRepository,
+    private val voiceSettingsRepository: VoiceSettingsRepository,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -123,6 +125,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         fileAccess,
         fileChangeHub,
         scheduledTaskRepository,
+        voiceSettingsRepository,
         context
     )
 }

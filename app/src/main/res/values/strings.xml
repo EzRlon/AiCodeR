@@ -1906,13 +1906,29 @@
     <string name="chat_explain_prefix">请解释以下内容：</string>
     <string name="chat_search_workspace_prefix">请在项目工作区中查找与以下内容相关的实现：</string>
     <string name="chat_session_id_copied">已复制会话 ID</string>
-    <string name="chat_voice_release_send">松开发送 · 上滑取消</string>
+    <string name="chat_voice_release_send">松手转文字 · 上滑取消</string>
     <string name="chat_voice_processing">正在识别…</string>
     <string name="chat_voice_listening_hint">正在聆听…再点一下结束</string>
     <string name="chat_voice_no_speech">没有听清，请重试</string>
     <string name="chat_voice_failed">语音识别失败，请重试</string>
     <string name="chat_voice_permission_granted">已允许录音，请再次长按发送键说话</string>
     <string name="chat_voice_permission_granted_tap">已允许录音，再点一下麦克风即可说话</string>
+    <string name="chat_voice_model_missing">离线语音模型未就绪，请到「设置 → 偏好设置」下载</string>
+
+    <!-- 语音输入引擎 -->
+    <string name="settings_voice_group">语音输入</string>
+    <string name="settings_voice_engine">识别引擎</string>
+    <string name="voice_engine_system">系统识别</string>
+    <string name="voice_engine_system_desc">使用设备自带的语音服务（谷歌或厂商）</string>
+    <string name="voice_engine_offline">离线识别（中文）</string>
+    <string name="voice_engine_offline_desc">完全离线，无需网络与账号；需先下载模型</string>
+    <string name="settings_voice_model">中文语音模型</string>
+    <string name="voice_model_missing">未下载 · 点按下载（约 %1$d MB）</string>
+    <string name="voice_model_downloading">下载中 %1$d%%</string>
+    <string name="voice_model_downloading_unknown">下载中…</string>
+    <string name="voice_model_installing">安装中…</string>
+    <string name="voice_model_ready">已就绪</string>
+    <string name="voice_model_failed">下载失败 · 点按重试</string>
     <string name="browser_share">分享</string>
     <string name="browser_copy_link">复制链接</string>
     <string name="browser_link_copied">链接已复制</string>

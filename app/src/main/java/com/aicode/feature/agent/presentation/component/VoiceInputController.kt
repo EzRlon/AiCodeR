@@ -8,7 +8,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
 /**
- * 应用内语音识别封装（微信式「按住说话」用）：基于系统 [SpeechRecognizer]，不跳出 App。
+ * 系统语音识别实现（微信式「按住说话」用）：基于系统 [SpeechRecognizer]（谷歌或厂商语音服务），不跳出 App。
  *
  * 生命周期约定（均在主线程调用）：
  * - [start] 开始识别；[finish] 停止并等待最终结果（[onResult] 异步到达）；[cancel] 直接取消；
@@ -17,18 +17,18 @@ import android.speech.SpeechRecognizer
  * 需要 RECORD_AUDIO 权限（调用前由 UI 层检查/请求）；未授权或设备无识别服务时
  * [start] 会立即回调 [onError]（[SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS] 等）。
  */
-internal class VoiceInputController(private val context: Context) {
+internal class VoiceInputController(private val context: Context) : VoiceSession {
 
-    var onResult: ((String) -> Unit)? = null
-    var onError: ((Int) -> Unit)? = null
+    override var onResult: ((String) -> Unit)? = null
+    override var onError: ((Int) -> Unit)? = null
 
     private var recognizer: SpeechRecognizer? = null
 
-    fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
+    override fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
 
-    fun start() {
+    override fun start() {
         if (!isAvailable()) {
-            onError?.invoke(ERROR_UNAVAILABLE)
+            onError?.invoke(VoiceSession.ERROR_UNAVAILABLE)
             return
         }
         if (recognizer == null) {
@@ -46,16 +46,16 @@ internal class VoiceInputController(private val context: Context) {
     }
 
     /** 停止收音：触发最终结果回调（[onResult] 异步到达）。 */
-    fun finish() {
+    override fun finish() {
         recognizer?.stopListening()
     }
 
     /** 取消本次识别（上滑取消）：不产生任何结果回调。 */
-    fun cancel() {
+    override fun cancel() {
         recognizer?.cancel()
     }
 
-    fun destroy() {
+    override fun destroy() {
         recognizer?.destroy()
         recognizer = null
     }
@@ -80,10 +80,5 @@ internal class VoiceInputController(private val context: Context) {
         override fun onEndOfSpeech() {}
         override fun onPartialResults(partialResults: Bundle?) {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
-    }
-
-    companion object {
-        /** 设备/系统无可用语音识别服务（INFO 之外的本地错误码，与系统错误码不冲突）。 */
-        const val ERROR_UNAVAILABLE = -1000
     }
 }

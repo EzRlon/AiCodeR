@@ -1907,13 +1907,29 @@
     <string name="chat_explain_prefix">Please explain the following:</string>
     <string name="chat_search_workspace_prefix">Find implementations in the project workspace related to the following:</string>
     <string name="chat_session_id_copied">Session ID copied</string>
-    <string name="chat_voice_release_send">Release to send · slide up to cancel</string>
+    <string name="chat_voice_release_send">Release to transcribe · slide up to cancel</string>
     <string name="chat_voice_processing">Recognizing…</string>
     <string name="chat_voice_listening_hint">Listening… tap again to stop</string>
     <string name="chat_voice_no_speech">Didn\'t catch that, please retry</string>
     <string name="chat_voice_failed">Speech recognition failed, please retry</string>
     <string name="chat_voice_permission_granted">Microphone allowed, hold the send button again to talk</string>
     <string name="chat_voice_permission_granted_tap">Microphone allowed, tap the mic button again to talk</string>
+    <string name="chat_voice_model_missing">Offline speech model not ready — download it in Settings → Preferences</string>
+
+    <!-- Voice input engine -->
+    <string name="settings_voice_group">Voice input</string>
+    <string name="settings_voice_engine">Recognition engine</string>
+    <string name="voice_engine_system">System recognition</string>
+    <string name="voice_engine_system_desc">Use the device\'s built-in speech service (Google or vendor)</string>
+    <string name="voice_engine_offline">Offline (Chinese)</string>
+    <string name="voice_engine_offline_desc">Fully offline — no network or account needed; one-time model download required</string>
+    <string name="settings_voice_model">Chinese speech model</string>
+    <string name="voice_model_missing">Not downloaded · tap to download (~%1$d MB)</string>
+    <string name="voice_model_downloading">Downloading %1$d%%</string>
+    <string name="voice_model_downloading_unknown">Downloading…</string>
+    <string name="voice_model_installing">Installing…</string>
+    <string name="voice_model_ready">Ready</string>
+    <string name="voice_model_failed">Download failed · tap to retry</string>
     <string name="browser_share">Share</string>
     <string name="browser_copy_link">Copy link</string>
     <string name="browser_link_copied">Link copied</string>

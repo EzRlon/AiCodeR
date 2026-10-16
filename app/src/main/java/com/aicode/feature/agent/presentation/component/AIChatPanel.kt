@@ -1386,9 +1386,13 @@ fun AIChatPanel(
         listState.animateScrollToItem(target)
     }
 
-    // ── 语音输入（应用内识别）：长按发送键为「按住说话」（松手直接发送）；
-    // 点击麦克风为点击聆听（再点一下结束，识别结果追加进输入框草稿）。──
-    val voiceController = remember { VoiceInputController(context.applicationContext) }
+    // ── 语音输入（应用内识别）：长按发送键为「按住说话」（松手后识别文本进输入框草稿，不直接发送）；
+    // 点击麦克风为点击聆听（再点一下结束，同样进草稿）。──
+    // 引擎来自设置（系统 / 离线）：切换时重建会话，下方 DisposableEffect 负责释放旧实例。
+    val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
+    val voiceController: VoiceSession = remember(voiceEngine) {
+        VoiceSession.create(context.applicationContext, voiceEngine)
+    }
     var voiceProcessing by remember { mutableStateOf(false) }
     // 点击聆听进行中（从开始持续到结果/错误到达；结果分流靠它区分点击与长按两种来源）
     var voiceTapActive by remember { mutableStateOf(false) }
@@ -1420,40 +1424,22 @@ fun AIChatPanel(
     }
     val onVoiceResult = rememberUpdatedState<(String) -> Unit>({ text ->
         voiceProcessing = false
-        val fromTap = voiceTapActive
         voiceTapActive = false
         val t = text.trim()
         if (t.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.chat_voice_no_speech), Toast.LENGTH_SHORT).show()
-        } else if (fromTap) {
-            // 点击聆听：识别文本追加进输入框草稿（不直接发送）
-            viewModel.updateInputDraft(if (inputText.isBlank()) t else "$inputText $t")
         } else {
-            // 长按「按住说话」：维持现状，识别结果直接发送
-            val intentType = draftIntentType
-            viewModel.enqueueAgentRequest(
-                request = t,
-                modelRequest = t + MessageIntentCatalog.modelNote(context, intentType),
-                currentFile = currentFile,
-                selectedCode = selectedCode,
-                projectRoot = projectRoot,
-                inputImages = emptyList(),
-                inputAttachments = emptyList(),
-                intentType = intentType
-            )
-            viewModel.updateDraftIntentType(null)
-            followBottom = true
-            scope.launch {
-                delay(0)
-                snapToBottom()
-            }
+            // 识别文本一率先进输入框草稿、不直接发送：可编辑、删除（撤销）或直接发送——
+            // 等价于「未发出语音」的可撤销确认阶段（AI 只接收文字，没有语音消息载体）。
+            viewModel.updateInputDraft(if (inputText.isBlank()) t else "$inputText $t")
         }
     })
     val onVoiceError = rememberUpdatedState<(Int) -> Unit>({ code ->
         voiceProcessing = false
         voiceTapActive = false
         val msgRes = when (code) {
-            VoiceInputController.ERROR_UNAVAILABLE -> R.string.chat_voice_unavailable
+            VoiceSession.ERROR_UNAVAILABLE -> R.string.chat_voice_unavailable
+            VoiceSession.ERROR_MODEL_MISSING -> R.string.chat_voice_model_missing
             SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> R.string.chat_voice_no_speech
             else -> R.string.chat_voice_failed
         }

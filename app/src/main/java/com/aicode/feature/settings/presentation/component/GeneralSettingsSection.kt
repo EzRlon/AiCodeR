@@ -35,7 +35,9 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.settings.data.repository.StartupSessionMode
+import com.aicode.feature.settings.data.repository.VoiceEngine
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 
@@ -69,9 +71,14 @@ internal fun GeneralSettingsSection(
     handoffPromptEnabled: Boolean,
     onToggleHandoffPromptEnabled: (Boolean) -> Unit,
     handoffPromptPercent: Int,
-    onSetHandoffPromptPercent: (Int) -> Unit
+    onSetHandoffPromptPercent: (Int) -> Unit,
+    voiceEngine: VoiceEngine,
+    voiceModelState: VoskModelManager.ModelState,
+    onSelectVoiceEngine: (VoiceEngine) -> Unit,
+    onDownloadVoiceModel: () -> Unit
 ) {
     var showStartupSessionSheet by remember { mutableStateOf(false) }
+    var showVoiceEngineSheet by remember { mutableStateOf(false) }
     var editingFirstByteTimeout by remember { mutableStateOf(false) }
     var editingStreamIdleTimeout by remember { mutableStateOf(false) }
     var editingMaxNetworkRetries by remember { mutableStateOf(false) }
@@ -277,6 +284,28 @@ internal fun GeneralSettingsSection(
                 }
             )
         }
+
+        SettingsGroupHeader(text = stringResource(R.string.settings_voice_group))
+        SettingsGroup {
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_voice_engine),
+                subtitle = stringResource(voiceEngineLabelRes(voiceEngine)),
+                onClick = { showVoiceEngineSheet = true }
+            )
+            if (voiceEngine == VoiceEngine.OFFLINE) {
+                SettingsDivider()
+                val downloadable = voiceModelState is VoskModelManager.ModelState.Missing ||
+                    voiceModelState is VoskModelManager.ModelState.Failed
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.settings_voice_model),
+                    subtitle = voiceModelSubtitle(voiceModelState),
+                    enabled = downloadable,
+                    onClick = { onDownloadVoiceModel() }
+                )
+            }
+        }
     }
 
     if (showStartupSessionSheet) {
@@ -287,6 +316,17 @@ internal fun GeneralSettingsSection(
                 showStartupSessionSheet = false
             },
             onDismiss = { showStartupSessionSheet = false }
+        )
+    }
+
+    if (showVoiceEngineSheet) {
+        VoiceEngineSheet(
+            selected = voiceEngine,
+            onSelect = {
+                onSelectVoiceEngine(it)
+                showVoiceEngineSheet = false
+            },
+            onDismiss = { showVoiceEngineSheet = false }
         )
     }
 
@@ -511,4 +551,90 @@ private fun StartupSessionMode.labelRes(): Int = when (this) {
 private fun StartupSessionMode.descRes(): Int = when (this) {
     StartupSessionMode.NEW_SESSION -> R.string.settings_startup_session_new_desc
     StartupSessionMode.RECENT_SESSION -> R.string.settings_startup_session_recent_desc
+}
+
+/** 语音引擎选择弹层（系统 / 离线）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VoiceEngineSheet(
+    selected: VoiceEngine,
+    onSelect: (VoiceEngine) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.settings_voice_engine),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .padding(horizontal = Spacing.lg)
+                    .padding(bottom = Spacing.md)
+            )
+
+            VoiceEngine.entries.forEach { engine ->
+                val isSelected = engine == selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(engine) }
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(voiceEngineLabelRes(engine)),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = stringResource(voiceEngineDescRes(engine)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (isSelected) {
+                        Icon(
+                            imageVector = FeatherIcons.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun voiceEngineLabelRes(engine: VoiceEngine): Int = when (engine) {
+    VoiceEngine.SYSTEM -> R.string.voice_engine_system
+    VoiceEngine.OFFLINE -> R.string.voice_engine_offline
+}
+
+private fun voiceEngineDescRes(engine: VoiceEngine): Int = when (engine) {
+    VoiceEngine.SYSTEM -> R.string.voice_engine_system_desc
+    VoiceEngine.OFFLINE -> R.string.voice_engine_offline_desc
+}
+
+/** 离线语音模型行的状态副标题。 */
+@Composable
+private fun voiceModelSubtitle(state: VoskModelManager.ModelState): String = when (state) {
+    VoskModelManager.ModelState.Missing ->
+        stringResource(R.string.voice_model_missing, VoskModelManager.MODEL_SIZE_MB)
+    is VoskModelManager.ModelState.Downloading ->
+        if (state.percent >= 0) stringResource(R.string.voice_model_downloading, state.percent)
+        else stringResource(R.string.voice_model_downloading_unknown)
+    VoskModelManager.ModelState.Installing -> stringResource(R.string.voice_model_installing)
+    is VoskModelManager.ModelState.Ready -> stringResource(R.string.voice_model_ready)
+    VoskModelManager.ModelState.Failed -> stringResource(R.string.voice_model_failed)
 }

@@ -264,6 +264,8 @@ fun SettingsScreen(
     val selfImproveMode by viewModel.selfImproveMode.collectAsStateWithLifecycle()
     val handoffPromptEnabled by viewModel.handoffPromptEnabled.collectAsStateWithLifecycle()
     val handoffPromptPercent by viewModel.handoffPromptPercent.collectAsStateWithLifecycle()
+    val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
+    val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themePresetId by viewModel.themePresetId.collectAsStateWithLifecycle()
     val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsStateWithLifecycle()
@@ -1028,7 +1030,11 @@ fun SettingsScreen(
                     handoffPromptEnabled = handoffPromptEnabled,
                     onToggleHandoffPromptEnabled = { viewModel.setHandoffPromptEnabled(it) },
                     handoffPromptPercent = handoffPromptPercent,
-                    onSetHandoffPromptPercent = { viewModel.setHandoffPromptPercent(it) }
+                    onSetHandoffPromptPercent = { viewModel.setHandoffPromptPercent(it) },
+                    voiceEngine = voiceEngine,
+                    voiceModelState = voiceModelState,
+                    onSelectVoiceEngine = { viewModel.setVoiceEngine(it) },
+                    onDownloadVoiceModel = { viewModel.downloadVoiceModel() }
                 )
                 SettingsSection.Providers -> ProvidersSection(
                     providers = providers,

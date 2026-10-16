@@ -19,6 +19,7 @@ import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
+import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
@@ -73,6 +74,8 @@ import com.aicode.feature.settings.data.repository.DownloadedImageRecord
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
+import com.aicode.feature.settings.data.repository.VoiceEngine
+import com.aicode.feature.settings.data.repository.VoiceSettingsRepository
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
 import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
@@ -359,6 +362,8 @@ private fun padTrend(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val voiceSettingsRepository: VoiceSettingsRepository,
+    private val voskModelManager: VoskModelManager,
     private val repository: AIProviderRepository,
     private val modelApiService: ModelApiService,
     private val modelMetadataService: ModelMetadataService,
@@ -580,6 +585,12 @@ class SettingsViewModel @Inject constructor(
 
     private val _handoffPromptEnabled = MutableStateFlow(true)
     val handoffPromptEnabled: StateFlow<Boolean> = _handoffPromptEnabled.asStateFlow()
+
+    private val _voiceEngine = MutableStateFlow(VoiceEngine.SYSTEM)
+    val voiceEngine: StateFlow<VoiceEngine> = _voiceEngine.asStateFlow()
+
+    /** 离线语音模型状态（下载/安装进度等；直接来自管理器）。 */
+    val voiceModelState: StateFlow<VoskModelManager.ModelState> = voskModelManager.state
 
     private val _handoffPromptPercent = MutableStateFlow(50)
     val handoffPromptPercent: StateFlow<Int> = _handoffPromptPercent.asStateFlow()
@@ -971,6 +982,12 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.startupSessionModeFlow.collectLatest {
                     _startupSessionMode.value = it
+                }
+            }
+
+            launch {
+                voiceSettingsRepository.engineFlow.collectLatest {
+                    _voiceEngine.value = it
                 }
             }
 
@@ -1986,6 +2003,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             generalSettingsRepository.setHandoffPromptPercent(percent)
         }
+    }
+
+    /** 切换语音输入引擎（系统 / 离线；离线需模型就绪）。 */
+    fun setVoiceEngine(engine: VoiceEngine) {
+        viewModelScope.launch {
+            voiceSettingsRepository.setEngine(engine)
+        }
+    }
+
+    /** 下载离线语音模型（进行中/已就绪时内部忽略）。 */
+    fun downloadVoiceModel() {
+        voskModelManager.startDownload()
     }
 
     /** 启动（含切换工作区）时进入新会话还是最近会话。 */
