@@ -158,10 +158,10 @@ private data class DrawerTab(val icon: ImageVector, val label: String, val desc:
 private val drawerTabWidth = 32.dp
 
 /**
- * 标签列顶部下移量：与内容列表「第一条会话标题」大致水平对齐（验收反馈 2026-10-17：
- * 按钮不要那么靠上）。估算：搜索框≈38 + 间距 8 + 分组头≈41 + 行内标题中线≈32 − 按钮半高 21。
+ * 标签列顶部下移量：与内容列表「第一条会话标题」水平对齐（验收反馈 2026-10-17）。
+ * 估算（qa 校准）：搜索框 41 + 间距 8 + 分组头 44 + 行内标题中线 19.5 − 按钮半高 21 ≈ 91.5 → 92。
  */
-private val drawerTabsTopPadding = 100.dp
+private val drawerTabsTopPadding = 92.dp
 
 /**
  * 产品册索引标签风竖排标签列：直边吸附内容卡片（列表区）右缘、圆角朝右的小标签，图标简洁。
