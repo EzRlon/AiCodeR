@@ -254,6 +254,10 @@ class McpConfigRepository @Inject constructor(
 
 /** MCP 配置 JSON 的序列化/解析（纯函数，无实例依赖；从仓库类提取以便独立单测）。 */
 internal object McpJsonCodec {
+    private const val TAG = "McpJsonCodec"
+    private val JSON = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val PRETTY_JSON = Json { prettyPrint = true }
+
     fun serialize(servers: List<McpServerConfig>): String {
         val serversObj = buildJsonObject {
             servers.forEach { server ->
