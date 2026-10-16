@@ -32,7 +32,7 @@ class StoreApiClient @Inject constructor(
         const val TAG = "StoreApiClient"
         const val CM_BASE = "https://claudemarket.ai"
         const val MCP_BASE = "https://registry.modelcontextprotocol.io"
-        const val USER_AGENT = "AiCode-Android"
+        const val USER_AGENT = "AiCodeR-Android"
     }
 
     private val json = Json {

@@ -11,7 +11,7 @@ import com.aicode.R
 import java.io.File
 
 /**
- * 宿主系统级的文件操作：保存到共享存储（下载/AiCode）、用 MT 管理器打开、
+ * 宿主系统级的文件操作：保存到共享存储（下载/AiCodeR）、用 MT 管理器打开、
  * 在文件管理器中查看、分享（FileProvider 授权 URI）。
  *
  * 「用 XX 打开 / 跳转」的产品语义 = 先由调用方把文件准备成宿主可访问的本地文件
@@ -22,8 +22,8 @@ object ExternalFileActions {
     /** MT 管理器包名。 */
     private const val MT_PACKAGE = "bin.mt.plus"
 
-    /** 共享存储中的保存子目录（下载/AiCode）。 */
-    private const val SAVE_DIR = "AiCode"
+    /** 共享存储中的保存子目录（下载/AiCodeR）。 */
+    private const val SAVE_DIR = "AiCodeR"
 
     private const val SHARE_CACHE_DIR = "sent_files"
 
@@ -104,7 +104,7 @@ object ExternalFileActions {
     }
 
     /**
-     * 保存到手机共享存储 `下载/AiCode/`。targetSdk 28（legacy 外部存储）下直写，再经媒体扫描
+     * 保存到手机共享存储 `下载/AiCodeR/`。targetSdk 28（legacy 外部存储）下直写，再经媒体扫描
      * 让文件管理器立即可见；同名文件自动加 `-2`、`-3` 后缀。成功返回展示路径，失败返回 null。
      * 展示路径用下载目录的实际物理名（dir.name，如 Download），与实际存放位置一致。
      */

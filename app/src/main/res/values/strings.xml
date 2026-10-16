@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AiCode</string>
+    <string name="app_name">许愿码</string>
     <string name="chat_context_usage_estimated">预计占可用输入预算 %1$d%%</string>
     <string name="agent_input_budget_exceeded">上下文超过当前模型的可用输入预算，请缩短输入或减少工具定义。</string>
 
@@ -429,7 +429,7 @@
     <string name="credential_auto_inject_title">自动注入凭证</string>
     <string name="credential_auto_inject_hint">把应用中保存的 git 凭据同步到远程服务器，仅对当前工作区根目录下的仓库生效，不影响你在服务器上手动使用 git</string>
     <string name="credential_auto_inject_prompt_title">自动注入 git 凭证？</string>
-    <string name="credential_auto_inject_prompt_body">是否让 AiCode 把应用中保存的 git 凭据同步到该远程服务器？仅对当前工作区根目录下的仓库生效，不会改动服务器的全局 git 配置。</string>
+    <string name="credential_auto_inject_prompt_body">是否让许愿码把应用中保存的 git 凭据同步到该远程服务器？仅对当前工作区根目录下的仓库生效，不会改动服务器的全局 git 配置。</string>
     <string name="credential_auto_inject_enable">开启</string>
     <string name="common_rename">重命名</string>
     <string name="common_hide">隐藏</string>
@@ -511,7 +511,7 @@
     <string name="file_action_install">安装</string>
     <string name="file_action_mt">用 MT 管理器打开</string>
     <string name="file_action_filemanager">在文件管理器中查看</string>
-    <string name="file_action_save">保存到手机（下载/AiCode）</string>
+    <string name="file_action_save">保存到手机（下载/AiCodeR）</string>
     <string name="file_action_share">分享</string>
     <string name="file_action_copy_path">复制路径</string>
     <string name="file_action_path_copied">路径已复制</string>
@@ -964,7 +964,7 @@
     <!-- Credential List -->
     <string name="credential_empty_hint">尚未添加凭据，点右上角 + 添加</string>
     <string name="credential_empty_title">暂无 Git 凭据</string>
-    <string name="credential_empty_desc">配置凭据后，AiCode 可在推送或拉取代码仓库时自动完成身份认证</string>
+    <string name="credential_empty_desc">配置凭据后，许愿码可在推送或拉取代码仓库时自动完成身份认证</string>
 
     <!-- Credential Add / Quick Login -->
     <string name="credential_add_sheet_title">添加凭据</string>
@@ -2215,7 +2215,7 @@
     <string name="crash_restart">重启应用</string>
     <string name="crash_exit">退出应用</string>
     <string name="crash_log_hint">完整日志文件位置：%1$s</string>
-    <string name="crash_report_title">AiCode 崩溃报告</string>
+    <string name="crash_report_title">许愿码崩溃报告</string>
     <string name="crash_report_time">时间：%1$s</string>
     <string name="crash_report_version">版本：%1$s</string>
     <string name="crash_report_device">设备：%1$s</string>

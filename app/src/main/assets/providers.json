@@ -109,7 +109,7 @@
   },
   {
     "id": "aicode",
-    "name": "AiCode",
+    "name": "AiCodeR",
     "type": "OPENAI",
     "baseUrl": "https://ai.murk.top/v1",
     "isRecommended": true,

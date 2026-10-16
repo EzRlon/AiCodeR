@@ -215,7 +215,7 @@ class KeysViewModel @Inject constructor(
     private fun buildManifest(entries: List<KeyFile>): String {
         val format = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
         return buildString {
-            appendLine("AiCode 密钥导出 / Keys Export")
+            appendLine("AiCodeR 密钥导出 / Keys Export")
             appendLine("时间 / Time: ${format.format(Date())}")
             appendLine("条目 / Entries: ${entries.size}")
             appendLine()
