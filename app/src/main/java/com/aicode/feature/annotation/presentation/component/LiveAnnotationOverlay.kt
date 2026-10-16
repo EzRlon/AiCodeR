@@ -1,6 +1,7 @@
 package com.aicode.feature.annotation.presentation.component
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -66,11 +67,17 @@ import compose.icons.feathericons.Check
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Minus
 import compose.icons.feathericons.MousePointer
+import compose.icons.feathericons.RotateCcw
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.Trash
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.X
 import kotlin.math.roundToInt
+
+/** 浮动工具条位置记忆（SharedPreferences）。 */
+private const val BAR_PREF_NAME = "live_annotation_bar"
+private const val BAR_PREF_X = "x"
+private const val BAR_PREF_Y = "y"
 
 /** 活标注当前工具（null 表示操作态：触摸全部穿透到真实界面）。 */
 private enum class LiveTool { RECT, LINE, ARROW, STROKE, TEXT, SELECT }
@@ -106,6 +113,8 @@ internal fun LiveAnnotationOverlay(
     var editingTextIndex by remember { mutableStateOf(-1) }
     var textDraft by remember { mutableStateOf("") }
     var barOffset by remember { mutableStateOf<Offset?>(null) }
+    var barSize by remember { mutableStateOf(IntSize.Zero) }
+    val barPrefs = remember { context.getSharedPreferences(BAR_PREF_NAME, Context.MODE_PRIVATE) }
     var captureInFlight by remember { mutableStateOf(false) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     val fit = remember(canvasSize) {
@@ -261,15 +270,31 @@ internal fun LiveAnnotationOverlay(
             null -> Unit
         }
 
-        // ── 3) 浮动工具条（可拖动）──
+        // ── 3) 浮动工具条（可拖动，带位置记忆）──
         val screenWidthPx = canvasSize.width.toFloat()
         val screenHeightPx = canvasSize.height.toFloat()
-        LaunchedEffect(canvasSize) {
+        // 浮条尺寸首帧未测得：初始定位与拖动 clamp 先用估计值兜底，测得后以实测为准。
+        val barWidthForClamp = if (barSize.width > 0) barSize.width.toFloat() else with(density) { 300.dp.toPx() }
+        val barHeightForClamp = if (barSize.height > 0) barSize.height.toFloat() else with(density) { 110.dp.toPx() }
+        fun clampBar(raw: Offset): Offset {
+            val marginPx = with(density) { 8.dp.toPx() }
+            val maxX = (screenWidthPx - barWidthForClamp - marginPx).coerceAtLeast(marginPx)
+            val maxY = (screenHeightPx - barHeightForClamp - marginPx).coerceAtLeast(marginPx)
+            return Offset(raw.x.coerceIn(marginPx, maxX), raw.y.coerceIn(marginPx, maxY))
+        }
+        LaunchedEffect(canvasSize, barSize) {
             if (barOffset == null && canvasSize.width > 0) {
-                barOffset = Offset(
-                    (screenWidthPx - with(density) { 200.dp.toPx() }).coerceAtLeast(16f),
-                    screenHeightPx * 0.32f
+                // 优先用记住的上次位置；没有则给默认位：竖屏右下（拇指区）、横屏右侧中部。
+                val saved = if (barPrefs.contains(BAR_PREF_X) && barPrefs.contains(BAR_PREF_Y)) {
+                    Offset(barPrefs.getFloat(BAR_PREF_X, 0f), barPrefs.getFloat(BAR_PREF_Y, 0f))
+                } else {
+                    null
+                }
+                val fallback = Offset(
+                    (screenWidthPx - barWidthForClamp - with(density) { 16.dp.toPx() }).coerceAtLeast(16f),
+                    screenHeightPx * if (screenWidthPx > screenHeightPx) 0.4f else 0.62f
                 )
+                barOffset = clampBar(saved ?: fallback)
             }
         }
         val offset = barOffset ?: Offset(16f, 16f)
@@ -278,9 +303,16 @@ internal fun LiveAnnotationOverlay(
             color = Color.Black.copy(alpha = 0.55f),
             modifier = Modifier
                 .offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
+                .onSizeChanged { barSize = it }
                 .pointerInput(Unit) {
-                    detectDragGestures { change, delta ->
-                        barOffset = (barOffset ?: Offset.Zero) + delta
+                    detectDragGestures(
+                        onDragEnd = {
+                            barOffset?.let {
+                                barPrefs.edit().putFloat(BAR_PREF_X, it.x).putFloat(BAR_PREF_Y, it.y).apply()
+                            }
+                        }
+                    ) { change, delta ->
+                        barOffset = clampBar((barOffset ?: Offset.Zero) + delta)
                         change.consume()
                     }
                 }
@@ -317,7 +349,7 @@ internal fun LiveAnnotationOverlay(
                     ToolToggle(tool == LiveTool.SELECT, FeatherIcons.MousePointer, stringResource(R.string.annotation_live_select)) { tool = LiveTool.SELECT }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ToolToggle(false, FeatherIcons.Trash, stringResource(R.string.annotation_undo)) {
+                    ToolToggle(false, FeatherIcons.RotateCcw, stringResource(R.string.annotation_undo)) {
                         marks.removeLastOrNull()
                         selectedIndex = -1
                     }

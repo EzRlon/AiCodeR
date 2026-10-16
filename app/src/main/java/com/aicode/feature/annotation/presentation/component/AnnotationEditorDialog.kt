@@ -76,6 +76,7 @@ import compose.icons.feathericons.Check
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Minus
 import compose.icons.feathericons.Square
+import compose.icons.feathericons.RotateCcw
 import compose.icons.feathericons.Trash
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.X
@@ -165,7 +166,7 @@ internal fun AnnotationEditorDialog(
                         enabled = marks.isNotEmpty()
                     ) {
                         Icon(
-                            FeatherIcons.Trash,
+                            FeatherIcons.RotateCcw,
                             contentDescription = stringResource(R.string.annotation_undo),
                             tint = if (marks.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.3f)
                         )
