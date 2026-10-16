@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 /**
  * VNC 悬浮小窗的状态中枢：窗口几何/钉住/最小化/全屏 + 容器服务状态 + 自动弹出轮询。
  * 作用域为聊天页 NavBackStackEntry（与 WorkbenchPane 同惯例）；轮询在聊天页存续期间运行
- * （导航入栈或退后台时每 5s 一次容器内 pgrep，开销极小，本地模式之外直接短路）；
+ * （每 5s 一次本地 TCP 端口探测，毫秒级且不唤起容器，本地模式之外直接短路）；
  * 几何与钉住状态经 DataStore 跨会话记忆，手动收起后 [AUTO_POPUP_COOLDOWN_MS] 内不再自动弹出。
  */
 @HiltViewModel

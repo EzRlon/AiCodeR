@@ -617,7 +617,7 @@ internal fun ChatInputBar(
                                 )
                                 Text(
                                     text = stringResource(
-                                        if (currentMode == AgentMode.BUILD) R.string.chat_mode_longpress_hint_build
+                                        if (currentMode == AgentMode.PLAN) R.string.chat_mode_longpress_hint_plan
                                         else R.string.chat_mode_longpress_hint
                                     ),
                                     style = MaterialTheme.typography.labelSmall,

@@ -1433,7 +1433,7 @@
     <string name="chat_new_session_sheet_scheduled">到点执行一条指令（定时任务）</string>
     <string name="chat_new_session_sheet_plan">先备计划，定时自主执行（长任务）</string>
     <string name="chat_mode_longpress_hint">长按模式图标：创建定时任务</string>
-    <string name="chat_mode_longpress_hint_build">长按模式图标：创建定时 Plan</string>
+    <string name="chat_mode_longpress_hint_plan">长按模式图标：创建定时 Plan</string>
     <string name="prompts_disable_builtin">完全禁用内置提示词</string>
     <string name="prompts_disable_builtin_hint">只保留你的片段；需要自己补全全部规则，谨慎开启</string>
 

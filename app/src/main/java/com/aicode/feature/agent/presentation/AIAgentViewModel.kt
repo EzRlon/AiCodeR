@@ -2225,10 +2225,13 @@ class AIAgentViewModel @Inject constructor(
     fun stopAllAgents() {
         // 取消前先抓快照：cancel 后内存态即被清空，未完成工具/流式文本需落库收尾
         // （与 stopAgentSession 同语义），否则同进程内切回该会话仍显示「执行中」。
-        val stoppedStates = sessionJobs.filterValues { it.isActive }.keys
-            .mapNotNull { snapshotStoppedState(it) }
-        val jobs = sessionJobs.values.filter { it.isActive }
-        jobs.forEach { it.cancel() }
+        val activeIds = sessionJobs.filterValues { it.isActive }.keys.toList()
+        val stoppedStates = activeIds.mapNotNull { snapshotStoppedState(it) }
+        // 子代理并发槽位兜底回收：取消路径不会发完成事件，不回收会让槽位虚高（task 误报已达上限）。
+        activeIds.forEach { subAgentEventBus.release(it) }
+        // cancel 在 Main.immediate 上可能同步跑完旧 job 的 finally 并经 flush/队列路径注册接替 job；
+        // 迭代两轮把它们一并取消，避免 clear 后出现无人持引用的游离任务。
+        repeat(2) { sessionJobs.values.toList().forEach { it.cancel() } }
         sessionJobs.clear()
         agentNotificationCenter.clearAll()
         _queuedRequests.value = emptyMap()

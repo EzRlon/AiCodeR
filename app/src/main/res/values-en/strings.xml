@@ -1433,7 +1433,7 @@
     <string name="chat_new_session_sheet_scheduled">Run an instruction on schedule (scheduled task)</string>
     <string name="chat_new_session_sheet_plan">Plan first, run unattended on schedule (long task)</string>
     <string name="chat_mode_longpress_hint">Long-press a mode icon: create a scheduled task</string>
-    <string name="chat_mode_longpress_hint_build">Long-press a mode icon: schedule a Plan</string>
+    <string name="chat_mode_longpress_hint_plan">Long-press a mode icon: schedule a Plan</string>
     <string name="prompts_disable_builtin">Disable all built-in prompts</string>
     <string name="prompts_disable_builtin_hint">Keep only your own fragments; you must supply every rule yourself</string>
 
