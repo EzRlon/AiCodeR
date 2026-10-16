@@ -164,9 +164,9 @@ private val drawerTabWidth = 32.dp
 private val drawerTabsTopPadding = 100.dp
 
 /**
- * 产品册索引标签风竖排标签列：完整圆角的小标签，整列停靠在左侧栏（抽屉）的边缘线上，图标简洁。
- * **样式规则（勿破）**：标签形状统一为完整圆角；以后新增的页签按钮只需加入 [tabs] 列表即可
- * 自动继承（形状在 [tabShape] 处统一定义；停靠位置由父级 Row 控制——整列贴抽屉右缘线）。
+ * 产品册索引标签风竖排标签列：直边吸附内容卡片（列表区）右缘、圆角朝右的小标签，图标简洁。
+ * **样式规则（勿破，用户三次反馈定稿）**：标签形状统一「圆角朝右、直边贴上一级卡片边缘」；
+ * 垂直起点下移对齐会话条目（[drawerTabsTopPadding]）；以后新增的页签按钮只需加入 [tabs] 列表即可自动继承。
  * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被卡片裁剪）。
  */
 @Composable
@@ -184,8 +184,8 @@ private fun DrawerVerticalTabs(
     val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
     val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value)
         .coerceIn(64f, 220f).dp
-    // 标签形状：完整圆角（四角对称）——「停靠在左侧栏边缘」的验收形态。
-    val tabShape = RoundedCornerShape(10.dp)
+    // 形状定稿：直边（左）吸附卡片右缘、圆角朝右——用户三次反馈确认的形态（勿再改）。
+    val tabShape = RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
 
     Column(
         modifier = modifier
@@ -372,16 +372,17 @@ fun ChatDrawerContent(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         Row(
-            // 标签列「停靠在左侧栏的边缘」：整列贴住抽屉右缘线，形状为完整圆角（验收反馈）。
+            // 标签列「停靠在卡片边缘」（用户三次反馈定稿）：直边吸附内容列表（卡片区）右缘、圆角朝右，
+            // 右侧留出与面板边缘的间距；垂直起点下移对齐会话条目（见 drawerTabsTopPadding）。
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .padding(end = Spacing.lg)
         ) {
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight()
-                    .padding(end = Spacing.sm),
+                    .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
 
@@ -516,7 +517,7 @@ fun ChatDrawerContent(
                 }
             }
 
-            // 产品册索引标签：整列停靠在左侧栏边缘线上，按住浮出功能提示
+            // 产品册索引标签：直边贴卡片右缘、圆角朝右；垂直下移对齐会话条目，按住浮出功能提示
             DrawerVerticalTabs(
                 selected = selectedTab,
                 tabs = listOf(

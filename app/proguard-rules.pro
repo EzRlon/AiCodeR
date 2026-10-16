@@ -145,3 +145,9 @@
 # 首次 R8 真机验证期保守整包保留类名与成员，防止去虚化/合并破坏密钥协商链路（远程是核心功能）。
 -keep class net.schmizz.** { *; }
 -dontwarn net.schmizz.**
+
+# ---- net.i2p.crypto:eddsa（sshj 的 Ed25519 依赖）----
+# 通过 JCA Provider（EdDSASecurityProvider）按类名字符串反射实例化引擎（EdDSAEngine 等）；
+# 类名被混淆会使 Ed25519 签名失败，整包保留。
+-keep class net.i2p.crypto.eddsa.** { *; }
+-dontwarn net.i2p.crypto.eddsa.**
