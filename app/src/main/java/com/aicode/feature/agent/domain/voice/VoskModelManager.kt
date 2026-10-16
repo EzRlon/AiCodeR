@@ -32,6 +32,11 @@ import okhttp3.Request
  * 安装采用「先解压临时目录、就绪校验通过后才替换正式目录」的顺序，失败不会破坏既有模型。
  * 两个涉及删除的目录均为 App 独占（filesDir 下自建），且 `java.util.zip` 解压不会把
  * zip 的符号链接条目还原为真实链接（落地为普通文件），删除无跟随链接的风险。
+ *
+ * 下载源为多源顺序尝试（官方 + Internet Archive 镜像，验收反馈 F7：无 VPN/国内网络需
+ * 自动切换），单源失败自动换下一个；同源中断重试支持 Range 断点续传；下载完成后与官方
+ * 发布件做 sha256 比对，不匹配则丢弃重试。最近一次失败原因记录在 [lastFailureReason]
+ * 供引导卡片/设置页展示。
  */
 @Singleton
 class VoskModelManager @Inject constructor(
@@ -64,6 +69,11 @@ class VoskModelManager @Inject constructor(
     @Volatile
     private var downloading = false
 
+    /** 最近一次失败原因（成功后清空）；多源全部不可达时为最后一个源的异常描述。 */
+    @Volatile
+    var lastFailureReason: String? = null
+        private set
+
     /** 下载复用同一 client（连接池）；超时按大文件放宽。 */
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -85,6 +95,7 @@ class VoskModelManager @Inject constructor(
             val tmpZip = File(context.cacheDir, "vosk-model-cn-download.zip")
             val tmpDir = File(context.filesDir, MODEL_DIR_NAME + "-tmp")
             try {
+                lastFailureReason = null
                 _state.value = ModelState.Downloading(-1)
                 download(tmpZip)
                 _state.value = ModelState.Installing
@@ -92,26 +103,59 @@ class VoskModelManager @Inject constructor(
                 install(tmpDir)
                 _state.value = ModelState.Ready(modelDir().absolutePath)
                 FileLogger.i(TAG, "离线语音模型已就绪")
+                // 成功才清下载产物；失败保留 tmpZip 与源标记，供下次断点续传/复用完整残本
+                tmpZip.delete()
+                File(context.cacheDir, tmpZip.name + ".src").delete()
             } catch (e: Exception) {
                 FileLogger.w(TAG, "离线语音模型安装失败", e)
+                lastFailureReason = e.message ?: e.javaClass.simpleName
                 tmpDir.deleteRecursively()
                 _state.value = ModelState.Failed
             } finally {
                 downloading = false
-                tmpZip.delete()
             }
         }
     }
 
+    /** 依次尝试各下载源，首个成功即返回；失败信息逐源拼接上报（便于排障）。 */
     private fun download(dest: File) {
-        httpClient.newCall(Request.Builder().url(MODEL_URL).build()).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-            val body = response.body ?: throw IOException("empty body")
-            val total = body.contentLength()
+        val failures = mutableListOf<String>()
+        for (url in MODEL_URLS) {
+            try {
+                downloadFrom(url, dest)
+                verifySha256(dest)
+                return
+            } catch (e: IOException) {
+                failures += "${url.substringAfterLast('/')}：${e.message}"
+                FileLogger.w(TAG, "语音模型下载源失败（$url）：${e.message}")
+            }
+        }
+        throw IOException(failures.joinToString("；"))
+    }
+
+    /**
+     * 从单个源下载到 [dest]，支持同源断点续传：缓存里记录上次使用的源（marker 文件），
+     * 与本次一致且已有部分文件时发 Range 请求接续；服务器回 206 则追加写入，否则删除重下。
+     * 进度按「已写总字节 / 含续传偏移的总大小」上报，续传时也从真实比例继续。
+     */
+    private fun downloadFrom(url: String, dest: File) {
+        val srcMarker = File(context.cacheDir, dest.name + ".src")
+        val resumeFrom = if (srcMarker.isFile && srcMarker.readText() == url && dest.isFile) dest.length() else 0L
+        // 先记录本次源：下载中途失败后下次按同源续传；换源重试会因 marker 不匹配而从头下载
+        srcMarker.writeText(url)
+        val request = Request.Builder().url(url).apply {
+            if (resumeFrom > 0) header("Range", "bytes=$resumeFrom-")
+        }.build()
+        httpClient.newCall(request).execute().use { response ->
+            val resumed = resumeFrom > 0 && response.code == 206
+            if (!response.isSuccessful && !resumed) throw IOException("HTTP ${response.code}")
+            val body = response.body ?: throw IOException("空响应")
+            val bodyLen = body.contentLength()
+            val total = if (resumed && bodyLen >= 0) resumeFrom + bodyLen else bodyLen
             body.byteStream().use { input ->
-                FileOutputStream(dest).use { output ->
+                FileOutputStream(dest, resumed).use { output ->
                     val buffer = ByteArray(64 * 1024)
-                    var copied = 0L
+                    var copied = resumeFrom
                     var lastPercent = -1
                     while (true) {
                         val read = input.read(buffer)
@@ -125,13 +169,31 @@ class VoskModelManager @Inject constructor(
                                 _state.value = ModelState.Downloading(percent)
                             }
                         }
-                        // 完整性兜底：Content-Length 已知时校验总字节数
-                        if (total > 0 && copied != total) {
-                            throw IOException("下载不完整：$copied / $total 字节")
-                        }
+                    }
+                    // 完整性兜底：Content-Length 已知时校验总字节数
+                    if (total > 0 && copied != total) {
+                        throw IOException("下载不完整：$copied / $total 字节")
                     }
                 }
             }
+        }
+    }
+
+    /** 与官方发布件的 sha256 比对（各源为同一文件）；不匹配则删除残本，由调用方换源/重试。 */
+    private fun verifySha256(dest: File) {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        FileInputStream(dest).use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (!actual.equals(MODEL_SHA256, ignoreCase = true)) {
+            dest.delete()
+            throw IOException("模型文件校验失败（sha256 不匹配）")
         }
     }
 
@@ -188,6 +250,19 @@ class VoskModelManager @Inject constructor(
 
         /** 官方中文小模型（约 42MB）。 */
         const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip"
+
+        /**
+         * 下载源列表（顺序尝试）：官方源 + Internet Archive 镜像（已核实为同一文件）。
+         * 无权威国内镜像（魔搭无此模型、HF 仅有词表/超大版），国内可达性以多源自动切换兼顾；
+         * 列表保持可追加（如后续自建 Gitee Release 镜像）。
+         */
+        val MODEL_URLS = listOf(
+            MODEL_URL,
+            "https://archive.org/download/vosk-models-small/vosk-model-small-cn-0.22.zip",
+        )
+
+        /** 官方发布件的 sha256（43,898,754 字节，2026-10-16 实测；各源同一文件）。 */
+        const val MODEL_SHA256 = "3af8b0e7e0f835ae9d414ce5df580237a3cfb08d586c9fbbb0f7ff29ad5b14ba"
 
         /** 展示用大小（MB）。 */
         const val MODEL_SIZE_MB = 42

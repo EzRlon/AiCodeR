@@ -25,6 +25,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,7 +46,39 @@ import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import com.aicode.feature.settings.presentation.component.ModelSelectionSheet
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
-import compose.icons.feathericons.Zap
+
+/**
+ * 思考强度入口的灯泡图标：参照 RikkaHub「调整模型思考深度」面板的灯泡意象（验收反馈 F1，
+ * 原与自动模式的 FeatherIcons.Zap 重复）。取 lucide lightbulb 同款路径，与 Feather 图标
+ * 同源的 24dp/2dp stroke 线性风格（Feather 集无灯泡，故自绘）。
+ */
+private val LightbulbIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "Lightbulb",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            moveTo(15f, 14f)
+            curveToRelative(0.2f, -1f, 0.7f, -1.7f, 1.5f, -2.5f)
+            curveToRelative(1f, -0.9f, 1.5f, -2.2f, 1.5f, -3.5f)
+            arcTo(6f, 6f, 0f, isMoreThanHalf = false, isPositiveArc = false, 6f, 8f)
+            curveToRelative(0f, 1f, 0.2f, 2.2f, 1.5f, 3.5f)
+            curveToRelative(0.7f, 0.7f, 1.3f, 1.5f, 1.5f, 2.5f)
+            moveTo(9f, 18f)
+            lineTo(15f, 18f)
+            moveTo(10f, 21f)
+            lineTo(14f, 21f)
+        }
+    }.build()
+}
 
 /**
  * 输入区下行的模型切换图标按钮
@@ -102,7 +140,7 @@ internal fun ReasoningEffortSelector(
             modifier = Modifier.size(36.dp)
         ) {
             Icon(
-                FeatherIcons.Zap,
+                LightbulbIcon,
                 contentDescription = stringResource(effort.labelRes()),
                 tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
                 modifier = Modifier.size(20.dp)
@@ -144,7 +182,7 @@ internal fun ReasoningEffortSelector(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            FeatherIcons.Zap,
+                            LightbulbIcon,
                             contentDescription = null,
                             tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)

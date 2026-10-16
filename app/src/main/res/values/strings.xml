@@ -326,7 +326,7 @@
     <string name="annotation_saved">已保存到标注账本</string>
     <string name="annotation_save_failed">保存失败，请重试</string>
     <string name="annotation_capture_failed">截屏失败，请重试</string>
-    <string name="annotation_ledger_empty">还没有标注，从侧边栏「界面标注」开始</string>
+    <string name="annotation_ledger_empty">收集来自界面标注和截图标注的反馈信息</string>
     <string name="annotation_no_note">（未填说明）</string>
     <string name="annotation_loading">加载中…</string>
     <string name="annotation_delete">删除这条标注</string>
@@ -1935,6 +1935,18 @@
     <string name="chat_voice_permission_granted">已允许录音，请再次长按发送键说话</string>
     <string name="chat_voice_permission_granted_tap">已允许录音，再点一下麦克风即可说话</string>
     <string name="chat_voice_model_missing">离线语音模型未就绪，请到「设置 → 偏好设置」下载</string>
+
+    <!-- 语音离线模型引导（F2/F7：系统识别不可用时自动降级/引导下载） -->
+    <string name="voice_fallback_title">未检测到系统语音服务</string>
+    <string name="voice_fallback_body">当前设备无法使用系统语音识别（常见于无谷歌服务的设备）。下载离线中文语音模型（约 %1$d MB）后即可完全离线使用语音输入。</string>
+    <string name="voice_fallback_download">立即下载</string>
+    <string name="voice_fallback_later">以后</string>
+    <string name="voice_fallback_progress">下载中 %1$d%%</string>
+    <string name="voice_fallback_installing">正在安装…</string>
+    <string name="voice_fallback_failed">下载失败：%1$s</string>
+    <string name="voice_fallback_retry">重试</string>
+    <string name="voice_switched_toast">已自动切换到离线识别，可再次使用语音输入</string>
+    <string name="voice_auto_ready_toast">离线语音已就绪并自动启用</string>
 
     <!-- 语音输入引擎 -->
     <string name="settings_voice_group">语音输入</string>

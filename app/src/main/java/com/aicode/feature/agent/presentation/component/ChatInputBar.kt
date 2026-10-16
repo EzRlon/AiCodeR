@@ -237,6 +237,8 @@ internal fun ChatInputBar(
     forceOpenModelSheet: Boolean = false,
     onSelectModelInOnboarding: (() -> Unit)? = null,
     onModelSheetDismiss: (() -> Unit)? = null,
+    /** 语音离线模型引导卡片（F2/F7）：系统识别不可用且模型未就绪时由宿主提供内容，渲染在待办面板之后。 */
+    voiceSetupCard: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val hasContent = value.isNotBlank() || pendingAttachments.isNotEmpty()
@@ -512,6 +514,8 @@ internal fun ChatInputBar(
                     onExpandedChange = onTodoExpandedChange
                 )
             }
+
+            voiceSetupCard?.invoke()
 
             if (activeProvider != null && activeProvider.dashboardScriptPath.isNotBlank()) {
                 ProviderDashboardBar(

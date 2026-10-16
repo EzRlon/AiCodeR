@@ -147,12 +147,13 @@ internal fun TimelineRail(
                 strokeWidth = 1.dp.toPx()
             )
 
-            // 视口胶囊：当前可见区间覆盖的节点范围（滚动时轻量跟随，停止后保持）。
+            // 视口胶囊：当前可见区间覆盖的节点范围（滚动时轻量跟随，停止后保持）。宽度收敛到略粗于节点，
+            // 不再喧宾夺主（验收反馈：绿线过粗）。
             val highlighted = displayNodes.withIndex().filter { it.value.itemIndex in visibleRange }
             if (highlighted.isNotEmpty()) {
                 val top = (yAt(highlighted.first().index) - spacing / 2).coerceAtLeast(0f)
                 val bottom = (yAt(highlighted.last().index) + spacing / 2).coerceAtMost(size.height)
-                val capsuleWidth = 10.dp.toPx()
+                val capsuleWidth = 4.dp.toPx()
                 if (bottom > top) {
                     drawRoundRect(
                         color = viewportColor,
@@ -163,13 +164,13 @@ internal fun TimelineRail(
                 }
             }
 
-            // 节点圆点：提问=主色实心、结果=弱色细点、验收报告=警告色特标。
+            // 节点圆点：提问=主色实心、结果=弱色细点、验收报告=警告色特标（验收反馈：整体调小一档）。
             displayNodes.forEachIndexed { index, node ->
                 val y = yAt(index)
                 val diameter = when (node.type) {
-                    TimelineNodeType.USER -> 3.5.dp.toPx()
-                    TimelineNodeType.ASSISTANT_RESULT -> 2.5.dp.toPx()
-                    TimelineNodeType.VERIFICATION -> 4.dp.toPx()
+                    TimelineNodeType.USER -> 2.5.dp.toPx()
+                    TimelineNodeType.ASSISTANT_RESULT -> 2.dp.toPx()
+                    TimelineNodeType.VERIFICATION -> 3.dp.toPx()
                 }
                 val color = when (node.type) {
                     TimelineNodeType.USER -> userColor
@@ -179,7 +180,7 @@ internal fun TimelineRail(
                 if (node.itemIndex == clickedItemIndex) {
                     drawCircle(
                         color = clickHaloColor,
-                        radius = diameter / 2 + 3.dp.toPx(),
+                        radius = diameter / 2 + 2.dp.toPx(),
                         center = Offset(cx, y)
                     )
                 }

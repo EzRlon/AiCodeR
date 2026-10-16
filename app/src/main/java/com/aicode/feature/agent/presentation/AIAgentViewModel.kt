@@ -27,6 +27,7 @@ import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -114,6 +115,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
@@ -177,6 +179,7 @@ class AIAgentViewModel @Inject constructor(
     private val fileChangeHub: FileChangeHub,
     private val scheduledTaskRepository: com.aicode.feature.schedule.data.ScheduledTaskRepository,
     private val voiceSettingsRepository: VoiceSettingsRepository,
+    private val voskModelManager: VoskModelManager,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -185,6 +188,69 @@ class AIAgentViewModel @Inject constructor(
     /** 语音输入引擎（设置里可切换；下一次录音生效）。 */
     val voiceEngine: StateFlow<VoiceEngine> = voiceSettingsRepository.engineFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VoiceEngine.SYSTEM)
+
+    // ── 语音可用性探测与自动降级（验收反馈 F2/F7）─────────────────────
+
+    /** 离线语音模型安装状态（引导卡片/设置页进度共用）。 */
+    val voiceModelState: StateFlow<VoskModelManager.ModelState> = voskModelManager.state
+
+    /** 系统识别可用性探测结果（null = 尚未探测；false = 本机无可用识别服务，如无谷歌设备）。 */
+    val systemSttAvailable: StateFlow<Boolean?> = voiceSettingsRepository.systemSttAvailableFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** 最近一次模型下载失败原因（引导卡片展示；无失败为 null）。 */
+    val voiceModelFailureReason: String?
+        get() = voskModelManager.lastFailureReason
+
+    /** 进程内只尝试一次：后台静默下载的节流标志。 */
+    private var voiceAutoDownloadAttempted = false
+
+    /** 探测系统识别可用性并持久化（瞬时同步调用，不耗资源；聊天页冷启动与语音失败时触发）。 */
+    fun refreshSystemSttAvailability() {
+        val available = runCatching {
+            android.speech.SpeechRecognizer.isRecognitionAvailable(context)
+        }.getOrDefault(false)
+        if (systemSttAvailable.value != available) {
+            viewModelScope.launch { voiceSettingsRepository.setSystemSttAvailable(available) }
+        }
+    }
+
+    /**
+     * 系统引擎语音识别失败（网络/服务类错误）时的处理：更新探测；离线模型已就绪 →
+     * 自动切离线并返回 false（调用方提示重试）；未就绪 → 返回 true（调用方弹引导卡片）。
+     */
+    fun onSystemVoiceFailure(): Boolean {
+        refreshSystemSttAvailability()
+        if (VoskModelManager.isModelReady(context)) {
+            viewModelScope.launch { voiceSettingsRepository.setEngine(VoiceEngine.OFFLINE) }
+            return false
+        }
+        return true
+    }
+
+    /** 用户在引导卡片点「立即下载」。 */
+    fun startVoiceModelDownload() = voskModelManager.startDownload()
+
+    /**
+     * 后台静默下载（每个进程至多一次）：现场探测确认系统识别不可用 ∧ 模型缺失 ∧ 不计费网络（WiFi）。
+     * 计费网络不静默下载（42MB），交给用户在引导卡片里主动确认。
+     */
+    fun maybeAutoDownloadVoiceModel() {
+        if (voiceAutoDownloadAttempted) return
+        if (VoskModelManager.isModelReady(context)) return
+        val systemSttAvailable = runCatching {
+            android.speech.SpeechRecognizer.isRecognitionAvailable(context)
+        }.getOrDefault(false)
+        if (systemSttAvailable) return
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return
+        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) return
+        voiceAutoDownloadAttempted = true
+        // 顺手持久化探测结果，供设置页/后续判断使用
+        viewModelScope.launch { voiceSettingsRepository.setSystemSttAvailable(false) }
+        FileLogger.i(TAG, "系统识别不可用且模型缺失，WiFi 下后台静默下载离线模型")
+        voskModelManager.startDownload()
+    }
 
     private val _handoffPrompt = MutableStateFlow<HandoffPrompt?>(null)
     val handoffPrompt: StateFlow<HandoffPrompt?> = _handoffPrompt.asStateFlow()
@@ -1185,6 +1251,22 @@ class AIAgentViewModel @Inject constructor(
     }
 
     init {
+        // F2/F7：离线模型就绪且系统识别确认不可用时自动切离线引擎，语音输入立即可用。
+        viewModelScope.launch {
+            voskModelManager.state
+                .filter { it is VoskModelManager.ModelState.Ready }
+                .collect {
+                    if (systemSttAvailable.value == false && voiceEngine.value == VoiceEngine.SYSTEM) {
+                        voiceSettingsRepository.setEngine(VoiceEngine.OFFLINE)
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.voice_auto_ready_toast),
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+        }
+
         // 冷启动收尾：上次进程被杀时残留的「执行中」工具回填为「已中断」。在后台执行，不阻塞首屏与会话展示。
         viewModelScope.launch(Dispatchers.IO) {
             sessionUseCase.initColdStartCleanup()

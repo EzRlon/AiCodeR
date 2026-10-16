@@ -90,6 +90,7 @@ import com.aicode.core.ui.readableContentMaxWidth
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
+import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.schedule.presentation.component.QuickSchedule
@@ -107,6 +108,7 @@ import com.aicode.feature.agent.presentation.hasVisibleContent
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.settings.presentation.SettingsViewModel
+import com.aicode.feature.settings.data.repository.VoiceEngine
 import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
 import com.aicode.feature.settings.domain.model.modelMetadataKey
@@ -147,7 +149,19 @@ private const val MESSAGE_ENTRY_STAGGER_MS = 90L
 private const val MESSAGE_ENTRY_MAX_STAGGER_MS = 360L
 
 /** 轮内「结果置前」翻转时，相关 item 换位的 placement 动画时长（ms）。 */
-private const val CHAT_ITEM_PLACEMENT_ANIM_MS = 220
+private const val CHAT_ITEM_PLACEMENT_ANIM_MS = 150
+
+/**
+ * 系统语音识别「服务不可达/不可用」类错误码（F2/F7）：触发自动降级到离线引擎。
+ * NO_MATCH（没说话声）/SPEECH_TIMEOUT/权限不足/识别器忙（RECOGNIZER_BUSY，重试即可）
+ * 不在此列，按原文案提示。
+ */
+private val SYSTEM_VOICE_FAILURE_CODES = setOf(
+    VoiceSession.ERROR_UNAVAILABLE,
+    android.speech.SpeechRecognizer.ERROR_NETWORK,
+    android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+    android.speech.SpeechRecognizer.ERROR_SERVER,
+)
 
 /** 消息未就绪时延迟多久才显示加载提示（ms）：本地读库很快，立即显示反而闪。 */
 private const val MESSAGES_LOADING_HINT_DELAY_MS = 220L
@@ -321,7 +335,8 @@ private fun messageRenderItems(message: AgentUIMessage): List<ChatRenderItem> {
  * 轮头展开态：没手动记录时「运行中或最新一轮」默认展开、更早的轮默认收起（[activeTurnKey]）；
  * 一旦用户在 [turnOverrides] 里点过，就以其选择为准，有更新的轮接手后自动收起不会覆盖它。
  *
- * 工具调用分组仍**默认收起**，只认 [groupOverrides] 的手动选择。
+ * 工具调用分组：手动选择（[groupOverrides]）优先；未点过时**跟随轮头展开态**——最新一轮
+ * （默认展开）的分组也默认展开，更早轮保持收起（验收反馈 F4：最近一条的过程要默认展开）。
  */
 internal fun buildChatItems(
     messages: List<AgentUIMessage>,
@@ -340,11 +355,12 @@ internal fun buildChatItems(
         }
         val running = turn.key == activeTurnKey
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
-        // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
-        val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides)
         // 展开态：手动覆盖优先；默认「运行中或最新一轮（含刚完成的）」展开——收工后最新轮的过程
         // 保持可见（过程不再整轮消失），更早的轮收起（有更新的轮接手时自动收起）。
         val expanded = turnOverrides[turn.key] ?: (running || turnIndex == turns.lastIndex)
+        // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
+        // 分组展开默认值跟随轮头：最新一轮的「N 次工具调用」也直接铺开（F4）。
+        val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides, expandGroups = expanded)
         // 结果置前：常显项与结果先排（结论先看），过程区（轮头 + 过程项）整体排到轮末。
         items += buildTurnPersistentItems(turn.messages, resultId)
         // 本轮产物聚合块跟随结果区（提示型工具逐条展示之外，给交付物一个统一位置；双份展示是有意设计）
@@ -462,6 +478,7 @@ private fun buildTurnProcessItems(
     messages: List<AgentUIMessage>,
     resultId: String?,
     groupOverrides: Map<String, Boolean>,
+    expandGroups: Boolean = false,
 ): List<ChatRenderItem> {
     val out = ArrayList<ChatRenderItem>(messages.size)
     var i = 0
@@ -481,7 +498,8 @@ private fun buildTurnProcessItems(
                     key = key,
                     contentType = TOOL_GROUP_CONTENT_TYPE,
                     toolGroup = members,
-                    groupExpanded = groupOverrides[key] == true,
+                    // 手动选择优先；未点过时跟随轮头展开态（最新轮默认铺开，见调用处）。
+                    groupExpanded = groupOverrides[key] ?: expandGroups,
                 )
             }
             i = j
@@ -1403,6 +1421,18 @@ fun AIChatPanel(
     val voiceController: VoiceSession = remember(voiceEngine) {
         VoiceSession.create(context.applicationContext, voiceEngine)
     }
+    // F2/F7：离线模型状态（引导卡片进度/就绪收起用）。
+    val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
+    // 系统识别不可用且模型未就绪时显示的引导卡片；就绪后自动收起（引擎由 VM 自动切换）。
+    var showVoiceSetupCard by remember { mutableStateOf(false) }
+    LaunchedEffect(voiceModelState) {
+        if (voiceModelState is VoskModelManager.ModelState.Ready) showVoiceSetupCard = false
+    }
+    // 冷启动探测 + WiFi 静默下载（本进程至多一次；计费网络不静默下载）。
+    LaunchedEffect(Unit) {
+        viewModel.refreshSystemSttAvailability()
+        viewModel.maybeAutoDownloadVoiceModel()
+    }
     var voiceProcessing by remember { mutableStateOf(false) }
     // 点击聆听进行中（从开始持续到结果/错误到达；结果分流靠它区分点击与长按两种来源）
     var voiceTapActive by remember { mutableStateOf(false) }
@@ -1447,13 +1477,23 @@ fun AIChatPanel(
     val onVoiceError = rememberUpdatedState<(Int) -> Unit>({ code ->
         voiceProcessing = false
         voiceTapActive = false
-        val msgRes = when (code) {
-            VoiceSession.ERROR_UNAVAILABLE -> R.string.chat_voice_unavailable
-            VoiceSession.ERROR_MODEL_MISSING -> R.string.chat_voice_model_missing
-            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> R.string.chat_voice_no_speech
-            else -> R.string.chat_voice_failed
+        // F2/F7：系统引擎的网络/服务类失败 → 探测并自动降级：模型就绪直接切离线（提示重试），
+        // 未就绪弹引导卡片下载；其余错误维持原 Toast 文案。
+        if (voiceEngine == VoiceEngine.SYSTEM && code in SYSTEM_VOICE_FAILURE_CODES) {
+            if (viewModel.onSystemVoiceFailure()) {
+                showVoiceSetupCard = true
+            } else {
+                Toast.makeText(context, context.getString(R.string.voice_switched_toast), Toast.LENGTH_LONG).show()
+            }
+        } else {
+            val msgRes = when (code) {
+                VoiceSession.ERROR_UNAVAILABLE -> R.string.chat_voice_unavailable
+                VoiceSession.ERROR_MODEL_MISSING -> R.string.chat_voice_model_missing
+                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> R.string.chat_voice_no_speech
+                else -> R.string.chat_voice_failed
+            }
+            Toast.makeText(context, context.getString(msgRes), Toast.LENGTH_SHORT).show()
         }
-        Toast.makeText(context, context.getString(msgRes), Toast.LENGTH_SHORT).show()
     })
     DisposableEffect(voiceController) {
         voiceController.onResult = { text -> onVoiceResult.value(text) }
@@ -1774,13 +1814,15 @@ fun AIChatPanel(
                     ) {
                         itemsIndexed(chatItems, key = { _, item -> item.key }, contentType = { _, item -> item.contentType }) { _, item ->
                             // 轮完成「结果置前」翻转时，轮头与结果区换位：placement 动画平滑过渡。
-                            // fade 关闭——出现/消失保持原样（TOOL 卡片另有自己的入场动画，避免叠加）。
+                            // fadeIn 保持关闭（TOOL 卡片另有自己的入场动画，避免叠加）；
+                            // fadeOut 给一短淡：翻转时消失的流式尾巴等不再瞬时硬切，降低与滑入
+                            // item 的交叉叠印窗口（验收反馈 F6：偶发文字叠印；时长已从 220 收紧到 150）。
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .animateItem(
                                         fadeInSpec = null,
-                                        fadeOutSpec = null,
+                                        fadeOutSpec = tween(durationMillis = 120),
                                         placementSpec = tween(
                                             durationMillis = CHAT_ITEM_PLACEMENT_ANIM_MS,
                                             easing = FastOutSlowInEasing
@@ -2101,6 +2143,16 @@ fun AIChatPanel(
                 activeToolLabel = thinkingLabel,
                 sessionId = currentSessionId.orEmpty(),
                 onTodoExpandedChange = { todoExpanded = it },
+                voiceSetupCard = if (showVoiceSetupCard) {
+                    {
+                        VoiceFallbackCard(
+                            state = voiceModelState,
+                            failureReason = viewModel.voiceModelFailureReason,
+                            onDownload = { viewModel.startVoiceModelDownload() },
+                            onDismiss = { showVoiceSetupCard = false },
+                        )
+                    }
+                } else null,
                 forceCollapseDashboard = pendingPermission != null || pendingQuestion != null || planApproval != null || budgetApproval != null || imeVisible,
                 onDashboardExpandedChange = { dashboardExpanded = it },
                 onRefreshDashboard = {

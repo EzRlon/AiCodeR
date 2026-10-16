@@ -87,6 +87,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val fileChangeHub: FileChangeHub,
     private val scheduledTaskRepository: ScheduledTaskRepository,
     private val voiceSettingsRepository: VoiceSettingsRepository,
+    private val voskModelManager: com.aicode.feature.agent.domain.voice.VoskModelManager,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -126,6 +127,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         fileChangeHub,
         scheduledTaskRepository,
         voiceSettingsRepository,
+        voskModelManager,
         context
     )
 }

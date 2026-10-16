@@ -11,8 +11,9 @@ import org.junit.Test
 /**
  * 连续工具调用分组的展开判定 + 整轮任务折叠。
  *
- * 分组展开与否 = **上层持久化的手动选择**（[AIAgentViewModel.toolExpansionOverrides]，按 [toolGroupKey] 取）：
- * 没有手动记录就一律收起——工具调用统一默认不展开。
+ * 分组展开与否：**上层持久化的手动选择**（[AIAgentViewModel.toolExpansionOverrides]，按 [toolGroupKey] 取）优先；
+ * 没有手动记录时**跟随轮头展开态**——最新一轮（运行中或刚完成）默认展开（验收反馈 F4：
+ * 最近一条的思考与编码过程要直接铺开），更早的轮默认收起。
  *
  * 整轮折叠（最外层）只认 [AIAgentViewModel.turnExpansionOverrides]；没记录时「运行中或最新一轮
  * （含刚完成的）默认展开、更早的轮默认收起」——收工后最新轮过程保持可见，有更新的轮接手后自动收起。
@@ -63,12 +64,12 @@ class ToolGroupExpansionTest {
     // ---- 连续工具调用分组 ----
 
     @Test
-    fun expandedTurn_groupCollapsesByDefault() {
-        // 整轮展开（末轮运行中）时，连续工具分组仍默认收起
+    fun latestTurn_groupExpandsByDefault() {
+        // 验收反馈 F4：最新一轮（运行中/刚完成）的工具分组随轮头默认铺开，过程直接可见
         val items = items(listOf(user("u0"), tool("t1"), tool("t2")), activeTurnKey = "turn:u0")
         val groups = items.groupItems()
         assertEquals(1, groups.size)
-        assertFalse(groups.first().groupExpanded)
+        assertTrue(groups.first().groupExpanded)
     }
 
     @Test
@@ -80,9 +81,8 @@ class ToolGroupExpansionTest {
     }
 
     @Test
-    fun noGroupAutoExpands() {
-        // 回归：曾经「组内还在跑」或「本轮仍在进行且这是最后一个分组」会自动弹开整组。
-        // 现在一律默认收起，历史分组与最新分组一视同仁。
+    fun earlierTurnGroup_collapses_latestTurnGroup_expands() {
+        // 验收反馈 F4：分组默认跟随轮头展开态——最新一轮铺开，更早的轮收起；手动选择仍最优先
         val messages = listOf(
             user("u0"),
             tool("t1"), tool("t2"),
@@ -91,7 +91,17 @@ class ToolGroupExpansionTest {
         )
         val groups = items(messages, activeTurnKey = "turn:u0").groupItems()
         assertEquals(2, groups.size)
-        assertTrue("默认全部收起", groups.none { it.groupExpanded })
+        assertTrue("同轮分组一并铺开", groups.all { it.groupExpanded })
+
+        // 两轮场景：第一轮收起（非最新）、第二轮展开
+        val twoTurns = listOf(
+            user("u0"), tool("t1"), tool("t2"),
+            user("u1"), tool("t3"), tool("t4"),
+        )
+        val groups2 = items(twoTurns, activeTurnKey = "turn:u1").groupItems()
+        assertEquals(2, groups2.size)
+        assertFalse("更早轮的分组收起", groups2[0].groupExpanded)
+        assertTrue("最新轮的分组展开", groups2[1].groupExpanded)
     }
 
     @Test
@@ -152,7 +162,7 @@ class ToolGroupExpansionTest {
         assertTrue("带附件的工具是顶层常显项", items.any { it.key == "send" })
         val groups = items.groupItems()
         assertEquals(listOf("toolgroup:t1", "toolgroup:t3"), groups.map { it.key })
-        assertTrue("分组默认收起", groups.none { it.groupExpanded })
+        assertTrue("运行中轮的分组随轮头铺开（F4）", groups.all { it.groupExpanded })
         // send 不是任何分组的成员
         assertFalse(groups.any { group -> group.toolGroup.orEmpty().any { it.id == "send" } })
     }

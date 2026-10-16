@@ -154,11 +154,11 @@ import kotlinx.coroutines.delay
 /** 抽屉标签项：图标 + 名称 + 功能说明（说明用于按住时的浮出提示）。 */
 private data class DrawerTab(val icon: ImageVector, val label: String, val desc: String)
 
-/** 索引标签宽度（同时决定浮出提示的横向偏移量）。 */
-private val drawerTabWidth = 38.dp
+/** 索引标签宽度（同时决定浮出提示的横向偏移量）。验收反馈 F5：收窄一档，不占过大空间。 */
+private val drawerTabWidth = 32.dp
 
 /**
- * 产品册索引标签风竖排标签列：贴卡片右缘、仅左侧圆角的小标签，图标简洁；
+ * 产品册索引标签风竖排标签列：贴卡片右缘、完整对称圆角的小标签，图标简洁；
  * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被卡片裁剪）。
  */
 @Composable
@@ -176,7 +176,7 @@ private fun DrawerVerticalTabs(
     val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
     val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value)
         .coerceIn(64f, 220f).dp
-    val tabShape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
+    val tabShape = RoundedCornerShape(10.dp)
 
     Column(
         modifier = modifier
@@ -192,7 +192,7 @@ private fun DrawerVerticalTabs(
                 Surface(
                     modifier = Modifier
                         .width(drawerTabWidth)
-                        .height(48.dp)
+                        .height(42.dp)
                         .selectable(
                             selected = isSelected,
                             interactionSource = interactionSource,
@@ -210,7 +210,7 @@ private fun DrawerVerticalTabs(
                         Icon(
                             imageVector = tab.icon,
                             contentDescription = tab.label,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(16.dp),
                             tint = if (isSelected) MaterialTheme.colorScheme.onSurface
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
