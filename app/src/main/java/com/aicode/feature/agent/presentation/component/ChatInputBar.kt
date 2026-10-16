@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -580,25 +581,17 @@ internal fun ChatInputBar(
                         onRemoveAttachment = onRemoveAttachment
                     )
 
-                    // 切换成功的即时反馈：选择层点选与提示条 × 两处入口共用；
-                    // 无会话时 setSessionMode 是静默 no-op，不能弹「已切换」假提示。
-                    val modeToastContext = LocalContext.current
-                    val switchModeWithToast: (AgentMode) -> Unit = { mode ->
-                        onToggleMode(mode)
-                        if (sessionId.isNotBlank()) {
-                            android.widget.Toast.makeText(
-                                modeToastContext,
-                                modeToastContext.getString(
-                                    R.string.chat_mode_switched,
-                                    modeToastContext.getString(modeLabelRes(mode))
-                                ),
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
+                    // 模式切换不再弹「已切换」Toast（验收反馈：底栏模式说明条已承载模式提示，弹窗多余）。
 
-                    if (currentMode != AgentMode.BUILD) {
-                        // 非默认模式的常驻提示条：说明当前模式规则，× 一键退回构建模式
+                    // 模式说明条（验收反馈）：底栏向上拓展展示当前模式规则。
+                    // 默认：切到计划/自动自动展开；构建默认收起，再次点击已点亮的模式图标开关本说明。
+                    var modeInfoVisible by rememberSaveable(sessionId) { mutableStateOf(currentMode != AgentMode.BUILD) }
+                    LaunchedEffect(currentMode) { modeInfoVisible = currentMode != AgentMode.BUILD }
+                    AnimatedVisibility(
+                        visible = modeInfoVisible,
+                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(tween(160)),
+                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(tween(120)),
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -614,10 +607,7 @@ internal fun ChatInputBar(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = stringResource(
-                                    if (currentMode == AgentMode.PLAN) R.string.agent_mode_plan_banner
-                                    else R.string.agent_mode_auto_banner
-                                ),
+                                text = stringResource(modeBannerRes(currentMode)),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -625,12 +615,18 @@ internal fun ChatInputBar(
                                 modifier = Modifier.weight(1f)
                             )
                             IconButton(
-                                onClick = { switchModeWithToast(AgentMode.BUILD) },
+                                onClick = {
+                                    if (currentMode == AgentMode.BUILD) modeInfoVisible = false
+                                    else onToggleMode(AgentMode.BUILD)
+                                },
                                 modifier = Modifier.size(24.dp)
                             ) {
                                 Icon(
                                     FeatherIcons.X,
-                                    contentDescription = stringResource(R.string.agent_mode_back_to_build),
+                                    contentDescription = stringResource(
+                                        if (currentMode == AgentMode.BUILD) R.string.common_collapse
+                                        else R.string.agent_mode_back_to_build
+                                    ),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(14.dp)
                                 )
@@ -705,90 +701,30 @@ internal fun ChatInputBar(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // 模式区：三个纯图标按钮（构建 / 计划 / 自动），尺寸与右侧图标统一
-                            // （36dp 按钮 / 20dp 图标）。点击未选中图标直接切换（保留「已切换」toast）；
-                            // 点击当前模式打开说明下拉（锚定到被点的图标）；长按（三个按钮任一）维持
-                            // 旧行为：按当前模式进「定时任务 / 定时 Plan」面板。
-                            var showModePicker by remember { mutableStateOf(false) }
+                            // （36dp 按钮 / 20dp 图标）。点击未选中图标直接切换；点击已点亮图标开关
+                            // 底部模式说明；长按（三个按钮任一）进「定时任务 / 定时 Plan」面板。
                             AgentMode.entries.forEach { mode ->
-                                Box {
-                                    val isSelected = mode == currentMode
-                                    val modeTint = when (mode) {
-                                        AgentMode.BUILD -> MaterialTheme.semanticColors.success
-                                        AgentMode.PLAN -> MaterialTheme.colorScheme.primary
-                                        AgentMode.AUTO -> MaterialTheme.colorScheme.error
-                                    }
-                                    Icon(
-                                        imageVector = modeIcon(mode),
-                                        contentDescription = stringResource(modeLabelRes(mode)),
-                                        tint = if (isSelected) modeTint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .combinedClickable(
-                                                onClick = {
-                                                    if (isSelected) showModePicker = true else switchModeWithToast(mode)
-                                                },
-                                                onLongClick = onModePillLongClick
-                                            )
-                                            .semantics { this.selected = isSelected }
-                                            .padding(8.dp)
-                                    )
-                                    if (isSelected) {
-                                        DropdownMenu(
-                                            expanded = showModePicker,
-                                            onDismissRequest = { showModePicker = false }
-                                        ) {
-                                            AgentMode.entries.forEach { menuMode ->
-                                                DropdownMenuItem(
-                                                    text = {
-                                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                            Icon(
-                                                                imageVector = modeIcon(menuMode),
-                                                                contentDescription = null,
-                                                                modifier = Modifier.size(16.dp),
-                                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                            Spacer(Modifier.width(Spacing.sm))
-                                                            Column {
-                                                                Text(
-                                                                    text = stringResource(modeLabelRes(menuMode)),
-                                                                    style = MaterialTheme.typography.labelLarge
-                                                                )
-                                                                Text(
-                                                                    text = stringResource(modeDescRes(menuMode)),
-                                                                    style = MaterialTheme.typography.bodySmall,
-                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                                )
-                                                            }
-                                                        }
-                                                    },
-                                                    trailingIcon = if (menuMode == currentMode) {
-                                                        {
-                                                            Icon(
-                                                                FeatherIcons.Check,
-                                                                contentDescription = null,
-                                                                tint = MaterialTheme.colorScheme.primary,
-                                                                modifier = Modifier.size(16.dp)
-                                                            )
-                                                        }
-                                                    } else {
-                                                        null
-                                                    },
-                                                    onClick = {
-                                                        showModePicker = false
-                                                        if (menuMode != currentMode) switchModeWithToast(menuMode)
-                                                    }
-                                                )
-                                            }
-                                            // 可发现性：长按图标可创建定时任务（长按手势天生隐蔽，说明层底部常驻提示）
-                                            Text(
-                                                text = stringResource(R.string.chat_mode_longpress_hint),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                            )
-                                        }
-                                    }
+                                val isSelected = mode == currentMode
+                                val modeTint = when (mode) {
+                                    AgentMode.BUILD -> MaterialTheme.semanticColors.success
+                                    AgentMode.PLAN -> MaterialTheme.colorScheme.primary
+                                    AgentMode.AUTO -> MaterialTheme.colorScheme.error
                                 }
+                                Icon(
+                                    imageVector = modeIcon(mode),
+                                    contentDescription = stringResource(modeLabelRes(mode)),
+                                    tint = if (isSelected) modeTint else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .combinedClickable(
+                                            onClick = {
+                                                if (isSelected) modeInfoVisible = !modeInfoVisible else onToggleMode(mode)
+                                            },
+                                            onLongClick = onModePillLongClick
+                                        )
+                                        .semantics { this.selected = isSelected }
+                                        .padding(8.dp)
+                                )
                             }
                             Spacer(Modifier.width(Spacing.xs))
 
@@ -1208,10 +1144,10 @@ private fun modeLabelRes(mode: AgentMode): Int = when (mode) {
     AgentMode.AUTO -> R.string.agent_mode_auto
 }
 
-private fun modeDescRes(mode: AgentMode): Int = when (mode) {
+private fun modeBannerRes(mode: AgentMode): Int = when (mode) {
     AgentMode.BUILD -> R.string.agent_mode_build_desc
-    AgentMode.PLAN -> R.string.agent_mode_plan_desc
-    AgentMode.AUTO -> R.string.agent_mode_auto_desc
+    AgentMode.PLAN -> R.string.agent_mode_plan_banner
+    AgentMode.AUTO -> R.string.agent_mode_auto_banner
 }
 
 private fun modeIcon(mode: AgentMode): ImageVector = when (mode) {
