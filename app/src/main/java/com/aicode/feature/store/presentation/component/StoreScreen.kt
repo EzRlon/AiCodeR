@@ -90,31 +90,28 @@ internal fun StoreScreen(
             )
         }
 
-        // 搜索行（技能 tab 提供；MCP 不提供搜索）
+        // 搜索框（技能 tab 提供；MCP 不提供搜索）：放大镜收进框内尾部（点击=搜索），
+        // 输入框随容器宽度自适应对齐（验收反馈）。
         if (state.tab == StoreKind.SKILL) {
-            Row(
+            AppTextField(
+                value = state.query,
+                onValueChange = onQueryChange,
+                label = stringResource(R.string.store_search_hint),
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(onClick = onSearch) {
+                        Icon(
+                            FeatherIcons.Search,
+                            contentDescription = stringResource(R.string.store_search_action),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.lg)
-                    .padding(top = Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    AppTextField(
-                        value = state.query,
-                        onValueChange = onQueryChange,
-                        label = stringResource(R.string.store_search_hint),
-                        singleLine = true
-                    )
-                }
-                IconButton(onClick = onSearch) {
-                    Icon(
-                        FeatherIcons.Search,
-                        contentDescription = stringResource(R.string.store_search_action),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
+                    .padding(top = Spacing.sm)
+            )
         }
 
         if (state.translating) {
