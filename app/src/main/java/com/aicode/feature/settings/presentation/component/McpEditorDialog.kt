@@ -477,6 +477,14 @@ fun McpServerEditDialog(
                                 }
                             }
 
+                            if (whitelistTools.isNotEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.mcp_tools_whitelist_note, whitelistTools.size),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
                             if (filteredTools.isEmpty()) {
                                 Box(
                                     modifier = Modifier
@@ -530,6 +538,7 @@ fun McpServerEditDialog(
                                                 )
                                                 AppSwitch(
                                                     checked = isToolEnabled,
+                                                    enabled = whitelistTools.isEmpty() || tool.name in whitelistTools,
                                                     onCheckedChange = { checked ->
                                                         if (checked) disabledToolsSet.remove(tool.name) else disabledToolsSet.add(tool.name)
                                                     }

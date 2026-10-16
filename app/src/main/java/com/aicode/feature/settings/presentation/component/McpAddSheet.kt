@@ -39,7 +39,8 @@ internal val ReaEnabledTools: Set<String> = setOf(
     "binary_session", "open_binary", "close_binary", "binary_overview", "inspect_artifact",
     "inspect_android_package", "inspect_android_class", "inspect_android_method",
     "search_android_classes", "trace_android_references", "analyze_javascript_application",
-    "identify_flutter_build", "list_strings", "search_strings", "find_xrefs_to_name",
+    "identify_flutter_build", "inspect_go_binary", "inspect_rust_binary", "inspect_analysis_view",
+    "list_strings", "search_strings", "find_xrefs_to_name",
     "analyze_function", "procedure_pseudo_code", "procedure_callers", "batch_decompile",
     "list_unknowns", "export_evidence_bundle"
 )

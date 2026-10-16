@@ -1283,6 +1283,7 @@
     <string name="mcp_recommended_rea_desc">分析 App / APK / JS 包是怎么实现的（需先在「环境安装」装好「逆向分析」）</string>
     <string name="mcp_recommended_context7_desc">免安装免登录，提供最新库/框架文档检索</string>
     <string name="mcp_recommended_footer">点击进入添加流程并预填配置</string>
+    <string name="mcp_tools_whitelist_note">白名单模式：仅名单内 %1$d 个工具会被启用（预设自带；此处可单独禁用）</string>
     <string name="mcp_add_manual">手动填写</string>
     <string name="mcp_add_manual_desc">逐个填写地址、请求头或启动命令</string>
     <string name="mcp_add_from_json">从 JSON 导入</string>

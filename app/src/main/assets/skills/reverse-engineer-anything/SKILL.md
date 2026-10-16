@@ -13,7 +13,7 @@ description: 逆向分析（REA）：分析 App / APK / JS-Electron 包 / 归档
 - 本 App 已通过 MCP 接入 REA（服务器名 `rea`，工具名前缀 `mcp__rea__*`）；
   默认按白名单放行核心分析工具（约 21 个）。
 - **工具不可见 / 调用被拒时**：通常是「逆向分析」环境未装或 MCP 条目未启用，引导用户两步：
-  ① 设置 → 容器与镜像 → 环境安装 → 勾选「逆向分析」；
+  ① 打开终端执行 `aicode`（首次进终端的初始化菜单里也有「环境安装」入口）→ 选「逆向分析」场景；
   ② 设置 → MCP → 添加 → 推荐区 → 点「REA 逆向工程」→ 保存。
   完成后让用户**新开或重启会话**再继续分析。
 - 可用引擎：APK 分析（JADX + JDK，已随场景装好）；JS/Electron、Go/Rust 元数据、归档包为内置静态分析（无需引擎）。
@@ -46,6 +46,8 @@ description: 逆向分析（REA）：分析 App / APK / JS-Electron 包 / 归档
 - `references/native-and-artifacts.md` —— 归档/二进制元数据/抽取细则。
 - `references/evidence-workflows.md` —— 证据分页、对比、未知项与复核。
 - `references/runtime-observation.md` —— 运行时观察（本环境多数依赖未部署，仅供概念参考）。
+
+> 注：本环境的工具白名单可能不含 references 中提到的全部工具；实际可用集以 `binary_session` 与工具列表为准，不可用工具如实告知限制即可。
 
 ## 法规与安全边界
 

@@ -1283,6 +1283,7 @@
     <string name="mcp_recommended_rea_desc">Analyze how an app, APK or JS bundle works (install the "Reverse Engineering" environment first)</string>
     <string name="mcp_recommended_context7_desc">No install or sign-in — latest library/framework docs lookup</string>
     <string name="mcp_recommended_footer">Opens the add flow with the config prefilled</string>
+    <string name="mcp_tools_whitelist_note">Whitelist mode: only %1$d listed tools are enabled (preset-managed; tools can be disabled here)</string>
     <string name="mcp_add_manual">Fill in manually</string>
     <string name="mcp_add_manual_desc">Enter URL, headers, or launch command one by one</string>
     <string name="mcp_add_from_json">Import from JSON</string>

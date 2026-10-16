@@ -236,6 +236,24 @@ class McpConfigRepository @Inject constructor(
         )
     }
 
+    fun serialize(servers: List<McpServerConfig>): String = McpJsonCodec.serialize(servers)
+
+    fun parse(raw: String): List<McpServerConfig> = McpJsonCodec.parse(raw)
+
+    /** 合并全局与项目配置：全局按序在前，项目项覆盖同名，顺序 = 全局序 + 项目新增项。 */
+    private fun merge(
+        global: List<McpServerConfig>,
+        project: List<McpServerConfig>
+    ): List<McpServerEntry> {
+        val byName = LinkedHashMap<String, McpServerEntry>()
+        global.forEach { byName[it.name] = McpServerEntry(it, McpScope.GLOBAL) }
+        project.forEach { byName[it.name] = McpServerEntry(it, McpScope.PROJECT) }
+        return byName.values.toList()
+    }
+}
+
+/** MCP 配置 JSON 的序列化/解析（纯函数，无实例依赖；从仓库类提取以便独立单测）。 */
+internal object McpJsonCodec {
     fun serialize(servers: List<McpServerConfig>): String {
         val serversObj = buildJsonObject {
             servers.forEach { server ->
@@ -351,16 +369,5 @@ class McpConfigRepository @Inject constructor(
                 }
             }
         }
-    }
-
-    /** 合并全局与项目配置：全局按序在前，项目项覆盖同名，顺序 = 全局序 + 项目新增项。 */
-    private fun merge(
-        global: List<McpServerConfig>,
-        project: List<McpServerConfig>
-    ): List<McpServerEntry> {
-        val byName = LinkedHashMap<String, McpServerEntry>()
-        global.forEach { byName[it.name] = McpServerEntry(it, McpScope.GLOBAL) }
-        project.forEach { byName[it.name] = McpServerEntry(it, McpScope.PROJECT) }
-        return byName.values.toList()
     }
 }
