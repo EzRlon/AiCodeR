@@ -46,9 +46,9 @@ object ContentWidth {
     /** 正文列最大宽度：再宽一行文字过长，视线来回扫描成本高。 */
     val readable = 800.dp
 
-    /** 侧边栏宽度：窄屏收紧到更紧凑的档位，大屏给文件树多留一点横向空间（验收反馈 F5：收窄）。 */
-    val drawerCompact = 240.dp
-    val drawerWide = 280.dp
+    /** 侧边栏宽度：窄屏到紧凑档（验收反馈：整个左侧弹出卡片再缩窄）；大屏相应收窄。 */
+    val drawerCompact = 180.dp
+    val drawerWide = 200.dp
 }
 
 /**

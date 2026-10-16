@@ -176,7 +176,8 @@ private fun DrawerVerticalTabs(
     val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
     val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value)
         .coerceIn(64f, 220f).dp
-    val tabShape = RoundedCornerShape(10.dp)
+    // 标签形状：直边（左）紧贴卡片边缘线、圆角（右）朝外——"以卡片边缘线为轴心镜像"的目标形态。
+    val tabShape = RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
 
     Column(
         modifier = modifier
@@ -363,8 +364,8 @@ fun ChatDrawerContent(
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         Row(
-            // 图标列右缘与底部「设置」卡片对齐（统一右边距，不再顶到屏幕边缘）；
-            // 与内容卡片之间零间隙（贴住卡片右缘），内容卡片随之缩窄（用户 2026-10-15 反馈）。
+            // 标签列直边紧贴内容卡片右缘（对称轴），圆角朝右向外——"以卡片边缘线为轴心镜像"
+            // 的验收反馈形态；右侧留白与左侧对称，底部卡片右缘与标签列右缘对齐（"底部镜像"）。
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -528,6 +529,7 @@ fun ChatDrawerContent(
             )
         }
 
+        // 底部卡片右缘与标签列右缘对齐（"底部镜像"——统一右边距；功能图标仅随布局移位、不翻转）。
         SettingsGroup(modifier = Modifier.padding(end = Spacing.lg)) {
             if (onNavigateToBrowser != null) {
                 SettingsRow(
