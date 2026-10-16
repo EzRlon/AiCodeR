@@ -11,8 +11,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.ui.unit.IntOffset
 
 /**
- * 整页切换的过渡规范（Material「shared axis X」）：两个页面**同向**横移，前进时一起向左推、
- * 返回时一起向右退，配合错开的淡出/淡入。顶层路由（NavHost）与设置页内部分区共用同一份，
+ * 整页切换的过渡规范（Material「shared axis X」的同向变体）：两个页面**同向**横移，
+ * 前进时一起向左推、返回时一起向右退，配合错开的淡出/淡入。顶层路由（NavHost）与设置页内部分区共用同一份，
  * 免得两处各写一套参数、动画节奏不一致。
  *
  * 为什么是同向小位移而不是 iOS 那种「新页盖住旧页 / 旧页抽走露出下层」：
@@ -20,16 +20,22 @@ import androidx.compose.ui.unit.IntOffset
  * navigation-compose 的 NavHost 不暴露 `targetContentZIndex`，返回时没法把被弹出的页面盖在上面。
  * 同向平移不依赖 z 序，任何方向都不会出现「该露出的页面被遮住」。
  *
- * 淡出比淡入快且淡入延后一点，两页几乎不同时可见，避免重叠期两层内容混色发糊。
+ * 节奏设计（2026-10-15 调优，针对「不够丝滑灵动」的反馈）：
+ * - 退场页滑程大于入场页（让位更快），形成轻微「推进去」的层次感，而不是两页同速平移的传送带感；
+ * - 退场淡出放宽到比滑动略短、而不是「瞬隐」——旧页随滑动渐隐，消除「唰地消失」的断裂；
+ * - 淡入延后一点、稍快：双页同显窗口约 80ms，兼顾连贯与防混色。
  */
-const val PAGE_MOTION_MS = 260
+const val PAGE_MOTION_MS = 240
 
 private const val PAGE_FADE_IN_MS = 200
 private const val PAGE_FADE_IN_DELAY_MS = 60
-private const val PAGE_FADE_OUT_MS = 90
+private const val PAGE_FADE_OUT_MS = 140
 
-/** 横移幅度占容器宽度的比例。整屏位移在大屏上像「甩」页，取四分之一足够表达方向。 */
-private const val PAGE_SLIDE_FRACTION = 0.25f
+/** 入场横移幅度（占容器宽度比例）。 */
+private const val PAGE_ENTER_SLIDE_FRACTION = 0.32f
+
+/** 退场横移幅度：明显大于入场，表达「旧页让位更快」。 */
+private const val PAGE_EXIT_SLIDE_FRACTION = 0.5f
 
 private val PageSlideSpec = tween<IntOffset>(
     durationMillis = PAGE_MOTION_MS,
@@ -41,13 +47,13 @@ private val PageSlideSpec = tween<IntOffset>(
  */
 fun pageEnter(forward: Boolean): EnterTransition =
     slideInHorizontally(PageSlideSpec) { width ->
-        val offset = (width * PAGE_SLIDE_FRACTION).toInt()
+        val offset = (width * PAGE_ENTER_SLIDE_FRACTION).toInt()
         if (forward) offset else -offset
     } + fadeIn(tween(PAGE_FADE_IN_MS, delayMillis = PAGE_FADE_IN_DELAY_MS))
 
 /** 退场页过渡：与 [pageEnter] 同向，前进时向左退出、返回时向右退出。 */
 fun pageExit(forward: Boolean): ExitTransition =
     slideOutHorizontally(PageSlideSpec) { width ->
-        val offset = (width * PAGE_SLIDE_FRACTION).toInt()
+        val offset = (width * PAGE_EXIT_SLIDE_FRACTION).toInt()
         if (forward) -offset else offset
     } + fadeOut(tween(PAGE_FADE_OUT_MS))
