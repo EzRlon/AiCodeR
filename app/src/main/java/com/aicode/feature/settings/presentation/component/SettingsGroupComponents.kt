@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
@@ -131,6 +132,8 @@ internal fun SettingsGroup(
  * @param icon 左侧图标，null 则标题与无图标行对齐。
  * @param trailing 右侧尾随内容（如 [com.aicode.core.ui.AppSwitch]、chevron）。
  * @param onClick null 表示无点击行为（如开关行）；非 null 时行尾自动显示右箭头。
+ * @param compact 紧凑模式：窄容器（如左侧栏底部功能组）专用——缩小行内边距与图标间距、
+ *   标题降一档字号并限单行，保证「图标 + 完整标题」一排放下（验收反馈：窄卡片下不得换行成两排）。
  */
 @Composable
 internal fun SettingsRow(
@@ -140,12 +143,13 @@ internal fun SettingsRow(
     trailing: (@Composable RowScope.() -> Unit)? = null,
     subtitle: String? = null,
     enabled: Boolean = true,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val baseModifier = modifier
         .fillMaxWidth()
         .let { if (onClick != null && enabled) it.clickable { onClick() } else it }
-        .padding(horizontal = Spacing.lg, vertical = 11.dp)
+        .padding(horizontal = if (compact) Spacing.md else Spacing.lg, vertical = 11.dp)
     Row(
         modifier = baseModifier.alpha(if (enabled) 1f else 0.5f),
         verticalAlignment = Alignment.CenterVertically
@@ -157,14 +161,16 @@ internal fun SettingsRow(
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(16.dp)
             )
-            Spacer(Modifier.width(Spacing.md))
+            Spacer(Modifier.width(if (compact) Spacing.sm else Spacing.md))
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.bodyLarge,
+                style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Normal,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = if (compact) 1 else Int.MAX_VALUE,
+                overflow = if (compact) TextOverflow.Ellipsis else TextOverflow.Clip
             )
             if (subtitle != null) {
                 Text(

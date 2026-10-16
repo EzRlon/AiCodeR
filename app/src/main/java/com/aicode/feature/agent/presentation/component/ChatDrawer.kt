@@ -158,7 +158,9 @@ private data class DrawerTab(val icon: ImageVector, val label: String, val desc:
 private val drawerTabWidth = 32.dp
 
 /**
- * 产品册索引标签风竖排标签列：贴卡片右缘、完整对称圆角的小标签，图标简洁；
+ * 产品册索引标签风竖排标签列：直边吸附父卡片（内容卡片）右缘、圆角朝右的小标签，图标简洁。
+ * **样式规则（勿破）**：标签的自定义形状统一"圆角朝右、直边吸附在上一级卡片边缘"；
+ * 以后新增的页签按钮只需加入 [tabs] 列表即可自动继承（形状在 [tabShape] 处统一定义）。
  * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被卡片裁剪）。
  */
 @Composable
@@ -535,7 +537,8 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Globe,
                     title = stringResource(R.string.browser_title),
-                    onClick = onNavigateToBrowser
+                    onClick = onNavigateToBrowser,
+                    compact = true
                 )
                 SettingsDivider()
             }
@@ -543,7 +546,8 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Monitor,
                     title = stringResource(R.string.preview_title),
-                    onClick = { showPreviewEntrySheet = true }
+                    onClick = { showPreviewEntrySheet = true },
+                    compact = true
                 )
                 SettingsDivider()
             }
@@ -551,7 +555,8 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Crosshair,
                     title = stringResource(R.string.annotation_live_entry),
-                    onClick = onStartLiveAnnotation
+                    onClick = onStartLiveAnnotation,
+                    compact = true
                 )
                 SettingsDivider()
             }
@@ -559,7 +564,8 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Camera,
                     title = stringResource(R.string.annotation_capture_entry),
-                    onClick = onStartAnnotationCapture
+                    onClick = onStartAnnotationCapture,
+                    compact = true
                 )
                 SettingsDivider()
             }
@@ -567,7 +573,8 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Layers,
                     title = stringResource(R.string.annotation_ledger_title),
-                    onClick = onNavigateToAnnotations
+                    onClick = onNavigateToAnnotations,
+                    compact = true
                 )
                 SettingsDivider()
             }
@@ -575,7 +582,8 @@ fun ChatDrawerContent(
                 SettingsRow(
                     icon = FeatherIcons.Package,
                     title = stringResource(R.string.test_build_title),
-                    onClick = onNavigateToTestBuilds
+                    onClick = onNavigateToTestBuilds,
+                    compact = true
                 )
                 SettingsDivider()
             }
@@ -583,6 +591,7 @@ fun ChatDrawerContent(
                 icon = FeatherIcons.Settings,
                 title = stringResource(R.string.chat_settings),
                 onClick = onNavigateToSettings,
+                compact = true,
                 modifier = Modifier.onboardingTarget(OnboardingStep.ENTER_SETTINGS)
             )
         }
@@ -1128,7 +1137,43 @@ private fun FileBrowserTab(
     var pendingDelete by remember { mutableStateOf<FileTreeNode?>(null) }
     val hScroll = rememberScrollState()
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // 顶部操作行：剪贴板指示器 + 文件操作状态 + 刷新按钮——固定占位、不再悬浮，
+        // 避免覆盖文件树首行文字（验收反馈：刷新按钮与文字重叠）。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = Spacing.xs),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            clipboard?.let { clip ->
+                ClipboardIndicator(
+                    clipboard = clip,
+                    onClear = onClearClipboard,
+                    modifier = Modifier.padding(end = Spacing.xs)
+                )
+            }
+            if (fileOpPaths.isNotEmpty()) {
+                CircularProgressIndicator(
+                    modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            IconButton(
+                onClick = onRefresh,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.RefreshCw,
+                    contentDescription = stringResource(R.string.file_browser_refresh),
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Box(modifier = Modifier.fillMaxSize()) {
         when (state) {
             is FileBrowseState.Loading -> Box(
                 modifier = Modifier.fillMaxSize(),
@@ -1202,38 +1247,6 @@ private fun FileBrowserTab(
             }
         }
 
-        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 刷新按钮。
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            clipboard?.let { clip ->
-                ClipboardIndicator(
-                    clipboard = clip,
-                    onClear = onClearClipboard,
-                    modifier = Modifier.padding(end = Spacing.xs)
-                )
-            }
-            if (fileOpPaths.isNotEmpty()) {
-                CircularProgressIndicator(
-                    modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            IconButton(
-                onClick = onRefresh,
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.RefreshCw,
-                    contentDescription = stringResource(R.string.file_browser_refresh),
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
     }
 
