@@ -129,3 +129,19 @@
 # MacroInfo.macro 保持 null，渲染时 Method.invoke NPE——release 包上所有带 \begin / 自定义宏的
 # 公式空白，debug 不混淆故正常。整包保留类名与方法名，避免再被 interface 去虚化等优化破坏。
 -keep class org.scilab.forge.jlatexmath.** { *; }
+
+# ---- JNA / Vosk（离线语音引擎）----
+# JNA 的 native 层在 JNI_OnLoad/initIDs 阶段按名字查找 Java 侧字段与类（如 com.sun.jna.Pointer
+# 的 peer 字段），类名/字段名被混淆会抛 UnsatisfiedLinkError: Can't obtain peer field ID ...
+# （真机实测：release 包长按语音必崩）。JNA 的 android aar 不带 consumer rules，须手动整包保留。
+-keep class com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
+# Vosk 的 LibVosk native 方法按「类名+方法名」绑定，方法/类被混淆同样会崩；整包保留。
+-keep class org.vosk.** { *; }
+-dontwarn org.vosk.**
+
+# ---- sshj（远程 SSH，0.38.0）----
+# 算法族经 Factory.Named 泛型列表组装、SecurityUtils 对 JCE/BC 做 Class.forName 动态加载；
+# 首次 R8 真机验证期保守整包保留类名与成员，防止去虚化/合并破坏密钥协商链路（远程是核心功能）。
+-keep class net.schmizz.** { *; }
+-dontwarn net.schmizz.**

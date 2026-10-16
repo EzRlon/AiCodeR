@@ -158,6 +158,12 @@ private data class DrawerTab(val icon: ImageVector, val label: String, val desc:
 private val drawerTabWidth = 32.dp
 
 /**
+ * 标签列顶部下移量：与内容列表「第一条会话标题」大致水平对齐（验收反馈 2026-10-17：
+ * 按钮不要那么靠上）。估算：搜索框≈38 + 间距 8 + 分组头≈41 + 行内标题中线≈32 − 按钮半高 21。
+ */
+private val drawerTabsTopPadding = 100.dp
+
+/**
  * 产品册索引标签风竖排标签列：完整圆角的小标签，整列停靠在左侧栏（抽屉）的边缘线上，图标简洁。
  * **样式规则（勿破）**：标签形状统一为完整圆角；以后新增的页签按钮只需加入 [tabs] 列表即可
  * 自动继承（形状在 [tabShape] 处统一定义；停靠位置由父级 Row 控制——整列贴抽屉右缘线）。
@@ -184,7 +190,7 @@ private fun DrawerVerticalTabs(
     Column(
         modifier = modifier
             .width(drawerTabWidth)
-            .padding(top = 2.dp),
+            .padding(top = drawerTabsTopPadding),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         tabs.forEachIndexed { index, tab ->

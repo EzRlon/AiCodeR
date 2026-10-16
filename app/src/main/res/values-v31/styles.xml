@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+：系统 SplashScreen 接管启动窗口。图标置为透明、背景取应用底色，
+         避免「软件图标（正方形）一闪而过」的残影观感（验收反馈 2026-10-17）。
+         API 30 及以下的窗口背景无图标处理见 drawable/splash_background.xml。 -->
+    <style name="Theme.AICode.Splash" parent="Theme.AICode">
+        <item name="android:windowSplashScreenBackground">@color/splash_background_color</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/splash_background_color</item>
+    </style>
+</resources>

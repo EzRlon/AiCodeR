@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 冷启动窗口底色：与内容背景同色即可（不放图标——图标一闪而过属残影，验收反馈 2026-10-17）。
+     Android 12+ 系统 SplashScreen 的图标隐藏见 values-v31/styles.xml。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/splash_background_color" />
-    <item
-        android:width="96dp"
-        android:height="96dp"
-        android:gravity="center"
-        android:drawable="@mipmap/ic_launcher" />
 </layer-list>
