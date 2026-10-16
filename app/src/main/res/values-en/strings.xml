@@ -350,6 +350,7 @@
 
     <!-- Web preview -->
     <string name="preview_title">Web preview</string>
+    <string name="preview_entry_title">Web</string>
     <string name="preview_port_hint">Port, e.g. 8080</string>
     <string name="preview_open">Open</string>
     <string name="preview_reload">Reload</string>

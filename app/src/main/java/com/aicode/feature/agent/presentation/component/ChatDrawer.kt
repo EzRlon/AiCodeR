@@ -545,7 +545,7 @@ fun ChatDrawerContent(
             if (onNavigateToPreview != null) {
                 SettingsRow(
                     icon = FeatherIcons.Monitor,
-                    title = stringResource(R.string.preview_title),
+                    title = stringResource(R.string.preview_entry_title),
                     onClick = { showPreviewEntrySheet = true },
                     compact = true
                 )
