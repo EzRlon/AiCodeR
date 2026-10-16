@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AnchorMenuPopup
 import com.aicode.core.ui.ImageViewerHost
 import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.readableContentMaxWidth
@@ -231,6 +232,9 @@ internal data class TurnHeaderState(
  * [anchor] 是锚点矩形（窗口坐标）：长按消息时为长按触点（零尺寸矩形），点「更多」时为按钮 bounds。
  */
 private data class MessageMenuState(val message: AgentUIMessage, val anchor: Rect)
+
+/** 文件卡片操作菜单的打开状态：目标附件 + 长按触点锚点（窗口坐标）。 */
+private data class FileMenuState(val attachment: AgentAttachment, val anchor: Rect)
 
 /**
  * 分组展开时成员行的左缩进：分组头与成员行行首元素原本左右完全对齐（同一格 16dp 图标 + 同一间距），
@@ -742,6 +746,12 @@ fun AIChatPanel(
     var uploadingCount by remember { mutableStateOf(0) }
     // 消息操作 mini 悬浮窗：长按消息与点「更多」共用一套打开状态（含锚点，见 MessageMenuState）。
     var messageMenuState by remember { mutableStateOf<MessageMenuState?>(null) }
+    var fileMenuState by remember { mutableStateOf<FileMenuState?>(null) }
+    // 附件长按回调经 static CompositionLocal 下发，值引用变化会强制重组合内容区，
+    // 故用 remember 缓存 lambda（fileMenuState 的 delegate 本身跨重组稳定）。
+    val attachmentLongPressHandler: (AgentAttachment, Rect) -> Unit = remember {
+        { attachment, anchor -> fileMenuState = FileMenuState(attachment, anchor) }
+    }
     // 根容器（Scaffold 内容区）在窗口中的位置：mini 悬浮窗按窗口坐标锚定，渲染前换算到容器局部。
     var panelRootInWindow by remember { mutableStateOf(Offset.Zero) }
     var textSelectMessageId by remember { mutableStateOf<String?>(null) }
@@ -1667,7 +1677,8 @@ fun AIChatPanel(
     CompositionLocalProvider(
         LocalMarkdownImageTransformer provides markdownImageTransformer,
         LocalImageViewer provides imageViewerState,
-        LocalAttachmentOpener provides attachmentOpener
+        LocalAttachmentOpener provides attachmentOpener,
+        LocalAttachmentLongPress provides attachmentLongPressHandler
     ) {
         Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -2266,6 +2277,16 @@ fun AIChatPanel(
                 } else null,
                 // 删除不限角色：对齐原「更多」菜单的能力集（助手回复也能删）。
                 onDeleteClick = { viewModel.deleteMessage(message.id) }
+            )
+        }
+        // 文件卡片操作菜单（长按附件弹出；条目构建见 attachmentActionEntries）。
+        fileMenuState?.let { state ->
+            AnchorMenuPopup(
+                title = state.attachment.fileName.ifBlank { context.getString(R.string.common_file) },
+                entries = attachmentActionEntries(context, state.attachment, viewModel.fileAccess),
+                anchorInWindow = state.anchor,
+                containerOriginInWindow = panelRootInWindow,
+                onDismiss = { fileMenuState = null }
             )
         }
         }

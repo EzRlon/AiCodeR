@@ -1,6 +1,6 @@
 package com.aicode.feature.installer.presentation.component
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,9 +28,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -41,9 +48,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AnchorMenuPopup
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.formatBytes
+import com.aicode.feature.agent.presentation.component.attachmentActionEntries
 import com.aicode.feature.agent.presentation.component.openSentAttachment
 import com.aicode.feature.installer.presentation.TestBuildListViewModel
 import compose.icons.FeatherIcons
@@ -69,7 +78,11 @@ internal fun TestBuildListScreen(
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // 文件操作菜单（长按条目弹出）：目标附件 + 长按触点锚点（窗口坐标）。
+    var fileMenuState by remember { mutableStateOf<Pair<AgentAttachment, Rect>?>(null) }
+    var rootInWindow by remember { mutableStateOf(Offset.Zero) }
 
+    Box(modifier = Modifier.fillMaxSize().onGloballyPositioned { rootInWindow = it.boundsInWindow().topLeft }) {
     Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
@@ -123,27 +136,31 @@ internal fun TestBuildListScreen(
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
                     items(entries, key = { it.containerPath }) { entry ->
+                        val attachment = remember(entry) {
+                            AgentAttachment(
+                                fileName = entry.fileName,
+                                containerPath = entry.containerPath,
+                                localPath = "",
+                                mimeType = "application/vnd.android.package-archive",
+                                sizeBytes = entry.sizeBytes,
+                                isImage = false
+                            )
+                        }
+                        var rowBounds by remember { mutableStateOf(Rect.Zero) }
                         Surface(
                             shape = RoundedCornerShape(Radius.mdLarge),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        openSentAttachment(
-                                            context,
-                                            AgentAttachment(
-                                                fileName = entry.fileName,
-                                                containerPath = entry.containerPath,
-                                                localPath = "",
-                                                mimeType = "application/vnd.android.package-archive",
-                                                sizeBytes = entry.sizeBytes,
-                                                isImage = false
-                                            ),
-                                            viewModel.fileAccess
-                                        )
-                                    }
-                                }
+                                .onGloballyPositioned { rowBounds = it.boundsInWindow() }
+                                .combinedClickable(
+                                    onClick = {
+                                        scope.launch {
+                                            openSentAttachment(context, attachment, viewModel.fileAccess)
+                                        }
+                                    },
+                                    onLongClick = { fileMenuState = attachment to rowBounds }
+                                )
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = Spacing.md, vertical = 10.dp),
@@ -185,6 +202,17 @@ internal fun TestBuildListScreen(
                     }
                 }
             }
+        }
+    }
+
+        fileMenuState?.let { (attachment, anchor) ->
+            AnchorMenuPopup(
+                title = attachment.fileName,
+                entries = attachmentActionEntries(context, attachment, viewModel.fileAccess),
+                anchorInWindow = anchor,
+                containerOriginInWindow = rootInWindow,
+                onDismiss = { fileMenuState = null }
+            )
         }
     }
 }

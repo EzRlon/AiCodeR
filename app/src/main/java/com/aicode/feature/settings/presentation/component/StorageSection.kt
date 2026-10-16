@@ -1,7 +1,9 @@
 package com.aicode.feature.settings.presentation.component
 
+import android.Manifest
 import android.content.ClipData
 import android.content.Context
+import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.util.ApkInstaller
+import com.aicode.core.util.ExternalFileActions
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.StorageUsagePalette
@@ -69,7 +72,10 @@ import com.aicode.feature.settings.domain.model.formatStorageSize
 import com.aicode.feature.settings.presentation.StorageUiState
 import com.aicode.feature.settings.presentation.StorageViewModel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.core.content.ContextCompat
 import java.io.File
 
 /** 分类色点缩进宽度：色点 10dp + 与标题的间距，明细行据此与标题左对齐。 */
@@ -279,6 +285,44 @@ internal fun StorageSection(
                             ActionRow(text = stringResource(R.string.storage_artifact_reveal)) {
                                 actionDetail = null
                                 reveal(path)
+                            }
+                        }
+                        if (ExternalFileActions.isMtInstalled(context)) {
+                            ActionRow(text = stringResource(R.string.file_action_mt)) {
+                                actionDetail = null
+                                scope.launch {
+                                    val file = File(File(context.filesDir, "projects"), path)
+                                    if (!file.exists()) {
+                                        Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
+                                        return@launch
+                                    }
+                                    val shareable = withContext(Dispatchers.IO) { ExternalFileActions.prepareShareable(context, file) }
+                                    if (shareable == null || !ExternalFileActions.openWithMt(context, shareable)) {
+                                        Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                        ActionRow(text = stringResource(R.string.file_action_save)) {
+                            actionDetail = null
+                            scope.launch {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                    != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    Toast.makeText(context, context.getString(R.string.file_action_need_storage), Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                val file = File(File(context.filesDir, "projects"), path)
+                                if (!file.exists()) {
+                                    Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                val saved = withContext(Dispatchers.IO) { ExternalFileActions.exportToShared(context, file, detail.label) }
+                                if (saved != null) {
+                                    Toast.makeText(context, context.getString(R.string.file_action_saved, saved), Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
+                                }
                             }
                         }
                         ActionRow(text = stringResource(R.string.storage_artifact_delete), danger = true) {
