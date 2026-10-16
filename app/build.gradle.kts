@@ -20,10 +20,13 @@ if (keystorePropertiesFile.exists()) {
 }
 
 // gitVersionName 从 git tag 动态解析，彻底解决“发版时手改 build.gradle.kts 与 tag 双向不同步”问题。
+// 本仓库是「许愿码 / AiCodeR」独立分支（dev）：版本号采用**独立命名空间**，不与上游官方
+// AiCode 的 1.x 版本线重叠——基线固定 2.0.0，并带 -aicoder 段标识分支身份；官方 v* tag
+// 解析逻辑保留，自打 tag 也支持 v2.0.0-aicoder 这类带标识的命名。
 // 规则：
-//   1. 若当前 commit 刚好有 tag（如 v1.7.0 或 v1.7.0-rc1），直接提取为 "1.7.0" 或 "1.7.0-rc1"；
-//   2. 若当前 commit 比上个 tag 多了 N 个提交（如 v1.7.0-2-g04bc2fa），提取为 "1.7.0-dev.2+g04bc2fa"；
-//   3. 若无 git 环境或报错，fallback 到默认版本号 "1.7.0-dev"。
+//   1. 若当前 commit 刚好有 tag（如 v2.0.0-aicoder 或 v2.0.0-aicoder-rc1），直接提取；
+//   2. 若当前 commit 比上个 tag 多了 N 个提交（如 v2.0.0-aicoder-2-g04bc2fa），转为 "2.0.0-aicoder-dev.2+g04bc2fa"；
+//   3. 无 v 前缀 tag（当前常态）或报错，fallback 到 "2.0.0-aicoder.dev[+<git describe>]"。
 // providers.exec 而非 Runtime.exec：配置缓存要求配置阶段的外部进程调用登记为 provider 输入，
 // 直接 fork 会让缓存条目被丢弃（external process started）。
 val gitDescribeOutput = providers.exec {
@@ -36,8 +39,8 @@ fun gitVersionName(): String = try {
     val raw = gitDescribeOutput.get().trim()
     if (raw.startsWith("v")) {
         val version = raw.substring(1) // 去掉开头的 'v'
-        // 如 "1.7.0"、"1.7.0-rc1" 或 "1.7.0-2-g04bc2fa"
-        // 将 git describe 格式 "1.7.0-2-g04bc2fa" 转为规范语义化版本 "1.7.0-dev.2+g04bc2fa"
+        // 如 "2.0.0-aicoder"、"2.0.0-aicoder-rc1" 或 "2.0.0-aicoder-2-g04bc2fa"
+        // 将 git describe 格式 "2.0.0-aicoder-2-g04bc2fa" 转为规范语义化版本 "2.0.0-aicoder-dev.2+g04bc2fa"
         val devRegex = Regex("""^(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+)?)-(\d+)-g([0-9a-f]+)(.*)$""")
         val match = devRegex.matchEntire(version)
         if (match != null) {
@@ -47,12 +50,12 @@ fun gitVersionName(): String = try {
             version
         }
     } else if (raw.isNotEmpty()) {
-        "1.7.0-dev+$raw"
+        "2.0.0-aicoder.dev+$raw"
     } else {
-        "1.7.0-dev"
+        "2.0.0-aicoder.dev"
     }
 } catch (e: Exception) {
-    "1.7.0-dev"
+    "2.0.0-aicoder.dev"
 }
 
 // versionCode 从 git 提交数自动生成：随每次提交单调递增，无需手动维护，
