@@ -4,7 +4,7 @@ AI 每次调用工具的前后，可以自动运行你自己写的脚本：做�
 
 ## 配置
 
-在容器内编辑 `~/.aicode/hooks.json`（电脑上也可在 AiCode 私有目录 `aicode/hooks.json` 找到；文件不存在则钩子整体关闭）：
+在容器内编辑 `~/.aicode/hooks.json`（电脑上也可在许愿码私有目录 `aicode/hooks.json` 找到；文件不存在则钩子整体关闭）：
 
 ```json
 {
