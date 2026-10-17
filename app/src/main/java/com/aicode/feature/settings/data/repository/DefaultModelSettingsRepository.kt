@@ -31,6 +31,9 @@ class DefaultModelSettingsRepository @Inject constructor(
     private companion object {
         val PROVIDER_ID_KEY = stringPreferencesKey("default_provider_id")
         val MODEL_KEY = stringPreferencesKey("default_model")
+
+        /** 子代理模型覆盖：key = 前缀 + agent 名（默认通用子代理用空名），value = "providerId|model"。 */
+        const val SUBAGENT_MODEL_PREFIX = "subagent_model_"
     }
 
     /** 当前持久化的新会话默认 providerId 流；未设置时为空字符串。 */
@@ -57,6 +60,35 @@ class DefaultModelSettingsRepository @Inject constructor(
 
     /** 读取一次当前新会话默认 providerId（冷读用）。 */
     suspend fun getDefaultProviderId(): String = providerIdFlow.first()
+
+    /** 子代理模型覆盖表：agent 名 → (providerId, model)；无条目 = 跟随主代理（继承父会话）。 */
+    val subAgentModelOverridesFlow: Flow<Map<String, Pair<String, String>>> =
+        context.defaultModelDataStore.data.map { prefs ->
+            prefs.asMap().entries.mapNotNull { (key, value) ->
+                if (!key.name.startsWith(SUBAGENT_MODEL_PREFIX)) return@mapNotNull null
+                val name = key.name.removePrefix(SUBAGENT_MODEL_PREFIX)
+                val text = value as? String ?: return@mapNotNull null
+                val sep = text.indexOf('|')
+                if (sep <= 0 || sep == text.lastIndex) return@mapNotNull null
+                name to (text.substring(0, sep) to text.substring(sep + 1))
+            }.toMap()
+        }
+
+    suspend fun setSubAgentModel(agentName: String, providerId: String, model: String) {
+        context.defaultModelDataStore.edit {
+            it[stringPreferencesKey(SUBAGENT_MODEL_PREFIX + agentName)] = "$providerId|$model"
+        }
+    }
+
+    suspend fun clearSubAgentModel(agentName: String) {
+        context.defaultModelDataStore.edit {
+            it.remove(stringPreferencesKey(SUBAGENT_MODEL_PREFIX + agentName))
+        }
+    }
+
+    /** 冷读一次子代理覆盖表（TaskTool 创建子会话时用）。 */
+    suspend fun subAgentModelOverridesSnapshot(): Map<String, Pair<String, String>> =
+        subAgentModelOverridesFlow.first()
 
     /** 读取一次当前新会话默认 model（冷读用）。 */
     suspend fun getDefaultModel(): String = modelFlow.first()

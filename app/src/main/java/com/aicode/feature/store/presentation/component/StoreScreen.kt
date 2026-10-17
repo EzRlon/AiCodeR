@@ -36,6 +36,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
+import com.aicode.feature.store.data.ExpertStoreItem
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
 import com.aicode.feature.store.data.StoreTranslation
@@ -58,6 +59,7 @@ internal fun StoreScreen(
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onInstall: (StoreItem) -> Unit,
+    onInstallExpert: (ExpertStoreItem) -> Unit,
     onConsumeMessage: () -> Unit,
     onRetryTranslation: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -82,12 +84,25 @@ internal fun StoreScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             SegmentedTabs(
-                selected = if (state.tab == StoreKind.SKILL) 0 else 1,
+                selected = when (state.tab) {
+                    StoreKind.SKILL -> 0
+                    StoreKind.MCP -> 1
+                    StoreKind.EXPERT -> 2
+                },
                 labels = listOf(
                     stringResource(R.string.store_tab_skills),
-                    stringResource(R.string.store_tab_mcp)
+                    stringResource(R.string.store_tab_mcp),
+                    stringResource(R.string.store_tab_experts)
                 ),
-                onSelect = { onTab(if (it == 0) StoreKind.SKILL else StoreKind.MCP) }
+                onSelect = {
+                    onTab(
+                        when (it) {
+                            0 -> StoreKind.SKILL
+                            1 -> StoreKind.MCP
+                            else -> StoreKind.EXPERT
+                        }
+                    )
+                }
             )
         }
 
@@ -151,6 +166,8 @@ internal fun StoreScreen(
         Spacer(Modifier.size(Spacing.xs))
 
         when {
+            state.tab == StoreKind.EXPERT -> ExpertTeamList(state = state, onInstall = onInstallExpert)
+
             state.loading -> Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -366,3 +383,76 @@ private fun StoreItemCard(
 
 /** MCP 条目仅提供本地包（无远程地址）时不支持一键安装。 */
 private fun StoreItem.stdinUnsupported(): Boolean = kind == StoreKind.MCP && stdioOnly
+
+/** 专家团 tab：内置 agents 定义列表（名称/简介/安装状态）；外部暂无成熟的专家团商店可接入。 */
+@Composable
+private fun ExpertTeamList(
+    state: StoreUiState,
+    onInstall: (ExpertStoreItem) -> Unit
+) {
+    if (state.experts.isEmpty()) {
+        Text(
+            text = stringResource(R.string.store_experts_empty),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 24.dp)
+        )
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = Spacing.lg,
+            end = Spacing.lg,
+            top = Spacing.xs,
+            bottom = Spacing.xl
+        ),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(state.experts, key = { it.fileName }) { expert ->
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.semanticColors.cardSurface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = expert.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (expert.description.isNotBlank()) {
+                            Text(
+                                text = expert.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(Spacing.sm))
+                    if (expert.installed) {
+                        Text(
+                            text = stringResource(R.string.store_expert_installed_tag),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        TextButton(
+                            onClick = { onInstall(expert) },
+                            enabled = state.installingId == null
+                        ) {
+                            Text(stringResource(R.string.store_expert_install))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

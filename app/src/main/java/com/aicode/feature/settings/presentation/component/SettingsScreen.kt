@@ -241,6 +241,9 @@ fun SettingsScreen(
     val subAgents by viewModel.subAgents.collectAsStateWithLifecycle()
     val subAgentSaveState by viewModel.subAgentSaveState.collectAsStateWithLifecycle()
     val subAgentDeleting by viewModel.subAgentDeleting.collectAsStateWithLifecycle()
+    val defaultModelProviderId by viewModel.defaultModelProviderId.collectAsStateWithLifecycle()
+    val defaultModel by viewModel.defaultModel.collectAsStateWithLifecycle()
+    val subAgentModelOverrides by viewModel.subAgentModelOverrides.collectAsStateWithLifecycle()
     val globalRules by viewModel.globalRules.collectAsStateWithLifecycle()
     val projectRules by viewModel.projectRules.collectAsStateWithLifecycle()
     val currentProjectName by viewModel.currentProjectName.collectAsStateWithLifecycle()
@@ -750,6 +753,7 @@ fun SettingsScreen(
                             onSearch = { storeViewModel.search() },
                             onLoadMore = { storeViewModel.loadMore() },
                             onInstall = { storeViewModel.install(it) },
+                            onInstallExpert = { storeViewModel.installExpert(it) },
                             onConsumeMessage = { storeViewModel.consumeMessage() },
                             onRetryTranslation = { storeViewModel.retryTranslation() }
                         )
@@ -1078,8 +1082,16 @@ fun SettingsScreen(
                     verificationModel = verificationModel,
                     imageGenProviderId = imageGenProviderId,
                     imageGenModel = imageGenModel,
+                    mainProviderId = defaultModelProviderId,
+                    mainModel = defaultModel,
+                    subAgentModels = subAgentModelOverrides,
+                    subAgents = subAgents.filter { !it.disabled }.map { it.name to it.description },
                     modelMetadata = modelMetadata,
                     onLoadMetadata = { viewModel.loadAllModelMetadata() },
+                    onSelectMainModel = { pid, m -> viewModel.setMainAgentModel(pid, m) },
+                    onClearMainModel = { viewModel.clearMainAgentModel() },
+                    onSelectSubAgentModel = { name, pid, m -> viewModel.setSubAgentModel(name, pid, m) },
+                    onClearSubAgentModel = { name -> viewModel.clearSubAgentModel(name) },
                     onSelectVisionModel = { pid, m -> viewModel.setVisionModel(pid, m) },
                     onClearVisionModel = { viewModel.clearVisionModel() },
                     onSelectCompactionModel = { pid, m -> viewModel.setCompactionModel(pid, m) },
@@ -1200,15 +1212,19 @@ fun SettingsScreen(
                         }
                     )
                 }
-                SettingsSection.SubAgents -> SubAgentsSection(
-                    projectName = currentProjectName,
+                SettingsSection.SubAgents -> {
+                    // 进入分区时重扫：商店刚安装的专家无需退出设置页即可出现。
+                    LaunchedEffect(Unit) { viewModel.refreshSubAgents() }
+                    SubAgentsSection(
+                        projectName = currentProjectName,
                     entries = subAgents,
                     onDelete = { subAgentToDelete = it },
                     onOpenDetail = {
                         selectedSubAgent = it
                         section = SettingsSection.SubAgentDetail
                     }
-                )
+                    )
+                }
                 SettingsSection.Teams -> TeamsSection(
                     teams = remember(section) { viewModel.listTeams() }
                 )

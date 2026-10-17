@@ -513,6 +513,28 @@ class SettingsViewModel @Inject constructor(
     val defaultModel: StateFlow<String> = defaultModelSettingsRepository.modelFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /** 子代理模型覆盖表：agent 名 → (providerId, model)；无条目 = 跟随主代理。 */
+    val subAgentModelOverrides: StateFlow<Map<String, Pair<String, String>>> =
+        defaultModelSettingsRepository.subAgentModelOverridesFlow
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** 主代理模型（默认模型页设置）：写入新会话默认 provider/model。 */
+    fun setMainAgentModel(providerId: String, model: String) {
+        viewModelScope.launch { defaultModelSettingsRepository.setDefaultModel(providerId, model) }
+    }
+
+    fun clearMainAgentModel() {
+        viewModelScope.launch { defaultModelSettingsRepository.clear() }
+    }
+
+    fun setSubAgentModel(agentName: String, providerId: String, model: String) {
+        viewModelScope.launch { defaultModelSettingsRepository.setSubAgentModel(agentName, providerId, model) }
+    }
+
+    fun clearSubAgentModel(agentName: String) {
+        viewModelScope.launch { defaultModelSettingsRepository.clearSubAgentModel(agentName) }
+    }
+
     /** 识图模型选择：providerId 为空即「跟随当前聊天模型」。 */
     private val _visionProviderId = MutableStateFlow("")
     val visionProviderId: StateFlow<String> = _visionProviderId.asStateFlow()

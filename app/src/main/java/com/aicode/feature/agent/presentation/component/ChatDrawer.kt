@@ -82,7 +82,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -188,10 +187,10 @@ private fun DrawerVerticalTabs(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val unselectedColor = MaterialTheme.semanticColors.mutedSurface
-    // 深色下用 surfaceBright：与未选中的色阶差足够大，选中态一眼可辨（胶囊色在深色下对比不足）。
-    val selectedColor = if (dark) MaterialTheme.colorScheme.surfaceBright else MaterialTheme.semanticColors.cardSurface
+    // 沉浸配色（2026-10-17 验收反馈）：未选中与左侧栏底部卡片（SettingsGroup 的 cardSurface）同色，融进面板；
+    // 选中用主题高亮色「亮起」，点击前后一眼可辨。
+    val unselectedColor = MaterialTheme.semanticColors.cardSurface
+    val selectedColor = MaterialTheme.colorScheme.primaryContainer
     // 提示统一浮在按钮右侧（用户规则：含以后新增的按钮）；宽度自适应到屏幕右缘，窄屏自动折行。
     val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
     val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value - drawerTabWidth.value - 10)
@@ -232,7 +231,7 @@ private fun DrawerVerticalTabs(
                             imageVector = tab.icon,
                             contentDescription = tab.label,
                             modifier = Modifier.size(16.dp),
-                            tint = if (isSelected) MaterialTheme.colorScheme.onSurface
+                            tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -1307,6 +1306,7 @@ private fun FileBrowserTab(
                                     else onOpenFile(node.path)
                                 },
                                 onLongClick = { menuNode = node },
+                                onRefreshRoot = if (node.root != null) onRefresh else null,
                                 modifier = Modifier.animateItem(
                                     fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
                                     fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
@@ -1319,9 +1319,8 @@ private fun FileBrowserTab(
             }
         }
 
-        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 刷新按钮。
-        // 2026-10-17 验收反馈：刷新按钮需与右侧「会话/文件」标签同列——整体右移，
-        // 使其中心对齐面板右缘线（offset = 面板内边距 + 行内边距 + 按钮半宽）。
+        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）。
+        // 刷新按钮已下放到两个根行右侧（项目空间 / 内置容器各自独立）。
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -1341,17 +1340,6 @@ private fun FileBrowserTab(
                     modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary
-                )
-            }
-            IconButton(
-                onClick = onRefresh,
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.RefreshCw,
-                    contentDescription = stringResource(R.string.file_browser_refresh),
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1620,6 +1608,7 @@ private fun FileTreeRow(
     busy: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onRefreshRoot: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // 展开加载态加最小延迟：本地模式列目录极快，避免每次展开都闪一下转圈。
@@ -1688,6 +1677,20 @@ private fun FileTreeRow(
             maxLines = 1,
             softWrap = false
         )
+        if (onRefreshRoot != null) {
+            Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = onRefreshRoot,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.RefreshCw,
+                    contentDescription = stringResource(R.string.file_browser_refresh),
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

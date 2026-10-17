@@ -47,6 +47,14 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -68,14 +76,64 @@ class FloatBallOverlay(
     private var panelWindow: PopupWindow? = null
     private var panelOpen = false
 
-    private val screenWidth: Int
-        get() = windowManager.maximumWindowMetrics.bounds.width()
-    private val screenHeight: Int
-        get() = windowManager.maximumWindowMetrics.bounds.height()
+    /** 屏幕尺寸：Android 11+ 用 maximumWindowMetrics（分屏下仍取全屏），低版本回退 realSize。 */
+    private val screenSize: Pair<Int, Int>
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            bounds.width() to bounds.height()
+        } else {
+            @Suppress("DEPRECATION")
+            val point = android.graphics.Point().also { windowManager.defaultDisplay.getRealSize(it) }
+            point.x to point.y
+        }
+    private val screenWidth: Int get() = screenSize.first
+    private val screenHeight: Int get() = screenSize.second
 
     private val ballSize = 112 // px ≈ 40dp @2.75x，实际按 dp 换算
 
+    /** 球窗口与面板窗口各自的 Compose 宿主 owner（attach 创建、detach/dismiss 销毁）。 */
+    private var ballComposeOwner: OverlayComposeOwner? = null
+    private var panelComposeOwner: OverlayComposeOwner? = null
+
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).roundToInt()
+
+    private companion object {
+        const val TAG = "FloatBallOverlay"
+    }
+
+    /** Service 窗口里的 ComposeView 需要 ViewTree 三件套，否则组合在 attach 时抛异常。 */
+    private class OverlayComposeOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
+        private val lifecycleRegistry = LifecycleRegistry(this)
+        private val store = ViewModelStore()
+        private val savedStateController = SavedStateRegistryController.create(this)
+
+        init {
+            savedStateController.performRestore(null)
+            lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+        }
+
+        override val lifecycle: Lifecycle get() = lifecycleRegistry
+        override val viewModelStore: ViewModelStore get() = store
+        override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
+
+        fun destroy() {
+            lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+            store.clear()
+        }
+    }
+
+    /** 悬浮窗 ComposeView 统一挂 ViewTree 三件套（Service 上下文无 Activity 提供的 owner）。
+     *  按资源名解析 id 后写入对应的 View tag：与 androidx 内部读取的是同一个 tag（资源合并后 id 稳定），
+     *  避开 2.9 起在源码层被隐藏的 ViewTree* 符号。 */
+    private fun ComposeView.withOverlayOwners(owner: OverlayComposeOwner): ComposeView = apply {
+        fun tagId(name: String) = resources.getIdentifier(name, "id", context.packageName)
+        tagId("view_tree_lifecycle_owner").takeIf { it != 0 }?.let { setTag(it, owner) }
+            ?: com.aicode.core.util.FileLogger.w(TAG, "资源 id 解析失败：view_tree_lifecycle_owner")
+        tagId("view_tree_view_model_store_owner").takeIf { it != 0 }?.let { setTag(it, owner) }
+            ?: com.aicode.core.util.FileLogger.w(TAG, "资源 id 解析失败：view_tree_view_model_store_owner")
+        tagId("view_tree_saved_state_registry_owner").takeIf { it != 0 }?.let { setTag(it, owner) }
+            ?: com.aicode.core.util.FileLogger.w(TAG, "资源 id 解析失败：view_tree_saved_state_registry_owner")
+    }
 
     private val configurationListener = object : android.content.ComponentCallbacks {
         @Deprecated("Deprecated in Java")
@@ -89,24 +147,31 @@ class FloatBallOverlay(
 
     fun attach() {
         if (ballView != null) return
-        val view = ComposeView(context)
-        view.setContent { BallContent() }
-        val params = WindowManager.LayoutParams(
-            ballSize, ballSize,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = screenWidth - ballSize - dp(8)
-            y = screenHeight / 3
-        }
+        var owner: OverlayComposeOwner? = null
         try {
+            owner = OverlayComposeOwner()
+            ballComposeOwner = owner
+            val view = ComposeView(context).withOverlayOwners(owner)
+            view.setContent { BallContent() }
+            val params = WindowManager.LayoutParams(
+                ballSize, ballSize,
+                overlayType(),
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = screenWidth - ballSize - dp(8)
+                y = screenHeight / 3
+            }
             windowManager.addView(view, params)
             ballView = view
             context.registerComponentCallbacks(configurationListener)
-        } catch (e: Exception) {
-            // 无权限/窗口被禁等异常：静默关闭服务，避免反复崩溃
+            com.aicode.core.util.FileLogger.i(TAG, "悬浮球已挂载 x=${params.x} y=${params.y} size=$ballSize")
+        } catch (e: Throwable) {
+            // 无权限/窗口被禁/组合异常等：记日志、销毁 owner 后关闭服务，避免反复崩溃与泄漏。
+            com.aicode.core.util.FileLogger.w(TAG, "悬浮球挂载失败：${e.javaClass.simpleName}: ${e.message}")
+            owner?.destroy()
+            ballComposeOwner = null
             onClose()
         }
     }
@@ -116,6 +181,8 @@ class FloatBallOverlay(
         runCatching { context.unregisterComponentCallbacks(configurationListener) }
         ballView?.let { runCatching { windowManager.removeView(it) } }
         ballView = null
+        ballComposeOwner?.destroy()
+        ballComposeOwner = null
     }
 
     private fun overlayType(): Int =
@@ -129,6 +196,8 @@ class FloatBallOverlay(
         panelWindow?.dismiss()
         panelWindow = null
         panelOpen = false
+        panelComposeOwner?.destroy()
+        panelComposeOwner = null
     }
 
     private fun currentParams(): WindowManager.LayoutParams? =
@@ -172,19 +241,32 @@ class FloatBallOverlay(
         val panelHeight = dp(208)
         val anchorX = if (onLeft) ballX + ballSize + dp(6) else ballX - panelWidth - dp(6)
         val anchorY = (ballY - dp(60)).coerceIn(dp(24), screenHeight - panelHeight - dp(24))
-        val panelView = ComposeView(context)
-        panelView.setContent { PanelContent(onClose = { dismissPanel() }) }
-        val popup = PopupWindow(panelView, panelWidth, panelHeight, true)
-        popup.isClippingEnabled = false
-        popup.isOutsideTouchable = true
-        popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-        popup.setOnDismissListener {
-            panelWindow = null
+        var panelOwner: OverlayComposeOwner? = null
+        try {
+            panelOwner = OverlayComposeOwner()
+            panelComposeOwner = panelOwner
+            val panelView = ComposeView(context).withOverlayOwners(panelOwner)
+            panelView.setContent { PanelContent(onClose = { dismissPanel() }) }
+            val popup = PopupWindow(panelView, panelWidth, panelHeight, true)
+            popup.isClippingEnabled = false
+            popup.isOutsideTouchable = true
+            popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            popup.setOnDismissListener {
+                panelWindow = null
+                panelOpen = false
+                panelComposeOwner?.destroy()
+                panelComposeOwner = null
+            }
+            popup.showAtLocation(ballView, Gravity.TOP or Gravity.START, anchorX, anchorY)
+            panelWindow = popup
+            panelOpen = true
+        } catch (e: Throwable) {
+            // 面板创建/弹出失败（窗口被禁等）：记日志并清理 owner，不让点击回调崩溃
+            com.aicode.core.util.FileLogger.w(TAG, "悬浮面板创建失败：${e.javaClass.simpleName}: ${e.message}")
+            panelOwner?.destroy()
+            panelComposeOwner = null
             panelOpen = false
         }
-        popup.showAtLocation(ballView, Gravity.TOP or Gravity.START, anchorX, anchorY)
-        panelWindow = popup
-        panelOpen = true
     }
 
     @Composable

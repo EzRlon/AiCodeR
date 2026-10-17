@@ -55,9 +55,12 @@ import compose.icons.feathericons.ArrowDown
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Camera
+import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
 import compose.icons.feathericons.Type
+import compose.icons.feathericons.User
+import compose.icons.feathericons.Users
 
 /**
  * 默认模型二级页：集中管理应用中的默认/特定用途模型设置（如识图模型、压缩模型）。
@@ -75,8 +78,16 @@ internal fun DefaultModelsSection(
     verificationModel: String,
     imageGenProviderId: String,
     imageGenModel: String,
+    mainProviderId: String,
+    mainModel: String,
+    subAgentModels: Map<String, Pair<String, String>>,
+    subAgents: List<Pair<String, String>>,
     modelMetadata: Map<String, ModelMetadata>,
     onLoadMetadata: () -> Unit,
+    onSelectMainModel: (providerId: String, model: String) -> Unit,
+    onClearMainModel: () -> Unit,
+    onSelectSubAgentModel: (agentName: String, providerId: String, model: String) -> Unit,
+    onClearSubAgentModel: (agentName: String) -> Unit,
     onSelectVisionModel: (providerId: String, model: String) -> Unit,
     onClearVisionModel: () -> Unit,
     onSelectCompactionModel: (providerId: String, model: String) -> Unit,
@@ -93,6 +104,9 @@ internal fun DefaultModelsSection(
     var showTitleSheet by remember { mutableStateOf(false) }
     var showVerificationSheet by remember { mutableStateOf(false) }
     var showImageGenSheet by remember { mutableStateOf(false) }
+    var showMainSheet by remember { mutableStateOf(false) }
+    // 子代理模型选择：null 不显示；空串 = 默认通用子代理，否则为 agent 名。
+    var subAgentSheetTarget by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { onLoadMetadata() }
 
@@ -126,6 +140,12 @@ internal fun DefaultModelsSection(
         imageGenModel
     }
 
+    val mainValue = if (mainProviderId.isBlank() || mainModel.isBlank()) {
+        stringResource(R.string.settings_main_agent_follow_chat)
+    } else {
+        mainModel
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -134,6 +154,34 @@ internal fun DefaultModelsSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        SettingsGroupHeader(text = stringResource(R.string.settings_agent_models_group))
+        SettingsGroup {
+            SettingsRow(
+                icon = FeatherIcons.User,
+                title = stringResource(R.string.settings_main_agent_model),
+                subtitle = mainValue,
+                onClick = { showMainSheet = true }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Users,
+                title = stringResource(R.string.settings_subagent_default_model),
+                subtitle = subAgentModels[""]?.second
+                    ?: stringResource(R.string.settings_subagent_follow_main),
+                onClick = { subAgentSheetTarget = "" }
+            )
+            subAgents.forEach { (name, _) ->
+                SettingsDivider()
+                SettingsRow(
+                    icon = FeatherIcons.Cpu,
+                    title = name,
+                    subtitle = subAgentModels[name]?.second
+                        ?: stringResource(R.string.settings_subagent_follow_main),
+                    onClick = { subAgentSheetTarget = name }
+                )
+            }
+        }
+        SettingsGroupHeader(text = stringResource(R.string.settings_models_group))
         SettingsGroup {
             SettingsRow(
                 icon = FeatherIcons.Image,
@@ -220,6 +268,47 @@ internal fun DefaultModelsSection(
                 }
             )
         }
+    }
+
+    if (showMainSheet) {
+        ModelSelectionSheet(
+            title = stringResource(R.string.settings_main_agent_model),
+            noModelsText = stringResource(R.string.vision_no_models),
+            providers = providers,
+            currentProviderId = mainProviderId,
+            currentModel = mainModel,
+            modelMetadata = modelMetadata,
+            onSelect = { pid, model ->
+                onSelectMainModel(pid, model)
+                showMainSheet = false
+            },
+            onClear = {
+                onClearMainModel()
+                showMainSheet = false
+            },
+            onDismiss = { showMainSheet = false }
+        )
+    }
+
+    subAgentSheetTarget?.let { target ->
+        val current = subAgentModels[target]
+        ModelSelectionSheet(
+            title = if (target.isEmpty()) stringResource(R.string.settings_subagent_default_model) else target,
+            noModelsText = stringResource(R.string.vision_no_models),
+            providers = providers,
+            currentProviderId = current?.first.orEmpty(),
+            currentModel = current?.second.orEmpty(),
+            modelMetadata = modelMetadata,
+            onSelect = { pid, model ->
+                onSelectSubAgentModel(target, pid, model)
+                subAgentSheetTarget = null
+            },
+            onClear = {
+                onClearSubAgentModel(target)
+                subAgentSheetTarget = null
+            },
+            onDismiss = { subAgentSheetTarget = null }
+        )
     }
 
     if (showVisionSheet) {

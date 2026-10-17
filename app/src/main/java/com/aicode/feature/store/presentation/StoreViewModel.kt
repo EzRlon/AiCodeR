@@ -2,6 +2,7 @@ package com.aicode.feature.store.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
@@ -9,6 +10,7 @@ import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.store.data.StoreApiClient
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.ExpertStoreItem
 import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.store.data.StoreTranslationService
 import com.aicode.feature.store.data.StoreTranslationStore
@@ -18,6 +20,9 @@ import com.aicode.feature.store.data.storeTranslationSourceHash
 import com.aicode.feature.store.data.toStoreItem
 import com.aicode.feature.store.domain.StoreInstaller
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -52,7 +57,9 @@ data class StoreUiState(
     /** 正在后台翻译（列表顶部显示提示行）。 */
     val translating: Boolean = false,
     /** 翻译失败（默认模型不可用/返回异常）：提示行带重试入口，避免静默回退英文。 */
-    val translationFailed: Boolean = false
+    val translationFailed: Boolean = false,
+    /** 内置专家团列表（EXPERT tab）。 */
+    val experts: List<ExpertStoreItem> = emptyList()
 )
 
 /**
@@ -69,7 +76,9 @@ class StoreViewModel @Inject constructor(
     private val mcpConfig: McpConfigRepository,
     private val translationService: StoreTranslationService,
     private val translationStore: StoreTranslationStore,
-    private val languageSettings: LanguageSettingsRepository
+    private val languageSettings: LanguageSettingsRepository,
+    private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
+    @param:ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
 
     private companion object {
@@ -145,6 +154,7 @@ class StoreViewModel @Inject constructor(
         when (s.tab) {
             StoreKind.SKILL -> loadSkills(nextPage = true)
             StoreKind.MCP -> loadMcp(next = true)
+            StoreKind.EXPERT -> Unit
         }
     }
 
@@ -152,6 +162,7 @@ class StoreViewModel @Inject constructor(
         when (tab) {
             StoreKind.SKILL -> loadSkills(nextPage = false)
             StoreKind.MCP -> loadMcp(next = false)
+            StoreKind.EXPERT -> loadExperts()
         }
     }
 
@@ -228,6 +239,10 @@ class StoreViewModel @Inject constructor(
                 when (item.kind) {
                     StoreKind.SKILL -> "已安装技能「${installer.installSkill(item)}」（默认未启用，可在技能页开启）"
                     StoreKind.MCP -> "已添加 MCP 服务器「${installer.installMcp(item)}」（默认未启用，可在 MCP 页开启）"
+                    StoreKind.EXPERT -> {
+                        FileLogger.w(TAG, "install() 收到专家条目，已忽略")
+                        "专家请在内置专家页安装"
+                    }
                 }
             }
             result.fold(
@@ -244,6 +259,71 @@ class StoreViewModel @Inject constructor(
 
     fun consumeMessage() {
         _state.update { it.copy(message = null) }
+    }
+
+    /** 加载内置专家团（assets/agents）：解析 frontmatter 名称/描述；已安装 = 全局 agents 目录存在同名文件。 */
+    fun loadExperts() {
+        viewModelScope.launch {
+            val experts = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.assets.list("agents").orEmpty()
+                        .filter { it.endsWith(".md") }
+                        .mapNotNull { file ->
+                            val text = context.assets.open("agents/$file")
+                                .bufferedReader().use { it.readText() }
+                            val name = Regex("(?m)^name:\\s*(.+)$").find(text)
+                                ?.groupValues?.get(1)?.trim()
+                                ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                            val desc = Regex("(?m)^description:\\s*(.+)$").find(text)
+                                ?.groupValues?.get(1)?.trim().orEmpty()
+                            ExpertStoreItem(
+                                fileName = file,
+                                name = name,
+                                description = desc,
+                                installed = runCatching {
+                                    fileAccess.exists("~/.aicode/agents/$file")
+                                }.getOrDefault(false)
+                            )
+                        }.sortedBy { it.name.lowercase() }
+                }.getOrElse { e ->
+                    FileLogger.w(TAG, "加载内置专家团失败", e)
+                    emptyList()
+                }
+            }
+            _state.update { it.copy(experts = experts) }
+        }
+    }
+
+    /** 安装内置专家团成员：写入 ~/.aicode/agents（已在设置 → 子代理中可启用/管理）。 */
+    fun installExpert(item: ExpertStoreItem) {
+        if (_state.value.installingId != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(installingId = item.fileName) }
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val text = context.assets.open("agents/${item.fileName}")
+                        .bufferedReader().use { it.readText() }
+                    fileAccess.writeFile("~/.aicode/agents/${item.fileName}", text)
+                    true
+                }.getOrElse { e ->
+                    FileLogger.w(TAG, "安装内置专家失败", e)
+                    false
+                }
+            }
+            _state.update { s ->
+                s.copy(
+                    installingId = null,
+                    experts = s.experts.map {
+                        if (it.fileName == item.fileName && ok) it.copy(installed = true) else it
+                    },
+                    message = if (ok) {
+                        context.getString(R.string.store_expert_installed_toast, item.name)
+                    } else {
+                        context.getString(R.string.store_expert_install_failed)
+                    }
+                )
+            }
+        }
     }
 
     /**
@@ -325,6 +405,7 @@ class StoreViewModel @Inject constructor(
                     when (item.kind) {
                         StoreKind.SKILL -> if (item.name.lowercase() in skillNames) item.id else null
                         StoreKind.MCP -> if (installer.sanitizeMcpName(item) in mcpNames) item.id else null
+                        StoreKind.EXPERT -> null
                     }
                 }.toSet()
                 s.copy(installedIds = installed)

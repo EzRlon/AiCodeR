@@ -174,9 +174,12 @@ class ContainerInstaller @Inject constructor(
             }
         }
 
+        /** 默认随版本释放的专家（其余 assets/agents 资产由在线商店「内置专家」安装）。 */
+        private val DEFAULT_RELEASED_AGENTS = setOf("explore.md", "qa.md")
+
         /**
-         * 从 assets 提取内置子代理定义（如 Explore）到 ~/.aicode/agents/。
-         * 若文件已存在则不覆盖，以保留用户的修改与删除后的重建选择。
+         * 从 assets 提取默认内置子代理（Explore / qa）到 ~/.aicode/agents/。
+         * 若文件已存在则不覆盖（保留用户修改）；其余专家资产不自动释放，由商店按需安装。
          */
         fun extractAgents(context: Context) {
             val destDir = File(File(context.filesDir, "aicode"), "agents")
@@ -184,6 +187,7 @@ class ContainerInstaller @Inject constructor(
             runCatching {
                 val entries = context.assets.list("agents") ?: return@runCatching
                 for (entry in entries) {
+                    if (entry !in DEFAULT_RELEASED_AGENTS) continue
                     val destFile = File(destDir, entry)
                     if (!destFile.exists()) {
                         context.assets.open("agents/$entry").use { input ->

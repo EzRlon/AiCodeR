@@ -46,11 +46,14 @@ class FloatBallService : Service() {
         FileLogger.i(TAG, "FloatBallService created")
         // START_STICKY 重建后从持久化开关恢复：开关关着就立即自停。
         serviceScope.launch {
-            if (generalSettings.floatBallEnabledFlow.first()) {
-                startOverlayIfPermitted()
-            } else {
-                stopSelf()
-            }
+            runCatching { generalSettings.floatBallEnabledFlow.first() }
+                .onSuccess { enabled ->
+                    if (enabled) startOverlayIfPermitted() else stopSelf()
+                }
+                .onFailure { e ->
+                    FileLogger.e(TAG, "读取悬浮球开关失败，自停服务", e)
+                    stopSelf()
+                }
         }
     }
 
@@ -89,6 +92,8 @@ class FloatBallService : Service() {
                 stopSelf()
             }
         }
+        // 赋值后再挂载（attach 幂等）：挂载失败时 onClose 能拿到已赋值的 overlay 完成清理。
+        overlay?.attach()
     }
 
     private fun removeOverlay() {

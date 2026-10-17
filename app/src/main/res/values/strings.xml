@@ -61,6 +61,13 @@
     <string name="settings_tokens_value">%1$d</string>
     <string name="settings_goal_max_tokens_input_hint">填不小于 1000 的整数</string>
     <string name="settings_vision_model">识图模型</string>
+    <!-- 智能体与子代理模型（2026-10-17 反馈） -->
+    <string name="settings_agent_models_group">智能体模型</string>
+    <string name="settings_models_group">专用模型</string>
+    <string name="settings_main_agent_model">主代理模型</string>
+    <string name="settings_main_agent_follow_chat">新会话默认（未设置）</string>
+    <string name="settings_subagent_default_model">默认子代理</string>
+    <string name="settings_subagent_follow_main">跟随主代理</string>
     <string name="settings_compaction_model">压缩模型</string>
     <string name="settings_title_model">标题总结模型</string>
     <string name="settings_verification_model">验收模型</string>
@@ -1433,9 +1440,15 @@
     <string name="schedule_title">定时任务</string>
     <string name="store_title">在线商店</string>
     <string name="store_translating">正在翻译…</string>
-    <string name="store_translation_failed">翻译失败：默认模型不可用或返回异常，已显示英文原文</string>
+    <string name="store_translation_failed">翻译失败：默认模型与免费翻译均不可用，已显示英文原文</string>
     <string name="store_translation_retry">重试</string>
     <string name="store_tab_skills">技能</string>
+    <string name="store_tab_experts">内置专家</string>
+    <string name="store_experts_empty">暂无内置专家团条目</string>
+    <string name="store_expert_install">安装</string>
+    <string name="store_expert_installed_tag">已安装</string>
+    <string name="store_expert_installed_toast">已安装：%1$s（可在「设置 → 子代理」中启用与管理）</string>
+    <string name="store_expert_install_failed">安装失败，请重试</string>
     <string name="store_tab_mcp">MCP 服务器</string>
     <string name="store_search_hint">搜索技能</string>
     <string name="store_search_action">搜索</string>

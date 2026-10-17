@@ -6,7 +6,18 @@ import kotlinx.serialization.Serializable
 // ── 统一模型（UI 层使用的商店条目） ──────────────────────────────────
 
 /** 商店条目类型：技能 / MCP 服务器。 */
-enum class StoreKind { SKILL, MCP }
+enum class StoreKind { SKILL, MCP, EXPERT }
+
+/**
+ * 内置专家团条目（随版本内置的 agents 定义，一键安装到 ~/.aicode/agents）。
+ * 外部暂无成熟的专家团商店可接入，商店以本地内置资产为来源。
+ */
+data class ExpertStoreItem(
+    val fileName: String,
+    val name: String,
+    val description: String,
+    val installed: Boolean
+)
 
 /**
  * 统一商店条目：两个源（claudemarket.ai 技能 / 官方 MCP Registry）映射到同一形态，

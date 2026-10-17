@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -191,9 +192,16 @@ internal fun GeneralSettingsSection(
             SettingsDivider()
             val overlayContext = androidx.compose.ui.platform.LocalContext.current
             var overlayGranted by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(overlayContext)) }
-            // 从系统授权页返回时刷新：否则授权后首次点开关仍会被再次引到授权页。
+            // 用户为开启悬浮球去过授权页：授权成功后返回自动置开，避免「以为开了其实没开」。
+            var awaitingOverlayGrant by rememberSaveable { mutableStateOf(false) }
+            // 从系统授权页返回时刷新；若之前点了开启且现已授权，自动写开关并拉起服务。
             LifecycleResumeEffect(Unit) {
-                overlayGranted = android.provider.Settings.canDrawOverlays(overlayContext)
+                val nowGranted = android.provider.Settings.canDrawOverlays(overlayContext)
+                if (!overlayGranted && nowGranted && awaitingOverlayGrant) {
+                    awaitingOverlayGrant = false
+                    onToggleFloatBallEnabled(true)
+                }
+                overlayGranted = nowGranted
                 onPauseOrDispose { }
             }
             SettingsRow(
@@ -201,12 +209,16 @@ internal fun GeneralSettingsSection(
                 title = stringResource(R.string.settings_float_ball),
                 subtitle = if (overlayGranted) stringResource(R.string.settings_float_ball_desc)
                 else stringResource(R.string.settings_float_ball_no_permission),
-                onClick = if (overlayGranted) null else ({ openOverlayPermission(overlayContext) }),
+                onClick = if (overlayGranted) null else ({
+                    awaitingOverlayGrant = true
+                    openOverlayPermission(overlayContext)
+                }),
                 trailing = {
                     AppSwitch(
                         checked = floatBallEnabled,
                         onCheckedChange = { enabled ->
                             if (enabled && !overlayGranted) {
+                                awaitingOverlayGrant = true
                                 openOverlayPermission(overlayContext)
                             } else {
                                 onToggleFloatBallEnabled(enabled)

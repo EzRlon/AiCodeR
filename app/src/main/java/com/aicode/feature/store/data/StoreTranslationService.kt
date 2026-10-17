@@ -27,7 +27,8 @@ class StoreTranslationService @Inject constructor(
     private val providerFactory: AIProviderFactory,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
-    private val store: StoreTranslationStore
+    private val store: StoreTranslationStore,
+    private val freeTranslation: FreeTranslationService
 ) {
     companion object {
         /** 单批最大条数（调用方按此分组调用）。 */
@@ -56,14 +57,12 @@ class StoreTranslationService @Inject constructor(
 
     /**
      * 翻译一批商店条目。返回 key（[storeTranslationKey]）→ 翻译；不再请求已缓存且源文未变的条目。
+     *
+     * 路线选择：无 VPN 时优先国内可直连的免费翻译（快且不依赖模型可用性）；
+     * 有 VPN 时用默认模型（翻译质量更好）；任一失败回退另一条，均失败才返回空 map。
      */
     suspend fun translateBatch(items: List<StoreItem>): Map<String, StoreTranslation> {
         if (items.isEmpty()) return emptyMap()
-        val providerId = defaultModelSettingsRepository.getDefaultProviderId()
-        val model = defaultModelSettingsRepository.getDefaultModel()
-        if (providerId.isBlank() || model.isBlank()) return emptyMap()
-        val config = aiProviderRepository.getProviderById(providerId) ?: return emptyMap()
-        if (!config.isEnabled || !config.hasUsableApiKey) return emptyMap()
         // 双保险：已缓存且源文未变的条目不再请求（调用方漏过滤时也不重复花 token）。
         val cached = store.all()
         val pending = items.filter { item ->
@@ -71,6 +70,36 @@ class StoreTranslationService @Inject constructor(
             entry == null || entry.sourceHash != item.storeTranslationSourceHash()
         }
         if (pending.isEmpty()) return emptyMap()
+        val byKey = pending.associateBy { it.storeTranslationKey() }
+
+        val hasVpn = freeTranslation.hasVpn()
+        if (!hasVpn) {
+            val free = freeTranslate(pending, byKey)
+            if (free != null) {
+                val missing = pending.filter { it.storeTranslationKey() !in free }
+                if (missing.isEmpty()) return free
+                // 部分条目不命中（如异常空名称被跳过）：剩余条目继续走模型回退
+                val modeled = modelTranslate(missing, missing.associateBy { it.storeTranslationKey() })
+                return free + (modeled ?: emptyMap())
+            }
+        }
+        modelTranslate(pending, byKey)?.let { return it }
+        if (hasVpn) {
+            freeTranslate(pending, byKey)?.let { return it }
+        }
+        return emptyMap()
+    }
+
+    /** 默认模型翻译；provider 未配置/不可用/请求或解析失败时返回 null。 */
+    private suspend fun modelTranslate(
+        pending: List<StoreItem>,
+        byKey: Map<String, StoreItem>
+    ): Map<String, StoreTranslation>? {
+        val providerId = defaultModelSettingsRepository.getDefaultProviderId()
+        val model = defaultModelSettingsRepository.getDefaultModel()
+        if (providerId.isBlank() || model.isBlank()) return null
+        val config = aiProviderRepository.getProviderById(providerId) ?: return null
+        if (!config.isEnabled || !config.hasUsableApiKey) return null
 
         val provider = providerFactory.create(config.copy(selectedModel = model), sessionId = null)
         val response = provider.complete(
@@ -81,9 +110,8 @@ class StoreTranslationService @Inject constructor(
         val parsed = parseTranslations(response.content)
         if (parsed == null) {
             FileLogger.w(TAG, "翻译结果解析失败：${response.content.take(200)}")
-            return emptyMap()
+            return null
         }
-        val byKey = pending.associateBy { it.storeTranslationKey() }
         return parsed.mapNotNull { entry ->
             val item = byKey[entry.id] ?: return@mapNotNull null
             entry.id to StoreTranslation(
@@ -91,7 +119,34 @@ class StoreTranslationService @Inject constructor(
                 descriptionZh = entry.descriptionZh.trim(),
                 sourceHash = item.storeTranslationSourceHash()
             )
-        }.toMap()
+        }.toMap().ifEmpty { null }
+    }
+
+    /** 国内免费翻译（名称与描述逐条成对提交）；失败返回 null。 */
+    private suspend fun freeTranslate(
+        pending: List<StoreItem>,
+        byKey: Map<String, StoreItem>
+    ): Map<String, StoreTranslation>? {
+        val texts = pending.flatMap { item ->
+            listOf(item.name, item.description.take(DESCRIPTION_MAX_CHARS))
+        }
+        val translated = freeTranslation.translate(texts) ?: return null
+        val result = buildMap {
+            pending.forEachIndexed { index, item ->
+                val nameZh = translated[index * 2].trim()
+                if (nameZh.isNotEmpty()) {
+                    put(
+                        item.storeTranslationKey(),
+                        StoreTranslation(
+                            nameZh = nameZh,
+                            descriptionZh = translated[index * 2 + 1].trim(),
+                            sourceHash = item.storeTranslationSourceHash()
+                        )
+                    )
+                }
+            }
+        }
+        return result.ifEmpty { null }
     }
 
     /** 批输入 JSON：[{"id","name","description"}]。 */
