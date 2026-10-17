@@ -34,6 +34,7 @@ enum class PermissionAuditDecision(val key: String) {
 enum class PermissionAuditSource(val key: String) {
     POPUP("POPUP"),
     NOTIFICATION("NOTIFICATION"),
+    FLOAT_BALL("FLOAT_BALL"),
     SYSTEM("SYSTEM");
 
     companion object {

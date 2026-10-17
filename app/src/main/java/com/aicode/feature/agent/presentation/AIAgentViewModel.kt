@@ -126,6 +126,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
@@ -670,9 +671,13 @@ class AIAgentViewModel @Inject constructor(
     private val expansionPrefs = context.getSharedPreferences("file_tree_expansion", Context.MODE_PRIVATE)
 
     /** 读取某工作区持久化的展开集；无记录时默认只展开工作区根。 */
-    private fun loadExpansion(workspace: String): Set<String> =
-        expansionPrefs.getStringSet(workspace, null)?.toSet()
+    private fun loadExpansion(workspace: String): Set<String> {
+        val saved = runCatching { expansionPrefs.getStringSet(workspace, null)?.toSet() }
+            .getOrNull()
             ?: setOf(WorkspacePathMapper.CONTAINER_ROOT)
+        // 防损坏：至少保证容器根在展开集（否则文件页只剩两行折叠根，看起来「空了」）。
+        return if (saved.isEmpty()) setOf(WorkspacePathMapper.CONTAINER_ROOT) else saved
+    }
 
     /** 持久化当前工作区的展开集（传新集合副本，SharedPreferences 禁止复用已存实例）。 */
     private fun saveExpansion(workspace: String, paths: Set<String>) {
@@ -728,6 +733,10 @@ class AIAgentViewModel @Inject constructor(
         }
         // 新树已就绪：清掉展开等待态（无论成功/出错都清，避免转圈卡死）。
         .onEach { _expandingPath.value = null }
+        .catch { e ->
+            FileLogger.e(TAG, "构建文件树失败", e)
+            emit(FileBrowseState.Error(e.message ?: "读取目录失败"))
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FileBrowseState.Loading)
 
     /** 读取工作区根与当前容器根，按 [expanded] 递归展开，产出扁平的可见节点列表；工作区根读取失败则整体报错。 */
@@ -1136,6 +1145,21 @@ class AIAgentViewModel @Inject constructor(
     }
 
     private val _streamingTexts = MutableStateFlow<Map<String, String?>>(emptyMap())
+
+    /** 当前会话正在执行的工具名（悬浮球「正在做什么」来源；悬浮窗侧映射为中文文案）。 */
+    val currentSessionRunningToolName: StateFlow<String?> = runningTool
+        .map { list -> list.lastOrNull()?.toolName?.takeIf { it.isNotBlank() } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** 当前会话正在生成的回复尾部预览（悬浮球面板「关键信息」来源；≤160 字符）。 */
+    val currentSessionStreamingPreview: StateFlow<String?> = combine(
+        _currentSessionId,
+        _streamingTexts
+    ) { sid, texts ->
+        val text = sid?.let { texts[it] }?.takeIf { it.isNotBlank() } ?: return@combine null
+        text.trim().replace('\n', ' ').take(160)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     val streamingText: StateFlow<String?> = _currentSessionId
         .flatMapLatest { id ->
             if (id == null) flowOf(null)
@@ -2554,6 +2578,19 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /** 悬浮球「停止任务」：优先停当前会话，其次停任意运行中的会话。返回是否真正执行。 */
+    private val floatBallStopBridge: () -> Boolean = {
+        val running = sessionJobs.filterValues { it.isActive }.keys
+        val target = _currentSessionId.value?.takeIf { it in running } ?: running.firstOrNull()
+        target?.let { stopAgentSession(it) }
+        target != null
+    }
+
+    /** 悬浮球「允许/拒绝」：处理最早待决的工具授权（与通知直达同一路径，带审计）。 */
+    private val floatBallApprovalBridge: (com.aicode.feature.agent.domain.permission.PermissionChoice) -> Boolean = { choice ->
+        toolPermissionManager.resolveEarliest(choice, com.aicode.feature.agent.domain.permission.PermissionAuditSource.FLOAT_BALL)
+    }
+
     init {
         // 跟随会话切换/冷启动刷新当前编队（单一同步点）
         viewModelScope.launch {
@@ -2565,12 +2602,68 @@ class AIAgentViewModel @Inject constructor(
         // 保留实例引用：onCleared 时仅在自己仍持有桥时才清空，避免误清新 ViewModel 的注册。
         FloatBallCommandCenter.send = floatBallSendBridge
         FloatBallCommandCenter.openApp = floatBallOpenAppBridge
+        FloatBallCommandCenter.stop = floatBallStopBridge
+        FloatBallCommandCenter.resolveApproval = floatBallApprovalBridge
+
+        // 悬浮球关键信息同步：各来源分别收集、更新快照后统一推送（避免多流 combine 的重载限制）。
+        var fbTodos: List<TodoItem> = emptyList()
+        var fbToolName: String? = null
+        var fbPreview: String? = null
+        var fbQueued = 0
+        var fbSid: String? = null
+        var fbPending: Pair<String?, String?>? = null
+        fun pushFloatBallDetails() {
+            val running = fbSid != null && (sessionJobs[fbSid]?.isActive == true || fbSid in _runningCommandSessions.value)
+            floatBallStateStore.syncDetails(
+                activeToolName = fbToolName,
+                replyPreview = fbPreview,
+                todos = fbTodos,
+                queuedCount = fbQueued,
+                pendingKind = fbPending?.first,
+                pendingTitle = fbPending?.second,
+                canStop = running
+            )
+        }
+        viewModelScope.launch {
+            currentSessionTodoItems.collect { fbTodos = it; pushFloatBallDetails() }
+        }
+        viewModelScope.launch {
+            currentSessionRunningToolName.collect { fbToolName = it; pushFloatBallDetails() }
+        }
+        viewModelScope.launch {
+            currentSessionStreamingPreview.collect { fbPreview = it; pushFloatBallDetails() }
+        }
+        viewModelScope.launch {
+            _currentSessionId.collect { fbSid = it; pushFloatBallDetails() }
+        }
+        viewModelScope.launch {
+            queuedRequests.collect { queue -> fbQueued = queue.size; pushFloatBallDetails() }
+        }
+        viewModelScope.launch {
+            combine(
+                pendingToolPermission,
+                pendingUserQuestion,
+                pendingPlanApproval
+            ) { permission, question, plan ->
+                when {
+                    permission != null -> "permission" to permission.toolName
+                    plan != null -> "plan" to (plan.reason.ifBlank { "计划审批" })
+                    question != null -> "question" to null
+                    else -> null to null
+                }
+            }.collect { pair ->
+                fbPending = pair
+                pushFloatBallDetails()
+            }
+        }
     }
 
     override fun onCleared() {
         // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
         if (FloatBallCommandCenter.send === floatBallSendBridge) FloatBallCommandCenter.send = null
         if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
+        if (FloatBallCommandCenter.stop === floatBallStopBridge) FloatBallCommandCenter.stop = null
+        if (FloatBallCommandCenter.resolveApproval === floatBallApprovalBridge) FloatBallCommandCenter.resolveApproval = null
         super.onCleared()
     }
 

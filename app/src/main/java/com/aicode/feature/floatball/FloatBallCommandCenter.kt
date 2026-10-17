@@ -14,4 +14,15 @@ object FloatBallCommandCenter {
     /** 返回 App 主界面（打开会话）。 */
     @Volatile
     var openApp: (() -> Unit)? = null
+
+    /** 停止当前正在运行的任务；null 表示未注册。返回是否真正执行了停止。 */
+    @Volatile
+    var stop: (() -> Boolean)? = null
+
+    /**
+     * 处理最早待决的工具授权：choice 为用户的允许/拒绝。
+     * 走带审计的 resolve 路径（source=FLOAT_BALL）；返回是否命中了挂起请求。
+     */
+    @Volatile
+    var resolveApproval: ((com.aicode.feature.agent.domain.permission.PermissionChoice) -> Boolean)? = null
 }

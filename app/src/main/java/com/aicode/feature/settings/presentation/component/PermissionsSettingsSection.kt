@@ -555,6 +555,7 @@ private fun AuditRow(
         PermissionAuditSource.POPUP -> stringResource(R.string.perm_audit_source_popup)
         PermissionAuditSource.NOTIFICATION -> stringResource(R.string.perm_audit_source_notification)
         PermissionAuditSource.SYSTEM -> stringResource(R.string.perm_audit_source_system)
+        PermissionAuditSource.FLOAT_BALL -> stringResource(R.string.perm_audit_source_float_ball)
         null -> record.source
     }
     val canJump = onJump != null && record.sessionId.isNotBlank()
