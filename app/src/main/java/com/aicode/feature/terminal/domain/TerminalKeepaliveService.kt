@@ -208,6 +208,8 @@ class TerminalKeepaliveService : Service() {
                 if (!persistent && sessionCount == 0) stopSelf()
             }
         }
+        // 赋值后再挂载（attach 幂等）：挂载失败时回调能拿到已赋值的 overlay 完成清理。
+        overlay?.attach()
     }
 
     private fun removeOverlay() {
