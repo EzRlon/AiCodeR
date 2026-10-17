@@ -323,6 +323,7 @@
     <string name="notification_keepalive_persistent_sessions">Keepalive · terminal tasks: %1$d</string>
     <string name="notification_keepalive_running_sessions">Running terminal tasks: %1$d</string>
     <string name="notification_keepalive_enabled">Keepalive enabled</string>
+    <string name="notification_float_ball_suffix"> · Float ball on</string>
     <string name="notification_channel_agent_complete">Agent completion notifications</string>
     <string name="notification_channel_agent_complete_desc">Notifications shown when the agent finishes in background</string>
     <string name="notification_channel_agent_permission">Tool permission requests</string>
@@ -1442,11 +1443,13 @@
     <string name="store_translation_failed">Translation failed: neither the default model nor the free translator is available; showing original text</string>
     <string name="store_translation_retry">Retry</string>
     <string name="store_tab_skills">Skills</string>
-    <string name="store_tab_experts">Built-in Experts</string>
+    <string name="store_tab_experts">Expert Teams</string>
     <string name="store_experts_empty">No built-in expert teams available</string>
     <string name="store_expert_install">Install</string>
+    <string name="store_team_members">Members: %1$s</string>
+    <string name="store_team_online_source">Online · wshobson/agents marketplace (MIT)</string>
     <string name="store_expert_installed_tag">Installed</string>
-    <string name="store_expert_installed_toast">Installed: %1$s (enable and manage in Settings → Subagents)</string>
+    <string name="store_expert_installed_toast">Expert team installed: %1$s (summon it from the chat page)</string>
     <string name="store_expert_install_failed">Install failed, please retry</string>
     <string name="store_tab_mcp">MCP Servers</string>
     <string name="store_search_hint">Search skills</string>

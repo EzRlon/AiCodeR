@@ -382,9 +382,9 @@ class AIEditorApp : Application(), Configuration.Provider {
             var last: Boolean? = null
             generalSettingsRepository.floatBallEnabledFlow.distinctUntilChanged().collect { enabled ->
                 if (enabled) {
-                    com.aicode.feature.floatball.FloatBallService.sync(this@AIEditorApp, true)
+                    com.aicode.feature.terminal.domain.TerminalKeepaliveService.syncFloatBall(this@AIEditorApp, true)
                 } else if (last == true) {
-                    com.aicode.feature.floatball.FloatBallService.sync(this@AIEditorApp, false)
+                    com.aicode.feature.terminal.domain.TerminalKeepaliveService.syncFloatBall(this@AIEditorApp, false)
                 }
                 last = enabled
             }

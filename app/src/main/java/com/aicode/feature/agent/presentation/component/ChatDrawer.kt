@@ -1681,12 +1681,14 @@ private fun FileTreeRow(
             Spacer(Modifier.weight(1f))
             IconButton(
                 onClick = onRefreshRoot,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                    .size(32.dp)
+                    .offset(x = 8.dp)
             ) {
                 Icon(
                     imageVector = FeatherIcons.RefreshCw,
                     contentDescription = stringResource(R.string.file_browser_refresh),
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(12.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

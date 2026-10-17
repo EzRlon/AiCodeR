@@ -14,12 +14,16 @@ import androidx.core.app.ServiceCompat
 import com.aicode.MainActivity
 import com.aicode.core.util.FileLogger
 import com.aicode.R
+import com.aicode.feature.floatball.FloatBallOverlay
+import com.aicode.feature.floatball.FloatBallStateStore
+import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -33,6 +37,17 @@ class TerminalKeepaliveService : Service() {
 
     @Inject
     lateinit var keepaliveSettings: KeepaliveSettingsRepository
+
+    @Inject
+    lateinit var generalSettings: GeneralSettingsRepository
+
+    @Inject
+    lateinit var floatBallStateStore: FloatBallStateStore
+
+    /** 悬浮球开关（内存态；onCreate 从持久化恢复）。悬浮球也由本服务承载——全应用只保留一条常驻通知。 */
+    private var floatBallOn = false
+
+    private var overlay: FloatBallOverlay? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -50,15 +65,25 @@ class TerminalKeepaliveService : Service() {
         // 进程被系统回收后 START_STICKY 重建：persistent 是内存态会丢失。
         // 从持久化开关恢复常驻前台，否则服务空转后 stopSelf，保活形同虚设。
         serviceScope.launch {
-            if (keepaliveSettings.isEnabled()) {
-                persistent = true
+            persistent = keepaliveSettings.isEnabled()
+            floatBallOn = runCatching { generalSettings.floatBallEnabledFlow.first() }
+                .getOrDefault(false)
+            if (persistent) {
                 ensureForeground()
                 FileLogger.i(TAG, "Restored persistent keepalive after restart")
+            }
+            if (floatBallOn) {
+                attachFloatBall()
+                FileLogger.i(TAG, "Restored float ball after restart")
+            }
+            if (!persistent && !floatBallOn) {
+                stopSelf()
             }
         }
     }
 
     override fun onDestroy() {
+        removeOverlay()
         serviceScope.cancel()
         releaseWifiLocks()
         super.onDestroy()
@@ -84,7 +109,7 @@ class TerminalKeepaliveService : Service() {
             }
             ACTION_STOP_SESSION -> {
                 sessionCount = (sessionCount - 1).coerceAtLeast(0)
-                if (sessionCount == 0 && !persistent) {
+                if (sessionCount == 0 && !persistent && !floatBallOn) {
                     stopSelf(startId)
                     FileLogger.i(TAG, "All sessions ended, stopping service")
                 } else {
@@ -99,13 +124,27 @@ class TerminalKeepaliveService : Service() {
             }
             ACTION_DISABLE_PERSISTENT -> {
                 persistent = false
-                if (sessionCount == 0) {
+                if (sessionCount == 0 && !floatBallOn) {
                     stopSelf(startId)
                     FileLogger.i(TAG, "Persistent keepalive disabled, no sessions, stopping service")
                 } else {
                     ensureForeground()
                     FileLogger.i(TAG, "Persistent keepalive disabled, sessions still running count=$sessionCount")
                 }
+            }
+            ACTION_SYNC_FLOAT_BALL -> {
+                floatBallOn = intent.getBooleanExtra(EXTRA_FLOAT_BALL_ENABLED, false)
+                if (floatBallOn) {
+                    attachFloatBall()
+                } else {
+                    removeOverlay()
+                    if (!persistent && sessionCount == 0) {
+                        stopSelf(startId)
+                    } else {
+                        ensureForeground()
+                    }
+                }
+                FileLogger.i(TAG, "Float ball synced: enabled=$floatBallOn")
             }
         }
         return START_STICKY
@@ -121,13 +160,14 @@ class TerminalKeepaliveService : Service() {
      * 不应让进程崩溃（设置页的开关仍是开启态，下次前台时由 [com.aicode.MainActivity] 恢复）。
      */
     private fun ensureForeground() {
-        val text = when {
+        val base = when {
             sessionCount > 0 && persistent ->
                 getString(R.string.notification_keepalive_persistent_sessions, sessionCount)
             sessionCount > 0 ->
                 getString(R.string.notification_keepalive_running_sessions, sessionCount)
             else -> getString(R.string.notification_keepalive_enabled)
         }
+        val text = if (floatBallOn) base + getString(R.string.notification_float_ball_suffix) else base
         val openAppIntent = PendingIntent.getActivity(
             this,
             0,
@@ -149,6 +189,30 @@ class TerminalKeepaliveService : Service() {
         runCatching { startForeground(NOTIFICATION_ID, notification) }
             .onSuccess { acquireWifiLocks() }
             .onFailure { FileLogger.e(TAG, "startForeground failed", it) }
+    }
+
+    /** 挂载悬浮球（幂等）：无权限时静默跳过（开关仍保留，下次前台恢复时重试）。 */
+    private fun attachFloatBall() {
+        if (overlay != null) return
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            FileLogger.w(TAG, "无悬浮窗权限，不显示悬浮球")
+            return
+        }
+        ensureForeground()
+        overlay = FloatBallOverlay(this, floatBallStateStore) {
+            // 用户点「关闭悬浮球」：关开关、撤窗口，服务按其余职责决定去留
+            removeOverlay()
+            floatBallOn = false
+            serviceScope.launch {
+                runCatching { generalSettings.setFloatBallEnabled(false) }
+                if (!persistent && sessionCount == 0) stopSelf()
+            }
+        }
+    }
+
+    private fun removeOverlay() {
+        overlay?.detach()
+        overlay = null
     }
 
     /**
@@ -185,6 +249,18 @@ class TerminalKeepaliveService : Service() {
         const val ACTION_STOP_SESSION = "com.aicode.action.STOP_SESSION"
         const val ACTION_ENABLE_PERSISTENT = "com.aicode.action.ENABLE_PERSISTENT"
         const val ACTION_DISABLE_PERSISTENT = "com.aicode.action.DISABLE_PERSISTENT"
+        const val ACTION_SYNC_FLOAT_BALL = "com.aicode.action.SYNC_FLOAT_BALL"
+        private const val EXTRA_FLOAT_BALL_ENABLED = "float_ball_enabled"
+
+        /** 同步悬浮球开关（幂等）：与保活共用本服务与同一条常驻通知。 */
+        fun syncFloatBall(context: Context, enabled: Boolean) {
+            val intent = Intent(context, TerminalKeepaliveService::class.java).apply {
+                action = ACTION_SYNC_FLOAT_BALL
+                putExtra(EXTRA_FLOAT_BALL_ENABLED, enabled)
+            }
+            runCatching { context.startService(intent) }
+                .onFailure { FileLogger.e(TAG, "syncFloatBall startService failed", it) }
+        }
 
         /** 开启常驻保活（幂等）。 */
         fun enablePersistent(context: Context) {

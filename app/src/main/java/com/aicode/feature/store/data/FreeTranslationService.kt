@@ -13,14 +13,15 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 国内可直连的免费翻译（微软 Edge 翻译的公开接口，无需 key）：
- * 先取短期 token，再批量 en→zh-Hans。作为默认模型翻译的补充/兜底——
- * 无 VPN 时商店不再因「默认模型不可用」而整体显示英文原文。
+ * 国内可直连的免费翻译（无需 key）：
+ * 主源腾讯交互翻译（transmart，支持整批 text_list 一次翻译）；失败由 MyMemory 逐条兜底。
+ * 作为默认模型翻译的补充/兜底——无 VPN 时商店不再因「默认模型不可用」而整体显示英文原文。
  */
 @Singleton
 class FreeTranslationService @Inject constructor(
@@ -28,14 +29,8 @@ class FreeTranslationService @Inject constructor(
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .build()
-
-    @Volatile
-    private var token: String? = null
-
-    @Volatile
-    private var tokenExpiresAt = 0L
 
     /** 当前活跃网络是否经 VPN（含代理类工具）。 */
     fun hasVpn(): Boolean = runCatching {
@@ -45,63 +40,82 @@ class FreeTranslationService @Inject constructor(
         caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     }.getOrDefault(false)
 
-    /** 批量翻译；返回与输入等长且同序的结果，失败返回 null。401 时清 token 重试一次。 */
+    /** 批量翻译 en→zh；返回与输入等长且同序的结果，失败返回 null。 */
     suspend fun translate(texts: List<String>): List<String>? = withContext(Dispatchers.IO) {
         if (texts.isEmpty()) return@withContext emptyList()
-        requestTranslate(texts) ?: run {
-            token = null
-            tokenExpiresAt = 0L
-            requestTranslate(texts)
-        }
+        translateTencent(texts) ?: translateMyMemory(texts)
     }
 
-    private fun requestTranslate(texts: List<String>): List<String>? = runCatching {
-        val auth = validToken() ?: return@runCatching null
-        val body = JSONArray().apply {
-            texts.forEach { put(JSONObject().put("Text", it.take(MAX_TEXT_CHARS))) }
+    /** 腾讯交互翻译：一次请求翻整批（text_list）。 */
+    private fun translateTencent(texts: List<String>): List<String>? = runCatching {
+        val payload = JSONObject().apply {
+            put("header", JSONObject().apply {
+                put("fn", "auto_translation")
+                put("client_key", "browser-chrome-110.0.0.0-1.0.0")
+            })
+            put("type", "plain")
+            put("model_category", "normal")
+            put("text_domain", "general")
+            put("source", JSONObject().apply {
+                put("lang", "en")
+                put("text_list", JSONArray(texts.map { it.take(MAX_TEXT_CHARS) }))
+            })
+            put("target", JSONObject().put("lang", "zh"))
         }.toString().toRequestBody(JSON_MEDIA)
         val request = Request.Builder()
-            .url("https://api-edge.cognitive.microsofttranslator.com/translate?from=&to=zh-Hans&api-version=3.0")
-            .header("Authorization", "Bearer $auth")
-            .post(body)
+            .url("https://transmart.qq.com/api/imt")
+            .header("Content-Type", "application/json")
+            .post(payload)
             .build()
         client.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) {
-                FileLogger.w(TAG, "免费翻译 HTTP ${resp.code}")
-                if (resp.code == 401) {
-                    token = null
-                    tokenExpiresAt = 0L
-                }
+                FileLogger.w(TAG, "腾讯翻译 HTTP ${resp.code}")
                 return@runCatching null
             }
-            val arr = JSONArray(resp.body?.string().orEmpty())
-            if (arr.length() != texts.size) return@runCatching null
-            texts.indices.map { i ->
-                arr.optJSONObject(i)?.optJSONArray("translations")?.optJSONObject(0)
-                    ?.optString("text").orEmpty()
+            val obj = JSONObject(resp.body?.string().orEmpty())
+            val code = obj.optJSONObject("header")?.optString("ret_code")
+            if (code != "succ") {
+                FileLogger.w(TAG, "腾讯翻译返回 ret_code=$code")
+                return@runCatching null
             }
+            val arr = obj.optJSONArray("auto_translation") ?: return@runCatching null
+            if (arr.length() != texts.size) return@runCatching null
+            texts.indices.map { i -> arr.optString(i).orEmpty() }
         }
     }.getOrNull()
 
-    private fun validToken(): String? {
-        val now = System.currentTimeMillis()
-        token?.let { if (now < tokenExpiresAt) return it }
-        val request = Request.Builder().url("https://edge.microsoft.com/translate/auth").build()
-        client.newCall(request).execute().use { resp ->
-            if (!resp.isSuccessful) return null
-            val fresh = resp.body?.string()?.trim()?.takeIf { it.isNotBlank() } ?: return null
-            token = fresh
-            tokenExpiresAt = now + TOKEN_TTL_MS
-            return fresh
+    /** MyMemory 逐条兜底（匿名额度小，仅作腾讯失败时的最后防线）。 */
+    private fun translateMyMemory(texts: List<String>): List<String>? = runCatching {
+        val results = ArrayList<String>(texts.size)
+        for (text in texts) {
+            val q = URLEncoder.encode(text.take(MYMEMORY_MAX_CHARS), "UTF-8")
+            val request = Request.Builder()
+                .url("https://api.mymemory.translated.net/get?q=$q&langpair=en|zh-CN")
+                .build()
+            val ok = client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@runCatching null
+                val obj = JSONObject(resp.body?.string().orEmpty())
+                val status = obj.optInt("responseStatus", 0)
+                if (status != 200) return@runCatching null
+                val translated = obj.optJSONObject("responseData")
+                    ?.optString("translatedText").orEmpty()
+                if (translated.isBlank()) return@runCatching null
+                results.add(translated)
+                true
+            }
+            if (!ok) return@runCatching null
         }
-    }
+        results
+    }.getOrNull()
 
     private companion object {
         const val TAG = "FreeTranslationService"
         val JSON_MEDIA = "application/json".toMediaType()
 
-        /** 接口单条文本上限 1000 字符。 */
+        /** 接口单条文本上限（腾讯长文本亦支持，此处保守截断）。 */
         const val MAX_TEXT_CHARS = 1000
-        const val TOKEN_TTL_MS = 8 * 60_000L
+
+        /** MyMemory 单条上限约 500 字节，中文按 480 字符保守截断。 */
+        const val MYMEMORY_MAX_CHARS = 480
     }
 }

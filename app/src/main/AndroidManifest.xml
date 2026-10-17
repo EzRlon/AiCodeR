@@ -91,12 +91,6 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <service
-            android:name=".feature.floatball.FloatBallService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
         <!-- 通知栏工具授权按钮（批准/拒绝）的落点：显式广播，不对外暴露。 -->
         <receiver
             android:name=".feature.agent.domain.notification.PermissionActionReceiver"

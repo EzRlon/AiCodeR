@@ -324,6 +324,7 @@
     <string name="notification_keepalive_persistent_sessions">后台保活 · 终端任务: %1$d</string>
     <string name="notification_keepalive_running_sessions">运行中的终端任务: %1$d</string>
     <string name="notification_keepalive_enabled">后台保活已开启</string>
+    <string name="notification_float_ball_suffix"> · 悬浮球已开启</string>
     <string name="notification_channel_agent_complete">Agent 完成通知</string>
     <string name="notification_channel_agent_complete_desc">Agent 在后台完成任务时弹出的通知</string>
     <string name="notification_channel_agent_permission">工具授权请求</string>
@@ -1443,11 +1444,13 @@
     <string name="store_translation_failed">翻译失败：默认模型与免费翻译均不可用，已显示英文原文</string>
     <string name="store_translation_retry">重试</string>
     <string name="store_tab_skills">技能</string>
-    <string name="store_tab_experts">内置专家</string>
-    <string name="store_experts_empty">暂无内置专家团条目</string>
+    <string name="store_tab_experts">专家团</string>
+    <string name="store_experts_empty">暂无内置专家团</string>
     <string name="store_expert_install">安装</string>
+    <string name="store_team_members">成员：%1$s</string>
+    <string name="store_team_online_source">在线 · wshobson/agents 市场（MIT）</string>
     <string name="store_expert_installed_tag">已安装</string>
-    <string name="store_expert_installed_toast">已安装：%1$s（可在「设置 → 子代理」中启用与管理）</string>
+    <string name="store_expert_installed_toast">已安装专家团：%1$s（可在聊天页「召唤编队」使用）</string>
     <string name="store_expert_install_failed">安装失败，请重试</string>
     <string name="store_tab_mcp">MCP 服务器</string>
     <string name="store_search_hint">搜索技能</string>

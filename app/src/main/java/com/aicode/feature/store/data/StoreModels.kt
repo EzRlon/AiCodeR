@@ -9,14 +9,19 @@ import kotlinx.serialization.Serializable
 enum class StoreKind { SKILL, MCP, EXPERT }
 
 /**
- * 内置专家团条目（随版本内置的 agents 定义，一键安装到 ~/.aicode/agents）。
- * 外部暂无成熟的专家团商店可接入，商店以本地内置资产为来源。
+ * 内置专家团条目：成套团队（团队定义 + 成员专家），一键安装到 ~/.aicode/teams 与 ~/.aicode/agents。
+ * members 对应团队定义的成员子代理名，安装时一并补齐其 agent 定义。
  */
-data class ExpertStoreItem(
+data class TeamStoreItem(
     val fileName: String,
     val name: String,
     val description: String,
-    val installed: Boolean
+    val members: List<String>,
+    val installed: Boolean,
+    /** 在线市场条目（非内置 assets）。 */
+    val online: Boolean = false,
+    /** 在线条目的插件目录（安装时据此下载成员定义）。 */
+    val pluginBase: String? = null
 )
 
 /**

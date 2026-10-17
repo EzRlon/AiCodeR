@@ -10,7 +10,7 @@ import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.store.data.StoreApiClient
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
-import com.aicode.feature.store.data.ExpertStoreItem
+import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.store.data.StoreTranslationService
 import com.aicode.feature.store.data.StoreTranslationStore
@@ -58,8 +58,8 @@ data class StoreUiState(
     val translating: Boolean = false,
     /** 翻译失败（默认模型不可用/返回异常）：提示行带重试入口，避免静默回退英文。 */
     val translationFailed: Boolean = false,
-    /** 内置专家团列表（EXPERT tab）。 */
-    val experts: List<ExpertStoreItem> = emptyList()
+    /** 内置专家团（团队包）列表（EXPERT tab）。 */
+    val teams: List<TeamStoreItem> = emptyList()
 )
 
 /**
@@ -78,13 +78,24 @@ class StoreViewModel @Inject constructor(
     private val translationStore: StoreTranslationStore,
     private val languageSettings: LanguageSettingsRepository,
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
+    baseClient: okhttp3.OkHttpClient,
     @param:ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
+
+    /** 商店在线源专用客户端（市场目录/在线专家团安装）：带超时，失败静默。 */
+    private val storeClient: okhttp3.OkHttpClient = baseClient.newBuilder()
+        .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 
     private companion object {
         const val PAGE_SIZE = 20
         const val MCP_PAGE_SIZE = 50
         const val TAG = "StoreViewModel"
+        /** 在线专家团市场（wshobson/agents，MIT）：经 gh-proxy 镜像访问。 */
+        const val GH_PROXY = "https://gh-proxy.com/"
+        const val MARKET_URL = GH_PROXY + "https://raw.githubusercontent.com/wshobson/agents/main/.claude-plugin/marketplace.json"
+        const val PLUGIN_API_BASE = GH_PROXY + "https://api.github.com/repos/wshobson/agents/contents/"
     }
 
     private val _state = MutableStateFlow(StoreUiState())
@@ -162,7 +173,7 @@ class StoreViewModel @Inject constructor(
         when (tab) {
             StoreKind.SKILL -> loadSkills(nextPage = false)
             StoreKind.MCP -> loadMcp(next = false)
-            StoreKind.EXPERT -> loadExperts()
+            StoreKind.EXPERT -> loadTeams()
         }
     }
 
@@ -261,27 +272,33 @@ class StoreViewModel @Inject constructor(
         _state.update { it.copy(message = null) }
     }
 
-    /** 加载内置专家团（assets/agents）：解析 frontmatter 名称/描述；已安装 = 全局 agents 目录存在同名文件。 */
-    fun loadExperts() {
+    /** 加载内置专家团（assets/teams 团队包）：解析 frontmatter；已安装 = ~/.aicode/teams 存在同名文件。 */
+    fun loadTeams() {
         viewModelScope.launch {
-            val experts = withContext(Dispatchers.IO) {
+            val teams = withContext(Dispatchers.IO) {
                 runCatching {
-                    context.assets.list("agents").orEmpty()
+                    context.assets.list("teams").orEmpty()
                         .filter { it.endsWith(".md") }
                         .mapNotNull { file ->
-                            val text = context.assets.open("agents/$file")
+                            val text = context.assets.open("teams/$file")
                                 .bufferedReader().use { it.readText() }
                             val name = Regex("(?m)^name:\\s*(.+)$").find(text)
                                 ?.groupValues?.get(1)?.trim()
                                 ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                             val desc = Regex("(?m)^description:\\s*(.+)$").find(text)
                                 ?.groupValues?.get(1)?.trim().orEmpty()
-                            ExpertStoreItem(
+                            val memberText = Regex("(?m)^members:\\s*\\[(.+?)]\\s*$").find(text)
+                                ?.groupValues?.get(1).orEmpty()
+                            val members = memberText.split(',')
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                            TeamStoreItem(
                                 fileName = file,
                                 name = name,
                                 description = desc,
+                                members = members,
                                 installed = runCatching {
-                                    fileAccess.exists("~/.aicode/agents/$file")
+                                    fileAccess.exists("~/.aicode/teams/$file")
                                 }.getOrDefault(false)
                             )
                         }.sortedBy { it.name.lowercase() }
@@ -290,30 +307,58 @@ class StoreViewModel @Inject constructor(
                     emptyList()
                 }
             }
-            _state.update { it.copy(experts = experts) }
+            // 在线专家团市场（wshobson/agents，经 gh-proxy 镜像）：失败静默，仅展示内置
+            val online = withContext(Dispatchers.IO) { fetchOnlineTeams() }
+            _state.update { it.copy(teams = teams + online) }
         }
     }
 
-    /** 安装内置专家团成员：写入 ~/.aicode/agents（已在设置 → 子代理中可启用/管理）。 */
-    fun installExpert(item: ExpertStoreItem) {
+    /** 拉取在线专家团市场清单（Claude Code 插件市场格式：.claude-plugin/marketplace.json）。 */
+    private fun fetchOnlineTeams(): List<TeamStoreItem> = runCatching {
+        val request = okhttp3.Request.Builder().url(MARKET_URL).build()
+        storeClient.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) return@runCatching emptyList()
+            val root = org.json.JSONObject(resp.body?.string().orEmpty())
+            val arr = root.optJSONArray("plugins") ?: return@runCatching emptyList()
+            val plugins = ArrayList<TeamStoreItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val name = obj.optString("name").takeIf { it.isNotBlank() } ?: continue
+                val source = obj.optString("source")
+                if (!source.startsWith("./")) continue // 仅本地插件（外部条目无法保证可下载）
+                plugins.add(
+                    TeamStoreItem(
+                        fileName = "online-$name.md",
+                        name = name,
+                        description = obj.optString("description"),
+                        members = emptyList(),
+                        installed = runCatching {
+                            fileAccess.exists("~/.aicode/teams/$name.md")
+                        }.getOrDefault(false),
+                        online = true,
+                        pluginBase = source.removePrefix("./")
+                    )
+                )
+            }
+            plugins.sortedBy { it.name.lowercase() }
+        }
+    }.getOrElse { e ->
+        FileLogger.w(TAG, "拉取在线专家团市场失败", e)
+        emptyList()
+    }
+
+    /** 安装专家团：内置团队写团队定义并补齐成员；在线团队下载成员定义后生成团队。 */
+    fun installTeam(item: TeamStoreItem) {
         if (_state.value.installingId != null) return
         viewModelScope.launch {
             _state.update { it.copy(installingId = item.fileName) }
             val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    val text = context.assets.open("agents/${item.fileName}")
-                        .bufferedReader().use { it.readText() }
-                    fileAccess.writeFile("~/.aicode/agents/${item.fileName}", text)
-                    true
-                }.getOrElse { e ->
-                    FileLogger.w(TAG, "安装内置专家失败", e)
-                    false
-                }
+                if (item.online) installOnlineTeam(item) else installBuiltinTeam(item)
             }
             _state.update { s ->
                 s.copy(
                     installingId = null,
-                    experts = s.experts.map {
+                    teams = s.teams.map {
                         if (it.fileName == item.fileName && ok) it.copy(installed = true) else it
                     },
                     message = if (ok) {
@@ -324,6 +369,103 @@ class StoreViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /** 内置团队：写入团队定义，并补齐成员专家定义（已存在则不覆盖）。 */
+    private fun installBuiltinTeam(item: TeamStoreItem): Boolean = runCatching {
+        val teamText = context.assets.open("teams/${item.fileName}")
+            .bufferedReader().use { it.readText() }
+        fileAccess.writeFile("~/.aicode/teams/${item.fileName}", teamText)
+        item.members.forEach { member ->
+            val agentText = runCatching {
+                context.assets.open("agents/$member.md").bufferedReader().use { it.readText() }
+            }.getOrNull() ?: return@forEach
+            if (!fileAccess.exists("~/.aicode/agents/$member.md")) {
+                fileAccess.writeFile("~/.aicode/agents/$member.md", agentText)
+            }
+        }
+        true
+    }.getOrElse { e ->
+        FileLogger.w(TAG, "安装内置专家团失败", e)
+        false
+    }
+
+    /**
+     * 在线团队（wshobson/agents 插件）：列出插件 agents 目录 → 逐个下载并清洗 frontmatter
+     * （外部工具名与本地不一致，剔除 tools/model 行，默认全工具由权限引擎兜底）→
+     * 写入 ~/.aicode/agents，再生成可直接召唤的团队定义。
+     */
+    private fun installOnlineTeam(item: TeamStoreItem): Boolean = runCatching {
+        val base = item.pluginBase ?: return false
+        val files = fetchAgentFiles(base) ?: return false
+        if (files.isEmpty()) return false
+        val installedNames = ArrayList<String>()
+        for ((fileName, downloadUrl) in files) {
+            val text = downloadText(downloadUrl) ?: continue
+            val cleaned = sanitizeExternalAgent(text)
+            val defName = Regex("(?m)^name:\\s*(.+)$").find(cleaned)?.groupValues?.get(1)?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: fileName.removeSuffix(".md")
+            fileAccess.writeFile("~/.aicode/agents/$defName.md", cleaned)
+            installedNames.add(defName)
+        }
+        if (installedNames.isEmpty()) return false
+        val description = item.description.replace('\n', ' ').take(180)
+        val team = buildString {
+            appendLine("---")
+            appendLine("name: ${item.name}")
+            appendLine("description: $description")
+            appendLine("members: [${installedNames.joinToString(", ")}]")
+            appendLine("---")
+            appendLine("你是「${item.name}」编队的团长。可派发的成员子代理：${installedNames.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
+            appendLine("收到任务后先判断涉及哪些环节，再决定派谁与顺序；派活时写清目标、已知上下文、边界与期望产出（成员看不到你与用户的对话）；成员回报后整合结果并向用户交付。")
+        }
+        fileAccess.writeFile("~/.aicode/teams/${item.name}.md", team)
+        true
+    }.getOrElse { e ->
+        FileLogger.w(TAG, "安装在线专家团失败: ${item.name}", e)
+        false
+    }
+
+    /** GitHub contents API 列插件 agents 目录；raw 直链统一改走 gh-proxy 镜像（国内可直连）。 */
+    private fun fetchAgentFiles(pluginBase: String): List<Pair<String, String>>? = runCatching {
+        val request = okhttp3.Request.Builder().url(PLUGIN_API_BASE + pluginBase + "/agents").build()
+        storeClient.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) return@runCatching null
+            val arr = org.json.JSONArray(resp.body?.string().orEmpty())
+            val files = ArrayList<Pair<String, String>>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val name = obj.optString("name")
+                if (!name.endsWith(".md")) continue
+                val url = obj.optString("download_url").takeIf { it.isNotBlank() } ?: continue
+                files.add(name to (GH_PROXY + url))
+            }
+            files
+        }
+    }.getOrNull()
+
+    private fun downloadText(url: String): String? = runCatching {
+        val request = okhttp3.Request.Builder().url(url).build()
+        storeClient.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) return@runCatching null
+            resp.body?.string()?.takeIf { it.isNotBlank() }
+        }
+    }.getOrNull()
+
+    /** 清洗外部 agent 定义：剔除 tools/model/color 行（工具名与本地不一致，保留会造成空白名单）。 */
+    private fun sanitizeExternalAgent(text: String): String {
+        if (!text.startsWith("---")) return text
+        val end = text.indexOf("\n---", 3)
+        if (end < 0) return text
+        val frontmatter = text.substring(3, end)
+            .lines()
+            .filterNot {
+                val t = it.trimStart()
+                t.startsWith("tools:") || t.startsWith("model:") || t.startsWith("color:")
+            }
+            .joinToString("\n")
+        return "---" + frontmatter + "\n---" + text.substring(end + 4)
     }
 
     /**

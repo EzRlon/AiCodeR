@@ -1239,7 +1239,7 @@ class AIAgentViewModel @Inject constructor(
             question?.sessionId?.takeIf { it.isNotBlank() }?.let { add(it) }
             plan?.sessionId?.takeIf { it.isNotBlank() }?.let { add(it) }
         }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+    }.debounce(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     // 工具调用传入参数（argsPreview）按落库消息 id 暂存：ToolCallStarted 落库后，
     // ToolCallFinished / 用户停止会用同 id REPLACE 整行，需在此把参数带到后续落库。

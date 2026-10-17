@@ -753,7 +753,7 @@ fun SettingsScreen(
                             onSearch = { storeViewModel.search() },
                             onLoadMore = { storeViewModel.loadMore() },
                             onInstall = { storeViewModel.install(it) },
-                            onInstallExpert = { storeViewModel.installExpert(it) },
+                            onInstallTeam = { storeViewModel.installTeam(it) },
                             onConsumeMessage = { storeViewModel.consumeMessage() },
                             onRetryTranslation = { storeViewModel.retryTranslation() }
                         )

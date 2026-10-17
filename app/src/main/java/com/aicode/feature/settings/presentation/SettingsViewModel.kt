@@ -2180,7 +2180,7 @@ class SettingsViewModel @Inject constructor(
     fun setFloatBallEnabled(enabled: Boolean) {
         viewModelScope.launch {
             generalSettingsRepository.setFloatBallEnabled(enabled)
-            com.aicode.feature.floatball.FloatBallService.sync(context, enabled)
+            com.aicode.feature.terminal.domain.TerminalKeepaliveService.syncFloatBall(context, enabled)
         }
     }
 

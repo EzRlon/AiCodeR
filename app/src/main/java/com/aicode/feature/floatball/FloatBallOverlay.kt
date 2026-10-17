@@ -6,7 +6,6 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
-import android.widget.PopupWindow
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -73,7 +72,7 @@ class FloatBallOverlay(
 ) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private var ballView: ComposeView? = null
-    private var panelWindow: PopupWindow? = null
+    private var panelWindow: android.view.View? = null
     private var panelOpen = false
 
     /** 屏幕尺寸：Android 11+ 用 maximumWindowMetrics（分屏下仍取全屏），低版本回退 realSize。 */
@@ -125,7 +124,7 @@ class FloatBallOverlay(
     /** 悬浮窗 ComposeView 统一挂 ViewTree 三件套（Service 上下文无 Activity 提供的 owner）。
      *  按资源名解析 id 后写入对应的 View tag：与 androidx 内部读取的是同一个 tag（资源合并后 id 稳定），
      *  避开 2.9 起在源码层被隐藏的 ViewTree* 符号。 */
-    private fun ComposeView.withOverlayOwners(owner: OverlayComposeOwner): ComposeView = apply {
+    private fun <T : android.view.View> T.withOverlayOwners(owner: OverlayComposeOwner): T = apply {
         fun tagId(name: String) = resources.getIdentifier(name, "id", context.packageName)
         tagId("view_tree_lifecycle_owner").takeIf { it != 0 }?.let { setTag(it, owner) }
             ?: com.aicode.core.util.FileLogger.w(TAG, "资源 id 解析失败：view_tree_lifecycle_owner")
@@ -193,7 +192,7 @@ class FloatBallOverlay(
         }
 
     private fun dismissPanel() {
-        panelWindow?.dismiss()
+        panelWindow?.let { runCatching { windowManager.removeView(it) } }
         panelWindow = null
         panelOpen = false
         panelComposeOwner?.destroy()
@@ -245,20 +244,40 @@ class FloatBallOverlay(
         try {
             panelOwner = OverlayComposeOwner()
             panelComposeOwner = panelOwner
-            val panelView = ComposeView(context).withOverlayOwners(panelOwner)
-            panelView.setContent { PanelContent(onClose = { dismissPanel() }) }
-            val popup = PopupWindow(panelView, panelWidth, panelHeight, true)
-            popup.isClippingEnabled = false
-            popup.isOutsideTouchable = true
-            popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-            popup.setOnDismissListener {
-                panelWindow = null
-                panelOpen = false
-                panelComposeOwner?.destroy()
-                panelComposeOwner = null
+            val compose = ComposeView(context).withOverlayOwners(panelOwner)
+            compose.setContent { PanelContent(onClose = { dismissPanel() }) }
+            // 不用平台 PopupWindow：它的窗口根是内部装饰视图，Compose 从窗口根找运行环境 owner 会失败。
+            // 改为与悬浮球相同的直连窗口方式，窗口根即本容器（tag 已挂）。
+            val host = object : android.widget.FrameLayout(context) {
+                override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+                    if (ev.actionMasked == android.view.MotionEvent.ACTION_OUTSIDE) {
+                        dismissPanel()
+                        return true
+                    }
+                    return super.dispatchTouchEvent(ev)
+                }
             }
-            popup.showAtLocation(ballView, Gravity.TOP or Gravity.START, anchorX, anchorY)
-            panelWindow = popup
+            host.withOverlayOwners(panelOwner)
+            host.addView(
+                compose,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            val params = WindowManager.LayoutParams(
+                panelWidth, panelHeight,
+                overlayType(),
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = anchorX
+                y = anchorY
+            }
+            windowManager.addView(host, params)
+            panelWindow = host
             panelOpen = true
         } catch (e: Throwable) {
             // 面板创建/弹出失败（窗口被禁等）：记日志并清理 owner，不让点击回调崩溃

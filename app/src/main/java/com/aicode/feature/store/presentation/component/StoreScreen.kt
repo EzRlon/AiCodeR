@@ -36,7 +36,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
-import com.aicode.feature.store.data.ExpertStoreItem
+import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
 import com.aicode.feature.store.data.StoreTranslation
@@ -59,7 +59,7 @@ internal fun StoreScreen(
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onInstall: (StoreItem) -> Unit,
-    onInstallExpert: (ExpertStoreItem) -> Unit,
+    onInstallTeam: (TeamStoreItem) -> Unit,
     onConsumeMessage: () -> Unit,
     onRetryTranslation: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -166,7 +166,7 @@ internal fun StoreScreen(
         Spacer(Modifier.size(Spacing.xs))
 
         when {
-            state.tab == StoreKind.EXPERT -> ExpertTeamList(state = state, onInstall = onInstallExpert)
+            state.tab == StoreKind.EXPERT -> TeamList(state = state, onInstall = onInstallTeam)
 
             state.loading -> Box(
                 modifier = Modifier
@@ -384,13 +384,13 @@ private fun StoreItemCard(
 /** MCP 条目仅提供本地包（无远程地址）时不支持一键安装。 */
 private fun StoreItem.stdinUnsupported(): Boolean = kind == StoreKind.MCP && stdioOnly
 
-/** 专家团 tab：内置 agents 定义列表（名称/简介/安装状态）；外部暂无成熟的专家团商店可接入。 */
+/** 专家团 tab：内置团队包列表（名称/简介/成员/安装状态）；外部暂无成熟的团队商店可接入。 */
 @Composable
-private fun ExpertTeamList(
+private fun TeamList(
     state: StoreUiState,
-    onInstall: (ExpertStoreItem) -> Unit
+    onInstall: (TeamStoreItem) -> Unit
 ) {
-    if (state.experts.isEmpty()) {
+    if (state.teams.isEmpty()) {
         Text(
             text = stringResource(R.string.store_experts_empty),
             style = MaterialTheme.typography.bodyMedium,
@@ -409,7 +409,7 @@ private fun ExpertTeamList(
         ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(state.experts, key = { it.fileName }) { expert ->
+        items(state.teams, key = { it.fileName }) { team ->
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.semanticColors.cardSurface,
@@ -421,23 +421,41 @@ private fun ExpertTeamList(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = expert.name,
+                            text = team.name,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        if (expert.description.isNotBlank()) {
+                        if (team.description.isNotBlank()) {
                             Text(
-                                text = expert.description,
+                                text = team.description,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
+                                maxLines = 3,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        if (team.members.isNotEmpty()) {
+                            Text(
+                                text = stringResource(R.string.store_team_members, team.members.joinToString("、")),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        } else if (team.online) {
+                            Text(
+                                text = stringResource(R.string.store_team_online_source),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                maxLines = 1,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
                     }
                     Spacer(Modifier.width(Spacing.sm))
-                    if (expert.installed) {
+                    if (team.installed) {
                         Text(
                             text = stringResource(R.string.store_expert_installed_tag),
                             style = MaterialTheme.typography.labelSmall,
@@ -445,7 +463,7 @@ private fun ExpertTeamList(
                         )
                     } else {
                         TextButton(
-                            onClick = { onInstall(expert) },
+                            onClick = { onInstall(team) },
                             enabled = state.installingId == null
                         ) {
                             Text(stringResource(R.string.store_expert_install))
