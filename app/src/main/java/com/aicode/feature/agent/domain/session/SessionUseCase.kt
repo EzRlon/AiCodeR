@@ -5,6 +5,7 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.presentation.MessageRole
 import java.util.UUID
@@ -97,6 +98,12 @@ class SessionUseCase @Inject constructor(
     /** 工作区里最近更新的根会话（忽略置顶），供启动时进入最近会话。 */
     suspend fun getMostRecentSessionOfWorkspace(workspacePath: String): ChatSessionEntity? {
         return chatSessionDao.getLatestRootSessionByWorkspace(workspacePath)
+    }
+
+    /** 工作区下可复用的空会话（从未发送过消息的根会话，取最近更新的一个），供「新建会话」直接切过去。 */
+    suspend fun getEmptySessionOfWorkspace(workspacePath: String): ChatSessionEntity? {
+        return chatSessionDao.getRootSessionsByWorkspaceOnce(workspacePath)
+            .firstOrNull { !agentMessageDao.hasMessages(it.id) }
     }
 
     /** 回收工作区下多余的空会话（从未发送过消息），保留 [keepId]；保证列表最多一个空会话。 */
@@ -193,6 +200,26 @@ class SessionUseCase @Inject constructor(
 
     suspend fun updateTeamName(sessionId: String, teamName: String?) {
         chatSessionDao.updateTeamName(sessionId, teamName)
+    }
+    /**
+     * 设定/覆盖会话 goal：重置轮次计数，并记录当前累计 token 作为消耗基线，状态置 ACTIVE。
+     * [goal] 为 null/空白则清除目标。
+     */
+    suspend fun setGoal(sessionId: String, goal: String?, startInputTokens: Int, startOutputTokens: Int) {
+        val trimmed = goal?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed == null) {
+            chatSessionDao.updateGoal(sessionId, null, null, 0, 0)
+        } else {
+            chatSessionDao.updateGoal(sessionId, trimmed, GoalStatus.ACTIVE.name, startInputTokens, startOutputTokens)
+        }
+    }
+
+    suspend fun updateGoalStatus(sessionId: String, status: GoalStatus?) {
+        chatSessionDao.updateGoalStatus(sessionId, status?.name)
+    }
+
+    suspend fun incrementGoalTurn(sessionId: String) {
+        chatSessionDao.incrementGoalTurn(sessionId)
     }
 
     suspend fun isSessionEmpty(sessionId: String): Boolean {

@@ -10,9 +10,12 @@ import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
 import com.aicode.feature.agent.domain.command.SlashCommandRegistry
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mention.FileMentionRepository
 import com.aicode.feature.agent.domain.notification.AgentNotificationCenter
+import com.aicode.feature.agent.presentation.notification.AgentLiveNotificationManager
+import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificationManager
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
@@ -29,6 +32,9 @@ import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
+import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
+import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
 import com.aicode.feature.settings.data.repository.VoiceSettingsRepository
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -76,8 +82,14 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val backupManager: BackupManager,
     private val mcpManager: McpManager,
     private val agentSoundSettings: AgentSoundSettingsRepository,
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val containerOsDetector: ContainerOsDetector,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val keepaliveSettings: KeepaliveSettingsRepository,
+    private val liveNotificationSettings: LiveNotificationSettingsRepository,
+    private val agentLiveNotificationManager: AgentLiveNotificationManager,
+    private val approvalNotificationSettings: ApprovalNotificationSettingsRepository,
+    private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
@@ -117,8 +129,14 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         backupManager,
         mcpManager,
         agentSoundSettings,
+        containerSettingsRepository,
+        containerOsDetector,
         generalSettingsRepository,
         keepaliveSettings,
+        liveNotificationSettings,
+        agentLiveNotificationManager,
+        approvalNotificationSettings,
+        agentApprovalNotificationManager,
         subAgentEventBus,
         agentNotificationCenter,
         agentDefinitionRepository,

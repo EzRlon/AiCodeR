@@ -31,3 +31,5 @@
 - 当前模型: {{AICODE_MODEL_CONTEXT}}
 
 [System] 当前本地时间: {{AICODE_DATE}}
+
+{{AICODE_GOAL}}

@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentContext
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
@@ -300,7 +301,8 @@ class SystemPromptProvider @Inject constructor(
             environmentContent,
             currentDate(),
             selfImprove = selfImproveContent,
-            modelContext = modelContextText(agentContext)
+            modelContext = modelContextText(agentContext),
+            goal = renderGoalBlock(agentContext)
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -337,7 +339,8 @@ class SystemPromptProvider @Inject constructor(
             environmentSource.build(ctx),
             currentDate(),
             selfImprove = selfImproveInstructionsSource.build(ctx),
-            modelContext = modelContextText(ctx)
+            modelContext = modelContextText(ctx),
+            goal = renderGoalBlock(ctx)
         )
         val teamContent = teamLeaderSource.build(ctx)
         return if (teamContent.isNullOrBlank()) rendered else "$rendered\n\n$teamContent"
@@ -431,7 +434,8 @@ class SystemPromptProvider @Inject constructor(
         date: String,
         subAgentName: String = "",
         selfImprove: String? = null,
-        modelContext: String = ""
+        modelContext: String = "",
+        goal: String? = null
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -447,6 +451,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(SELF_IMPROVE_VAR, selfImprove.orEmpty())
         out = out.replace(SUBAGENT_NAME_VAR, subAgentName)
         out = out.replace(MODEL_CONTEXT_VAR, modelContext.ifBlank { "未知" })
+        out = out.replace(GOAL_VAR, goal.orEmpty())
         return out
     }
 
@@ -461,6 +466,13 @@ class SystemPromptProvider @Inject constructor(
 
     private fun currentDate(): String =
         java.time.ZonedDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+
+    /** 会话目标注入块：仅当会话处于 goal 自主循环（ACTIVE）时非空；文本取自 prompts/agent/goal.md，用户可覆盖。 */
+    private fun renderGoalBlock(ctx: AgentContext): String? {
+        if (ctx.goalStatus != GoalStatus.ACTIVE) return null
+        val goal = ctx.goal?.takeIf { it.isNotBlank() } ?: return null
+        return resolvePrompt(GOAL_FILE).replace(GOAL_TEXT_PLACEHOLDER, goal).trim()
+    }
 
     /** 把连续 3 个以上换行压成 2 个：变量展开后空清单会留下额外空行。 */
     private fun collapseBlankLines(text: String): String =
@@ -515,6 +527,10 @@ class SystemPromptProvider @Inject constructor(
         const val WORKSPACE_VAR = "{{AICODE_WORKSPACE}}"
         const val ENVIRONMENT_VAR = "{{AICODE_ENVIRONMENT}}"
         const val DATE_VAR = "{{AICODE_DATE}}"
+        const val GOAL_VAR = "{{AICODE_GOAL}}"
+        /** goal 自主循环的注入块模板（prompts/agent/goal.md）；占位符换成目标文本。 */
+        const val GOAL_FILE = "agent/goal.md"
+        const val GOAL_TEXT_PLACEHOLDER = "{{GOAL_TEXT}}"
         const val SUBAGENT_NAME_VAR = "{{AICODE_SUBAGENT_NAME}}"
         const val SELF_IMPROVE_VAR = "{{AICODE_SELF_IMPROVE}}"
         const val MODEL_CONTEXT_VAR = "{{AICODE_MODEL_CONTEXT}}"

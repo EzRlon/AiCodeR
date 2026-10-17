@@ -82,6 +82,7 @@ object ToolPermissionCatalog {
         ToolPermissionInfo("task", R.string.perm_tool_task, R.string.perm_tool_task_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.ASK),
         ToolPermissionInfo("messageParent", R.string.perm_tool_message_parent, R.string.perm_tool_message_parent_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("planMode", R.string.perm_tool_plan_mode, R.string.perm_tool_plan_mode_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.ASK),
+        ToolPermissionInfo("goalStatus", R.string.perm_tool_goal_status, R.string.perm_tool_goal_status_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("todo", R.string.perm_tool_todo, R.string.perm_tool_todo_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("askUserQuestion", R.string.perm_tool_ask_question, R.string.perm_tool_ask_question_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         // 记忆与扩展

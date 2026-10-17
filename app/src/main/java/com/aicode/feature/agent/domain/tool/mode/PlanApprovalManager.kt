@@ -45,7 +45,7 @@ class PlanApprovalManager @Inject constructor(
         val decision = CompletableDeferred<PlanApprovalChoice>()
         currentDecision = decision
         currentSessionId = sessionId
-        _pendingApproval.value = PlanApprovalRequest(reason = reason)
+        _pendingApproval.value = PlanApprovalRequest(reason = reason, sessionId = sessionId)
 
         try {
             return decision.await()
@@ -85,7 +85,7 @@ class PlanApprovalManager @Inject constructor(
     }
 }
 
-data class PlanApprovalRequest(val reason: String)
+data class PlanApprovalRequest(val reason: String, val sessionId: String? = null)
 
 enum class PlanApprovalChoice {
     /** 批准计划，切换到 BUILD 模式执行 */

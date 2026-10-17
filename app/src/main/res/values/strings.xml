@@ -51,6 +51,15 @@
     <string name="settings_sendfile_max_size_desc">单个文件大小上限，超过则整批发送失败</string>
     <string name="settings_mb_value">%1$d MB</string>
     <string name="settings_sendfile_max_size_input_hint">单位 MB，填大于 0 的整数</string>
+    <string name="settings_general_goal">目标（goal）</string>
+    <string name="settings_goal_max_turns">最大续跑轮数</string>
+    <string name="settings_goal_max_turns_desc">自主循环最多续跑多少轮，达到即停止</string>
+    <string name="settings_turns_value">%1$d 轮</string>
+    <string name="settings_goal_max_turns_input_hint">填大于 0 的整数轮数</string>
+    <string name="settings_goal_max_tokens">token 预算</string>
+    <string name="settings_goal_max_tokens_desc">自主循环累计消耗的输入+输出 token 上限</string>
+    <string name="settings_tokens_value">%1$d</string>
+    <string name="settings_goal_max_tokens_input_hint">填不小于 1000 的整数</string>
     <string name="settings_vision_model">识图模型</string>
     <string name="settings_compaction_model">压缩模型</string>
     <string name="settings_title_model">标题总结模型</string>
@@ -295,6 +304,10 @@
     <string name="settings_network_guide_more">更多机型与详细说明见官网文档</string>
     <string name="settings_agent_sound_title">Agent 完成通知</string>
     <string name="settings_agent_sound_subtitle">退到后台时 Agent 完成弹出通知</string>
+    <string name="settings_live_notification_title">实时通知</string>
+    <string name="settings_live_notification_subtitle">AI 在后台工作时展示实时进度通知</string>
+    <string name="settings_approval_notification_title">授权审批通知</string>
+    <string name="settings_approval_notification_subtitle">AI 请求授权、提问或等待计划审批时弹出通知</string>
     <string name="agent_complete_notification_title">任务完成</string>
     <string name="agent_complete_notification_body">点击返回查看</string>
     <string name="agent_complete_notification_background_body">后台任务「%1$s」已完成</string>
@@ -357,6 +370,20 @@
     <string name="preview_retry">重试</string>
     <string name="preview_idle_hint">在终端里启动开发服务（如 npm run dev），然后回到这里输入端口打开预览；前端热更新会直接生效。</string>
     <string name="preview_failed">连不上 127.0.0.1:%1$s，请确认服务已启动且端口正确</string>
+    <string name="notification_channel_agent_live">AI 实时进度</string>
+    <string name="notification_channel_agent_live_desc">AI 在后台工作时展示当前进度的通知</string>
+    <string name="notification_agent_live_title_multi">%1$d 个任务进行中</string>
+    <string name="notification_channel_agent_approval">授权审批通知</string>
+    <string name="notification_channel_agent_approval_desc">AI 在后台请求授权、提问或等待计划审批时弹出的通知</string>
+    <string name="notification_approval_title">AI 等待你的确认</string>
+    <string name="notification_approval_multi_title">%1$d 个任务等待确认</string>
+    <string name="notification_approval_needed">需要审批</string>
+    <string name="notification_approval_label_permission">需要授权</string>
+    <string name="notification_approval_label_question">需要回答</string>
+    <string name="notification_approval_label_plan">等待计划审批</string>
+    <string name="notification_approval_action_allow">允许</string>
+    <string name="notification_approval_action_reject">拒绝</string>
+    <string name="notification_approval_action_approve_plan">批准</string>
     <string name="settings_app_permissions">软件权限</string>
     <string name="settings_permission_apk_install">安装未知应用</string>
     <string name="settings_permission_apk_install_desc">允许安装 APK 安装包</string>
@@ -589,6 +616,13 @@
     <string name="about_update_verify_not_newer">安装包版本不高于当前版本</string>
     <string name="about_update_install_failed">没有可用的安装程序</string>
 
+    <!-- Disclaimer -->
+    <string name="about_disclaimer">免责声明</string>
+    <string name="disclaimer_title">免责声明</string>
+    <string name="disclaimer_body">本软件（AiCode）为开源软件，按「现状」提供，仅供学习、研究与合法的软件开发用途。\n\n使用本软件时，你应遵守所在国家或地区的法律法规以及所使用服务的相关条款。严禁将本软件用于任何违法或侵权用途，包括但不限于：未经授权入侵、破解、逆向工程他人软件或系统，绕过技术保护措施，窃取或泄露他人数据，传播恶意代码，以及其它侵害他人合法权益的行为。\n\n你应自行承担使用本软件的全部风险与责任。对于你因使用或无法使用本软件而产生的任何直接或间接损失，以及你利用本软件实施的任何行为及其后果，作者与贡献者均不承担任何责任。\n\n若你不同意本声明，请立即停止使用并卸载本软件。</string>
+    <string name="disclaimer_accept">我已阅读并同意</string>
+    <string name="disclaimer_decline">不同意</string>
+
     <!-- Ask User Question -->
     <string name="ask_confirm_title">AI 需要你的确认</string>
     <string name="ask_supplement">补充</string>
@@ -754,6 +788,7 @@
     <string name="editor_unsaved_message">当前文件有未保存的修改，是否保存？</string>
     <string name="editor_discard">放弃</string>
     <string name="editor_save_and_exit">保存并退出</string>
+    <string name="editor_save_and_switch">保存并切换</string>
     <string name="editor_dont_save">不保存</string>
     <string name="editor_md_preview">预览 Markdown</string>
     <string name="editor_md_show_source">显示源码</string>
@@ -843,7 +878,10 @@
     <string name="chat_status_running_command">正在执行命令</string>
     <string name="chat_status_editing_file">正在编辑文件</string>
     <string name="chat_status_reading_file">正在读取文件</string>
+    <string name="chat_status_viewing_image">正在查看图片</string>
     <string name="chat_status_searching_web">正在联网搜索</string>
+    <string name="chat_status_browsing_web">正在操作浏览器</string>
+    <string name="chat_status_asking_user">正在询问用户</string>
     <string name="chat_status_generating_image">正在生成图片</string>
     <string name="chat_status_updating_todo">正在整理待办</string>
     <string name="chat_status_starting_subagent">正在启动子代理</string>
@@ -854,6 +892,7 @@
     <string name="chat_tool_calls_count">%1$d 次工具调用</string>
     <string name="chat_turn_running">执行中</string>
     <string name="chat_turn_completed">已完成 %1$s</string>
+    <string name="chat_turn_completed_plain">已完成</string>
     <string name="chat_context_usage">上下文已用 %1$d%%</string>
     <string name="chat_bg_command_done">后台命令已完成</string>
     <string name="chat_bg_commands_done">%1$d 个后台任务已完成</string>
@@ -863,10 +902,20 @@
     <string name="chat_compressing_context">正在压缩上下文</string>
     <string name="chat_retrying">正在重试 %1$s/%2$s</string>
     <string name="chat_key_switched">已切换到第 %1$d/%2$d 个 Key</string>
+    <string name="chat_goal_label">目标·%1$s</string>
+    <string name="chat_goal_status_active">进行中</string>
+    <string name="chat_goal_status_paused">已暂停</string>
+    <string name="chat_goal_status_completed">已完成</string>
+    <string name="chat_goal_status_blocked">受阻</string>
+    <string name="chat_goal_status_exhausted">预算耗尽</string>
+    <string name="chat_goal_pause">暂停目标</string>
+    <string name="chat_goal_resume">恢复目标</string>
+    <string name="chat_goal_clear">清除目标</string>
     <string name="chat_error_title">请求失败</string>
     <string name="slash_command_compress_desc">手动触发当前会话的上下文压缩</string>
     <string name="slash_command_init_desc">分析当前工作区代码库，生成或改进项目规则 AGENTS.md</string>
     <string name="slash_command_usage_desc">查看今日与累计的调用次数、token 用量与预估费用</string>
+    <string name="slash_command_goal_desc">设定会话持续目标，AI 自主循环推进至达成或预算耗尽</string>
     <string name="retry_error_rate_limit">速率限制</string>
     <string name="retry_error_server_overloaded">服务器负载过高</string>
     <string name="retry_error_server">服务端错误</string>
@@ -949,6 +998,14 @@
     <string name="container_download_failed">下载失败：%1$s</string>
     <string name="container_download_list_empty">暂无可用镜像</string>
     <string name="container_download_done">已下载</string>
+    <string name="container_download_newer_available">有新版可下载</string>
+    <string name="container_download_checksum_failed">文件校验失败，可能被截断或篡改，请重试</string>
+    <string name="container_download_eol_soon">即将停止支持</string>
+    <string name="container_download_eol_ended">已停止支持</string>
+    <string name="container_download_eol_extended">已进入 %1$s 延长支持</string>
+    <string name="container_download_eol_extended_generic">已进入延长支持</string>
+    <string name="container_download_eol_support_ends">常规支持结束：%1$s</string>
+    <string name="container_download_eol_fully_ends">完全停止支持：%1$s</string>
     <string name="container_download_size">大小：%1$s</string>
     <string name="container_download_delete_title">删除下载镜像</string>
     <string name="container_download_delete_confirm">删除「%1$s」的下载文件？已导入的容器将无法再解压。</string>
@@ -1085,9 +1142,10 @@
     <string name="git_files_changed">%1$s 个文件改动</string>
     <string name="git_no_files_changed">该提交无文件改动</string>
     <string name="git_loading_files">正在加载改动文件…</string>
-    <string name="git_not_a_repo">当前工作区不是 Git 仓库</string>
-    <string name="git_init_desc">初始化后会在此创建 .git，之后可暂存、提交、关联远程。</string>
-    <string name="git_init_repo">初始化 Git 仓库</string>
+    <string name="git_not_a_repo">当前工作区还不是 Git 仓库</string>
+    <string name="git_init_desc_primary">可在此初始化新仓库，开始版本管理</string>
+    <string name="git_init_desc_secondary">若子目录已有 Git 仓库，也可直接选择使用</string>
+    <string name="git_init_repo">初始化新仓库</string>
     <string name="git_clone_repo">克隆远程仓库</string>
     <string name="git_clone_dialog_title">克隆 Git 仓库</string>
     <string name="git_clone_desc">将远程仓库克隆到当前工作区根目录（工作区需为空）。若为私有仓库，可先在右上角凭据管理中配置访问凭据。</string>
@@ -1108,6 +1166,11 @@
     <string name="git_unstage_all_confirm">将取消所有文件的暂存，但不会删除文件内容。确定继续吗？</string>
     <string name="git_pull_dirty_confirm">当前工作区有未提交改动，拉取可能导致冲突。建议先提交或暂存。仍要继续拉取吗？</string>
     <string name="git_pull_continue">继续拉取</string>
+    <string name="git_switch_repo">切换仓库</string>
+    <string name="git_pick_existing_repo">选择已有仓库</string>
+    <string name="git_repo_selector_title">选择仓库</string>
+    <string name="git_repo_not_repo">非仓库</string>
+    <string name="git_pick_repo_empty">当前工作区没有可选的目录</string>
     <string name="git_push_master_confirm_title">分支命名建议</string>
     <string name="git_push_master_confirm_desc">当前本地分支为 master，GitHub 与 GitLab 推荐使用 main 作为默认主分支。是否将本地分支重命名为 main 后再推送？</string>
     <string name="git_push_rename_to_main">重命名为 main 并推送</string>
@@ -1124,6 +1187,8 @@
     <string name="git_toast_action_failed">%1$s失败：%2$s</string>
     <string name="git_toast_checkout_success">已切换到 %1$s</string>
     <string name="git_toast_checkout_failed">切换失败：%1$s</string>
+    <string name="git_toast_not_repo">该目录不是 Git 仓库</string>
+    <string name="git_toast_switch_repo_failed">切换仓库失败：%1$s</string>
     <string name="git_toast_diff_failed">加载差异失败</string>
     <string name="git_toast_path_copied">已复制路径</string>
     <string name="git_action_stage_all">全部暂存</string>
@@ -2188,6 +2253,8 @@
     <string name="perm_tool_message_parent">向父代理汇报</string>
     <string name="perm_tool_message_parent_desc">子代理向主会话发送进度或结果</string>
     <string name="perm_tool_plan_mode">模式切换</string>
+    <string name="perm_tool_goal_status">目标状态</string>
+    <string name="perm_tool_goal_status_desc">目标自主循环中由 AI 标记目标完成或受阻</string>
     <string name="perm_tool_plan_mode_desc">申请进入或退出计划模式</string>
     <string name="perm_tool_todo">任务清单</string>
     <string name="perm_tool_todo_desc">维护任务清单，向用户展示真实进度</string>

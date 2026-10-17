@@ -121,9 +121,11 @@ import com.aicode.feature.agent.presentation.ChatSearchState
 import com.aicode.feature.agent.presentation.BrowseClipboard
 import com.aicode.feature.agent.presentation.FileBrowseState
 import com.aicode.feature.agent.presentation.FileTreeNode
+import com.aicode.feature.agent.presentation.FileTreeRoot
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.core.ui.containerOsLogo
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
@@ -146,6 +148,7 @@ import compose.icons.feathericons.Server
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
@@ -1244,17 +1247,86 @@ private fun FileBrowserTab(
     var pendingDelete by remember { mutableStateOf<FileTreeNode?>(null) }
     val hScroll = rememberScrollState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // 顶部操作行：剪贴板指示器 + 文件操作状态 + 刷新按钮——固定占位、不再悬浮，
-        // 避免覆盖文件树首行文字（验收反馈：刷新按钮与文字重叠）。
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (state) {
+            is FileBrowseState.Loading -> Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            }
+
+            is FileBrowseState.Error -> Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = state.detail ?: stringResource(R.string.file_browser_error),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = Spacing.md)
+                )
+            }
+
+            is FileBrowseState.Success -> {
+                val listState = rememberLazyListState()
+                val textMeasurer = rememberTextMeasurer()
+                val textStyle = MaterialTheme.typography.bodyMedium
+                val density = LocalDensity.current
+                // 预算最宽一行的内容宽度（固定开销 + 缩进 + 文本），供所有行取统一宽度，
+                // 以实现整棵树统一横向平移（而非每行各自滚动）。
+                // 逐个 measure 在大目录下会在组合期同步跑上千次文本测量；先按「缩进 + 字符宽度权重」
+                // 挑出最宽的那一行，只对它做一次真实测量。估算不精确，但这里只用来给横向滚动留够宽度。
+                val maxContentPx = remember(state.nodes, textStyle) {
+                    with(density) {
+                        val widest = state.nodes.maxByOrNull { node ->
+                            node.depth * 4 + node.displayName.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
+                        } ?: return@with 0
+                        val textW = textMeasurer.measure(widest.displayName, textStyle).size.width
+                        (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
+                    }
+                }
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val rowWidthPx = maxOf(constraints.maxWidth, maxContentPx)
+                    val rowWidth = with(density) { rowWidthPx.toDp() }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .horizontalScroll(hScroll)
+                    ) {
+                        items(state.nodes, key = { it.path }) { node ->
+                            FileTreeRow(
+                                node = node,
+                                rowWidth = rowWidth,
+                                expanding = node.entry.isDirectory && node.path == expandingPath,
+                                busy = node.path in fileOpPaths,
+                                onClick = {
+                                    if (node.entry.isDirectory) onToggleExpand(node.path)
+                                    else onOpenFile(node.path)
+                                },
+                                onLongClick = { menuNode = node },
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                    fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                                    placementSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 刷新按钮。
         // 2026-10-17 验收反馈：刷新按钮需与右侧「会话/文件」标签同列——整体右移，
         // 使其中心对齐面板右缘线（offset = 面板内边距 + 行内边距 + 按钮半宽）。
         Row(
             modifier = Modifier
-                .fillMaxWidth()
+                .align(Alignment.TopEnd)
                 .offset(x = Spacing.lg + Spacing.xs + 16.dp)
                 .padding(end = Spacing.xs),
-            horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
             clipboard?.let { clip ->
@@ -1283,81 +1355,6 @@ private fun FileBrowserTab(
                 )
             }
         }
-        Box(modifier = Modifier.fillMaxSize()) {
-            when (state) {
-                is FileBrowseState.Loading -> Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                }
-
-                is FileBrowseState.Error -> Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = state.detail ?: stringResource(R.string.file_browser_error),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = Spacing.md)
-                    )
-                }
-
-                is FileBrowseState.Success -> {
-                    val listState = rememberLazyListState()
-                    val textMeasurer = rememberTextMeasurer()
-                    val textStyle = MaterialTheme.typography.bodyMedium
-                    val density = LocalDensity.current
-                    // 预算最宽一行的内容宽度（固定开销 + 缩进 + 文本），供所有行取统一宽度，
-                    // 以实现整棵树统一横向平移（而非每行各自滚动）。
-                    // 逐个 measure 在大目录下会在组合期同步跑上千次文本测量；先按「缩进 + 字符宽度权重」
-                    // 挑出最宽的那一行，只对它做一次真实测量。估算不精确，但这里只用来给横向滚动留够宽度。
-                    val maxContentPx = remember(state.nodes, textStyle) {
-                        with(density) {
-                            val widest = state.nodes.maxByOrNull { node ->
-                                val label = if (node.isRoot) WORKSPACE_LABEL else node.entry.name
-                                node.depth * 4 + label.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
-                            } ?: return@with 0
-                            val label = if (widest.isRoot) WORKSPACE_LABEL else widest.entry.name
-                            val textW = textMeasurer.measure(label, textStyle).size.width
-                            (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
-                        }
-                    }
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                        val rowWidthPx = maxOf(constraints.maxWidth, maxContentPx)
-                        val rowWidth = with(density) { rowWidthPx.toDp() }
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .horizontalScroll(hScroll)
-                        ) {
-                            items(state.nodes, key = { it.path }) { node ->
-                                FileTreeRow(
-                                    node = node,
-                                    rowWidth = rowWidth,
-                                    expanding = node.entry.isDirectory && node.path == expandingPath,
-                                    busy = node.path in fileOpPaths,
-                                    onClick = {
-                                        if (node.entry.isDirectory) onToggleExpand(node.path)
-                                        else onOpenFile(node.path)
-                                    },
-                                    onLongClick = { menuNode = node },
-                                    modifier = Modifier.animateItem(
-                                        fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-                                        fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                                        placementSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-        }
     }
 
     creating?.let { target ->
@@ -1383,12 +1380,12 @@ private fun FileBrowserTab(
             clipboard = clipboard,
             onNewFile = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FILE)
             },
             onNewFolder = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FOLDER)
             },
             onRename = {
@@ -1549,7 +1546,7 @@ private fun FileTreeActionSheet(
                 .padding(bottom = Spacing.xl)
         ) {
             Text(
-                text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+                text = node.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -1581,7 +1578,7 @@ private fun FileTreeActionSheet(
                     onClick = onNewFolder
                 )
             }
-            if (!node.isRoot) {
+            if (node.root == null) {
                 SheetActionRow(
                     icon = FeatherIcons.Copy,
                     label = stringResource(R.string.common_copy),
@@ -1635,7 +1632,7 @@ private fun FileTreeRow(
             showExpanding = false
         }
     }
-    val isDotfile = !node.isRoot && node.entry.name.startsWith(".")
+    val isDotfile = node.root == null && node.entry.name.startsWith(".")
     val decorationColor: Color? = when {
         node.hasError -> MaterialTheme.colorScheme.error
         node.ignored -> FileTreeIgnoredColor
@@ -1685,7 +1682,7 @@ private fun FileTreeRow(
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+            text = node.displayName,
             style = MaterialTheme.typography.bodyMedium,
             color = decorationColor ?: MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
@@ -1694,9 +1691,31 @@ private fun FileTreeRow(
     }
 }
 
-/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。[decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
+/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。容器根用「容器与镜像」列表同款图标。
+ * [decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
 @Composable
 private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
+    val containerRoot = node.root as? FileTreeRoot.Container
+    if (containerRoot != null) {
+        val tint = decorationColor ?: MaterialTheme.colorScheme.primary
+        val logo = containerOsLogo(containerRoot.osId)
+        if (logo != null) {
+            Icon(
+                painter = logo,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        } else {
+            Icon(
+                imageVector = if (containerRoot.remote) FeatherIcons.Server else FeatherIcons.HardDrive,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        }
+        return
+    }
     val vector = if (node.entry.isDirectory) {
         FeatherIcons.Folder
     } else {
@@ -1715,8 +1734,8 @@ private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
 /** .gitignore 命中条目的弱化色（橙，类 VSCode）。 */
 private val FileTreeIgnoredColor = Color(0xFFCC8844)
 
-/** 文件树根节点显示名，对应容器路径 `~/workspace`。 */
-private const val WORKSPACE_LABEL = "workspace"
+/** 文件树一行的显示名：根节点用根标签（工作区根 `workspace` / 当前容器名），其余用条目名。 */
+private val FileTreeNode.displayName: String get() = root?.label ?: entry.name
 
 /** 文件树一行除缩进与文本外的固定宽度开销（start 8 + 箭头 16 + 4 + 图标 20 + 8 + end 12），供预算整树统一行宽。 */
 private val FILE_TREE_ROW_OVERHEAD = 68.dp

@@ -2,6 +2,7 @@ package com.aicode
 
 import android.app.ActivityManager
 import android.app.Application
+import android.app.ApplicationExitInfo
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
@@ -12,6 +13,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import com.aicode.core.net.AppProxy
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.TombstoneParser
 import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpManager
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -45,6 +48,26 @@ class AIEditorApp : Application(), Configuration.Provider {
         private const val KEY_CRASH_UI_SHOWING = "crash_ui_showing"
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
         private const val KEY_CRASH_COUNT = "crash_count"
+        /** ApplicationExitInfo 增量游标：已处理过的最大退出时间戳，避免重复上报历史退出。 */
+        private const val KEY_LAST_EXIT_TIMESTAMP = "last_exit_timestamp"
+        /** ApplicationExitInfo 读取的历史退出记录条数上限。 */
+        private const val MAX_EXIT_RECORDS = 20
+        /** 单条退出 trace 落盘时保留的字节上限（按字节截断，避免超大 trace 撑爆内存）。 */
+        private const val TRACE_HEAD_BYTES = 16 * 1024
+
+        /** 崩溃 tombstone 落盘目录保留的文件数上限（超出则删除最旧的）。 */
+        private const val MAX_CRASH_TRACE_FILES = 20
+        /**
+         * 无 Java 异常、只能靠 ApplicationExitInfo 补记的退出原因（API 30+）。
+         * 不包含 REASON_CRASH（Java 崩溃已由 installCrashHandler + CrashActivity 完整记录）。
+         */
+        private val ABNORMAL_EXIT_REASONS = setOf(
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_LOW_MEMORY,
+            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+            ApplicationExitInfo.REASON_SIGNALED
+        )
         /** 10 秒内的连续崩溃视为密集崩溃。 */
         private const val CRASH_RESET_WINDOW_MS = 10_000L
         /** 密集崩溃达到 3 次触发硬熔断退出，杜绝死循环。 */
@@ -212,6 +235,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var modelMetadataService: ModelMetadataService
 
+    /** 可下载镜像目录：启动即异步从仓库 data 分支拉取最新版本清单（12h 缓存，失败静默，兜底内置 assets）。 */
+    @Inject
+    lateinit var containerImageCatalog: com.aicode.feature.agent.domain.container.ContainerImageCatalog
+
     /** 提供商级代理注册表：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
     @Inject
     lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
@@ -228,6 +255,8 @@ class AIEditorApp : Application(), Configuration.Provider {
         }
         super.onCreate()
         logDeviceInfo()
+        // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
+        appScope.launch { reportAbnormalExits() }
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
@@ -280,8 +309,11 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             modelMetadataService.refreshFromNetworkIfStale()
         }
-        // providers.json 预设已内置化（见 ProviderPresetLibrary）：不再从官方仓库拉取，
-        // 自建分支的 models 预填字段只存在于内置数据。
+        // providers.json 预设已内置化（见 ProviderPresetLibrary）：不从官方仓库拉取，
+        // 自建分支的 models 预填字段只存在于内置数据，网络刷新会覆盖它们。
+        // 镜像目录的网络刷新暂不启用：发布源（data 分支的 container-images.json）随官方 CI
+        // 一起未合入，启动即刷新只会发起注定失败的网络尝试（违性能纪律）。
+        // 待发布源就绪后再恢复 containerImageCatalog.refreshFromNetworkIfStale() 调用。
         // 启动即加载持久化等级，并随设置页改动实时生效（唯一同步点）。
         appScope.launch {
             logSettings.levelFlow.collectLatest { FileLogger.setMinLevel(it) }
@@ -559,6 +591,158 @@ class AIEditorApp : Application(), Configuration.Provider {
     }
 
     /**
+     * 读取历史进程退出原因（ApplicationExitInfo，API 30+），把 Java 未捕获异常处理器覆盖不到的
+     * 异常退出（native 崩溃、ANR、低内存被杀、初始化失败、被信号杀死）补记到日志。
+     *
+     * 用 SharedPreferences 记录已处理的最大时间戳做增量：首次运行只建立基线，不回捞旧记录；
+     * 与最近一次 Java 崩溃时间窗重叠的记录跳过，避免与 CrashActivity 链路重复上报。
+     * 低版本（< API 30）无此 API，静默跳过。
+     */
+    private fun reportAbnormalExits() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        runCatching {
+            val am = getSystemService(ActivityManager::class.java)
+            val records = am.getHistoricalProcessExitReasons(packageName, 0, MAX_EXIT_RECORDS)
+            if (records.isEmpty()) return@runCatching
+            val prefs = getSharedPreferences(CRASH_PREFS, MODE_PRIVATE)
+            val lastSeen = prefs.getLong(KEY_LAST_EXIT_TIMESTAMP, 0L)
+            // 首次运行（尚无游标）只建立基线，不回捞安装前的历史退出，避免一次刷出大量旧记录。
+            if (lastSeen == 0L) {
+                prefs.edit().putLong(KEY_LAST_EXIT_TIMESTAMP, records.maxOf { it.timestamp }).apply()
+                return@runCatching
+            }
+            val lastJavaCrash = prefs.getLong(KEY_LAST_CRASH_TIME, 0L)
+            var maxTimestamp = lastSeen
+            records.sortedBy { it.timestamp }.forEach { info ->
+                if (info.timestamp <= lastSeen) return@forEach
+                maxTimestamp = maxOf(maxTimestamp, info.timestamp)
+                if (info.reason !in ABNORMAL_EXIT_REASONS) return@forEach
+                // 与最近一次 Java 崩溃属同一次退出（时间窗内）时跳过，避免两条链路重复上报。
+                if (lastJavaCrash > 0 &&
+                    kotlin.math.abs(info.timestamp - lastJavaCrash) < CRASH_RESET_WINDOW_MS * 3
+                ) {
+                    return@forEach
+                }
+                FileLogger.e(TAG, "检测到上次异常退出：\n${describeExit(info)}", null)
+            }
+            if (maxTimestamp != lastSeen) {
+                prefs.edit().putLong(KEY_LAST_EXIT_TIMESTAMP, maxTimestamp).apply()
+            }
+        }.onFailure { FileLogger.w(TAG, "读取历史进程退出原因失败", it) }
+    }
+
+    /** 组装单条异常退出的可读描述：原因、时间、状态、重要级、内存、描述与 trace 首部。 */
+    private fun describeExit(info: ApplicationExitInfo): String = buildString {
+        append("原因=").append(exitReasonName(info.reason))
+        append("，时间=").append(
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                .format(java.util.Date(info.timestamp))
+        )
+        append("，status=").append(info.status)
+        append("，importance=").append(info.importance)
+        append("，pss=").append(info.pss / 1024 / 1024).append("MB")
+        append("，rss=").append(info.rss / 1024 / 1024).append("MB")
+        info.description?.let { append("，描述=").append(it) }
+        if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+            append("\n").append(describeNativeTrace(info.traceInputStream, info.timestamp))
+        } else {
+            readTraceHead(info.traceInputStream)?.let { append("\n").append(it) }
+        }
+    }
+
+    /**
+     * native 崩溃的 trace 是 tombstone 的 protobuf（见 [TombstoneParser]）。原样落盘一份（无损，
+     * 便于线下用 protobuf 工具重解析），并解析成可读文本内联——不再走 [readTraceHead] 的可打印过滤，
+     * 那条路径会丢掉线程边界、无法定位到崩溃线程。
+     */
+    private fun describeNativeTrace(stream: java.io.InputStream?, timestamp: Long): String {
+        val bytes = runCatching { stream?.use { it.readBytes() } }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) return "trace: (无)"
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date(timestamp))
+        val dir = FileLogger.logDirectory()?.let { File(it, "crash-traces").apply { mkdirs() } }
+        val rawPath = dir?.let { d ->
+            File(d, "tombstone-$stamp.pb").also { f ->
+                runCatching { f.writeBytes(bytes) }
+                    .onFailure { FileLogger.w(TAG, "落盘原始 tombstone 失败", it) }
+            }.absolutePath
+        }
+        pruneCrashTraces(dir)
+        val body = TombstoneParser.parse(bytes)
+            ?: readTraceHead(bytes.inputStream())
+            ?: "(无可读内容)"
+        val where = rawPath?.let { "\n原始 tombstone: $it" } ?: ""
+        return "trace:\n$body$where"
+    }
+
+    /** 崩溃 tombstone 目录只保留最新的 [MAX_CRASH_TRACE_FILES] 个文件，避免无上限增长。 */
+    private fun pruneCrashTraces(dir: File?) {
+        if (dir == null) return
+        runCatching {
+            val files = dir.listFiles { f -> f.isFile && f.name.startsWith("tombstone-") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: return
+            if (files.size <= MAX_CRASH_TRACE_FILES) return
+            files.drop(MAX_CRASH_TRACE_FILES).forEach { it.delete() }
+        }
+    }
+
+    /**
+     * 读取 trace 前 [TRACE_HEAD_BYTES] 字节（按字节限长，避免超大 trace 撑爆内存），
+     * 并只保留其中的可打印文本片段。用于 ANR 等非 native 退出（trace 可能是压缩流），
+     * 或 tombstone 解析失败时的兜底；直接按 UTF-8 转字符串会变成大量乱码并撑大日志。
+     * 无 trace 或无可见内容时返回 null。
+     */
+    private fun readTraceHead(stream: java.io.InputStream?): String? {
+        if (stream == null) return null
+        return runCatching {
+            stream.use { input ->
+                val buffer = ByteArray(TRACE_HEAD_BYTES)
+                var read = 0
+                while (read < buffer.size) {
+                    val n = input.read(buffer, read, buffer.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read <= 0) return@use null
+                val sb = StringBuilder()
+                val current = StringBuilder()
+                fun flush() {
+                    if (current.length >= 4) {
+                        if (sb.isNotEmpty()) sb.append('\n')
+                        sb.append(current)
+                    }
+                    current.setLength(0)
+                }
+                for (i in 0 until read) {
+                    val b = buffer[i].toInt() and 0xFF
+                    if (b in 0x20..0x7E || b == 0x09) {
+                        current.append(b.toChar())
+                    } else {
+                        flush()
+                    }
+                }
+                flush()
+                sb.toString().trim().takeIf { it.isNotEmpty() }?.let { "trace:\n$it" }
+            }
+        }.getOrNull()
+    }
+
+    /** ApplicationExitInfo 原因码 → 可读名称。 */
+    private fun exitReasonName(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_CRASH -> "Java 崩溃"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native 崩溃"
+        ApplicationExitInfo.REASON_ANR -> "无响应（ANR）"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "低内存被系统杀死"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "初始化失败"
+        ApplicationExitInfo.REASON_SIGNALED -> "被信号杀死"
+        ApplicationExitInfo.REASON_EXIT_SELF -> "主动退出"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "用户主动结束"
+        ApplicationExitInfo.REASON_OTHER -> "其它原因"
+        else -> "未知（$reason）"
+    }
+
+    /**
      * 崩溃进程的内存快照，随报告带出。必须在主进程采集——错误页跑在 :crash 独立进程，
      * 在那里读到的只是汇报进程的堆，对定位 OOM 无意义。
      */
@@ -623,6 +807,28 @@ class AIEditorApp : Application(), Configuration.Provider {
                 setShowBadge(true)
             }
             notificationManager.createNotificationChannel(permissionChannel)
+
+            // AI 工作期间的实时通知（Android 16 Live Updates）：静默，由系统决定是否提升到状态栏/锁屏。
+            val liveChannel = NotificationChannel(
+                "agent_live",
+                getString(R.string.notification_channel_agent_live),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.notification_channel_agent_live_desc)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(liveChannel)
+
+            // 授权审批通知：AI 在后台阻塞等待授权/提问/计划审批时弹出，需要弹窗+声音。
+            val approvalChannel = NotificationChannel(
+                "agent_approval",
+                getString(R.string.notification_channel_agent_approval),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.notification_channel_agent_approval_desc)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(approvalChannel)
         }
     }
 }

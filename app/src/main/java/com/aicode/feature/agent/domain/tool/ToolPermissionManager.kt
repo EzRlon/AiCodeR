@@ -96,6 +96,16 @@ class ToolPermissionManager @Inject constructor(
         return true
     }
 
+    /**
+     * 审批通知上的按钮用：在无歧义（至多一个待决请求）时按选择解决最早的请求。
+     * 调用方须保证当前只有一个待决请求，否则会作用到最早进入的那个。
+     * 默认记通知来源（与前台弹窗区分，审计可追溯）。
+     */
+    fun resolveEarliest(choice: PermissionChoice, source: PermissionAuditSource = PermissionAuditSource.NOTIFICATION) {
+        val id = synchronized(lock) { pending.keys.firstOrNull() } ?: return
+        resolve(id, choice, source)
+    }
+
     /** 取某会话当前的待决请求（stopAgent 停止单个会话时用，避免误取其它会话的弹窗）。 */
     fun pendingForSession(sessionId: String): PendingToolPermission? =
         synchronized(lock) { pending.values.firstOrNull { it.request.sessionId == sessionId }?.request }

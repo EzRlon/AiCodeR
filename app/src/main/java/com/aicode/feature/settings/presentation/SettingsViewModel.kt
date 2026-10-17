@@ -24,6 +24,7 @@ import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.agent.domain.container.ContainerProfile
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.RootfsSource
+import com.aicode.feature.agent.domain.container.displayLabel
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -56,6 +57,7 @@ import com.aicode.feature.agent.domain.subagent.InjectPart
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
+import com.aicode.feature.settings.data.remote.ContainerImageVersionProbe
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.remote.ModelTestResult
 import com.aicode.feature.settings.data.remote.ApkDownloadResult
@@ -71,6 +73,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.DownloadedImageRecord
+import com.aicode.feature.settings.data.repository.effectiveVersion
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
@@ -83,6 +86,8 @@ import com.aicode.feature.settings.data.repository.ExecutionModeRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
+import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
 import com.aicode.feature.settings.data.repository.ProxyConfig
@@ -373,6 +378,8 @@ class SettingsViewModel @Inject constructor(
     private val keepaliveSettingsRepository: KeepaliveSettingsRepository,
     private val screenOnSettingsRepository: ScreenOnSettingsRepository,
     private val agentSoundSettingsRepository: AgentSoundSettingsRepository,
+    private val liveNotificationSettingsRepository: LiveNotificationSettingsRepository,
+    private val approvalNotificationSettingsRepository: ApprovalNotificationSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val teamRepository: TeamRepository,
     private val languageSettingsRepository: LanguageSettingsRepository,
@@ -394,6 +401,7 @@ class SettingsViewModel @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val containerImageCatalog: ContainerImageCatalog,
     private val containerImageDownloader: ContainerImageDownloader,
+    private val containerImageVersionProbe: ContainerImageVersionProbe,
     private val containerInstaller: ContainerInstaller,
     private val containerOsDetector: ContainerOsDetector,
     private val executionModeRepository: ExecutionModeRepository,
@@ -577,6 +585,12 @@ class SettingsViewModel @Inject constructor(
     private val _agentSoundEnabled = MutableStateFlow(false)
     val agentSoundEnabled: StateFlow<Boolean> = _agentSoundEnabled.asStateFlow()
 
+    private val _liveNotificationEnabled = MutableStateFlow(false)
+    val liveNotificationEnabled: StateFlow<Boolean> = _liveNotificationEnabled.asStateFlow()
+
+    private val _approvalNotificationEnabled = MutableStateFlow(false)
+    val approvalNotificationEnabled: StateFlow<Boolean> = _approvalNotificationEnabled.asStateFlow()
+
     private val _autoRemoveStaleModels = MutableStateFlow(true)
     val autoRemoveStaleModels: StateFlow<Boolean> = _autoRemoveStaleModels.asStateFlow()
 
@@ -627,6 +641,12 @@ class SettingsViewModel @Inject constructor(
 
     private val _sendFileMaxSizeMb = MutableStateFlow(100)
     val sendFileMaxSizeMb: StateFlow<Int> = _sendFileMaxSizeMb.asStateFlow()
+
+    private val _goalMaxTurns = MutableStateFlow(50)
+    val goalMaxTurns: StateFlow<Int> = _goalMaxTurns.asStateFlow()
+
+    private val _goalMaxTokens = MutableStateFlow(500_000)
+    val goalMaxTokens: StateFlow<Int> = _goalMaxTokens.asStateFlow()
 
     private val _deleteExternalWorkspaceSessions = MutableStateFlow(false)
     val deleteExternalWorkspaceSessions: StateFlow<Boolean> = _deleteExternalWorkspaceSessions.asStateFlow()
@@ -794,6 +814,13 @@ class SettingsViewModel @Inject constructor(
     private val _sourceUnavailableIds = MutableStateFlow<Set<String>>(emptySet())
     val sourceUnavailableIds: StateFlow<Set<String>> = _sourceUnavailableIds.asStateFlow()
 
+    /**
+     * 运行时探测到的精确版本（entryId → 版本号，如 Debian 的 `12.15`）。
+     * 只有配了 versionPath 且探测成功的条目会出现在表中；其余条目 UI 回退到内置版本号。
+     */
+    private val _imageVersions = MutableStateFlow<Map<String, String>>(emptyMap())
+    val imageVersions: StateFlow<Map<String, String>> = _imageVersions.asStateFlow()
+
     private val _containerImageDownload = MutableStateFlow<ContainerImageDownloadUiState>(ContainerImageDownloadUiState.Idle)
     val containerImageDownload: StateFlow<ContainerImageDownloadUiState> = _containerImageDownload.asStateFlow()
 
@@ -840,10 +867,20 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     init {
-        _imageCatalog.value = containerImageCatalog.load()
-        _imageSourceOptions.value = containerImageCatalog.sourceIds
-        _selectedImageSource.value = containerImageCatalog.sourceIds.firstOrNull { it == "official" }
-            ?: containerImageCatalog.sourceIds.firstOrNull() ?: "official"
+        // 先同步拿本地目录（内存 → 磁盘缓存 → 内置 assets），保证首帧就有列表、断网也不为空
+        containerImageCatalog.load()
+        // 目录快照变化时同步刷新列表与源选项：启动预热从仓库拉到最新版本号后会在这里反映出来
+        viewModelScope.launch {
+            containerImageCatalog.catalog.collect { data ->
+                _imageCatalog.value = data.images
+                _imageSourceOptions.value = data.sources.keys.toList()
+                // 仅在当前选中源已不存在时才回退（否则会把用户刚切的源重置掉）
+                if (_selectedImageSource.value !in data.sources) {
+                    _selectedImageSource.value = data.sources.keys.firstOrNull { it == "official" }
+                        ?: data.sources.keys.firstOrNull() ?: "official"
+                }
+            }
+        }
         // 已下载/已安装记录跨重启保留
         viewModelScope.launch {
             containerSettingsRepository.downloadedImagesFlow.collect { records ->
@@ -856,6 +893,20 @@ class SettingsViewModel @Inject constructor(
                 entries.filter { containerImageCatalog.urlFor(it, sourceId, ContainerImageCatalog.CURRENT_ABI) == null }
                     .map { it.id }.toSet()
             }.collect { _sourceUnavailableIds.value = it }
+        }
+        // 精确版本探测：Debian 之类的条目内置值只有主版本，而 rootfs 内容随上游滚动，
+        // 故按「当前源 + 当前架构」读版本文件补上补丁号。失败静默保留内置版本；
+        // 切源后重探（版本文件 URL 随源变化），collectLatest 顺带取消上一轮未完成的探测。
+        viewModelScope.launch {
+            combine(_imageCatalog, _selectedImageSource) { entries, sourceId -> entries to sourceId }
+                .collectLatest { (entries, sourceId) ->
+                    _imageVersions.value = entries.mapNotNull { entry ->
+                        val url = containerImageCatalog.versionUrlFor(
+                            entry, sourceId, ContainerImageCatalog.CURRENT_ABI
+                        ) ?: return@mapNotNull null
+                        containerImageVersionProbe.probe(url)?.let { entry.id to it }
+                    }.toMap()
+                }
         }
         // 公告按「内容哈希比对」判断是否弹出：首次（无哈希）或内容更新（哈希不一致）即弹。
         viewModelScope.launch {
@@ -965,6 +1016,18 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
+                liveNotificationSettingsRepository.enabledFlow.collectLatest {
+                    _liveNotificationEnabled.value = it
+                }
+            }
+
+            launch {
+                approvalNotificationSettingsRepository.enabledFlow.collectLatest {
+                    _approvalNotificationEnabled.value = it
+                }
+            }
+
+            launch {
                 generalSettingsRepository.autoRemoveStaleModelsFlow.collectLatest {
                     _autoRemoveStaleModels.value = it
                 }
@@ -1057,6 +1120,18 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.sendFileMaxSizeMbFlow.collectLatest {
                     _sendFileMaxSizeMb.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.goalMaxTurnsFlow.collectLatest {
+                    _goalMaxTurns.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.goalMaxTokensFlow.collectLatest {
+                    _goalMaxTokens.value = it
                 }
             }
 
@@ -1914,6 +1989,27 @@ class SettingsViewModel @Inject constructor(
         return line.contains("[$serverName]") || line.contains("mcp__${serverName}__")
     }
 
+    /** 标准日志行的开头（时间 + 等级），用于区分堆栈续行。与 FileLogger 落盘格式对齐。 */
+    private val logLinePrefixRegex = Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (?:VERBOSE|DEBUG|INFO|WARN|ERROR) """)
+
+    /**
+     * 按 MCP server 过滤日志：命中的标准日志行连同其后的堆栈续行一并保留。
+     * 堆栈续行本身不含 tag 与 server 名，逐行匹配会把报错的堆栈整段丢掉。
+     */
+    private fun filterMcpServerLines(rawLines: List<String>, serverName: String): List<String> {
+        val result = ArrayList<String>()
+        var keepContinuation = false
+        for (line in rawLines) {
+            if (logLinePrefixRegex.containsMatchIn(line)) {
+                keepContinuation = isMcpServerLogLine(line, serverName)
+                if (keepContinuation) result.add(line)
+            } else if (keepContinuation) {
+                result.add(line)
+            }
+        }
+        return result
+    }
+
     fun refreshLogs(filterServerName: String? = _logViewerState.value.filterServerName, silent: Boolean = false) {
         loadLogs(
             filterServerName = filterServerName?.takeIf { it.isNotBlank() },
@@ -1958,7 +2054,7 @@ class SettingsViewModel @Inject constructor(
                     val filteredLines = if (filterServerName.isNullOrBlank()) {
                         rawLines
                     } else {
-                        rawLines.filter { line -> isMcpServerLogLine(line, filterServerName) }
+                        filterMcpServerLines(rawLines, filterServerName)
                     }
                     val visibleLines = filteredLines.takeLast(MAX_LOG_LINES)
 
@@ -1998,6 +2094,18 @@ class SettingsViewModel @Inject constructor(
     fun setAgentSoundEnabled(enabled: Boolean) {
         viewModelScope.launch {
             agentSoundSettingsRepository.setEnabled(enabled)
+        }
+    }
+
+    fun setLiveNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            liveNotificationSettingsRepository.setEnabled(enabled)
+        }
+    }
+
+    fun setApprovalNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            approvalNotificationSettingsRepository.setEnabled(enabled)
         }
     }
 
@@ -2119,6 +2227,20 @@ class SettingsViewModel @Inject constructor(
     fun setSendFileMaxSizeMb(mb: Int) {
         viewModelScope.launch {
             generalSettingsRepository.setSendFileMaxSizeMb(mb)
+        }
+    }
+
+    /** goal 自主循环最大续跑轮数（不小于 1）。 */
+    fun setGoalMaxTurns(turns: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setGoalMaxTurns(turns)
+        }
+    }
+
+    /** goal 自主循环 token 预算（不小于 1000）。 */
+    fun setGoalMaxTokens(tokens: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setGoalMaxTokens(tokens)
         }
     }
 
@@ -2357,20 +2479,26 @@ class SettingsViewModel @Inject constructor(
             url.endsWith(".tgz") -> "tgz"
             else -> "tar.gz"
         }
-        val fileName = "download_${entry.id}_${entry.version}_${System.currentTimeMillis()}.$suffix"
+        // 记录里存「探测到的精确版本」（如 Debian 的 12.15），文件名与后续展示都以此为准，
+        // 避免用户下载到 12.15 却在文件名/容器名里看到 12。
+        val version = _imageVersions.value[entry.id] ?: entry.version
+        val fileName = "download_${entry.id}_${version}_${System.currentTimeMillis()}.$suffix"
+        // 目录里带了官方校验和就校验（Alpine/Ubuntu 有，Debian 没有 → 传 null 跳过）
+        val expectedSha256 = containerImageCatalog.sha256For(entry, ContainerImageCatalog.CURRENT_ABI)
         downloadJob = viewModelScope.launch {
             _containerImageDownload.value =
-                ContainerImageDownloadUiState.Downloading(entry.id, entry.name, entry.version, sourceId, 0, 0)
+                ContainerImageDownloadUiState.Downloading(entry.id, entry.name, version, sourceId, 0, 0)
             try {
-                val uri = containerImageDownloader.download(url, fileName) { read, total ->
+                val uri = containerImageDownloader.download(url, fileName, expectedSha256) { read, total ->
                     _containerImageDownload.value = ContainerImageDownloadUiState.Downloading(
-                        entry.id, entry.name, entry.version, sourceId, read, total
+                        entry.id, entry.name, version, sourceId, read, total
                     )
                 }
-                // 下载完成即持久化记录，安装与否都保留，跨重启可见。
-                containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri))
+                // 下载完成即持久化记录，安装与否都保留，跨重启可见。版本一并记下，
+                // 之后上游发新补丁时列表才能提示「有新版」而不是一直显示「已下载」。
+                containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entry.id, uri, version = version))
                 _containerImageDownload.value =
-                    ContainerImageDownloadUiState.Done(entry.id, entry.name, entry.version, uri)
+                    ContainerImageDownloadUiState.Done(entry.id, entry.name, version, uri)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _containerImageDownload.value = ContainerImageDownloadUiState.Idle
                 throw e
@@ -2392,18 +2520,31 @@ class SettingsViewModel @Inject constructor(
      */
     fun importDownloadedImage(entryId: String, fileUri: String) {
         val entry = _imageCatalog.value.firstOrNull { it.id == entryId } ?: return
+        val record = _downloadedImages.value[entryId]
         viewModelScope.launch {
             val profile = ContainerProfile(
                 id = "custom-${System.currentTimeMillis()}",
-                name = "${entry.name} ${entry.version}",
+                // 用**磁盘上这份文件的实际版本**命名：记录字段优先，升级前的旧记录退回文件名解析，
+                // 都拿不到才用目录当前版本。否则会出现「名字写着 3.21.8、实际解压的是 3.21.7」。
+                name = entry.displayLabel(
+                    record?.effectiveVersion()?.takeIf { it.isNotBlank() } ?: _imageVersions.value[entry.id]
+                ),
                 rootfsSource = RootfsSource.LocalFile(fileUri),
                 shellPath = null,
                 extraArgs = ContainerProfile.DEFAULT_PROOT_ARGS,
                 isBuiltin = false
             )
             containerSettingsRepository.upsertCustomProfile(profile)
-            // 保留已下载记录，仅标记已导入；UI 状态不消失。
-            containerSettingsRepository.upsertDownloadedImage(DownloadedImageRecord(entryId, fileUri, installed = true))
+            // 保留已下载记录（含下载时的版本号，供「有新版」判定），仅标记已导入；UI 状态不消失。
+            // 旧记录在这里顺带把文件名解析出的版本回写进去，下次就不必再解析。
+            containerSettingsRepository.upsertDownloadedImage(
+                DownloadedImageRecord(
+                    entryId = entryId,
+                    fileUri = fileUri,
+                    version = record?.effectiveVersion().orEmpty(),
+                    installed = true
+                )
+            )
             _containerImageDownload.value = ContainerImageDownloadUiState.Idle
         }
     }

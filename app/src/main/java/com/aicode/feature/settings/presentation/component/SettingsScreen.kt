@@ -251,6 +251,8 @@ fun SettingsScreen(
     val keepaliveEnabled by viewModel.keepaliveEnabled.collectAsStateWithLifecycle()
     val screenOnEnabled by viewModel.screenOnEnabled.collectAsStateWithLifecycle()
     val agentSoundEnabled by viewModel.agentSoundEnabled.collectAsStateWithLifecycle()
+    val liveNotificationEnabled by viewModel.liveNotificationEnabled.collectAsStateWithLifecycle()
+    val approvalNotificationEnabled by viewModel.approvalNotificationEnabled.collectAsStateWithLifecycle()
     val autoRemoveStaleModels by viewModel.autoRemoveStaleModels.collectAsStateWithLifecycle()
     val startupSessionMode by viewModel.startupSessionMode.collectAsStateWithLifecycle()
     val firstByteTimeoutSec by viewModel.firstByteTimeoutSec.collectAsStateWithLifecycle()
@@ -260,6 +262,8 @@ fun SettingsScreen(
     val compactionThresholdPercent by viewModel.compactionThresholdPercent.collectAsStateWithLifecycle()
     val tokenBudget by viewModel.tokenBudget.collectAsStateWithLifecycle()
     val sendFileMaxSizeMb by viewModel.sendFileMaxSizeMb.collectAsStateWithLifecycle()
+    val goalMaxTurns by viewModel.goalMaxTurns.collectAsStateWithLifecycle()
+    val goalMaxTokens by viewModel.goalMaxTokens.collectAsStateWithLifecycle()
     val deleteExternalWorkspaceSessions by viewModel.deleteExternalWorkspaceSessions.collectAsStateWithLifecycle()
     val selfImproveMode by viewModel.selfImproveMode.collectAsStateWithLifecycle()
     val handoffPromptEnabled by viewModel.handoffPromptEnabled.collectAsStateWithLifecycle()
@@ -300,6 +304,7 @@ fun SettingsScreen(
     val promptsAnnouncementText by viewModel.promptsAnnouncementText.collectAsStateWithLifecycle()
     val promptsAnnouncementOutdated by viewModel.promptsAnnouncementOutdated.collectAsStateWithLifecycle()
     val imageCatalog by viewModel.imageCatalog.collectAsStateWithLifecycle()
+    val imageVersions by viewModel.imageVersions.collectAsStateWithLifecycle()
     val imageDownload by viewModel.containerImageDownload.collectAsStateWithLifecycle()
     val containerReset by viewModel.containerReset.collectAsStateWithLifecycle()
     val imageSourceOptions by viewModel.imageSourceOptions.collectAsStateWithLifecycle()
@@ -1027,6 +1032,10 @@ fun SettingsScreen(
                     onSetTokenBudget = { viewModel.setTokenBudget(it) },
                     sendFileMaxSizeMb = sendFileMaxSizeMb,
                     onSetSendFileMaxSizeMb = { viewModel.setSendFileMaxSizeMb(it) },
+                    goalMaxTurns = goalMaxTurns,
+                    onSetGoalMaxTurns = { viewModel.setGoalMaxTurns(it) },
+                    goalMaxTokens = goalMaxTokens,
+                    onSetGoalMaxTokens = { viewModel.setGoalMaxTokens(it) },
                     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
                     onToggleDeleteExternalWorkspaceSessions = { viewModel.setDeleteExternalWorkspaceSessions(it) },
                     selfImproveMode = selfImproveMode,
@@ -1242,6 +1251,7 @@ fun SettingsScreen(
                 )
                 SettingsSection.ContainerDownloads -> ContainerImageDownloadSection(
                     catalog = imageCatalog,
+                    imageVersions = imageVersions,
                     state = imageDownload,
                     downloadedImages = downloadedImages,
                     sourceUnavailableIds = sourceUnavailableIds,
@@ -1305,7 +1315,11 @@ fun SettingsScreen(
                     screenOnEnabled = screenOnEnabled,
                     onToggleScreenOn = { viewModel.setScreenOnEnabled(it) },
                     agentSoundEnabled = agentSoundEnabled,
-                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) }
+                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) },
+                    liveNotificationEnabled = liveNotificationEnabled,
+                    onToggleLiveNotification = { viewModel.setLiveNotificationEnabled(it) },
+                    approvalNotificationEnabled = approvalNotificationEnabled,
+                    onToggleApprovalNotification = { viewModel.setApprovalNotificationEnabled(it) }
                 )
                 SettingsSection.TokenStats -> TokenStatsSection(
                     state = tokenStats,
