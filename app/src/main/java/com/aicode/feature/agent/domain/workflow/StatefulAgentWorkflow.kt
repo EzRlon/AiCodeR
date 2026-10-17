@@ -462,17 +462,6 @@ class StatefulAgentWorkflow @Inject constructor(
             )
         )
 
-        // 提示词构建会读取技能/子代理/记忆等文件（远程模式经 SFTP），必须离开收集本工作流的线程（Main），
-        // 否则远程模式下每次会话首次发消息都会在主线程做多次文件/网络往返。
-        val promptStartedNs = System.nanoTime()
-        FileLogger.memoryCheckpoint(TAG, "prompt.start", details = "operation=$promptStartedNs")
-        val systemPrompt = withContext(Dispatchers.IO) { promptProvider.build(currentContext) }
-        FileLogger.memoryCheckpoint(
-            TAG,
-            "prompt.ready",
-            elapsedMs = (System.nanoTime() - promptStartedNs) / 1_000_000,
-            details = "operation=$promptStartedNs promptChars=${systemPrompt.length}"
-        )
         val providerStartedNs = System.nanoTime()
         FileLogger.memoryCheckpoint(TAG, "provider.start", details = "operation=$providerStartedNs")
         val aiProvider = getEffectiveProvider(currentContext.sessionId)
@@ -482,13 +471,32 @@ class StatefulAgentWorkflow @Inject constructor(
             elapsedMs = (System.nanoTime() - providerStartedNs) / 1_000_000,
             details = "operation=$providerStartedNs"
         )
-        // 压缩失败后本轮（本次用户请求内）不再重复尝试压缩，避免每次 LLM 调用都白试一次。
-        var compactionAttemptFailed = false
         val metadata = modelMetadataService.resolve(aiProvider.providerId, when (aiProvider) {
             is AnthropicAdapter -> ProviderType.ANTHROPIC
             is GeminiAdapter -> ProviderType.GEMINI
             else -> ProviderType.OPENAI
         }, aiProvider.model)
+        // 提示词构建会读取技能/子代理/记忆等文件（远程模式经 SFTP），必须离开收集本工作流的线程（Main），
+        // 否则远程模式下每次会话首次发消息都会在主线程做多次文件/网络往返。
+        // 当前模型名与上下文窗口在此注入运行时上下文：会话内稳定（换模型才变），不打断 KV Cache。
+        val promptStartedNs = System.nanoTime()
+        FileLogger.memoryCheckpoint(TAG, "prompt.start", details = "operation=$promptStartedNs")
+        val systemPrompt = withContext(Dispatchers.IO) {
+            promptProvider.build(
+                currentContext.copy(
+                    modelName = aiProvider.model,
+                    modelContextTokens = metadata.contextTokens
+                )
+            )
+        }
+        FileLogger.memoryCheckpoint(
+            TAG,
+            "prompt.ready",
+            elapsedMs = (System.nanoTime() - promptStartedNs) / 1_000_000,
+            details = "operation=$promptStartedNs promptChars=${systemPrompt.length}"
+        )
+        // 压缩失败后本轮（本次用户请求内）不再重复尝试压缩，避免每次 LLM 调用都白试一次。
+        var compactionAttemptFailed = false
         val inputBudget = ModelContextPolicy.effectiveInputBudget(metadata)
         if (aiProvider is AnthropicAdapter) {
             aiProvider.maxOutputTokens = ModelContextPolicy.outputReserveTokens(metadata)

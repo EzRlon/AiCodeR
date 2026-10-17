@@ -81,7 +81,6 @@ import com.termux.view.TerminalView
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Settings
 import compose.icons.feathericons.X
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
@@ -102,7 +101,6 @@ fun TerminalScreen(
     val revision by viewModel.revision.collectAsStateWithLifecycle()
     val creatingTab by viewModel.creatingTab.collectAsStateWithLifecycle()
     val terminalSettings by viewModel.terminalSettings.collectAsStateWithLifecycle()
-    var showToolsSheet by remember { mutableStateOf(false) }
 
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val bgArgb = MaterialTheme.colorScheme.background.toArgb()
@@ -136,11 +134,6 @@ fun TerminalScreen(
                                 if (embedded) R.string.common_close else R.string.common_back
                             )
                         )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showToolsSheet = true }) {
-                        Icon(FeatherIcons.Settings, contentDescription = stringResource(R.string.terminal_settings_title))
                     }
                 }
             )
@@ -203,17 +196,6 @@ fun TerminalScreen(
                     }
                 }
             }
-        }
-
-        if (showToolsSheet) {
-            TerminalSettingsSheet(
-                settings = terminalSettings,
-                onDismiss = { showToolsSheet = false },
-                onSelectTheme = { viewModel.setTheme(it) },
-                onChangeFontSize = { viewModel.setFontSize(it) },
-                onChangeCursorStyle = { viewModel.setCursorStyle(it) },
-                onChangeFontPath = { viewModel.setFontPath(it) }
-            )
         }
     }
 }

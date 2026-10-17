@@ -345,6 +345,18 @@ class AIEditorApp : Application(), Configuration.Provider {
                 last = enabled
             }
         }
+        // 悬浮球反应器：监听开关启停悬浮球服务（覆盖设置页实时切换与冷启动恢复）。
+        appScope.launch {
+            var last: Boolean? = null
+            generalSettingsRepository.floatBallEnabledFlow.distinctUntilChanged().collect { enabled ->
+                if (enabled) {
+                    com.aicode.feature.floatball.FloatBallService.sync(this@AIEditorApp, true)
+                } else if (last == true) {
+                    com.aicode.feature.floatball.FloatBallService.sync(this@AIEditorApp, false)
+                }
+                last = enabled
+            }
+        }
         // 网络恢复或切换链路时立即重连 SSH，不等 supervisor 轮询（并带动远端工作区刷新）。
         appScope.launch {
             networkConnectivityObserver.recovered.collect {

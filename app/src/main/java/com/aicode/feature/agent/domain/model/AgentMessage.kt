@@ -83,5 +83,9 @@ data class AgentContext(
      */
     val agentDefinition: AgentDefinition? = null,
     /** 会话级召唤的编队名：非空时系统提示词注入团长指令（见 SystemPromptProvider）。 */
-    val teamName: String? = null
+    val teamName: String? = null,
+    /** 当前模型名（注入运行时上下文，供 AI 知晓自己所用模型）。 */
+    val modelName: String? = null,
+    /** 当前模型最大上下文窗口（tokens）；0 = 未知。注入后保持会话内稳定，不破坏 KV Cache。 */
+    val modelContextTokens: Int = 0
 )

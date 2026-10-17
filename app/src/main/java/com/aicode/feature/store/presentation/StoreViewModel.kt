@@ -50,7 +50,9 @@ data class StoreUiState(
     /** 条目 key（[storeTranslationKey]）→ 中文翻译（界面上双语展示用；仅在中文界面下生成）。 */
     val translations: Map<String, StoreTranslation> = emptyMap(),
     /** 正在后台翻译（列表顶部显示提示行）。 */
-    val translating: Boolean = false
+    val translating: Boolean = false,
+    /** 翻译失败（默认模型不可用/返回异常）：提示行带重试入口，避免静默回退英文。 */
+    val translationFailed: Boolean = false
 )
 
 /**
@@ -250,6 +252,7 @@ class StoreViewModel @Inject constructor(
      */
     private fun kickTranslation() {
         translationJob?.cancel()
+        _state.update { it.copy(translationFailed = false) }
         // LAZY + 赋值后再 start：确保协程体执行时 translationJob 已是本任务，finally 的当前任务判定才可靠
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -258,6 +261,7 @@ class StoreViewModel @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 FileLogger.w(TAG, "商店翻译任务异常", e)
+                _state.update { it.copy(translationFailed = true) }
             } finally {
                 // 已被新任务取代时不复位，避免踩掉新任务的 translating 状态
                 if (translationJob === coroutineContext[Job]) {
@@ -267,6 +271,12 @@ class StoreViewModel @Inject constructor(
         }
         translationJob = job
         job.start()
+    }
+
+    /** 翻译失败提示行的重试入口。 */
+    fun retryTranslation() {
+        if (translationJob?.isActive == true) return
+        kickTranslation()
     }
 
     private suspend fun translatePendingItems() {
@@ -279,6 +289,7 @@ class StoreViewModel @Inject constructor(
         }
         if (pending.isEmpty()) return
         _state.update { it.copy(translating = true) }
+        var allFailed = true
         for (batch in pending.chunked(StoreTranslationService.MAX_BATCH_SIZE)) {
             val result = runCatching { translationService.translateBatch(batch) }
                 .getOrElse { e ->
@@ -287,9 +298,11 @@ class StoreViewModel @Inject constructor(
                     emptyMap()
                 }
             if (result.isEmpty()) continue
+            allFailed = false
             translationStore.putAll(result)
             _state.update { it.copy(translations = it.translations + result) }
         }
+        _state.update { it.copy(translationFailed = allFailed) }
     }
 
     /** 界面语言是否为中文：用户显式选择按 tag 判断，跟随系统时看系统语言。 */

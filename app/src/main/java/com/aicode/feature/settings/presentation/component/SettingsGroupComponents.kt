@@ -27,6 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusState
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
 import androidx.compose.ui.graphics.Color
@@ -203,15 +207,21 @@ internal fun SettingsDivider() {
     )
 }
 
-/** iOS 风格搜索框：浅灰胶囊背景、无边框，与设置页分组风格一致。
- *  [trailing] 为可选尾部控件（如清除按钮）。 */
+/**
+ * iOS 风格搜索框：浅灰胶囊背景、无边框，与设置页分组风格一致。
+ *  [trailing] 为可选尾部控件（如清除按钮）。
+ *  [focusRequester] 非空时绑定到内部输入框，供外部「展开即聚焦」控制。
+ *  [onFocusChanged] 可选：挂在内层 BasicTextField（真实焦点目标）上的焦点变化回调。
+ */
 @Composable
 internal fun ModelSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
-    trailing: (@Composable () -> Unit)? = null
+    trailing: (@Composable () -> Unit)? = null,
+    focusRequester: FocusRequester? = null,
+    onFocusChanged: ((FocusState) -> Unit)? = null
 ) {
     val isLight = settingsLightMode()
     Surface(
@@ -247,7 +257,10 @@ internal fun ModelSearchField(
                     ),
                     singleLine = true,
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .let { if (focusRequester != null) it.focusRequester(focusRequester) else it }
+                        .let { if (onFocusChanged != null) it.onFocusChanged(onFocusChanged) else it }
                 )
             }
             trailing?.invoke()

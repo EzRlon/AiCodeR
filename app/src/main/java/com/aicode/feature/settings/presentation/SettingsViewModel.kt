@@ -595,6 +595,15 @@ class SettingsViewModel @Inject constructor(
     private val _handoffPromptPercent = MutableStateFlow(50)
     val handoffPromptPercent: StateFlow<Int> = _handoffPromptPercent.asStateFlow()
 
+    private val _handoffAutoEnabled = MutableStateFlow(true)
+    val handoffAutoEnabled: StateFlow<Boolean> = _handoffAutoEnabled.asStateFlow()
+
+    private val _handoffAutoPercent = MutableStateFlow(75)
+    val handoffAutoPercent: StateFlow<Int> = _handoffAutoPercent.asStateFlow()
+
+    private val _floatBallEnabled = MutableStateFlow(false)
+    val floatBallEnabled: StateFlow<Boolean> = _floatBallEnabled.asStateFlow()
+
     private val _startupSessionMode = MutableStateFlow(StartupSessionMode.NEW_SESSION)
     val startupSessionMode: StateFlow<StartupSessionMode> = _startupSessionMode.asStateFlow()
 
@@ -976,6 +985,24 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.handoffPromptPercentFlow.collectLatest {
                     _handoffPromptPercent.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.handoffAutoEnabledFlow.collectLatest {
+                    _handoffAutoEnabled.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.handoffAutoPercentFlow.collectLatest {
+                    _handoffAutoPercent.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.floatBallEnabledFlow.collectLatest {
+                    _floatBallEnabled.value = it
                 }
             }
 
@@ -2002,6 +2029,28 @@ class SettingsViewModel @Inject constructor(
     fun setHandoffPromptPercent(percent: Int) {
         viewModelScope.launch {
             generalSettingsRepository.setHandoffPromptPercent(percent)
+        }
+    }
+
+    /** 自动交接开关：达到阈值后暂停当前会话并自动开新会话接手。 */
+    fun setHandoffAutoEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            generalSettingsRepository.setHandoffAutoEnabled(enabled)
+        }
+    }
+
+    /** 自动交接阈值（1..100）。 */
+    fun setHandoffAutoPercent(percent: Int) {
+        viewModelScope.launch {
+            generalSettingsRepository.setHandoffAutoPercent(percent)
+        }
+    }
+
+    /** 悬浮球开关：切换时同步启停悬浮球服务。 */
+    fun setFloatBallEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            generalSettingsRepository.setFloatBallEnabled(enabled)
+            com.aicode.feature.floatball.FloatBallService.sync(context, enabled)
         }
     }
 

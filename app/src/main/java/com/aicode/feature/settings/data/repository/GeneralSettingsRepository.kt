@@ -52,6 +52,9 @@ class GeneralSettingsRepository @Inject constructor(
         val SELF_IMPROVE_MODE_KEY = booleanPreferencesKey("self_improve_mode")
         val HANDOFF_PROMPT_ENABLED_KEY = booleanPreferencesKey("handoff_prompt_enabled")
         val HANDOFF_PROMPT_PERCENT_KEY = intPreferencesKey("handoff_prompt_percent")
+        val HANDOFF_AUTO_ENABLED_KEY = booleanPreferencesKey("handoff_auto_enabled")
+        val HANDOFF_AUTO_PERCENT_KEY = intPreferencesKey("handoff_auto_percent")
+        val FLOAT_BALL_ENABLED_KEY = booleanPreferencesKey("float_ball_enabled")
         /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
         val PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("prompts_announcement_shown_hash")
 
@@ -69,6 +72,9 @@ class GeneralSettingsRepository @Inject constructor(
 
         /** 交接提醒阈值默认 50%：上下文占用过半时提示开新会话接手。 */
         const val DEFAULT_HANDOFF_PROMPT_PERCENT = 50
+
+        /** 自动交接阈值默认 75%：达到后暂停当前会话并自动开新会话接手。 */
+        const val DEFAULT_HANDOFF_AUTO_PERCENT = 75
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
@@ -197,6 +203,31 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[HANDOFF_PROMPT_PERCENT_KEY] = percent.coerceIn(1, 100) }
     }
 
+    /** 自动交接开关；默认开启。达到自动阈值后暂停当前会话并自动开新会话接手。 */
+    val handoffAutoEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[HANDOFF_AUTO_ENABLED_KEY] ?: true }
+
+    suspend fun setHandoffAutoEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[HANDOFF_AUTO_ENABLED_KEY] = enabled }
+    }
+
+    /** 自动交接阈值（上下文窗口的百分比）；默认 75，限定 1..100。 */
+    val handoffAutoPercentFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[HANDOFF_AUTO_PERCENT_KEY] ?: DEFAULT_HANDOFF_AUTO_PERCENT).coerceIn(1, 100)
+    }
+
+    suspend fun setHandoffAutoPercent(percent: Int) {
+        context.generalDataStore.edit { it[HANDOFF_AUTO_PERCENT_KEY] = percent.coerceIn(1, 100) }
+    }
+
+    /** 悬浮球开关；默认关闭（需 SYSTEM_ALERT_WINDOW 授权，开启后跨应用显示任务小球）。 */
+    val floatBallEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[FLOAT_BALL_ENABLED_KEY] ?: false }
+
+    suspend fun setFloatBallEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[FLOAT_BALL_ENABLED_KEY] = enabled }
+    }
+
     /** 压缩前读取一次触发阈值百分比。 */
     suspend fun compactionThresholdPercent(): Int = compactionThresholdPercentFlow.first()
 
@@ -277,6 +308,20 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun handoffPromptPercentSnapshot(): Int = handoffPromptPercentFlow.first()
 
     suspend fun restoreHandoffPromptEnabled(enabled: Boolean) = setHandoffPromptEnabled(enabled)
+
+    /** 备份快照：自动交接开关与阈值。 */
+    suspend fun handoffAutoEnabledSnapshot(): Boolean = handoffAutoEnabledFlow.first()
+
+    suspend fun handoffAutoPercentSnapshot(): Int = handoffAutoPercentFlow.first()
+
+    suspend fun restoreHandoffAutoEnabled(enabled: Boolean) = setHandoffAutoEnabled(enabled)
+
+    suspend fun restoreHandoffAutoPercent(percent: Int) = setHandoffAutoPercent(percent)
+
+    /** 备份快照：悬浮球开关。 */
+    suspend fun floatBallEnabledSnapshot(): Boolean = floatBallEnabledFlow.first()
+
+    suspend fun restoreFloatBallEnabled(enabled: Boolean) = setFloatBallEnabled(enabled)
 
     suspend fun restoreHandoffPromptPercent(percent: Int) = setHandoffPromptPercent(percent)
 }

@@ -299,7 +299,8 @@ class SystemPromptProvider @Inject constructor(
             workspaceContent,
             environmentContent,
             currentDate(),
-            selfImprove = selfImproveContent
+            selfImprove = selfImproveContent,
+            modelContext = modelContextText(agentContext)
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -335,7 +336,8 @@ class SystemPromptProvider @Inject constructor(
             workspaceSource.build(ctx),
             environmentSource.build(ctx),
             currentDate(),
-            selfImprove = selfImproveInstructionsSource.build(ctx)
+            selfImprove = selfImproveInstructionsSource.build(ctx),
+            modelContext = modelContextText(ctx)
         )
         val teamContent = teamLeaderSource.build(ctx)
         return if (teamContent.isNullOrBlank()) rendered else "$rendered\n\n$teamContent"
@@ -371,7 +373,8 @@ class SystemPromptProvider @Inject constructor(
                 projectRules?.project,
                 workspaceSource.build(agentContext),
                 environmentSource.build(agentContext),
-                currentDate()
+                currentDate(),
+                modelContext = modelContextText(agentContext)
             )
         )
 
@@ -408,7 +411,8 @@ class SystemPromptProvider @Inject constructor(
                 workspaceSource.build(agentContext),
                 environmentSource.build(agentContext),
                 currentDate(),
-                definition.name
+                definition.name,
+                modelContext = modelContextText(agentContext)
             )
         )
     }
@@ -426,7 +430,8 @@ class SystemPromptProvider @Inject constructor(
         environment: String,
         date: String,
         subAgentName: String = "",
-        selfImprove: String? = null
+        selfImprove: String? = null,
+        modelContext: String = ""
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -441,7 +446,17 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(DATE_VAR, date)
         out = out.replace(SELF_IMPROVE_VAR, selfImprove.orEmpty())
         out = out.replace(SUBAGENT_NAME_VAR, subAgentName)
+        out = out.replace(MODEL_CONTEXT_VAR, modelContext.ifBlank { "未知" })
         return out
+    }
+
+    /** 当前模型及其上下文窗口（运行时注入；窗口在会话内稳定，不随时变动，避免打断 KV Cache）。 */
+    private fun modelContextText(ctx: AgentContext): String {
+        val name = ctx.modelName?.takeIf { it.isNotBlank() } ?: return ""
+        if (ctx.modelContextTokens <= 0) return name
+        val window = if (ctx.modelContextTokens % 1000 == 0) "${ctx.modelContextTokens / 1000}K"
+        else ctx.modelContextTokens.toString()
+        return "$name（上下文窗口 $window tokens）"
     }
 
     private fun currentDate(): String =
@@ -502,6 +517,7 @@ class SystemPromptProvider @Inject constructor(
         const val DATE_VAR = "{{AICODE_DATE}}"
         const val SUBAGENT_NAME_VAR = "{{AICODE_SUBAGENT_NAME}}"
         const val SELF_IMPROVE_VAR = "{{AICODE_SELF_IMPROVE}}"
+        const val MODEL_CONTEXT_VAR = "{{AICODE_MODEL_CONTEXT}}"
 
         /** 自我改进模式指令正文；仅开关开启时经 [SELF_IMPROVE_VAR] 注入主会话。 */
         const val SELF_IMPROVE_INSTRUCTIONS =

@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Android 11+ 包可见性：语音输入要检测系统语音识别服务是否可用（resolveActivity）。 -->
     <queries>
@@ -84,6 +85,12 @@
 
         <service
             android:name=".feature.terminal.domain.TerminalKeepaliveService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".feature.floatball.FloatBallService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

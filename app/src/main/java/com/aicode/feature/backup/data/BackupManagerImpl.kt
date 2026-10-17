@@ -391,6 +391,9 @@ class BackupManagerImpl @Inject constructor(
         deleteExternalWorkspaceSessions = if (options.appSettings) generalSettingsRepository.deleteExternalWorkspaceSessionsSnapshot() else false,
         handoffPromptEnabled = if (options.appSettings) generalSettingsRepository.handoffPromptEnabledSnapshot() else true,
         handoffPromptPercent = if (options.appSettings) generalSettingsRepository.handoffPromptPercentSnapshot() else 50,
+        handoffAutoEnabled = if (options.appSettings) generalSettingsRepository.handoffAutoEnabledSnapshot() else true,
+        handoffAutoPercent = if (options.appSettings) generalSettingsRepository.handoffAutoPercentSnapshot() else 75,
+        floatBallEnabled = if (options.appSettings) generalSettingsRepository.floatBallEnabledSnapshot() else false,
         logLevel = if (options.appSettings) logSettingsRepository.snapshot() else null,
         visionProviderId = if (options.appSettings) visionModelSettingsRepository.getVisionProviderId() else "",
         visionModel = if (options.appSettings) visionModelSettingsRepository.getVisionModel() else "",
@@ -732,6 +735,9 @@ class BackupManagerImpl @Inject constructor(
             generalSettingsRepository.restoreDeleteExternalWorkspaceSessions(meta.deleteExternalWorkspaceSessions)
             generalSettingsRepository.restoreHandoffPromptEnabled(meta.handoffPromptEnabled)
             generalSettingsRepository.restoreHandoffPromptPercent(meta.handoffPromptPercent)
+            generalSettingsRepository.restoreHandoffAutoEnabled(meta.handoffAutoEnabled)
+            generalSettingsRepository.restoreHandoffAutoPercent(meta.handoffAutoPercent)
+            generalSettingsRepository.restoreFloatBallEnabled(meta.floatBallEnabled)
             logSettingsRepository.restore(meta.logLevel)
             if (meta.visionProviderId.isNotBlank() || meta.visionModel.isNotBlank()) {
                 visionModelSettingsRepository.setVisionModel(meta.visionProviderId, meta.visionModel)

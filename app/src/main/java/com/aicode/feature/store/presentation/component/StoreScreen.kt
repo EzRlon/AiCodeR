@@ -59,6 +59,7 @@ internal fun StoreScreen(
     onLoadMore: () -> Unit,
     onInstall: (StoreItem) -> Unit,
     onConsumeMessage: () -> Unit,
+    onRetryTranslation: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -123,6 +124,28 @@ internal fun StoreScreen(
                     .padding(horizontal = Spacing.lg)
                     .padding(top = Spacing.xs)
             )
+        }
+
+        if (state.translationFailed) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(horizontal = Spacing.lg)
+                    .padding(top = Spacing.xs)
+            ) {
+                Text(
+                    text = stringResource(R.string.store_translation_failed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onRetryTranslation) {
+                    Text(
+                        text = stringResource(R.string.store_translation_retry),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.size(Spacing.xs))

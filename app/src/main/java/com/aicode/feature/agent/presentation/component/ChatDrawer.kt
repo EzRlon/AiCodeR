@@ -2,6 +2,7 @@ package com.aicode.feature.agent.presentation.component
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -44,6 +45,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCut
@@ -77,11 +79,16 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -134,6 +141,7 @@ import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Layers
 import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
@@ -160,15 +168,15 @@ private val drawerTabWidth = 32.dp
 
 /**
  * 标签列顶部下移量：与内容列表「第一条会话标题」水平对齐（验收反馈 2026-10-17）。
- * 估算（qa 校准）：搜索框 41 + 间距 8 + 分组头 44 + 行内标题中线 19.5 − 按钮半高 21 ≈ 91.5 → 92。
+ * 估算（qa 校准）：搜索框 41 + 间距 8 + 分组头 44 + 行内标题中线 19.5 − 按钮半高 17（34dp 高按钮）≈ 95.5 → 96。
  */
-private val drawerTabsTopPadding = 92.dp
+private val drawerTabsTopPadding = 96.dp
 
 /**
- * 产品册索引标签风竖排标签列：直边吸附内容卡片（列表区）右缘、圆角朝右的小标签，图标简洁。
- * **样式规则（勿破，用户三次反馈定稿）**：标签形状统一「圆角朝右、直边贴上一级卡片边缘」；
+ * 产品册索引标签风竖排标签列：左直边贴面板右缘、右侧圆角的小标签，**整体位于面板外侧**（图1 定稿）。
+ * **样式规则（勿破，2026-10-17 三次定稿）**：标签左直边贴面板右缘线、右半圆角朝外；
  * 垂直起点下移对齐会话条目（[drawerTabsTopPadding]）；以后新增的页签按钮只需加入 [tabs] 列表即可自动继承。
- * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被卡片裁剪）。
+ * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被面板裁剪）。
  */
 @Composable
 private fun DrawerVerticalTabs(
@@ -183,9 +191,9 @@ private fun DrawerVerticalTabs(
     val selectedColor = if (dark) MaterialTheme.colorScheme.surfaceBright else MaterialTheme.semanticColors.cardSurface
     // 提示统一浮在按钮右侧（用户规则：含以后新增的按钮）；宽度自适应到屏幕右缘，窄屏自动折行。
     val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
-    val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value)
+    val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value - drawerTabWidth.value - 10)
         .coerceIn(64f, 220f).dp
-    // 形状定稿：直边（左）吸附卡片右缘、圆角朝右——用户三次反馈确认的形态（勿再改）。
+    // 形状定稿（图1）：左直边贴面板右缘、圆角只在右侧。
     val tabShape = RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
 
     Column(
@@ -202,7 +210,7 @@ private fun DrawerVerticalTabs(
                 Surface(
                     modifier = Modifier
                         .width(drawerTabWidth)
-                        .height(42.dp)
+                        .height(34.dp)
                         .selectable(
                             selected = isSelected,
                             interactionSource = interactionSource,
@@ -360,167 +368,271 @@ fun ChatDrawerContent(
     }
 
     val imeInset = rememberImeBottomInset()
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(settingsPageBackground())
-            .windowInsetsPadding(
-                WindowInsets.systemBars.only(
-                    WindowInsetsSides.Horizontal + WindowInsetsSides.Top
-                )
-            )
-            .padding(start = Spacing.lg)
-            .padding(bottom = imeInset + Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        Row(
-            // 标签列「停靠在卡片边缘」（用户三次反馈定稿）：直边吸附内容列表（卡片区）右缘、圆角朝右，
-            // 右侧留出与面板边缘的小间隙（悬空感）。2026-10-17 验收反馈：整列向右移动——
-            // 与面板边缘间距 lg(16dp)→xs(4dp)，标签列随内容区右移 12dp；垂直起点下移对齐会话条目。
+    val focusManager = LocalFocusManager.current
+    // 根 Box 比面板多出「标签骑线悬出」的半宽：面板只画到 drawerWidth()，
+    // 右侧多出的一条让「会话 / 文件」标签骑在面板右缘线上（中心对齐边线，图2 定稿）。
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(end = Spacing.xs)
+                .width(drawerWidth())
+                .fillMaxHeight()
+                .background(settingsPageBackground())
+                .windowInsetsPadding(
+                    WindowInsets.systemBars.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top
+                    )
+                )
+                .padding(start = Spacing.lg, top = Spacing.sm)
+                .padding(bottom = imeInset + Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            Column(
+            Row(
+                // 内容区右侧留出标签左半宽：标签骑在面板右缘线上后，左半压在面板内这条边距上，
+                // 不遮列表文字（2026-10-17 二次验收：按钮改为骑线形态，中心对齐面板右缘线）。
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    .fillMaxWidth()
+                    .padding(end = Spacing.lg)
             ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
 
-        // 聊天记录搜索框放在 Tab 栏正下方，仅「会话」Tab 可见。
-                if (selectedTab == 0 && isSelectionMode) {
-                    Surface(
-                        color = MaterialTheme.semanticColors.cardSurface,
-                        shape = RoundedCornerShape(Radius.mdLarge),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-                            verticalAlignment = Alignment.CenterVertically
+            // 聊天记录搜索框放在 Tab 栏正下方，仅「会话」Tab 可见。
+                    if (selectedTab == 0 && isSelectionMode) {
+                        Surface(
+                            color = MaterialTheme.semanticColors.cardSurface,
+                            shape = RoundedCornerShape(Radius.mdLarge),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            IconButton(
-                                onClick = {
-                                    isSelectionMode = false
-                                    selectedSessionIds.clear()
-                                },
-                                modifier = Modifier.size(32.dp)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = FeatherIcons.X,
-                                    contentDescription = stringResource(R.string.common_cancel),
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Spacer(Modifier.width(Spacing.xs))
-                            Text(
-                                text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
-                            )
-                            val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
-                                val ids = mutableListOf<String>()
-                                sessions.forEach { s ->
-                                    ids.add(s.id)
-                                    subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                                IconButton(
+                                    onClick = {
+                                        isSelectionMode = false
+                                        selectedSessionIds.clear()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = FeatherIcons.X,
+                                        contentDescription = stringResource(R.string.common_cancel),
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
                                 }
-                                ids
-                            }
-                            val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
-                            TextButton(onClick = {
-                                if (allSelected) {
-                                    selectedSessionIds.clear()
-                                } else {
-                                    selectedSessionIds.clear()
-                                    selectedSessionIds.addAll(allSessionIds)
-                                }
-                            }) {
-                                Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
-                            }
-                            IconButton(
-                                onClick = { showBatchDeleteConfirm = true },
-                                enabled = selectedSessionIds.isNotEmpty(),
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = FeatherIcons.Trash2,
-                                    contentDescription = stringResource(R.string.chat_batch_delete_title),
-                                    modifier = Modifier.size(18.dp),
-                                    tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                Spacer(Modifier.width(Spacing.xs))
+                                Text(
+                                    text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
+                                    val ids = mutableListOf<String>()
+                                    sessions.forEach { s ->
+                                        ids.add(s.id)
+                                        subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                                    }
+                                    ids
+                                }
+                                val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
+                                TextButton(onClick = {
+                                    if (allSelected) {
+                                        selectedSessionIds.clear()
+                                    } else {
+                                        selectedSessionIds.clear()
+                                        selectedSessionIds.addAll(allSessionIds)
+                                    }
+                                }) {
+                                    Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
+                                }
+                                IconButton(
+                                    onClick = { showBatchDeleteConfirm = true },
+                                    enabled = selectedSessionIds.isNotEmpty(),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = FeatherIcons.Trash2,
+                                        contentDescription = stringResource(R.string.chat_batch_delete_title),
+                                        modifier = Modifier.size(18.dp),
+                                        tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                    )
+                                }
                             }
                         }
+                    } else if (selectedTab == 0) {
+                        ChatSearchField(
+                            query = searchQuery,
+                            onQueryChange = onSearchQueryChange,
+                            onClear = onClearSearch
+                        )
                     }
-                } else if (selectedTab == 0) {
-                    ChatSearchField(
-                        query = searchQuery,
-                        onQueryChange = onSearchQueryChange,
-                        onClear = onClearSearch
-                    )
-                }
 
-                AnimatedContent(
-                    targetState = selectedTab,
-                    modifier = Modifier.weight(1f),
-                    transitionSpec = {
-                        // 与全局页面切换动效同语言：切到「文件」从右来、切回「会话」从左来。
-                        // sizeTransform 必须给 null，否则容器裁剪会留下拖影。
-                        val forward = targetState > initialState
-                        ContentTransform(pageEnter(forward), pageExit(forward), sizeTransform = null)
-                    },
-                    label = "drawer-tab-content"
-                ) { tab ->
-                    when (tab) {
-                        0 -> SessionListTab(
-                            sessions = sessions,
-                            currentSessionId = currentSessionId,
-                            agentStates = agentStates,
-                            awaitingPermissionSessionIds = awaitingPermissionSessionIds,
-                            subSessionsByParent = subSessionsByParent,
-                            listState = listState,
-                            searchQuery = searchQuery,
-                            searchState = searchState,
-                            selectionMode = isSelectionMode,
-                            selectedSessionIds = selectedSessionIds,
-                            onToggleSelectSession = { s ->
-                                if (s.id in selectedSessionIds) {
-                                    selectedSessionIds.remove(s.id)
-                                } else {
-                                    selectedSessionIds.add(s.id)
+                    AnimatedContent(
+                        targetState = selectedTab,
+                        modifier = Modifier
+                            .weight(1f)
+                            // 按压列表/文件树即视为「注意力离开搜索」：清焦点使搜索框自动收起（不消耗事件）。
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        if (awaitPointerEvent().type == PointerEventType.Press) {
+                                            focusManager.clearFocus()
+                                        }
+                                    }
                                 }
                             },
-                            onSelect = onSelect,
-                            onLongClick = { menuSession = it },
-                            onOpenSearchHit = onOpenSearchHit
-                        )
-                        1 -> FileBrowserTab(
-                            state = browseState,
-                            expandedPaths = expandedPaths,
-                            expandingPath = expandingPath,
-                            fileOpPaths = fileOpPaths,
-                            clipboard = clipboard,
-                            onToggleExpand = onToggleExpand,
-                            onOpenFile = onOpenFile,
-                            onRefresh = onRefreshBrowse,
-                            onCreateFile = onCreateFile,
-                            onCreateFolder = onCreateFolder,
-                            onRenameEntry = onRenameEntry,
-                            onDeleteEntry = onDeleteEntry,
-                            onCopyEntry = onCopyEntry,
-                            onCutEntry = onCutEntry,
-                            onPasteEntry = onPasteEntry,
-                            onClearClipboard = onClearClipboard
-                        )
+                        transitionSpec = {
+                            // 与全局页面切换动效同语言：切到「文件」从右来、切回「会话」从左来。
+                            // sizeTransform 必须给 null，否则容器裁剪会留下拖影。
+                            val forward = targetState > initialState
+                            ContentTransform(pageEnter(forward), pageExit(forward), sizeTransform = null)
+                        },
+                        label = "drawer-tab-content"
+                    ) { tab ->
+                        when (tab) {
+                            0 -> SessionListTab(
+                                sessions = sessions,
+                                currentSessionId = currentSessionId,
+                                agentStates = agentStates,
+                                awaitingPermissionSessionIds = awaitingPermissionSessionIds,
+                                subSessionsByParent = subSessionsByParent,
+                                listState = listState,
+                                searchQuery = searchQuery,
+                                searchState = searchState,
+                                selectionMode = isSelectionMode,
+                                selectedSessionIds = selectedSessionIds,
+                                onToggleSelectSession = { s ->
+                                    if (s.id in selectedSessionIds) {
+                                        selectedSessionIds.remove(s.id)
+                                    } else {
+                                        selectedSessionIds.add(s.id)
+                                    }
+                                },
+                                onSelect = onSelect,
+                                onLongClick = { menuSession = it },
+                                onOpenSearchHit = onOpenSearchHit
+                            )
+                            1 -> FileBrowserTab(
+                                state = browseState,
+                                expandedPaths = expandedPaths,
+                                expandingPath = expandingPath,
+                                fileOpPaths = fileOpPaths,
+                                clipboard = clipboard,
+                                onToggleExpand = onToggleExpand,
+                                onOpenFile = onOpenFile,
+                                onRefresh = onRefreshBrowse,
+                                onCreateFile = onCreateFile,
+                                onCreateFolder = onCreateFolder,
+                                onRenameEntry = onRenameEntry,
+                                onDeleteEntry = onDeleteEntry,
+                                onCopyEntry = onCopyEntry,
+                                onCutEntry = onCutEntry,
+                                onPasteEntry = onPasteEntry,
+                                onClearClipboard = onClearClipboard
+                            )
+                        }
                     }
                 }
             }
 
-            // 产品册索引标签：直边贴卡片右缘、圆角朝右；垂直下移对齐会话条目，按住浮出功能提示
+            // 底部卡片与内容列表右缘对齐（同一右边距；功能图标仅随布局移位、不翻转）。
+            SettingsGroup(modifier = Modifier.padding(end = Spacing.lg)) {
+                if (onNavigateToBrowser != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Globe,
+                        title = stringResource(R.string.browser_title),
+                        onClick = onNavigateToBrowser,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToRea != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Cpu,
+                        title = stringResource(R.string.rea_entry_title),
+                        onClick = onNavigateToRea,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToPreview != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Monitor,
+                        title = stringResource(R.string.preview_entry_title),
+                        onClick = { showPreviewEntrySheet = true },
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onStartLiveAnnotation != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Crosshair,
+                        title = stringResource(R.string.annotation_live_entry),
+                        onClick = onStartLiveAnnotation,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onStartAnnotationCapture != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Camera,
+                        title = stringResource(R.string.annotation_capture_entry),
+                        onClick = onStartAnnotationCapture,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToAnnotations != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Layers,
+                        title = stringResource(R.string.annotation_ledger_title),
+                        onClick = onNavigateToAnnotations,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToTestBuilds != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Package,
+                        title = stringResource(R.string.test_build_title),
+                        onClick = onNavigateToTestBuilds,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                SettingsRow(
+                    icon = FeatherIcons.Settings,
+                    title = stringResource(R.string.chat_settings),
+                    onClick = onNavigateToSettings,
+                    compact = true,
+                    modifier = Modifier.onboardingTarget(OnboardingStep.ENTER_SETTINGS)
+                )
+            }
+        }
+
+        // 「会话 / 文件」标签列：左直边贴面板右缘、整体位于面板外侧（图1 定稿）。
+        // 显式按「面板宽 + 标签宽」定宽（而非跟随容器宽度），保证按钮左缘永远对齐面板右缘。
+        Box(
+            modifier = Modifier
+                .width(drawerWidth() + drawerTabWidth)
+                .fillMaxHeight()
+                .windowInsetsPadding(
+                    WindowInsets.systemBars.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top
+                    )
+                )
+                // 与面板内容同步下移：顶部沉浸留白（搜索图标与状态栏之间）
+                .padding(top = Spacing.sm)
+        ) {
             DrawerVerticalTabs(
                 selected = selectedTab,
                 tabs = listOf(
@@ -536,81 +648,7 @@ fun ChatDrawerContent(
                     )
                 ),
                 onSelect = { selectedTab = it },
-                modifier = Modifier.fillMaxHeight()
-            )
-        }
-
-        // 底部卡片右缘与标签列右缘对齐（"底部镜像"——统一右边距；功能图标仅随布局移位、不翻转）。
-        SettingsGroup(modifier = Modifier.padding(end = Spacing.xs)) {
-            if (onNavigateToBrowser != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Globe,
-                    title = stringResource(R.string.browser_title),
-                    onClick = onNavigateToBrowser,
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            if (onNavigateToRea != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Cpu,
-                    title = stringResource(R.string.rea_entry_title),
-                    onClick = onNavigateToRea,
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            if (onNavigateToPreview != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Monitor,
-                    title = stringResource(R.string.preview_entry_title),
-                    onClick = { showPreviewEntrySheet = true },
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            if (onStartLiveAnnotation != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Crosshair,
-                    title = stringResource(R.string.annotation_live_entry),
-                    onClick = onStartLiveAnnotation,
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            if (onStartAnnotationCapture != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Camera,
-                    title = stringResource(R.string.annotation_capture_entry),
-                    onClick = onStartAnnotationCapture,
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            if (onNavigateToAnnotations != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Layers,
-                    title = stringResource(R.string.annotation_ledger_title),
-                    onClick = onNavigateToAnnotations,
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            if (onNavigateToTestBuilds != null) {
-                SettingsRow(
-                    icon = FeatherIcons.Package,
-                    title = stringResource(R.string.test_build_title),
-                    onClick = onNavigateToTestBuilds,
-                    compact = true
-                )
-                SettingsDivider()
-            }
-            SettingsRow(
-                icon = FeatherIcons.Settings,
-                title = stringResource(R.string.chat_settings),
-                onClick = onNavigateToSettings,
-                compact = true,
-                modifier = Modifier.onboardingTarget(OnboardingStep.ENTER_SETTINGS)
+                modifier = Modifier.align(Alignment.TopEnd)
             )
         }
     }
@@ -973,31 +1011,82 @@ private fun SessionListContent(
     }
 }
 
-/** Tab0 底部搜索框：复用设置页的胶囊搜索框，非空时带清除按钮。 */
+/**
+ * Tab0 搜索入口：默认只显示一个搜索图标按钮；点击展开为输入框并自动聚焦，
+ * 焦点离开（点列表、切页或收键盘）时自动收起回图标。
+ * 搜索词非空时图标保持高亮，表示列表仍按关键词过滤。
+ */
 @Composable
 private fun ChatSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit
 ) {
-    ModelSearchField(
-        query = query,
-        onQueryChange = onQueryChange,
-        placeholder = stringResource(R.string.chat_search_hint),
-        modifier = Modifier.fillMaxWidth(),
-        trailing = if (query.isEmpty()) null else {
-            {
-                IconButton(onClick = onClear, modifier = Modifier.size(24.dp)) {
+    var expanded by remember { mutableStateOf(false) }
+    // 忽略展开瞬间的初始「未聚焦」回调，避免搜索框刚出现就立刻收起。
+    var receivedFocus by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val hasQuery = query.isNotEmpty()
+
+    Crossfade(
+        targetState = expanded,
+        animationSpec = tween(durationMillis = 160),
+        label = "drawer-search-fold"
+    ) { open ->
+        if (open) {
+            ModelSearchField(
+                query = query,
+                onQueryChange = onQueryChange,
+                placeholder = stringResource(R.string.chat_search_hint),
+                modifier = Modifier.fillMaxWidth(),
+                focusRequester = focusRequester,
+                onFocusChanged = { state ->
+                    if (state.isFocused) receivedFocus = true
+                    else if (receivedFocus) expanded = false
+                },
+                trailing = if (query.isEmpty()) null else {
+                    {
+                        IconButton(
+                            onClick = {
+                                onClear()
+                                focusRequester.requestFocus()
+                            },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.X,
+                                contentDescription = stringResource(R.string.chat_search_clear),
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            )
+            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        } else {
+            Surface(
+                onClick = {
+                    receivedFocus = false
+                    expanded = true
+                },
+                shape = CircleShape,
+                color = if (hasQuery) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                else MaterialTheme.semanticColors.capsuleSurface,
+                modifier = Modifier.size(41.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(R.string.chat_search_clear),
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        imageVector = FeatherIcons.Search,
+                        contentDescription = stringResource(R.string.chat_search_hint),
+                        modifier = Modifier.size(18.dp),
+                        tint = if (hasQuery) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.semanticColors.subtleText
                     )
                 }
             }
         }
-    )
+    }
 }
 
 /** 搜索结果区：加载中 / 无结果 / 命中列表三态。 */
@@ -1158,9 +1247,12 @@ private fun FileBrowserTab(
     Column(modifier = Modifier.fillMaxSize()) {
         // 顶部操作行：剪贴板指示器 + 文件操作状态 + 刷新按钮——固定占位、不再悬浮，
         // 避免覆盖文件树首行文字（验收反馈：刷新按钮与文字重叠）。
+        // 2026-10-17 验收反馈：刷新按钮需与右侧「会话/文件」标签同列——整体右移，
+        // 使其中心对齐面板右缘线（offset = 面板内边距 + 行内边距 + 按钮半宽）。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .offset(x = Spacing.lg + Spacing.xs + 16.dp)
                 .padding(end = Spacing.xs),
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically

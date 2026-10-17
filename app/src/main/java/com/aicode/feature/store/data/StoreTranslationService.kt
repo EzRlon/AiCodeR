@@ -39,6 +39,8 @@ class StoreTranslationService @Inject constructor(
         private const val DESCRIPTION_MAX_CHARS = 400
 
         private val FENCE_REGEX = Regex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+        private val THINKING_TAG_REGEX = Regex("(?s)&lt;thinking&gt;.*?&lt;/thinking&gt;", RegexOption.IGNORE_CASE)
+        private val CODE_FENCE_LINE_REGEX = Regex("(?s)```.*?\\n", RegexOption.IGNORE_CASE)
 
         /** 翻译提示词（硬编码，不走 prompts 目录，属商店页内部协议，与文件无关）。 */
         private const val SYSTEM_PROMPT = """你是翻译引擎。输入是一个 JSON 数组，每个元素包含在线商店条目的 id、name（名称）与 description（描述）。
@@ -123,11 +125,19 @@ class StoreTranslationService @Inject constructor(
         }
     }.getOrNull()
 
-    /** 剥掉 markdown 围栏；无围栏时退回提取首尾方括号之间的片段。 */
+    /**
+     * 剥掉 markdown 围栏；无围栏时退回提取首尾方括号之间的片段。
+     * 部分思考型模型（如 deepseek-reasoner）会在 JSON 前附加思考段落，这里再去除
+     * `&lt;thinking&gt;…&lt;/thinking&gt;` 等标记段，只保留 JSON 数组本身。
+     */
     private fun sanitizeResponse(text: String): String {
         FENCE_REGEX.find(text)?.let { return it.groupValues[1].trim() }
-        val start = text.indexOf('[')
-        val end = text.lastIndexOf(']')
-        return if (start in 0 until end) text.substring(start, end + 1) else text
+        val withoutThinking = text
+            .replace(THINKING_TAG_REGEX, "")
+            .replace(CODE_FENCE_LINE_REGEX, "")
+            .trim()
+        val start = withoutThinking.indexOf('[')
+        val end = withoutThinking.lastIndexOf(']')
+        return if (start in 0 until end) withoutThinking.substring(start, end + 1) else withoutThinking
     }
 }

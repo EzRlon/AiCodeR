@@ -30,6 +30,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -72,6 +73,12 @@ internal fun GeneralSettingsSection(
     onToggleHandoffPromptEnabled: (Boolean) -> Unit,
     handoffPromptPercent: Int,
     onSetHandoffPromptPercent: (Int) -> Unit,
+    handoffAutoEnabled: Boolean,
+    onToggleHandoffAutoEnabled: (Boolean) -> Unit,
+    handoffAutoPercent: Int,
+    onSetHandoffAutoPercent: (Int) -> Unit,
+    floatBallEnabled: Boolean,
+    onToggleFloatBallEnabled: (Boolean) -> Unit,
     voiceEngine: VoiceEngine,
     voiceModelState: VoskModelManager.ModelState,
     onSelectVoiceEngine: (VoiceEngine) -> Unit,
@@ -84,6 +91,7 @@ internal fun GeneralSettingsSection(
     var editingMaxNetworkRetries by remember { mutableStateOf(false) }
     var editingCompactionThreshold by remember { mutableStateOf(false) }
     var editingHandoffPercent by remember { mutableStateOf(false) }
+    var editingHandoffAutoPercent by remember { mutableStateOf(false) }
     var editingTokenBudget by remember { mutableStateOf(false) }
     var editingSendFileMaxSize by remember { mutableStateOf(false) }
 
@@ -145,6 +153,59 @@ internal fun GeneralSettingsSection(
                         text = stringResource(R.string.settings_percent_value, handoffPromptPercent),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_auto),
+                subtitle = stringResource(R.string.settings_handoff_auto_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = handoffAutoEnabled,
+                        onCheckedChange = onToggleHandoffAutoEnabled
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_auto_percent),
+                subtitle = stringResource(R.string.settings_handoff_auto_percent_desc),
+                onClick = { editingHandoffAutoPercent = true },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_percent_value, handoffAutoPercent),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            val overlayContext = androidx.compose.ui.platform.LocalContext.current
+            var overlayGranted by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(overlayContext)) }
+            // 从系统授权页返回时刷新：否则授权后首次点开关仍会被再次引到授权页。
+            LifecycleResumeEffect(Unit) {
+                overlayGranted = android.provider.Settings.canDrawOverlays(overlayContext)
+                onPauseOrDispose { }
+            }
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_float_ball),
+                subtitle = if (overlayGranted) stringResource(R.string.settings_float_ball_desc)
+                else stringResource(R.string.settings_float_ball_no_permission),
+                onClick = if (overlayGranted) null else ({ openOverlayPermission(overlayContext) }),
+                trailing = {
+                    AppSwitch(
+                        checked = floatBallEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && !overlayGranted) {
+                                openOverlayPermission(overlayContext)
+                            } else {
+                                onToggleFloatBallEnabled(enabled)
+                            }
+                        }
                     )
                 }
             )
@@ -399,6 +460,21 @@ internal fun GeneralSettingsSection(
         )
     }
 
+    if (editingHandoffAutoPercent) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_handoff_auto_percent),
+            initialValue = handoffAutoPercent,
+            hint = stringResource(R.string.settings_compaction_threshold_input_hint),
+            minValue = 1,
+            maxValue = 100,
+            onConfirm = {
+                onSetHandoffAutoPercent(it)
+                editingHandoffAutoPercent = false
+            },
+            onDismiss = { editingHandoffAutoPercent = false }
+        )
+    }
+
     if (editingTokenBudget) {
         NumberInputDialog(
             title = stringResource(R.string.settings_token_budget),
@@ -637,4 +713,16 @@ private fun voiceModelSubtitle(state: VoskModelManager.ModelState): String = whe
     VoskModelManager.ModelState.Installing -> stringResource(R.string.voice_model_installing)
     is VoskModelManager.ModelState.Ready -> stringResource(R.string.voice_model_ready)
     VoskModelManager.ModelState.Failed -> stringResource(R.string.voice_model_failed)
+}
+
+/** 引导用户授予悬浮窗权限（跳系统「显示在其他应用上层」设置页）。 */
+private fun openOverlayPermission(context: android.content.Context) {
+    runCatching {
+        context.startActivity(
+            android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}")
+            ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+        )
+    }
 }

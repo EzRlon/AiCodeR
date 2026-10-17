@@ -18,6 +18,7 @@ import com.aicode.core.util.GitIgnoreMatcher
 import com.aicode.core.util.toUserMessage
 import com.aicode.core.util.formatCostUsd
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.floatball.FloatBallCommandCenter
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
@@ -139,8 +140,34 @@ data class HandoffPrompt(
     val sessionId: String,
     val percent: Int,
     /** 正在生成接手摘要（按钮禁用、显示进度）。 */
-    val generating: Boolean = false
+    val generating: Boolean = false,
+    /** 已达硬阈值：当前会话暂停接受新消息，面板不可「暂不」。 */
+    val paused: Boolean = false,
+    /** 暂停态下正在生成可复制的交接内容。 */
+    val preparingCopy: Boolean = false
 )
+
+/** 交接检测结果：无动作 / 软提醒 / 硬阈值自动交接。 */
+enum class HandoffAction { NONE, PROMPT, AUTO_HANDOFF }
+
+/**
+ * 交接阈值判定（纯函数，便于单测）：
+ * - 硬阈值（自动交接开启时）优先，且不受软提醒次数影响；
+ * - 软提醒达到阈值后每会话最多 [maxReminders] 次。
+ */
+internal fun decideHandoffAction(
+    percent: Int,
+    promptPercent: Int,
+    reminderEnabled: Boolean,
+    autoEnabled: Boolean,
+    autoPercent: Int,
+    dismissedCount: Int,
+    maxReminders: Int = 2
+): HandoffAction = when {
+    autoEnabled && percent >= autoPercent -> HandoffAction.AUTO_HANDOFF
+    reminderEnabled && percent >= promptPercent && dismissedCount < maxReminders -> HandoffAction.PROMPT
+    else -> HandoffAction.NONE
+}
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
@@ -181,6 +208,7 @@ class AIAgentViewModel @Inject constructor(
     private val scheduledTaskRepository: com.aicode.feature.schedule.data.ScheduledTaskRepository,
     private val voiceSettingsRepository: VoiceSettingsRepository,
     private val voskModelManager: VoskModelManager,
+    private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -256,8 +284,11 @@ class AIAgentViewModel @Inject constructor(
     private val _handoffPrompt = MutableStateFlow<HandoffPrompt?>(null)
     val handoffPrompt: StateFlow<HandoffPrompt?> = _handoffPrompt.asStateFlow()
 
-    /** 本运行内已忽略/已处理的会话：不再重复弹交接提醒。 */
-    private val ignoredHandoffSessions = mutableSetOf<String>()
+    /** 每个会话已点「暂不」的次数：软提醒最多两次，两次后不再打扰。 */
+    private val dismissedHandoffCounts = mutableMapOf<String, Int>()
+
+    /** 已达硬阈值而暂停的会话（sessionId → 触发时的占用百分比）：拒绝新请求，直至交接或用户明确继续。 */
+    private val pausedHandoffSessions = mutableMapOf<String, Int>()
 
     /**
      * agent 执行期间持有的 CPU 唤醒锁：熄屏后系统会挂起进程，使流式响应中断、工具调用卡死。
@@ -312,6 +343,7 @@ class AIAgentViewModel @Inject constructor(
 
     private fun setAgentState(sessionId: String, state: AgentUIState) {
         _agentStates.value = _agentStates.value + (sessionId to state)
+        floatBallStateStore.syncAgentStates(_agentStates.value)
     }
 
     /**
@@ -1233,6 +1265,9 @@ class AIAgentViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "AIAgentViewModel"
+
+        /** 50% 软提醒的会话级上限：两次提醒后不再打扰。 */
+        const val MAX_HANDOFF_REMINDERS = 2
         const val AGENT_COMPLETE_CHANNEL = "agent_complete"
         const val AGENT_COMPLETE_NOTIFICATION_ID = 100
         /** wakeLock 超时保险：构建、装依赖类工具动辄十几分钟，给足 60 分钟；任务正常结束会主动释放。 */
@@ -1491,11 +1526,15 @@ class AIAgentViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            enqueueAgentRequest(
+            val accepted = enqueueAgentRequest(
                 request = AgentNotificationFormatter.buildMessage(listOf(item)),
                 projectRoot = _currentWorkspace.value,
                 targetSessionId = sessionId
             )
+            if (!accepted) {
+                // 硬阈值暂停拦截：通知回收入中心，解除暂停后由 flushPendingNotifications 补投。
+                agentNotificationCenter.enqueue(sessionId, item)
+            }
         }
     }
 
@@ -1514,6 +1553,8 @@ class AIAgentViewModel @Inject constructor(
      * 已被工具结果搭车送达的通知此时已 ack 移除，取到空则什么都不做。
      */
     private fun flushPendingNotifications(sessionId: String) {
+        // 暂停会话不 drain：通知保留在中心，解除暂停/交接后下一轮可补投，避免丢失。
+        if (sessionId in pausedHandoffSessions) return
         val items = agentNotificationCenter.drain(sessionId)
         if (items.isEmpty()) return
         FileLogger.d(TAG, "flushPendingNotifications: sid=$sessionId items=${items.size} state=${_agentStates.value[sessionId]}")
@@ -1526,6 +1567,9 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 提交一条 agent 请求：空闲直接执行、忙碌入队；返回 false 表示被硬阈值暂停拦截（调用方应保留草稿）。
+     */
     fun enqueueAgentRequest(
         request: String,
         modelRequest: String = request,
@@ -1537,8 +1581,14 @@ class AIAgentViewModel @Inject constructor(
         isAutoTrigger: Boolean = false,
         targetSessionId: String? = null,
         intentType: String? = null
-    ) {
+    ): Boolean {
         val sid = targetSessionId ?: _currentSessionId.value
+        // 硬阈值暂停：拒绝一切新请求（含系统通知），避免继续膨胀上下文污染项目；
+        // 同时把交接面板重新亮出来（用户手动切回旧会话时告知原因与出口）。
+        if (sid != null && sid in pausedHandoffSessions) {
+            _handoffPrompt.value = HandoffPrompt(sid, pausedHandoffSessions.getValue(sid), paused = true)
+            return false
+        }
         val isCurrentRunning = sid != null &&
             (sessionJobs[sid]?.isActive == true || sid in _runningCommandSessions.value)
         if (isCurrentRunning) {
@@ -1570,6 +1620,7 @@ class AIAgentViewModel @Inject constructor(
                 intentType = intentType
             )
         }
+        return true
     }
 
     /** 从当前会话队列移除指定条目（队列面板删除按钮）。 */
@@ -1637,6 +1688,8 @@ class AIAgentViewModel @Inject constructor(
     }
 
     private fun processNextInQueue(sessionId: String) {
+        // 暂停会话不消费队列：保留待发请求，交接后用户到新会话重新发起。
+        if (sessionId in pausedHandoffSessions) return
         // 已有活跃 job（可能是本次收尾前由通知合并/flush 等入口启动的）时不消费，
         // 避免队列被多个收尾入口重复消费、同一会话并发跑两个 job。
         if (sessionJobs[sessionId]?.isActive == true) return
@@ -1697,6 +1750,11 @@ class AIAgentViewModel @Inject constructor(
         val sessionId = targetSessionId ?: ensureSession()
         if (sessionId.isBlank()) {
             FileLogger.w(TAG, "工作区未就绪，跳过请求")
+            return@launch
+        }
+        // 硬阈值暂停兜底：排队消费/直调等所有执行入口在此统一拒绝（队列保留不丢）。
+        if (sessionId in pausedHandoffSessions) {
+            _handoffPrompt.value = HandoffPrompt(sessionId, pausedHandoffSessions.getValue(sessionId), paused = true)
             return@launch
         }
         // 命令分流：命中斜杠命令（内置命令或技能）时，不走 agent workflow，直接执行命令操作
@@ -2122,63 +2180,140 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 交接提醒评估：上下文占用达到阈值且未忽略时，在输入区上方弹出提示。
-     * 只在回合成功结束时调用；任何一步失败都静默（纯提示，不影响主流程）。
+     * 交接提醒评估：只在回合成功结束时调用，任何一步失败都静默（纯提示，不影响主流程）。
+     * - 硬阈值（默认 75%）：暂停当前会话并自动生成接手摘要、开新会话继续（可在设置关闭）；
+     * - 软阈值（默认 50%）：最多提醒两次，提示模型推理能力即将下降。
      */
     private suspend fun maybePromptHandoff(sessionId: String) {
         runCatching {
-            if (sessionId in ignoredHandoffSessions) return
-            if (!generalSettingsRepository.handoffPromptEnabledFlow.first()) return
-            val threshold = generalSettingsRepository.handoffPromptPercentFlow.first()
-            val usedTokens = sessionUseCase.getSessionById(sessionId)?.lastInputTokens ?: 0
+            // 只对根会话生效：子代理会话的上下文由父会话统一管理，不单独提醒/暂停。
+            val session = sessionUseCase.getSessionById(sessionId) ?: return
+            if (session.parentId != null) return
+            val usedTokens = session.lastInputTokens
             if (usedTokens <= 0) return
             val budget = agentWorkflow.handoffInputBudget(sessionId) ?: return
             val percent = (usedTokens * 100L / budget).toInt()
-            if (percent >= threshold) {
-                _handoffPrompt.value = HandoffPrompt(sessionId, percent)
+            val action = decideHandoffAction(
+                percent = percent,
+                promptPercent = generalSettingsRepository.handoffPromptPercentFlow.first(),
+                reminderEnabled = generalSettingsRepository.handoffPromptEnabledFlow.first(),
+                autoEnabled = generalSettingsRepository.handoffAutoEnabledFlow.first(),
+                autoPercent = generalSettingsRepository.handoffAutoPercentFlow.first(),
+                dismissedCount = dismissedHandoffCounts[sessionId] ?: 0,
+                maxReminders = MAX_HANDOFF_REMINDERS
+            )
+            if (action == HandoffAction.NONE) return
+            // 挂起读取设置后复查运行状态：flush 通知可能已拉起新一轮，不能按「本轮已结束」处理。
+            if (sessionJobs[sessionId]?.isActive == true) return
+            if (_agentStates.value[sessionId] is AgentUIState.Streaming) return
+            if (!_queuedRequests.value[sessionId].isNullOrEmpty()) return
+            when (action) {
+                HandoffAction.AUTO_HANDOFF -> {
+                    if (sessionId in pausedHandoffSessions) return
+                    pausedHandoffSessions[sessionId] = percent
+                    _handoffPrompt.value = HandoffPrompt(sessionId, percent, paused = true, generating = true)
+                    if (!handoffToNewSession(sessionId, closePromptOnSuccess = true)) {
+                        _handoffPrompt.value = HandoffPrompt(sessionId, percent, paused = true)
+                    }
+                }
+                HandoffAction.PROMPT -> _handoffPrompt.value = HandoffPrompt(sessionId, percent)
+                HandoffAction.NONE -> Unit
             }
         }.onFailure { FileLogger.w(TAG, "交接提醒评估失败", it) }
+    }
+
+    /**
+     * 生成接手摘要并新建「（接手）旧标题」会话继续；成功后切到新会话。
+     * 失败返回 false（调用方决定面板如何恢复）。
+     */
+    private suspend fun handoffToNewSession(oldSessionId: String, closePromptOnSuccess: Boolean): Boolean = runCatching {
+        val summary = agentWorkflow.buildHandoffSummary(oldSessionId)
+        check(!summary.isNullOrBlank()) { "接手摘要生成失败" }
+        val old = sessionUseCase.getSessionById(oldSessionId)
+        checkNotNull(old) { "原会话不存在" }
+        val newEntity = sessionUseCase.newSessionEntity(
+            workspacePath = old.workspacePath,
+            providerId = old.providerId,
+            model = old.model,
+            reasoningEffort = old.reasoningEffort
+        ).copy(title = handoffTitle(old.title))
+        sessionUseCase.upsertSession(newEntity)
+        messagePersistenceUseCase.persist(newEntity.id, MessageRole.USER, CONTEXT_COMPACTION_MARKER)
+        messagePersistenceUseCase.persist(newEntity.id, MessageRole.ASSISTANT, summary)
+        messagePersistenceUseCase.invalidateHistory(newEntity.id)
+        sessionUseCase.touch(newEntity.id, messagePersistenceUseCase.nextTimestamp())
+        dismissedHandoffCounts.remove(oldSessionId)
+        // 只清理属于旧会话的提示，避免误清期间新产生的其它会话提醒。
+        if (closePromptOnSuccess && _handoffPrompt.value?.sessionId == oldSessionId) {
+            _handoffPrompt.value = null
+        }
+        selectSession(newEntity.id)
+        true
+    }.getOrElse {
+        FileLogger.w(TAG, "交接开新会话失败", it)
+        false
+    }
+
+    /** 接手会话标题：本地化前缀，避免重复交接叠加前缀。 */
+    private fun handoffTitle(original: String): String {
+        val prefix = context.getString(R.string.session_handoff_title_prefix)
+        return if (original.startsWith(prefix)) original else prefix + original
     }
 
     /** 确认交接：生成接手摘要并新建「（接手）旧标题」会话继续；失败时恢复提示卡。 */
     fun confirmHandoff() {
         val prompt = _handoffPrompt.value ?: return
-        if (prompt.generating) return
+        if (prompt.generating || prompt.preparingCopy) return
         _handoffPrompt.value = prompt.copy(generating = true)
         viewModelScope.launch {
-            val oldSessionId = prompt.sessionId
-            runCatching {
-                val summary = agentWorkflow.buildHandoffSummary(oldSessionId)
-                check(!summary.isNullOrBlank()) { "接手摘要生成失败" }
-                val old = sessionUseCase.getSessionById(oldSessionId)
-                checkNotNull(old) { "原会话不存在" }
-                val newEntity = sessionUseCase.newSessionEntity(
-                    workspacePath = old.workspacePath,
-                    providerId = old.providerId,
-                    model = old.model,
-                    reasoningEffort = old.reasoningEffort
-                ).copy(title = "（接手）" + old.title)
-                sessionUseCase.upsertSession(newEntity)
-                messagePersistenceUseCase.persist(newEntity.id, MessageRole.USER, CONTEXT_COMPACTION_MARKER)
-                messagePersistenceUseCase.persist(newEntity.id, MessageRole.ASSISTANT, summary)
-                messagePersistenceUseCase.invalidateHistory(newEntity.id)
-                sessionUseCase.touch(newEntity.id, messagePersistenceUseCase.nextTimestamp())
-                ignoredHandoffSessions.add(oldSessionId)
-                _handoffPrompt.value = null
-                selectSession(newEntity.id)
-            }.onFailure {
-                FileLogger.w(TAG, "交接开新会话失败", it)
+            val ok = handoffToNewSession(prompt.sessionId, closePromptOnSuccess = true)
+            if (!ok) {
                 val current = _handoffPrompt.value
-                if (current?.sessionId == oldSessionId) {
+                if (current?.sessionId == prompt.sessionId) {
                     _handoffPrompt.value = current.copy(generating = false)
                 }
             }
         }
     }
 
-    /** 忽略本次交接提醒（本运行内该会话不再提示）。 */
+    /** 暂停态：把接手摘要复制到剪贴板，作为「一键可复制」的交接内容。 */
+    fun copyHandoffContent() {
+        val prompt = _handoffPrompt.value ?: return
+        if (prompt.generating || prompt.preparingCopy) return
+        _handoffPrompt.value = prompt.copy(preparingCopy = true)
+        viewModelScope.launch {
+            val summary = runCatching { agentWorkflow.buildHandoffSummary(prompt.sessionId) }.getOrNull()
+            val current = _handoffPrompt.value
+            if (current?.sessionId == prompt.sessionId) {
+                _handoffPrompt.value = current.copy(preparingCopy = false)
+            }
+            if (summary.isNullOrBlank()) {
+                android.widget.Toast.makeText(
+                    context, context.getString(R.string.handoff_copy_failed), android.widget.Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AiCode handoff", summary))
+            android.widget.Toast.makeText(
+                context, context.getString(R.string.handoff_copy_done), android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    /** 暂不交接：软提醒每个会话最多两次，两次后不再打扰；硬阈值暂停态或生成中不可暂不。 */
     fun dismissHandoff() {
-        _handoffPrompt.value?.let { ignoredHandoffSessions.add(it.sessionId) }
+        val prompt = _handoffPrompt.value ?: return
+        if (prompt.paused || prompt.generating || prompt.preparingCopy) return
+        dismissedHandoffCounts[prompt.sessionId] = (dismissedHandoffCounts[prompt.sessionId] ?: 0) + 1
+        _handoffPrompt.value = null
+    }
+
+    /** 用户明确选择在已暂停的会话里继续（自行承担上下文超限风险）。 */
+    fun continueAfterPause() {
+        val prompt = _handoffPrompt.value ?: return
+        if (!prompt.paused || prompt.generating || prompt.preparingCopy) return
+        pausedHandoffSessions.remove(prompt.sessionId)
         _handoffPrompt.value = null
     }
 
@@ -2187,6 +2322,19 @@ class AIAgentViewModel @Inject constructor(
     /** 当前会话召唤的编队名；null 表示未使用编队。 */
     val teamName: StateFlow<String?> = _teamName.asStateFlow()
 
+    private val floatBallSendBridge: (String) -> Boolean = { text ->
+        text.isNotBlank() && enqueueAgentRequest(text.trim())
+    }
+
+    private val floatBallOpenAppBridge: () -> Unit = {
+        runCatching {
+            val intent = android.content.Intent(context, com.aicode.MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            context.startActivity(intent)
+        }
+    }
+
     init {
         // 跟随会话切换/冷启动刷新当前编队（单一同步点）
         viewModelScope.launch {
@@ -2194,6 +2342,17 @@ class AIAgentViewModel @Inject constructor(
                 _teamName.value = if (id.isNullOrBlank()) null else sessionUseCase.getSessionById(id)?.teamName
             }
         }
+        // 悬浮球命令桥：面板「发送 / 回到 App」经此进入主会话流程（享受队列/暂停拦截等既有保护）。
+        // 保留实例引用：onCleared 时仅在自己仍持有桥时才清空，避免误清新 ViewModel 的注册。
+        FloatBallCommandCenter.send = floatBallSendBridge
+        FloatBallCommandCenter.openApp = floatBallOpenAppBridge
+    }
+
+    override fun onCleared() {
+        // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
+        if (FloatBallCommandCenter.send === floatBallSendBridge) FloatBallCommandCenter.send = null
+        if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
+        super.onCleared()
     }
 
     /** 更新当前会话的编队（null 清除）。 */

@@ -1501,7 +1501,7 @@ fun AIChatPanel(
         onDispose { voiceController.destroy() }
     }
 
-    val sendMessage: () -> Unit = {
+    val sendMessage: () -> Unit = sendMessage@{
         val text = inputText.trim()
         if (text.isNotEmpty() || pendingAttachments.isNotEmpty()) {
             val attachments = pendingAttachments
@@ -1513,7 +1513,7 @@ fun AIChatPanel(
             val images = if (modelSupportsVision) attachments.toAgentImages() else emptyList()
             // 统一走队列：AI 忙时入队（等本轮结束后自动发送下一条），空闲时直接发送。
             // 斜杠命令在 ViewModel 内（agent workflow 之前）分流执行，无需在此区分。
-            viewModel.enqueueAgentRequest(
+            val accepted = viewModel.enqueueAgentRequest(
                 request = text,
                 modelRequest = modelRequest,
                 currentFile = currentFile,
@@ -1523,6 +1523,8 @@ fun AIChatPanel(
                 inputAttachments = attachments.toAgentAttachments(),
                 intentType = intentType
             )
+            // 暂停会话会拒绝发送：保留草稿与附件，避免用户输入被清空丢失。
+            if (!accepted) return@sendMessage
             viewModel.clearInputDraft()
             pendingAttachments = emptyList()
             followBottom = true
@@ -1990,9 +1992,11 @@ fun AIChatPanel(
             }
 
             val handoffPrompt by viewModel.handoffPrompt.collectAsStateWithLifecycle()
-            val handoffForPanel = rememberLastNonNull(handoffPrompt)
+            // 只显示当前会话的交接提示：避免 A 会话的暂停/提醒误显示在 B 会话上。
+            val currentHandoff = handoffPrompt?.takeIf { it.sessionId == currentSessionId }
+            val handoffForPanel = rememberLastNonNull(currentHandoff)
             AnimatedVisibility(
-                visible = handoffPrompt != null,
+                visible = currentHandoff != null,
                 modifier = Modifier.graphicsLayer { alpha = floatingPanelAlpha },
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
@@ -2001,7 +2005,11 @@ fun AIChatPanel(
                     HandoffPromptPanel(
                         percent = prompt.percent,
                         generating = prompt.generating,
+                        paused = prompt.paused,
+                        preparingCopy = prompt.preparingCopy,
                         onConfirm = { viewModel.confirmHandoff() },
+                        onCopy = { viewModel.copyHandoffContent() },
+                        onContinue = { viewModel.continueAfterPause() },
                         onDismiss = { viewModel.dismissHandoff() }
                     )
                 }

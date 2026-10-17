@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -71,6 +72,7 @@ import androidx.navigation.navArgument
 import com.aicode.core.theme.AIEditorTheme
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.ui.BetaWatermark
+import com.aicode.core.ui.ContentWidth
 import com.aicode.core.ui.ImageSource
 import com.aicode.core.ui.ImageViewerHost
 import com.aicode.core.ui.ImageViewerRequest
@@ -127,7 +129,6 @@ import com.aicode.feature.settings.presentation.component.SettingsScreen
 import com.aicode.feature.settings.presentation.component.UpdateCheckDialog
 import com.aicode.feature.settings.presentation.component.decodeBackgroundBitmap
 import com.aicode.feature.settings.presentation.component.openUrl
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.presentation.TerminalViewModel
 import com.aicode.feature.terminal.presentation.component.TerminalScreen
@@ -1051,6 +1052,9 @@ fun AppNavigation(
             animationSpec = tween(durationMillis = PAGE_MOTION_MS),
             label = "sidebar-width"
         )
+        // 标签悬出宽度随动画比例缩放：收起/展开末帧不出现 16dp 跳变。
+        val sidebarTabOverhang = ContentWidth.drawerTabOverhang *
+            (sidebarWidth / drawerWidth()).coerceIn(0f, 1f)
         // 侧栏完全收起后整棵子树离开组合，要拿 SaveableStateHolder 接住内部状态，
         // 否则每次从设置页回来 tab 都跳回「会话」、文件树滚动位置也丢。
         val sidebarStateHolder = rememberSaveableStateHolder()
@@ -1058,14 +1062,16 @@ fun AppNavigation(
             if (sidebarWidth > 0.dp) {
                 Box(
                     modifier = Modifier
-                        .width(sidebarWidth)
+                        // 多出「标签骑线悬出」的半宽：标签中心对齐面板右缘线，右半落在主内容侧（图2 定稿）
+                        .width(sidebarWidth + sidebarTabOverhang)
                         .fillMaxHeight()
                         .clipToBounds()
                 ) {
                     // 内容按完整宽度渲染再裁剪：收起过程中不去重排侧栏内部布局。
+                    // 宽度含「标签骑线悬出」的半宽，与 sheet 路径保持一致。
                     Box(
                         modifier = Modifier
-                            .width(drawerWidth())
+                            .width(drawerWidth() + sidebarTabOverhang)
                             .fillMaxHeight()
                     ) {
                         sidebarStateHolder.SaveableStateProvider("chat-sidebar") {
@@ -1087,9 +1093,11 @@ fun AppNavigation(
             drawerContent = {
                 ModalDrawerSheet(
                     drawerShape = RectangleShape,
-                    drawerContainerColor = settingsPageBackground(),
+                    // 面板底色改由 ChatDrawerContent 自绘（宽度 = 面板宽）；sheet 多出的右缘悬出区保持透明，
+                    // 让「会话/文件」标签能骑在面板右缘线上而不被 Surface 裁剪。
+                    drawerContainerColor = Color.Transparent,
                     drawerTonalElevation = 0.dp,
-                    modifier = Modifier.width(drawerWidth())
+                    modifier = Modifier.width(drawerWidth() + ContentWidth.drawerTabOverhang)
                 ) {
                     drawerBody()
                 }

@@ -264,6 +264,9 @@ fun SettingsScreen(
     val selfImproveMode by viewModel.selfImproveMode.collectAsStateWithLifecycle()
     val handoffPromptEnabled by viewModel.handoffPromptEnabled.collectAsStateWithLifecycle()
     val handoffPromptPercent by viewModel.handoffPromptPercent.collectAsStateWithLifecycle()
+    val handoffAutoEnabled by viewModel.handoffAutoEnabled.collectAsStateWithLifecycle()
+    val handoffAutoPercent by viewModel.handoffAutoPercent.collectAsStateWithLifecycle()
+    val floatBallEnabled by viewModel.floatBallEnabled.collectAsStateWithLifecycle()
     val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
     val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -742,7 +745,8 @@ fun SettingsScreen(
                             onSearch = { storeViewModel.search() },
                             onLoadMore = { storeViewModel.loadMore() },
                             onInstall = { storeViewModel.install(it) },
-                            onConsumeMessage = { storeViewModel.consumeMessage() }
+                            onConsumeMessage = { storeViewModel.consumeMessage() },
+                            onRetryTranslation = { storeViewModel.retryTranslation() }
                         )
                     }
                 }
@@ -1031,6 +1035,12 @@ fun SettingsScreen(
                     onToggleHandoffPromptEnabled = { viewModel.setHandoffPromptEnabled(it) },
                     handoffPromptPercent = handoffPromptPercent,
                     onSetHandoffPromptPercent = { viewModel.setHandoffPromptPercent(it) },
+                    handoffAutoEnabled = handoffAutoEnabled,
+                    onToggleHandoffAutoEnabled = { viewModel.setHandoffAutoEnabled(it) },
+                    handoffAutoPercent = handoffAutoPercent,
+                    onSetHandoffAutoPercent = { viewModel.setHandoffAutoPercent(it) },
+                    floatBallEnabled = floatBallEnabled,
+                    onToggleFloatBallEnabled = { viewModel.setFloatBallEnabled(it) },
                     voiceEngine = voiceEngine,
                     voiceModelState = voiceModelState,
                     onSelectVoiceEngine = { viewModel.setVoiceEngine(it) },
