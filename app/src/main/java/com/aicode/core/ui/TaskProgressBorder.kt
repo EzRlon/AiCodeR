@@ -53,7 +53,9 @@ fun TaskProgressBorder(
     activeColor: Color,
     completedColor: Color,
     pendingColor: Color,
-    trackColor: Color
+    trackColor: Color,
+    /** 任务已开始但 AI 还没产生 todo：只画底轨 + 起点一段呼吸弧，让外框立刻「拉起」。 */
+    indeterminate: Boolean = false
 ) {
     // 进度变化时弧长缓慢平滑过渡（放慢到 900ms，缓入缓出）
     val animatedProgress by animateFloatAsState(
@@ -95,11 +97,18 @@ fun TaskProgressBorder(
         drawPath(path, trackColor, style = Stroke(1.2.dp.toPx()))
 
         val strokeWidth = 2.2.dp.toPx()
-        // 弧长 = 完成比例，从路径起点顺时针点亮（无 todo 时调用方不渲染本组件，不做假进度）
+        // 弧长 = 完成比例，从路径起点顺时针点亮（无 todo 时由 indeterminate 画呼吸段，不做假节点）
         val seg = Path()
         if (animatedProgress > 0.001f) {
             measure.getSegment(0f, total * animatedProgress, seg, true)
             drawPath(seg, completedColor, style = Stroke(strokeWidth, cap = StrokeCap.Round))
+        } else if (indeterminate) {
+            measure.getSegment(0f, total * 0.06f, seg, true)
+            drawPath(
+                seg,
+                activeColor.copy(alpha = breathAlpha),
+                style = Stroke(strokeWidth, cap = StrokeCap.Round)
+            )
         }
 
         // 节点：均匀内缩分布在整圈轨迹上（点击由上层热点层实现）

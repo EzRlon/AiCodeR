@@ -168,7 +168,28 @@ interface AgentMessageDao {
         """
     )
     suspend fun sessionStorageUsage(limit: Int): List<SessionStorageUsage>
+
+    /**
+     * 交付物页数据源：AI 产出的附件（USER 行是用户上传，不算交付物），按当前工作区过滤
+     * （附件的容器路径总是按当前工作区解析，跨工作区行会指错文件）。
+     * 只投影解析附件所需的三列，避免把 content/reasoning 等大字段读进内存。
+     */
+    @Query(
+        "SELECT m.role AS role, m.timestamp AS timestamp, m.attachmentsJson AS attachmentsJson " +
+            "FROM agent_messages m JOIN chat_sessions s ON s.id = m.sessionId " +
+            "WHERE s.workspacePath = :workspacePath AND m.role != 'USER' " +
+            "AND m.attachmentsJson IS NOT NULL AND m.attachmentsJson != '[]' " +
+            "ORDER BY m.timestamp DESC LIMIT 300"
+    )
+    suspend fun messagesWithAttachments(workspacePath: String): List<AttachmentMessageRow>
 }
+
+/** 交付物页的消息附件投影。 */
+data class AttachmentMessageRow(
+    val role: String,
+    val timestamp: Long,
+    val attachmentsJson: String?
+)
 
 /** 跨会话聊天记录搜索的命中投影（[AgentMessageDao.searchInWorkspace] 的投影）。 */
 data class ChatSearchMatch(

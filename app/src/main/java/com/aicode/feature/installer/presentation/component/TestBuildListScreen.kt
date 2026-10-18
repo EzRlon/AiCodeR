@@ -208,7 +208,7 @@ internal fun TestBuildListScreen(
         fileMenuState?.let { (attachment, anchor) ->
             AnchorMenuPopup(
                 title = attachment.fileName,
-                entries = attachmentActionEntries(context, attachment, viewModel.fileAccess),
+                entries = attachmentActionEntries(context, attachment, viewModel.fileAccess, scope),
                 anchorInWindow = anchor,
                 containerOriginInWindow = rootInWindow,
                 onDismiss = { fileMenuState = null }

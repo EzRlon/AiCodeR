@@ -84,12 +84,13 @@ data class AgentMessageEntity(
         )
     }
 
-    private fun decodeAttachments(value: String?): List<AgentAttachment> {
-        if (value.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<AgentAttachment>>(value) }.getOrDefault(emptyList())
-    }
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
 
-    private companion object {
-        val json = Json { ignoreUnknownKeys = true }
+        /** 解析 attachmentsJson；交付物页只持有投影列时也复用。 */
+        internal fun decodeAttachments(value: String?): List<AgentAttachment> {
+            if (value.isNullOrBlank()) return emptyList()
+            return runCatching { json.decodeFromString<List<AgentAttachment>>(value) }.getOrDefault(emptyList())
+        }
     }
 }

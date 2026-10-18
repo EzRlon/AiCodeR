@@ -530,6 +530,8 @@ class ToolPermissionPolicyEngine @Inject constructor(
         }
 
         // 3) 不可静态判定 → 守夜分支（破坏性拒绝+引导 / 非破坏性放行+记录）；否则必须弹窗、不可记忆（内置白名单也不适用）。
+        //    定时 AI 任务运行中，预授权清单是唯一权威：不可静态判定的命令不得借守夜分支放行
+        //    （否则任意 shell 都能绕过清单），落到 ASK 走通知授权/兑底超时。
         if (!analysis.analyzable) {
             if (watchMode) {
                 return if (looksDestructive(command)) {
@@ -537,6 +539,12 @@ class ToolPermissionPolicyEngine @Inject constructor(
                         Verdict.DENY,
                         emptyList(),
                         denyReason = "守夜模式：命令包含命令替换/子 shell/绝对路径重定向等无法静态判定的构造且疑似破坏性，已自动拒绝。请改写为不含这些构造、路径明确可分析的简单命令后重试。"
+                    )
+                } else if (scheduledRun) {
+                    EvalResult(
+                        Verdict.ASK,
+                        emptyList(),
+                        rememberDisabledReason = "定时任务运行中：命令无法静态判定，不在预授权清单内，已转通知授权"
                     )
                 } else {
                     EvalResult(

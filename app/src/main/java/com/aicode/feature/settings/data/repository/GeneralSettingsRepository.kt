@@ -69,14 +69,17 @@ class GeneralSettingsRepository @Inject constructor(
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
-        /** 自动压缩阈值默认 90%，与原硬编码值一致。 */
-        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 90
+        /** 自动压缩阈值默认 70%：先于交接触发，靠「保留最近消息 + 摘要」续命，避免动辄换会话变笨。 */
+        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 70
 
-        /** 交接提醒阈值默认 50%：上下文占用过半时提示开新会话接手。 */
+        /** 交接提醒阈值默认 50%：上下文占用过半时提示压缩/接手。 */
         const val DEFAULT_HANDOFF_PROMPT_PERCENT = 50
 
-        /** 自动交接阈值默认 75%：达到后暂停当前会话并自动开新会话接手。 */
-        const val DEFAULT_HANDOFF_AUTO_PERCENT = 75
+        /**
+         * 自动交接阈值默认 93%：退化为压缩救不回时的兑底（正常情况下 70% 自动压缩先把占用拉回，
+         * 根本到不了这里）；保留高值避免长任务被过早切断。
+         */
+        const val DEFAULT_HANDOFF_AUTO_PERCENT = 93
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100

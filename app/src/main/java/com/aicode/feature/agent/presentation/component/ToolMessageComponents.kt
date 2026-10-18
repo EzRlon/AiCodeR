@@ -62,6 +62,7 @@ import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -655,8 +656,9 @@ internal fun AgentUIMessage.isToolRunning(liveOutput: String?): Boolean =
         content.startsWith(SessionUseCase.LEGACY_PENDING_TOOL_MARKER)
 
 /**
- * 「N 次工具调用」分组头：DSH 把一轮任务里连续的工具调用折成一行，**默认收起**，
- * 点一下手动展开/收起（运行中也不自动弹开）。
+ * 「N 次工具调用」分组头：DSH 把一轮任务里连续的工具调用折成一行。
+ * 展开态由宿主（[AIChatPanel]）控制：跟随所在轮的轮头展开态——运行中的轮随轮头铺开，
+ * 完成后随轮头一并收进「构造过程」；用户手动开关过的分组以其选择为准。
  * 布局对齐思考行：左侧工具图标（锤子/施工） + 中间调用计数 + 折叠箭头。
  *
  * [running] 为真时「N 次工具调用」用主题色标注（静态色差，不做文字动画）；
@@ -756,13 +758,44 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
                 .nestedScroll(rememberBoundNestedScrollConnection(scrollState))
                 .verticalScroll(scrollState)
         ) {
+            val shownText = when {
+                live -> displayedContent
+                collapsible && !expanded -> collapsedContent
+                else -> content
+            }
+            // 普通文本结果里的 unified diff（bash git diff 等）也按增删行上色，
+            // 与 editFile/writeFile 差异卡同一套语义色；非 diff 文本零开销直通。
+            val addText = DiffAddText
+            val addBg = DiffAddBg
+            val removeText = DiffRemoveText
+            val removeBg = DiffRemoveBg
+            val metaColor = MaterialTheme.colorScheme.primary
+            val baseColor = MaterialTheme.colorScheme.onSurfaceVariant
+            val annotated: AnnotatedString = remember(shownText) {
+                if (!looksLikeUnifiedDiff(shownText)) {
+                    AnnotatedString(shownText)
+                } else {
+                    buildAnnotatedString {
+                        shownText.lines().forEachIndexed { index, line ->
+                            if (index > 0) append('\n')
+                            when {
+                                line.startsWith("+++") || line.startsWith("---") ||
+                                    line.startsWith("@@") || line.startsWith("diff ") ||
+                                    line.startsWith("index ") ->
+                                    withStyle(SpanStyle(color = metaColor, fontWeight = FontWeight.Bold)) { append(line) }
+                                line.startsWith('+') ->
+                                    withStyle(SpanStyle(color = addText, background = addBg)) { append(line) }
+                                line.startsWith('-') ->
+                                    withStyle(SpanStyle(color = removeText, background = removeBg)) { append(line) }
+                                else -> withStyle(SpanStyle(color = baseColor)) { append(line) }
+                            }
+                        }
+                    }
+                }
+            }
             SelectionContainer {
                 Text(
-                    text = when {
-                        live -> displayedContent
-                        collapsible && !expanded -> collapsedContent
-                        else -> content
-                    },
+                    text = annotated,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace
@@ -889,6 +922,21 @@ internal fun DiffView(diff: String, startLine: Int) {
             )
         }
     }
+}
+
+/** 判定普通文本结果是否是 unified diff：必须有 diff 头/@@ 标记，且有至少 2 行增删。避免给普通 +/- 列表上色。 */
+private fun looksLikeUnifiedDiff(text: String): Boolean {
+    var markers = 0
+    var changes = 0
+    for (raw in text.lineSequence()) {
+        val line = raw.trimEnd()
+        when {
+            line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@") ||
+                line.startsWith("diff ") || line.startsWith("index ") -> markers++
+            line.startsWith('+') || line.startsWith('-') -> changes++
+        }
+    }
+    return markers >= 1 && changes >= 2
 }
 
 /** 长差异的页脚切换 */

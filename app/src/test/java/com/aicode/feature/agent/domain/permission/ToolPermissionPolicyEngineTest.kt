@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -586,6 +587,17 @@ class ToolPermissionPolicyEngineTest {
         val e = engine(watchMode = true)
         val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf \$(pwd)/build"), AgentMode.BUILD)
         assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_unanalyzableBenignNotAutoAllowed() = runTest {
+        // 安全回归：定时任务运行中，不可静态判定的命令不得借守夜分支放行绕过预授权清单；
+        // 预授权仅 READ（不含 EXECUTE），命令替换命令应落 ASK（通知授权/兑底超时）。
+        // 对照：纯守夜（非定时）下同类命令仍放行（上一用例）；EXECUTE 已预授权时则按清单放行。
+        val e = engine(activeRun = scheduledRun(ScheduledAuthCategory.READ))
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("echo \$(date)"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertNull(r.watchAutoAllow)
     }
 
     @Test

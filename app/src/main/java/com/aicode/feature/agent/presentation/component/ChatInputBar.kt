@@ -880,10 +880,13 @@ internal fun ChatInputBar(
                     }
                 }
 
-                if (isBusy && todoItems.isNotEmpty()) {
+                if (isBusy) {
+                    // 任务一开始就拉起外框：todo 还没产生时画呼吸段（indeterminate），
+                    // 有了 todo 才切换为真实节点与完成弧。
                     TaskProgressBorder(
                         modifier = Modifier.matchParentSize(),
-                        progress = todoItems.count { it.status == TodoStatus.COMPLETED }.toFloat() / todoItems.size,
+                        progress = if (todoItems.isEmpty()) 0f
+                        else todoItems.count { it.status == TodoStatus.COMPLETED }.toFloat() / todoItems.size,
                         nodes = progressNodes,
                         cornerRadius = Radius.lg,
                         activeColor = MaterialTheme.colorScheme.primary,
@@ -894,7 +897,8 @@ internal fun ChatInputBar(
                             0.4f
                         ),
                         pendingColor = MaterialTheme.colorScheme.outlineVariant,
-                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                        indeterminate = todoItems.isEmpty()
                     )
                     if (progressNodes.isNotEmpty()) {
                         // 节点点击热点：独立小层只拦截节点附近触摸，避免整层覆盖独占卡片内交互

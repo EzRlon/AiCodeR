@@ -72,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -117,6 +118,7 @@ import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.presentation.ChatSearchHit
 import com.aicode.feature.agent.presentation.ChatSearchState
+import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.BrowseClipboard
 import com.aicode.feature.agent.presentation.FileBrowseState
 import com.aicode.feature.agent.presentation.FileTreeNode
@@ -149,6 +151,13 @@ import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Settings
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import compose.icons.feathericons.Archive
+import compose.icons.feathericons.File
+import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Image
+import compose.icons.feathericons.MoreHorizontal
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
 import androidx.compose.ui.res.stringResource
@@ -314,6 +323,12 @@ fun ChatDrawerContent(
     onStartLiveAnnotation: (() -> Unit)? = null,
     /** 标注账本入口：打开账本列表页；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
+    /** 交付物列表（左栏第三页）：会话附件 + 工作区安装包，时间倒序。 */
+    deliverables: List<AIAgentViewModel.DeliverableItem> = emptyList(),
+    deliverablesScanning: Boolean = false,
+    onRefreshDeliverables: () -> Unit = {},
+    /** 交付物操作菜单所需的文件访问（保存到手机/MT/分享等）；null 时行点击仅提示。 */
+    deliverableFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider? = null,
     /** 测试包入口：打开工作区 APK 列表；null 则隐藏该入口。 */
     onNavigateToTestBuilds: (() -> Unit)? = null,
     onNavigateToRea: (() -> Unit)? = null,
@@ -379,11 +394,8 @@ fun ChatDrawerContent(
                 .width(drawerWidth())
                 .fillMaxHeight()
                 .background(settingsPageBackground())
-                .windowInsetsPadding(
-                    WindowInsets.systemBars.only(
-                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top
-                    )
-                )
+                // 沉浸：背景铺满全高（含状态栏后面），内容只避开系统栏；底部手势区也留白。
+                .windowInsetsPadding(WindowInsets.systemBars)
                 .padding(start = Spacing.lg, top = Spacing.sm)
                 .padding(bottom = imeInset + Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -541,6 +553,12 @@ fun ChatDrawerContent(
                                 onPasteEntry = onPasteEntry,
                                 onClearClipboard = onClearClipboard
                             )
+                            2 -> DeliverablesTab(
+                                deliverables = deliverables,
+                                scanning = deliverablesScanning,
+                                onRefresh = onRefreshDeliverables,
+                                fileAccess = deliverableFileAccess
+                            )
                         }
                     }
                 }
@@ -627,11 +645,7 @@ fun ChatDrawerContent(
             modifier = Modifier
                 .width(drawerWidth() + drawerTabWidth)
                 .fillMaxHeight()
-                .windowInsetsPadding(
-                    WindowInsets.systemBars.only(
-                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top
-                    )
-                )
+                .windowInsetsPadding(WindowInsets.systemBars)
                 // 与面板内容同步下移：顶部沉浸留白（搜索图标与状态栏之间）
                 .padding(top = Spacing.sm)
         ) {
@@ -647,6 +661,11 @@ fun ChatDrawerContent(
                         FeatherIcons.Folder,
                         stringResource(R.string.drawer_tab_files),
                         stringResource(R.string.drawer_tab_files_desc)
+                    ),
+                    DrawerTab(
+                        FeatherIcons.Archive,
+                        stringResource(R.string.drawer_tab_deliverables),
+                        stringResource(R.string.drawer_tab_deliverables_desc)
                     )
                 ),
                 onSelect = { selectedTab = it },
@@ -1909,4 +1928,173 @@ private fun sessionGroupLabel(groupKey: String, anchorSession: ChatSession): Str
         stringResource(R.string.session_group_month_format),
         Locale.getDefault()
     ).format(Date(anchorSession.updatedAt))
+}
+
+/** 交付物页：会话附件 + 工作区安装包，按后缀分组、组内时间倒序；行点击弹出操作菜单。 */
+@Composable
+private fun DeliverablesTab(
+    deliverables: List<AIAgentViewModel.DeliverableItem>,
+    scanning: Boolean,
+    onRefresh: () -> Unit,
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+    if (deliverables.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (scanning) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text(
+                    text = stringResource(R.string.deliverables_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+    val groups = remember(deliverables) {
+        deliverables.groupBy { deliverableGroupKey(it.attachment.fileName) }
+            .toList()
+            .sortedBy { (key, _) -> deliverableGroupOrder(key) }
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Spacing.xl)
+    ) {
+        groups.forEach { (key, list) ->
+            item(key = "deliv-$key") {
+                SettingsGroupHeader(text = deliverableGroupTitle(key))
+            }
+            items(list, key = { it.attachment.containerPath }) { item ->
+                DeliverableRow(item = item, fileAccess = fileAccess)
+            }
+        }
+    }
+}
+
+/** 交付物分组键：按文件名后缀归类。 */
+private fun deliverableGroupKey(fileName: String): String {
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        "apk", "apks", "xapk", "aab" -> "apk"
+        "zip", "7z", "rar", "tar", "gz", "tgz" -> "archive"
+        "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg" -> "image"
+        "md", "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "json", "csv", "html" -> "doc"
+        else -> "other"
+    }
+}
+
+private fun deliverableGroupOrder(key: String): Int = when (key) {
+    "apk" -> 0
+    "archive" -> 1
+    "image" -> 2
+    "doc" -> 3
+    else -> 4
+}
+
+@Composable
+private fun deliverableGroupTitle(key: String): String = stringResource(
+    when (key) {
+        "apk" -> R.string.deliverables_group_apk
+        "archive" -> R.string.deliverables_group_archive
+        "image" -> R.string.deliverables_group_image
+        "doc" -> R.string.deliverables_group_doc
+        else -> R.string.deliverables_group_other
+    }
+)
+
+@Composable
+private fun DeliverableRow(
+    item: AIAgentViewModel.DeliverableItem,
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+    // 动作作用域挂在行上（菜单内容随退场动画销毁，不能在那里 rememberCoroutineScope）。
+    val actionScope = rememberCoroutineScope()
+    val key = deliverableGroupKey(item.attachment.fileName)
+    val icon = when (key) {
+        "apk" -> FeatherIcons.Download
+        "archive" -> FeatherIcons.Archive
+        "image" -> FeatherIcons.Image
+        "doc" -> FeatherIcons.FileText
+        else -> FeatherIcons.File
+    }
+    val timeText = remember(item.timestamp) {
+        if (item.timestamp <= 0) "" else SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+            .format(Date(item.timestamp))
+    }
+    val sizeText = remember(item.attachment.sizeBytes) {
+        if (item.attachment.sizeBytes <= 0) "" else
+            android.text.format.Formatter.formatShortFileSize(context, item.attachment.sizeBytes)
+    }
+    Box {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { menuOpen = true }
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    item.attachment.fileName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    FeatherIcons.MoreHorizontal,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            val meta = listOfNotNull(
+                timeText.takeIf { it.isNotBlank() },
+                sizeText.takeIf { it.isNotBlank() }
+            ).joinToString(" · ")
+            if (meta.isNotEmpty()) {
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 18.dp + Spacing.sm, top = 1.dp)
+                )
+            }
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            if (fileAccess != null) {
+                attachmentActionEntries(context, item.attachment, fileAccess, actionScope).forEach { entry ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(entry.labelRes)) },
+                        leadingIcon = {
+                            Icon(entry.icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        onClick = {
+                            menuOpen = false
+                            entry.action()
+                        }
+                    )
+                }
+            } else {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.deliverables_unavailable)) },
+                    onClick = { menuOpen = false }
+                )
+            }
+        }
+    }
 }

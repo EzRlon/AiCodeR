@@ -153,15 +153,30 @@ class ContextCompactorTest {
     @Test
     fun invalidResponsesDoNotCommitAndCountFailedCalls() = runTest {
         prepare()
-        for (response in listOf(AIResponse(""), AIResponse("partial", stopReason = "length"), AIResponse("blocked", stopReason = "refusal"))) {
+        // 空内容与策略拒答仍算失败；截断响应（stopReason=length）不再算失败——见下一用例。
+        for (response in listOf(AIResponse(""), AIResponse("blocked", stopReason = "refusal"))) {
             coEvery { provider.complete(any(), any(), any(), any()) } returns response
             val original = history()
             val result = compactor.compactIfNeeded(original, provider, force = true)
             assertFalse(result.compacted)
             assertSame(original, result.messages)
         }
-        coVerify(exactly = 3) { records.insert(match { it.status == "error" }) }
+        coVerify(exactly = 2) { records.insert(match { it.status == "error" }) }
         coVerify(exactly = 0) { dao.commitCompaction(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun truncatedSummaryCommitsInsteadOfFailing() = runTest {
+        prepare()
+        // 历史越长越容易撞到输出上限，恰在最需要压缩时：截断的摘要远好于压缩整体失败。
+        // sessionId 未传（不落库），只验证压缩结果本身生效；record 落一条成功记录。
+        coEvery { provider.complete(any(), any(), any(), any()) } returns AIResponse("partial", stopReason = "length")
+        val original = history()
+        val result = compactor.compactIfNeeded(original, provider, force = true)
+        assertTrue(result.compacted)
+        assertNotSame(original, result.messages)
+        coVerify(exactly = 0) { dao.commitCompaction(any(), any(), any(), any()) }
+        coVerify(atLeast = 1) { records.insert(match { it.status != "error" }) }
     }
 
     @Test

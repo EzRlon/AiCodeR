@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
@@ -483,6 +484,8 @@ fun AppNavigation(
     val expandingPath by agentViewModel.expandingPath.collectAsStateWithLifecycle()
     val fileOpPaths by agentViewModel.fileOpPaths.collectAsStateWithLifecycle()
     val browseState by agentViewModel.browseState.collectAsStateWithLifecycle()
+    val deliverables by agentViewModel.deliverables.collectAsStateWithLifecycle()
+    val deliverablesScanning by agentViewModel.deliverablesScanning.collectAsStateWithLifecycle()
     val browseClipboard by agentViewModel.browseClipboard.collectAsStateWithLifecycle()
     val pasteConflict by agentViewModel.pasteConflict.collectAsStateWithLifecycle()
     val chatSearchQuery by agentViewModel.chatSearchQuery.collectAsStateWithLifecycle()
@@ -645,6 +648,10 @@ fun AppNavigation(
             awaitingPermissionSessionIds = awaitingPermissionSessionIds,
             subSessionsByParent = subSessionsByParent,
             browseState = browseState,
+            deliverables = deliverables,
+            deliverablesScanning = deliverablesScanning,
+            onRefreshDeliverables = { agentViewModel.refreshDeliverables() },
+            deliverableFileAccess = agentViewModel.fileAccess,
             expandedPaths = expandedPaths,
             expandingPath = expandingPath,
             fileOpPaths = fileOpPaths,
@@ -1126,6 +1133,9 @@ fun AppNavigation(
                     // 让「会话/文件」标签能骑在面板右缘线上而不被 Surface 裁剪。
                     drawerContainerColor = Color.Transparent,
                     drawerTonalElevation = 0.dp,
+                    // 默认 windowInsets 会把 sheet 内容区压到状态栏以下，面板自绘背景盖不到状态栏后面，
+                    // 顶部透出遮罩底色形成割裂带；置零让内容全高渲染，沉浸交给 ChatDrawer 自身的 systemBars inset。
+                    windowInsets = WindowInsets(0, 0, 0, 0),
                     modifier = Modifier.width(drawerWidth() + ContentWidth.drawerTabOverhang)
                 ) {
                     drawerBody()

@@ -54,6 +54,11 @@ class AgentCliViewModel @Inject constructor(
                 val agentId = installingTabs.value[event.tabId] ?: return@collect
                 installingTabs.value = installingTabs.value - event.tabId
                 if (event.exitCode != 0) {
+                    // npm 的具体错误（超时/断流/磁盘）只存在于终端尾部输出里，落日志方便事后诊断。
+                    com.aicode.core.util.FileLogger.w(
+                        "AgentCliViewModel",
+                        "CLI 安装失败 agent=$agentId exitCode=${event.exitCode}\n${event.tailOutput.orEmpty()}"
+                    )
                     _error.value = context.getString(R.string.agent_cli_install_failed, event.exitCode)
                 }
                 setOne(agentId) { it.copy(installing = false, checking = true) }

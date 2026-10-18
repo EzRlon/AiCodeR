@@ -464,8 +464,13 @@ class SystemPromptProvider @Inject constructor(
         return "$name（上下文窗口 $window tokens）"
     }
 
-    private fun currentDate(): String =
+    /** 进程级固定日期：system prompt 里的日期若每天变化会击穿整个 system 缓存前缀（缓存命中大头）；
+     * 跨天沿用启动日可接受，模型可从文件时间戳/上下文推断当前时间。 */
+    private val fixedDate: String by lazy {
         java.time.ZonedDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+    }
+
+    private fun currentDate(): String = fixedDate
 
     /** 会话目标注入块：仅当会话处于 goal 自主循环（ACTIVE）时非空；文本取自 prompts/agent/goal.md，用户可覆盖。 */
     private fun renderGoalBlock(ctx: AgentContext): String? {

@@ -25,6 +25,7 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.model.TodoItem
+import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
@@ -230,7 +231,13 @@ class AIAgentViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
+    /** 已选择「继续」的暂停会话：抑制自动交接直至占用降回提醒阈值以下。 */
+    private val handoffContinuedSessions = mutableSetOf<String>()
+
     private val sessionJobs = mutableMapOf<String, Job>()
+
+    /** 斜杠命令/技能回合的执行 job（按会话）：悬浮球「停止任务」需要能停到它们。 */
+    private val commandJobs = mutableMapOf<String, Job>()
 
     /** 语音输入引擎（设置里可切换；下一次录音生效）。 */
     val voiceEngine: StateFlow<VoiceEngine> = voiceSettingsRepository.engineFlow
@@ -1160,6 +1167,86 @@ class AIAgentViewModel @Inject constructor(
         text.trim().replace('\n', ' ').take(160)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    // ── 交付物（左栏「交付物」页数据源：会话附件 + 工作区安装包）──────────
+
+    /** 一条交付物：附件元数据 + 产生时间（用于倒序排列与分组）。 */
+    data class DeliverableItem(
+        val attachment: com.aicode.feature.agent.presentation.AgentAttachment,
+        val timestamp: Long
+    )
+
+    private val _deliverables = MutableStateFlow<List<DeliverableItem>>(emptyList())
+    val deliverables: StateFlow<List<DeliverableItem>> = _deliverables.asStateFlow()
+    private val _deliverablesScanning = MutableStateFlow(false)
+    val deliverablesScanning: StateFlow<Boolean> = _deliverablesScanning.asStateFlow()
+    private var deliverablesJob: Job? = null
+
+    /** 刷新交付物：进入交付物页时调用（扫描只在用户打开该页时发生，重入忽略）。 */
+    fun refreshDeliverables() {
+        if (deliverablesJob?.isActive == true) return
+        deliverablesJob = viewModelScope.launch {
+            _deliverablesScanning.value = true
+            try {
+                _deliverables.value = withContext(Dispatchers.IO) { loadDeliverables() }
+            } finally {
+                _deliverablesScanning.value = false
+            }
+        }
+    }
+
+    /** 聚合：最近消息附件（跨会话） + 工作区安装包（去重、时间倒序）。 */
+    private suspend fun loadDeliverables(): List<DeliverableItem> {
+        val workspacePath = _currentWorkspace.value
+        val byPath = LinkedHashMap<String, DeliverableItem>()
+        runCatching {
+            agentMessageDao.messagesWithAttachments(workspacePath).forEach { row ->
+                AgentMessageEntity.decodeAttachments(row.attachmentsJson).forEach { attachment ->
+                    if (attachment.containerPath.isNotBlank()) {
+                        byPath.putIfAbsent(
+                            attachment.containerPath,
+                            DeliverableItem(attachment, row.timestamp)
+                        )
+                    }
+                }
+            }
+        }.onFailure { FileLogger.w(TAG, "读取消息附件失败", it) }
+        runCatching {
+            val root = com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT
+            // listFilesRecursive 返回相对 root 的路径；组装成容器路径以与会话附件去重。
+            fileAccess.listFilesRecursive(root, 8)
+                .filter { rel ->
+                    val lower = rel.lowercase()
+                    (lower.endsWith(".apk") || lower.endsWith(".apks") || lower.endsWith(".xapk")) &&
+                        !rel.startsWith(".git/") && !rel.contains("/.git/") &&
+                        !rel.startsWith("node_modules/") && !rel.contains("/node_modules/")
+                }
+                .forEach { rel ->
+                    val fileName = rel.substringAfterLast('/')
+                    val parent = rel.substringBeforeLast('/', "")
+                    val parentDir = if (parent.isEmpty()) root else "$root/$parent"
+                    val entry = runCatching {
+                        fileAccess.listFiles(parentDir).firstOrNull { it.name == fileName }
+                    }.getOrNull()
+                    val containerPath = "$root/$rel"
+                    byPath.putIfAbsent(
+                        containerPath,
+                        DeliverableItem(
+                            com.aicode.feature.agent.presentation.AgentAttachment(
+                                fileName = fileName,
+                                containerPath = containerPath,
+                                localPath = "",
+                                mimeType = "application/vnd.android.package-archive",
+                                sizeBytes = entry?.size ?: 0,
+                                isImage = false
+                            ),
+                            entry?.lastModified ?: 0L
+                        )
+                    )
+                }
+        }.onFailure { FileLogger.w(TAG, "扫描工作区安装包失败", it) }
+        return byPath.values.sortedByDescending { it.timestamp }
+    }
+
     val streamingText: StateFlow<String?> = _currentSessionId
         .flatMapLatest { id ->
             if (id == null) flowOf(null)
@@ -1425,7 +1512,11 @@ class AIAgentViewModel @Inject constructor(
 
         // 启动与工作区切换时重新扫描技能（项目级技能随工作区变化），刷新 `/` 命令菜单。
         viewModelScope.launch {
-            _currentWorkspace.collect { slashCommandRegistry.refresh() }
+            _currentWorkspace.collect {
+                slashCommandRegistry.refresh()
+                // 交付物按工作区聚合：切工作区后清空，下次进入交付物页重新扫描。
+                _deliverables.value = emptyList()
+            }
         }
 
         viewModelScope.launch {
@@ -1918,7 +2009,7 @@ class AIAgentViewModel @Inject constructor(
      * 执行期间标记为命令占用（防新消息并行执行），结束后接续队列中排队的下一条。
      */
     private fun runResolvedCommand(resolved: ResolvedCommand, input: String, sessionId: String) {
-        viewModelScope.launch {
+        val job = viewModelScope.launch {
             _runningCommandSessions.value = _runningCommandSessions.value + sessionId
             try {
                 messagePersistenceUseCase.persist(sessionId, MessageRole.USER, input)
@@ -1932,6 +2023,8 @@ class AIAgentViewModel @Inject constructor(
                 processNextInQueue(sessionId)
             }
         }
+        commandJobs[sessionId] = job
+        job.invokeOnCompletion { commandJobs.remove(sessionId, job) }
     }
 
     fun executeAgentRequestStream(
@@ -1956,7 +2049,8 @@ class AIAgentViewModel @Inject constructor(
             return@launch
         }
         // 硬阈值暂停兜底：排队消费/直调等所有执行入口在此统一拒绝（队列保留不丢）。
-        if (sessionId in pausedHandoffSessions) {
+        // 唯一放行 /compress：暂停的会话往往正是最需要压缩的，压缩成功后自动解除暂停。
+        if (sessionId in pausedHandoffSessions && !request.trim().startsWith("/compress")) {
             _handoffPrompt.value = HandoffPrompt(sessionId, pausedHandoffSessions.getValue(sessionId), paused = true)
             return@launch
         }
@@ -2424,8 +2518,9 @@ class AIAgentViewModel @Inject constructor(
 
     /**
      * 交接提醒评估：只在回合成功结束时调用，任何一步失败都静默（纯提示，不影响主流程）。
-     * - 硬阈值（默认 75%）：暂停当前会话并自动生成接手摘要、开新会话继续（可在设置关闭）；
-     * - 软阈值（默认 50%）：最多提醒两次，提示模型推理能力即将下降。
+     * - 硬阈值（默认 93%，兑底）：暂停当前会话并自动生成接手摘要、开新会话继续（可在设置关闭）；
+     *   正常情况下 70% 的自动压缩先把占用拉回，几乎不会走到这里；
+     * - 软阈值（默认 50%）：最多提醒两次，建议 /compress 压缩或交接。
      */
     private suspend fun maybePromptHandoff(sessionId: String) {
         runCatching {
@@ -2436,9 +2531,10 @@ class AIAgentViewModel @Inject constructor(
             if (usedTokens <= 0) return
             val budget = agentWorkflow.handoffInputBudget(sessionId) ?: return
             val percent = (usedTokens * 100L / budget).toInt()
+            val promptPercent = generalSettingsRepository.handoffPromptPercentFlow.first()
             val action = decideHandoffAction(
                 percent = percent,
-                promptPercent = generalSettingsRepository.handoffPromptPercentFlow.first(),
+                promptPercent = promptPercent,
                 reminderEnabled = generalSettingsRepository.handoffPromptEnabledFlow.first(),
                 autoEnabled = generalSettingsRepository.handoffAutoEnabledFlow.first(),
                 autoPercent = generalSettingsRepository.handoffAutoPercentFlow.first(),
@@ -2446,6 +2542,16 @@ class AIAgentViewModel @Inject constructor(
                 maxReminders = MAX_HANDOFF_REMINDERS
             )
             if (action == HandoffAction.NONE) return
+            // 用户选过「继续」的会话：抑制自动交接，直到占用降回提醒阈值以下再恢复资格。
+            // 移除评估必须在通用路径做：抑制分支只在自动阈值以上进入，占用回落后不会再触发，
+            // 若把移除条件放在抑制分支内则永不可达（qa 发现的死码）。
+            if (sessionId in handoffContinuedSessions) {
+                if (percent < promptPercent) {
+                    handoffContinuedSessions.remove(sessionId)
+                } else if (action == HandoffAction.AUTO_HANDOFF) {
+                    return
+                }
+            }
             // 挂起读取设置后复查运行状态：flush 通知可能已拉起新一轮，不能按「本轮已结束」处理。
             if (sessionJobs[sessionId]?.isActive == true) return
             if (_agentStates.value[sessionId] is AgentUIState.Streaming) return
@@ -2479,10 +2585,18 @@ class AIAgentViewModel @Inject constructor(
             providerId = old.providerId,
             model = old.model,
             reasoningEffort = old.reasoningEffort
-        ).copy(title = handoffTitle(old.title))
+        ).copy(
+            title = handoffTitle(old.title),
+            // 交接不丢现场：目标、模式、编队一并带到新会话（goal 自主循环/编队协作不因交接中断）。
+            mode = old.mode,
+            goal = old.goal,
+            goalStatus = old.goalStatus,
+            goalTurnCount = old.goalTurnCount,
+            teamName = old.teamName
+        )
         sessionUseCase.upsertSession(newEntity)
-        messagePersistenceUseCase.persist(newEntity.id, MessageRole.USER, CONTEXT_COMPACTION_MARKER)
-        messagePersistenceUseCase.persist(newEntity.id, MessageRole.ASSISTANT, summary)
+        messagePersistenceUseCase.persist(newEntity.id, MessageRole.USER, CONTEXT_COMPACTION_MARKER, isCompactionMarker = true)
+        messagePersistenceUseCase.persist(newEntity.id, MessageRole.ASSISTANT, summary, isContextSummary = true)
         messagePersistenceUseCase.invalidateHistory(newEntity.id)
         sessionUseCase.touch(newEntity.id, messagePersistenceUseCase.nextTimestamp())
         dismissedHandoffCounts.remove(oldSessionId)
@@ -2557,6 +2671,8 @@ class AIAgentViewModel @Inject constructor(
         val prompt = _handoffPrompt.value ?: return
         if (!prompt.paused || prompt.generating || prompt.preparingCopy) return
         pausedHandoffSessions.remove(prompt.sessionId)
+        // 抑制再次自动交接：继续后占用通常仍在阈值上方，若不抑制下一轮结束又会立即暂停。
+        handoffContinuedSessions.add(prompt.sessionId)
         _handoffPrompt.value = null
     }
 
@@ -2578,11 +2694,16 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
-    /** 悬浮球「停止任务」：优先停当前会话，其次停任意运行中的会话。返回是否真正执行。 */
+    /** 悬浮球「停止任务」：优先停当前会话，其次停任意运行中的 agent 回合或斜杠命令回合。返回是否真正执行。 */
     private val floatBallStopBridge: () -> Boolean = {
-        val running = sessionJobs.filterValues { it.isActive }.keys
-        val target = _currentSessionId.value?.takeIf { it in running } ?: running.firstOrNull()
-        target?.let { stopAgentSession(it) }
+        val agentRunning = sessionJobs.filterValues { it.isActive }.keys
+        val commandRunning = commandJobs.filterValues { it.isActive }.keys
+        val target = _currentSessionId.value?.takeIf { it in agentRunning || it in commandRunning }
+            ?: agentRunning.firstOrNull()
+            ?: commandRunning.firstOrNull()
+        if (target != null) {
+            if (target in agentRunning) stopAgentSession(target) else commandJobs[target]?.cancel()
+        }
         target != null
     }
 
@@ -2613,7 +2734,9 @@ class AIAgentViewModel @Inject constructor(
         var fbSid: String? = null
         var fbPending: Pair<String?, String?>? = null
         fun pushFloatBallDetails() {
-            val running = fbSid != null && (sessionJobs[fbSid]?.isActive == true || fbSid in _runningCommandSessions.value)
+            val running = fbSid != null &&
+                (sessionJobs[fbSid]?.isActive == true || commandJobs[fbSid]?.isActive == true ||
+                    fbSid in _runningCommandSessions.value)
             floatBallStateStore.syncDetails(
                 activeToolName = fbToolName,
                 replyPreview = fbPreview,
@@ -2708,6 +2831,7 @@ class AIAgentViewModel @Inject constructor(
         _queuedRequests.value = emptyMap()
         goalEmptyTurnCounts.clear()
         _runningCommandSessions.value = emptySet()
+        commandJobs.clear()
         _agentStates.value = _agentStates.value.mapValues { AgentUIState.Idle }
         _streamingTexts.value = emptyMap()
         _streamingReasonings.value = emptyMap()
@@ -3082,7 +3206,7 @@ class AIAgentViewModel @Inject constructor(
         }
         persistGoalNotice(
             sid,
-            "已设定目标：$goalText\nAI 将自主循环推进（工具自动放行、PLAN 停用），直到达成、受阻或预算耗尽。" +
+            "已设定目标：$goalText\nAI 将自主循环推进，直到达成、受阻或预算耗尽（写操作仍按工具授权设置处理，PLAN 已停用）。" +
                 "可随时 `/goal pause` / `/goal resume` / `/goal clear`。"
         )
         enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goalText, 1))
@@ -3112,7 +3236,10 @@ class AIAgentViewModel @Inject constructor(
             return
         }
         sessionUseCase.updateGoalStatus(sid, GoalStatus.ACTIVE)
-        persistGoalNotice(sid, "目标已恢复，继续自主循环。")
+        // 预算基线同步重置：EXHAUSTED 后直接 resume 会沿用旧基线立即再次耗尽，
+        // 以当前累计量为新起点重新计预算（轮次计数保留，可看到总续跑轮数）。
+        sessionUseCase.setGoal(sid, goal, session.totalInputTokens, session.totalOutputTokens)
+        persistGoalNotice(sid, "目标已恢复，继续自主循环（预算基线已重置）。")
         enqueueGoalTurn(sid, session.workspacePath, buildGoalPrompt(goal, session.goalTurnCount + 1))
     }
 
@@ -3263,6 +3390,11 @@ class AIAgentViewModel @Inject constructor(
                         role = MessageRole.ASSISTANT,
                         content = context.getString(R.string.agent_context_no_compaction)
                     )
+                }
+                // 暂停兑底的会话：压缩成功即解除暂停，用户无需再点「继续」。
+                if (!failed && changed && pausedHandoffSessions.remove(sid) != null) {
+                    handoffContinuedSessions.add(sid)
+                    if (_handoffPrompt.value?.sessionId == sid) _handoffPrompt.value = null
                 }
             } catch (e: CancellationException) {
                 throw e

@@ -343,11 +343,11 @@ private fun messageRenderItems(message: AgentUIMessage): List<ChatRenderItem> {
  * 这一段缺的是轮首用户消息而不是折叠头——原样常显会在历史最前面摊开一整轮过程。它们补一个不带
  * 耗时的折叠头（key 见 [leadingHeadKey]），默认收起。
  *
- * 轮头展开态：没手动记录时「运行中或最新一轮（含刚完成的）」默认展开、更早的轮默认收起（[activeTurnKey]）；
- * 一旦用户在 [turnOverrides] 里点过，就以其选择为准，有更新的轮接手后自动收起不会覆盖它。
+ * 轮头展开态：没手动记录时「运行中展开（看进展）、完成后自动收起进『构造过程』」，完成后会话里只剩
+ * 用户消息与最终实施结果，过程（思考/工具/中间正文）折叠进轮头；手动点过的轮以上选择为准。
  *
- * 工具调用分组：手动选择（[groupOverrides]）优先；未点过时**跟随轮头展开态**——最新一轮
- * （默认展开）的分组也默认展开，更早轮保持收起（验收反馈 F4：最近一条的过程要默认展开）。
+ * 工具调用分组：手动选择（[groupOverrides]）优先；未点过时**跟随轮头展开态**——运行中的轮
+ * 随轮头铺开（看得到进展），完成后随轮头一并收起；单张思考卡/工具卡同样只往运行中的轮自动展开。
  */
 internal fun buildChatItems(
     messages: List<AgentUIMessage>,
@@ -379,18 +379,18 @@ internal fun buildChatItems(
         }
         items += buildTurnPersistentItems(leading, resultId)
     }
-    for ((turnIndex, turn) in turns.withIndex()) {
+    for (turn in turns) {
         items += messageRenderItems(turn.userMessage)
         val endAssistant = turn.messages.lastOrNull {
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
         }
         val running = turn.key == activeTurnKey
         val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
-        // 展开态：手动覆盖优先；默认「运行中或最新一轮（含刚完成的）」展开——收工后最新轮的过程
-        // 保持可见（过程不再整轮消失），更早的轮收起（有更新的轮接手时自动收起）。
-        val expanded = turnOverrides[turn.key] ?: (running || turnIndex == turns.lastIndex)
+        // 展开态：手动覆盖优先；默认「运行中展开、完成后收起进『构造过程』」——运行中能看到思考与
+        // 施工进展，收工后只留用户消息与最终实施结果，会话保持清爽。
+        val expanded = turnOverrides[turn.key] ?: running
         // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
-        // 分组展开默认值跟随轮头：最新一轮的「N 次工具调用」也直接铺开（F4）。
+        // 分组展开默认值跟随轮头：运行中的轮「N 次工具调用」直接铺开，完成后一并收进构造过程。
         val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides, expandGroups = expanded)
         // 结果置前：常显项与结果先排（结论先看），过程区（轮头 + 过程项）整体排到轮末。
         items += buildTurnPersistentItems(turn.messages, resultId)
@@ -1641,28 +1641,34 @@ fun AIChatPanel(
 
     // 渲染一条 item。轮头 / 工具分组的展开内容与折叠头在同一 Composable 内用 AnimatedVisibility
     // 整体展开（而非逐个列表项各自 placement 动画）：高度平滑撑开、内容跟着一起走，手感是一个整体。
+    // [autoExpandCards]：仅运行中的轮自动铺开单张思考卡/工具卡（看得到进展）；完成后随「构造过程」收起，
+    // 手动展开轮头时卡片仍默认收起（二级细节点开看），用户手动开关过的卡以手动值为准。
     @Composable
-    fun RenderChatItem(item: ChatRenderItem) {
+    fun RenderChatItem(item: ChatRenderItem, autoExpandCards: Boolean = false) {
         val header = item.turnHeader
         val group = item.toolGroup
         when {
             header != null -> {
-                TurnCollapseHeader(
-                    running = header.running,
-                    durationMs = header.endMessageId?.let { taskDurations[it] },
-                    expanded = header.expanded,
-                    onToggle = {
-                        viewModel.setTurnExpanded(header.key, !header.expanded)
-                        onToolItemToggled()
-                    }
-                )
-                AnimatedVisibility(
-                    visible = header.expanded,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        item.turnProcess.forEach { child -> RenderChatItem(child) }
+                // 外层 item 容器是 Box（叠放）：轮头与过程区必须包进 Column 纵向排列，
+                // 否则「已完成 Xs」会和第一张过程卡同一 y 叠印。
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    TurnCollapseHeader(
+                        running = header.running,
+                        durationMs = header.endMessageId?.let { taskDurations[it] },
+                        expanded = header.expanded,
+                        onToggle = {
+                            viewModel.setTurnExpanded(header.key, !header.expanded)
+                            onToolItemToggled()
+                        }
+                    )
+                    AnimatedVisibility(
+                        visible = header.expanded,
+                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            item.turnProcess.forEach { child -> RenderChatItem(child, header.running) }
+                        }
                     }
                 }
             }
@@ -1675,42 +1681,44 @@ fun AIChatPanel(
                     text = item.message.reasoning.orEmpty(),
                     cache = markdownCache,
                     durationMs = reasoningDurations[item.message.id],
-                    expandedOverride = reasoningOverrideSnapshot[item.message.id],
+                    expandedOverride = reasoningOverrideSnapshot[item.message.id] ?: autoExpandCards,
                     onExpandedChange = { viewModel.setReasoningExpanded(item.message.id, it) }
                 )
             }
             group != null -> {
-                ToolCallGroupHeader(
-                    count = group.size,
-                    running = group.any { it.id in runningToolIds || it.isToolRunning(null) },
-                    expanded = item.groupExpanded,
-                    onToggle = {
-                        viewModel.setToolExpanded(item.key, !item.groupExpanded)
-                        onToolItemToggled()
-                    }
-                )
-                AnimatedVisibility(
-                    visible = item.groupExpanded,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-                ) {
-                    Column {
-                        group.forEach { member ->
-                            val live = runningTool.firstOrNull { it.messageId == member.id }?.text
-                            AgentMessageItem(
-                                message = member,
-                                showActions = member.id in actionableMessageIds,
-                                liveOutput = live,
-                                markdownCache = markdownCache,
-                                onRewindClick = { viewModel.openRewindMenu(it) },
-                                onMoreClick = { msg, anchor -> messageMenuState = MessageMenuState(msg, anchor) },
-                                toolExpandedOverride = toolGroupOverrideSnapshot[member.id],
-                                onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(member.id, isExpanded) },
-                                onToolToggle = onToolItemToggled,
-                                // 分组展开时成员行内缩一级，与分组头区分层级
-                                contentPadding = ToolGroupMemberPadding,
-                                entryDelayMs = messageEntryDelays[member.id]
-                            )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    ToolCallGroupHeader(
+                        count = group.size,
+                        running = group.any { it.id in runningToolIds || it.isToolRunning(null) },
+                        expanded = item.groupExpanded,
+                        onToggle = {
+                            viewModel.setToolExpanded(item.key, !item.groupExpanded)
+                            onToolItemToggled()
+                        }
+                    )
+                    AnimatedVisibility(
+                        visible = item.groupExpanded,
+                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                    ) {
+                        Column {
+                            group.forEach { member ->
+                                val live = runningTool.firstOrNull { it.messageId == member.id }?.text
+                                AgentMessageItem(
+                                    message = member,
+                                    showActions = member.id in actionableMessageIds,
+                                    liveOutput = live,
+                                    markdownCache = markdownCache,
+                                    onRewindClick = { viewModel.openRewindMenu(it) },
+                                    onMoreClick = { msg, anchor -> messageMenuState = MessageMenuState(msg, anchor) },
+                                    toolExpandedOverride = toolGroupOverrideSnapshot[member.id] ?: autoExpandCards,
+                                    onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(member.id, isExpanded) },
+                                    onToolToggle = onToolItemToggled,
+                                    // 分组展开时成员行内缩一级，与分组头区分层级
+                                    contentPadding = ToolGroupMemberPadding,
+                                    entryDelayMs = messageEntryDelays[member.id]
+                                )
+                            }
                         }
                     }
                 }
@@ -1729,11 +1737,11 @@ fun AIChatPanel(
                     reasoningVisible = item.reasoningVisible,
                     onRewindClick = { viewModel.openRewindMenu(it) },
                     onMoreClick = { msg, anchor -> messageMenuState = MessageMenuState(msg, anchor) },
-                    toolExpandedOverride = toolGroupOverrideSnapshot[message.id],
+                    toolExpandedOverride = toolGroupOverrideSnapshot[message.id] ?: autoExpandCards,
                     onToolExpandedChange = { isExpanded -> viewModel.setToolExpanded(message.id, isExpanded) },
                     onToolToggle = onToolItemToggled,
                     reasoningDurationMs = reasoningDurations[message.id],
-                    reasoningExpandedOverride = reasoningOverrideSnapshot[message.id],
+                    reasoningExpandedOverride = reasoningOverrideSnapshot[message.id] ?: autoExpandCards,
                     onReasoningExpandedChange = { isExpanded -> viewModel.setReasoningExpanded(message.id, isExpanded) },
                     taskDurationMs = taskDurations[message.id],
                     turnUsage = turnUsages[message.id],
@@ -2376,7 +2384,7 @@ fun AIChatPanel(
         fileMenuState?.let { state ->
             AnchorMenuPopup(
                 title = state.attachment.fileName.ifBlank { context.getString(R.string.common_file) },
-                entries = attachmentActionEntries(context, state.attachment, viewModel.fileAccess),
+                entries = attachmentActionEntries(context, state.attachment, viewModel.fileAccess, scope),
                 anchorInWindow = state.anchor,
                 containerOriginInWindow = panelRootInWindow,
                 onDismiss = { fileMenuState = null }

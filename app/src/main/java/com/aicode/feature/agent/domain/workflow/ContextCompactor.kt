@@ -256,7 +256,9 @@ class ContextCompactor @Inject constructor(
         try {
             val result = provider.complete(systemPrompt = SUMMARY_SYSTEM, messages = messages, tools = emptyList())
             response = result
-            check(result.content.isNotBlank() && !result.isAborted && !result.isTruncated && result.toolCalls.isEmpty()) {
+            // 截断的摘要也远好于压缩整体失败（历史越长越容易撞到输出上限，恰在最需要压缩时）：
+            // 只拦真正不可用的响应（空/中止/带工具调用）。
+            check(result.content.isNotBlank() && !result.isAborted && result.toolCalls.isEmpty()) {
                 "Incomplete summary response: ${result.stopReason ?: "empty or tool response"}"
             }
             return result.content
@@ -389,7 +391,9 @@ internal object CompactionText {
             split = index
         }
         val latestUser = messages.indexOfLast { it is AgentMessage.UserMessage && it.content != CONTEXT_COMPACTION_MARKER }
-        if (latestUser > 0 && estimateRequest("", emptyList(), messages.drop(latestUser)) <= recentBudget) split = minOf(split, latestUser)
+        // 无条件把切点前移到最新一条用户消息：当前任务请求必须原样进上下文，绝不能被摘要化
+        // （变笨主因之一）。代价是 tail 可能超出保留预算——那时压缩会失败并回退，仍优于丢请求。
+        if (latestUser > 0) split = minOf(split, latestUser)
         return split
     }
 

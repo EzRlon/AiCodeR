@@ -18,6 +18,7 @@ import com.aicode.feature.floatball.FloatBallOverlay
 import com.aicode.feature.floatball.FloatBallStateStore
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
+import com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +44,9 @@ class TerminalKeepaliveService : Service() {
 
     @Inject
     lateinit var floatBallStateStore: FloatBallStateStore
+
+    @Inject
+    lateinit var themeSettings: ThemeSettingsRepository
 
     /** 悬浮球开关（内存态；onCreate 从持久化恢复）。悬浮球也由本服务承载——全应用只保留一条常驻通知。 */
     private var floatBallOn = false
@@ -160,14 +164,16 @@ class TerminalKeepaliveService : Service() {
      * 不应让进程崩溃（设置页的开关仍是开启态，下次前台时由 [com.aicode.MainActivity] 恢复）。
      */
     private fun ensureForeground() {
-        val base = when {
+        // 文案按真实原因组合：只开悬浮球时不再误写「保活已开启」；保活与球并存时用后缀同时表达。
+        val ballSuffix = if (floatBallOn) getString(R.string.notification_float_ball_suffix) else ""
+        val text = when {
             sessionCount > 0 && persistent ->
-                getString(R.string.notification_keepalive_persistent_sessions, sessionCount)
+                getString(R.string.notification_keepalive_persistent_sessions, sessionCount) + ballSuffix
             sessionCount > 0 ->
-                getString(R.string.notification_keepalive_running_sessions, sessionCount)
-            else -> getString(R.string.notification_keepalive_enabled)
+                getString(R.string.notification_keepalive_running_sessions, sessionCount) + ballSuffix
+            floatBallOn && !persistent -> getString(R.string.notification_float_ball_only)
+            else -> getString(R.string.notification_keepalive_enabled) + ballSuffix
         }
-        val text = if (floatBallOn) base + getString(R.string.notification_float_ball_suffix) else base
         val openAppIntent = PendingIntent.getActivity(
             this,
             0,
@@ -199,7 +205,7 @@ class TerminalKeepaliveService : Service() {
             return
         }
         ensureForeground()
-        overlay = FloatBallOverlay(this, floatBallStateStore) {
+        overlay = FloatBallOverlay(this, floatBallStateStore, themeSettings) {
             // 用户点「关闭悬浮球」：关开关、撤窗口，服务按其余职责决定去留
             removeOverlay()
             floatBallOn = false

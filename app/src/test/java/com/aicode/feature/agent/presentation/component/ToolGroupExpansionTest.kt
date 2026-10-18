@@ -12,11 +12,11 @@ import org.junit.Test
  * 连续工具调用分组的展开判定 + 整轮任务折叠。
  *
  * 分组展开与否：**上层持久化的手动选择**（[AIAgentViewModel.toolExpansionOverrides]，按 [toolGroupKey] 取）优先；
- * 没有手动记录时**跟随轮头展开态**——最新一轮（运行中或刚完成）默认展开（验收反馈 F4：
- * 最近一条的思考与编码过程要直接铺开），更早的轮默认收起。
+ * 没有手动记录时**跟随轮头展开态**——运行中的轮随轮头铺开（看得到思考与施工进展），
+ * 完成后随轮头收进「构造过程」。
  *
- * 整轮折叠（最外层）只认 [AIAgentViewModel.turnExpansionOverrides]；没记录时「运行中或最新一轮
- * （含刚完成的）默认展开、更早的轮默认收起」——收工后最新轮过程保持可见，有更新的轮接手后自动收起。
+ * 整轮折叠（最外层）只认 [AIAgentViewModel.turnExpansionOverrides]；没记录时「运行中展开、
+ * 完成后自动收起进『构造过程』」——完成后每轮只常显用户消息与最终实施结果，会话保持清爽。
  *
  * 结构：工具分组与过程项都挂在轮头 item 的 [ChatRenderItem.turnProcess] 里（与折叠头同一 Composable，
  * 展开时整体动画）；顶层 items 的顺序为「用户消息 / 结果区（常显项与结果 + 产物块）/ 轮头（过程区）」。
@@ -65,7 +65,7 @@ class ToolGroupExpansionTest {
 
     @Test
     fun latestTurn_groupExpandsByDefault() {
-        // 验收反馈 F4：最新一轮（运行中/刚完成）的工具分组随轮头默认铺开，过程直接可见
+        // 运行中的轮：工具分组随轮头默认铺开，过程直接可见
         val items = items(listOf(user("u0"), tool("t1"), tool("t2")), activeTurnKey = "turn:u0")
         val groups = items.groupItems()
         assertEquals(1, groups.size)
@@ -82,7 +82,7 @@ class ToolGroupExpansionTest {
 
     @Test
     fun earlierTurnGroup_collapses_latestTurnGroup_expands() {
-        // 验收反馈 F4：分组默认跟随轮头展开态——最新一轮铺开，更早的轮收起；手动选择仍最优先
+        // 分组默认跟随轮头展开态——运行中的轮铺开，非运行轮收起；手动选择仍最优先
         val messages = listOf(
             user("u0"),
             tool("t1"), tool("t2"),
@@ -202,19 +202,30 @@ class ToolGroupExpansionTest {
     }
 
     @Test
-    fun finishedLastTurn_staysExpanded() {
-        // 收工（activeTurnKey 归 null）：最新完成轮的过程保持展开显示（「过程不再整轮消失」），
-        // 折叠头转为「已完成」且过程数据仍在
+    fun finishedTurn_autoCollapses() {
+        // 收工（activeTurnKey 归 null）：本轮自动收进「构造过程」——只留用户消息与最终结果，
+        // 过程数据仍挂在轮头里可手动展开
         val items = items(listOf(user("u0"), tool("t1"), tool("t2")), activeTurnKey = null)
         val header = items.header().turnHeader!!
         assertFalse(header.running)
-        assertTrue("最新完成轮默认展开", header.expanded)
+        assertFalse("完成轮默认收起（构造过程）", header.expanded)
         assertEquals(1, items.groupItems().size)
     }
 
     @Test
+    fun finishedTurn_manualExpandSurvives() {
+        // 手动展开过的轮：完成后仍保持用户的选择（不会被「自动收起」覆盖）
+        val items = items(
+            listOf(user("u0"), tool("t1"), tool("t2")),
+            turnOverrides = mapOf("turn:u0" to true),
+            activeTurnKey = null,
+        )
+        assertTrue(items.header().turnHeader!!.expanded)
+    }
+
+    @Test
     fun finishedEarlierTurn_autoCollapses() {
-        // 更早的完成轮：有更新的轮接手后默认收起，只有最新一轮保持展开
+        // 完成的轮一律默认收起：会话里每轮只常显用户消息与最终实施结果
         val messages = listOf(
             user("u0"), tool("t1"), tool("t2"),
             user("u1"), tool("t3"), tool("t4"),
@@ -223,7 +234,7 @@ class ToolGroupExpansionTest {
         val headers = items.filter { it.turnHeader != null }
         assertEquals(2, headers.size)
         assertFalse("更早的轮收起", headers[0].turnHeader!!.expanded)
-        assertTrue("最新轮保持展开", headers[1].turnHeader!!.expanded)
+        assertFalse("最新轮也收起（构造过程）", headers[1].turnHeader!!.expanded)
     }
 
     @Test

@@ -100,7 +100,10 @@ class MessagePersistenceUseCase @Inject constructor(
         cachedInputTokens: Int = 0,
         isCompacted: Boolean = false,
         isContextExcluded: Boolean = false,
-        intentType: String? = null
+        intentType: String? = null,
+        /** 交接新会话写入的 marker/摘要行：标记后 UI 渲染为压缩分隔线/摘要卡，不当作普通气泡。 */
+        isCompactionMarker: Boolean = false,
+        isContextSummary: Boolean = false
     ) {
         agentMessageDao.insert(
             AgentMessageEntity(
@@ -123,6 +126,8 @@ class MessagePersistenceUseCase @Inject constructor(
                 cachedInputTokens = cachedInputTokens,
                 isCompacted = isCompacted,
                 isContextExcluded = isContextExcluded,
+                isCompactionMarker = isCompactionMarker,
+                isContextSummary = isContextSummary,
                 intentType = intentType
             )
         )
