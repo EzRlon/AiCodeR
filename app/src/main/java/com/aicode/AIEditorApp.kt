@@ -207,6 +207,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var languageSettings: LanguageSettingsRepository
 
+    /** 主题设置仓库：承载系统深浅实时镜像（见 systemDark 注释），供 AUTO 模式可靠跟随系统。 */
+    @Inject
+    lateinit var themeSettings: com.aicode.feature.settings.data.repository.ThemeSettingsRepository
+
     /** 执行模式同步缓存：启动时从 DataStore 读首帧注入 DI。 */
     @Inject
     lateinit var executionModeHolder: com.aicode.feature.settings.data.repository.ExecutionModeHolder
@@ -246,6 +250,13 @@ class AIEditorApp : Application(), Configuration.Provider {
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 系统深浅变化在此实时可达：Activity 级 wrapper（createConfigurationContext）会冻结 uiMode，
+        // 不能依赖 Compose isSystemInDarkTheme()，改由此处刷新镜像供 AUTO 模式消费。
+        themeSettings.refreshSystemDark()
+    }
+
     override fun onCreate() {
         if (isCrashProcess(this)) {
             // 崩溃错误页运行在独立 :crash 进程中。
@@ -273,6 +284,10 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即把最新的内置指南手册提取到私有配置目录
         appScope.launch {
             ContainerInstaller.extractDocs(this@AIEditorApp)
+        }
+        // 启动即把 multi-llm（模型顾问团）服务端源码释放到 ~/.aicode/multi-llm/（覆盖式，随 App 升级更新）
+        appScope.launch {
+            ContainerInstaller.extractMultiLlm(this@AIEditorApp)
         }
         // 启动即把内置提示词全量释放到 ~/.aicode/prompts/（覆盖式，随 App 升级更新）；
         // 用户自定义覆盖放在 ~/.aicode/prompts.custom/，同名即覆盖，不被升级覆盖。

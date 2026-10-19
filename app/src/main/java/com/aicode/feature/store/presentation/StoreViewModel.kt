@@ -310,6 +310,8 @@ class StoreViewModel @Inject constructor(
             // 在线专家团市场（wshobson/agents，经 gh-proxy 镜像）：失败静默，仅展示内置
             val online = withContext(Dispatchers.IO) { fetchOnlineTeams() }
             _state.update { it.copy(teams = teams + online) }
+            // 专家团条目一并进翻译管线（用户反馈：专家团名称/描述此前不翻译）
+            kickTranslation()
         }
     }
 
@@ -417,7 +419,7 @@ class StoreViewModel @Inject constructor(
             appendLine("description: $description")
             appendLine("members: [${installedNames.joinToString(", ")}]")
             appendLine("---")
-            appendLine("你是「${item.name}」编队的团长。可派发的成员子代理：${installedNames.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
+            appendLine("你是「${item.name}」专家团的团长。可派发的成员子代理：${installedNames.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
             appendLine("收到任务后先判断涉及哪些环节，再决定派谁与顺序；派活时写清目标、已知上下文、边界与期望产出（成员看不到你与用户的对话）；成员回报后整合结果并向用户交付。")
         }
         fileAccess.writeFile("~/.aicode/teams/${item.name}.md", team)
@@ -505,7 +507,19 @@ class StoreViewModel @Inject constructor(
         // 缓存先载入 state：已有译文立即可见，再只翻译缺失 / 源文变化的条目
         val cached = translationStore.all()
         _state.update { it.copy(translations = it.translations + cached) }
-        val pending = _state.value.items.filter { item ->
+        // 技能/MCP 列表 + 专家团（映射为 EXPERT 条目共用同一缓存键体系）
+        val candidates = _state.value.items + _state.value.teams.map { team ->
+            StoreItem(
+                id = team.fileName,
+                kind = StoreKind.EXPERT,
+                name = team.name,
+                description = team.description,
+                category = "",
+                popularity = 0L,
+                detailUrl = ""
+            )
+        }
+        val pending = candidates.filter { item ->
             val entry = cached[item.storeTranslationKey()]
             entry == null || entry.sourceHash != item.storeTranslationSourceHash()
         }

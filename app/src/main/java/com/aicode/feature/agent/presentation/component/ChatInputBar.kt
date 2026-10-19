@@ -720,6 +720,8 @@ internal fun ChatInputBar(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            // 控制行高度保底：上层 Column 总高溢出时防测量挤压（发送按钮变形，用户反馈）。
+                            .heightIn(min = 44.dp)
                             .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1234,7 +1236,9 @@ internal fun SendButton(
     onVoiceHoldFinish: () -> Unit = {},
     onVoiceHoldCancel: () -> Unit = {}
 ) {
-    // AI 工作中：输入框为空显示停止按钮；有内容显示橙色发送（消息排队发送）；空闲时按常规发送按钮
+    // AI 工作中：输入框为空显示停止按钮；有内容显示橙色发送（消息排队发送）；空闲时常规蓝色发送。
+    // 四态色均需与底色对比明显：idle 用 primary（用户反馈：surfaceVariant 灰与输入栏融为一体，
+    // 深色下尤甚，像“只有一个色且未适配深色”）。
     val showStop = isBusy && !hasContent
     val haptic = LocalHapticFeedback.current
     val clickable = showStop || canSend
@@ -1242,7 +1246,7 @@ internal fun SendButton(
         showStop -> MaterialTheme.colorScheme.error
         isBusy -> Brand.Orange
         canSend -> MaterialTheme.semanticColors.success
-        else -> MaterialTheme.colorScheme.surfaceVariant
+        else -> MaterialTheme.colorScheme.primary
     }
     // 前景色相对按钮底色而非主题：深色主题下的亮绿底用主题 onSurface（近白）会看不清。
     val iconTint = when {

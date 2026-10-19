@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -99,8 +100,15 @@ internal fun QueuedRequestPanel(
     onEditQueued: (QueuedRequest) -> Unit,
     onInterjectQueued: (String) -> Unit
 ) {
-    // 按会话记忆展开状态，默认展开；弹窗/键盘叠加时联动强制收起（同待办面板）。
-    var isExpanded by rememberSaveable(sessionId) { mutableStateOf(true) }
+    // 按会话记忆展开状态；默认展开仅限少量条目：多条队列+仪表盘+输入卡同屏时总高
+    // 超出底栏可用空间，无滚动 Column 溢出会挤压末端控制行（发送按钮被压扁，用户反馈 2026-10-18）。
+    var isExpanded by rememberSaveable(sessionId) {
+        mutableStateOf(queuedRequests.size <= 2)
+    }
+    // 新消息入队使条数超阈值时自动收起一次，防溢出；用户仍可手动展开查看。
+    LaunchedEffect(queuedRequests.size) {
+        if (queuedRequests.size > 2) isExpanded = false
+    }
     val effectiveExpanded = isExpanded && !forceCollapse
     // 拖拽中读取最新队列与回调：pointerInput 只在 key 变化时重启，用 rememberUpdatedState 避免捕获陈旧值。
     val currentQueue by rememberUpdatedState(queuedRequests)

@@ -357,7 +357,6 @@
     <string name="permission_notification_reject">Reject</string>
 
     <!-- Screenshot annotation ledger -->
-    <string name="annotation_capture_entry">Screenshot</string>
     <string name="annotation_live_entry">Annotate</string>
     <string name="annotation_ledger_title">Annotations</string>
     <string name="annotation_type_bug">Bug</string>
@@ -369,7 +368,6 @@
     <string name="annotation_save">Save</string>
     <string name="annotation_saved">Saved to annotation ledger</string>
     <string name="annotation_save_failed">Save failed, please retry</string>
-    <string name="annotation_capture_failed">Screenshot failed, please retry</string>
     <string name="annotation_ledger_empty">Feedback collected from live annotations and screenshot annotations</string>
     <string name="annotation_no_note">(no note)</string>
     <string name="annotation_loading">Loading…</string>
@@ -1386,6 +1384,14 @@
     <string name="mcp_recommended_section">Recommended</string>
     <string name="mcp_recommended_rea_title">REA Reverse Engineering</string>
     <string name="mcp_recommended_rea_desc">Analyze how an app, APK or JS bundle works (install the "Reverse Engineering" environment first)</string>
+    <string name="mcp_multillm_title">multi-llm · Model Consultants</string>
+    <string name="mcp_multillm_desc">Reverse-proxies the web versions of ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek into MCP tools, so the AI can consult other models directly. Install downloads ~150 MB (chromium and Python dependencies); first use requires signing in to each site via the VNC window (login persists).</string>
+    <string name="mcp_multillm_install">Install</string>
+    <string name="mcp_multillm_attach">Attach to MCP</string>
+    <string name="mcp_multillm_installing">Installing…</string>
+    <string name="mcp_multillm_install_failed">Model Consultants installation incomplete; retry later (terminal: aicode → Model Consultants)</string>
+    <string name="mcp_multillm_attached">Model Consultants attached to the MCP list below</string>
+    <string name="mcp_multillm_running_elsewhere">An installation is already running; please wait</string>
     <string name="mcp_recommended_context7_desc">No install or sign-in — latest library/framework docs lookup</string>
     <string name="mcp_recommended_footer">Opens the add flow with the config prefilled</string>
     <string name="mcp_tools_whitelist_note">Whitelist mode: only %1$d listed tools are enabled (preset-managed; tools can be disabled here)</string>
@@ -1398,7 +1404,27 @@
     <string name="rea_status_installed">Installed</string>
     <string name="rea_status_connected">Connected</string>
     <string name="rea_status_not_connected">Not connected</string>
-    <string name="rea_status_not_provisioned">Container not initialized: open the terminal to initialize (or run `aicode`)</string>
+    <string name="rea_status_not_provisioned">Container not installed: tap the button below to open the terminal and install</string>
+    <string name="rea_open_terminal_button">Open terminal to install container</string>
+    <string name="rea_mcp_state_configured">Configured (not connected)</string>
+    <string name="rea_mcp_state_connected">Connected · %1$d tools</string>
+    <string name="rea_mcp_state_connecting">Connecting…</string>
+    <string name="rea_mcp_state_failed">Connection failed</string>
+    <string name="rea_mcp_state_needs_auth">Authorization required</string>
+    <string name="rea_mcp_state_disabled">Disabled</string>
+    <string name="rea_mcp_failed_detail">Connection failed: %1$s</string>
+    <string name="rea_mcp_reconnect">Reconnect</string>
+    <string name="rea_samples_title">Analysis targets</string>
+    <string name="rea_rescan">Rescan</string>
+    <string name="rea_samples_empty">No analyzable files found in the workspace (APK / DEX / JAR / SO / JS…); copy or download a target first</string>
+    <string name="rea_analyze_button">Analyze</string>
+    <string name="rea_analyze_prompt">Please analyze %1$s following the reverse-engineering methodology: start with an overall structure overview, then step into the core logic, explaining in plain language as I am learning RE</string>
+    <string name="rea_tools_title">Available analysis tools (%1$d)</string>
+    <string name="rea_tasks_title">Learning task templates (tap to fill into chat)</string>
+    <string name="rea_task_overview">Walk me through the overall structure of an APK: manifest, components, packer/obfuscation traits</string>
+    <string name="rea_task_class">Decompile a class with me and explain the core logic line by line</string>
+    <string name="rea_task_string">Trace where a given string / URL comes from and how it is used (cross references)</string>
+    <string name="rea_task_js">Analyze the entry point and main modules of a JS application</string>
     <string name="rea_status_unsupported">Local container mode only</string>
     <string name="rea_install_button">Install environment</string>
     <string name="rea_installing">Installing (a few minutes; keep the app in the foreground)…</string>
@@ -2148,7 +2174,7 @@
     <string name="handoff_prompt_action">Handoff to new session</string>
     <string name="handoff_prompt_dismiss">Not now</string>
     <string name="handoff_prompt_generating">Preparing summary…</string>
-    <string name="settings_teams">Teams</string>
+    <string name="settings_teams">Expert Teams</string>
     <string name="settings_teams_empty">No team definitions yet</string>
     <string name="settings_teams_empty_desc">Add a &lt;name&gt;.md under ~/.aicode/teams or the workspace .aicode/teams</string>
     <string name="settings_teams_hint">Format: YAML frontmatter with name/description/members; the body is the leader prompt. Summon from the team button in the chat header.</string>

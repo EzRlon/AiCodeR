@@ -188,12 +188,20 @@ internal fun LiveAnnotationOverlay(
             }
             draft?.let { drawMark(it, fit, fade = false, selected = false, textMeasurer = textMeasurer) }
             componentHit?.let { hit ->
+                // 双描边（白外黑内）：命中框画在任意亮暗的真实界面上都可见（用户反馈：标注层未适配深浅）。
                 drawRoundRect(
                     color = Color.White.copy(alpha = 0.95f),
                     topLeft = Offset(hit.bounds.left, hit.bounds.top),
                     size = Size(hit.bounds.width, hit.bounds.height),
                     cornerRadius = CornerRadius(12f, 12f),
-                    style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f)))
+                    style = Stroke(width = 4f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f)))
+                )
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = 0.75f),
+                    topLeft = Offset(hit.bounds.left, hit.bounds.top),
+                    size = Size(hit.bounds.width, hit.bounds.height),
+                    cornerRadius = CornerRadius(12f, 12f),
+                    style = Stroke(width = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f)))
                 )
             }
         }

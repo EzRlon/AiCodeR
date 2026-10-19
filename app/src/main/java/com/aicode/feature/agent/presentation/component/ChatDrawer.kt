@@ -317,9 +317,7 @@ fun ChatDrawerContent(
     onCancelPasteOverwrite: () -> Unit,
     onClearClipboard: () -> Unit,
     onNavigateToBrowser: (() -> Unit)? = null,
-    /** 截图标注入口：收起抽屉后截取当前界面进入标注编辑；null 则隐藏该入口。 */
-    onStartAnnotationCapture: (() -> Unit)? = null,
-    /** 界面标注 v2（活标注：真实界面叠标注层，完成时整屏捕获含弹窗）。 */
+    /** 界面标注（活标注：真实界面叠标注层，完成时整屏捕获含弹窗；不画标记直接完成=原截屏标注）。 */
     onStartLiveAnnotation: (() -> Unit)? = null,
     /** 标注账本入口：打开账本列表页；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
@@ -598,15 +596,6 @@ fun ChatDrawerContent(
                         icon = FeatherIcons.Crosshair,
                         title = stringResource(R.string.annotation_live_entry),
                         onClick = onStartLiveAnnotation,
-                        compact = true
-                    )
-                    SettingsDivider()
-                }
-                if (onStartAnnotationCapture != null) {
-                    SettingsRow(
-                        icon = FeatherIcons.Camera,
-                        title = stringResource(R.string.annotation_capture_entry),
-                        onClick = onStartAnnotationCapture,
                         compact = true
                     )
                     SettingsDivider()

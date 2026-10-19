@@ -358,7 +358,6 @@
     <string name="permission_notification_reject">拒绝</string>
 
     <!-- 截图标注账本 -->
-    <string name="annotation_capture_entry">截屏标注</string>
     <string name="annotation_live_entry">界面标注</string>
     <string name="annotation_ledger_title">标注账本</string>
     <string name="annotation_type_bug">bug</string>
@@ -370,7 +369,6 @@
     <string name="annotation_save">保存</string>
     <string name="annotation_saved">已保存到标注账本</string>
     <string name="annotation_save_failed">保存失败，请重试</string>
-    <string name="annotation_capture_failed">截屏失败，请重试</string>
     <string name="annotation_ledger_empty">收集来自界面标注和截图标注的反馈信息</string>
     <string name="annotation_no_note">（未填说明）</string>
     <string name="annotation_loading">加载中…</string>
@@ -1387,6 +1385,14 @@
     <string name="mcp_recommended_section">推荐</string>
     <string name="mcp_recommended_rea_title">REA 逆向工程</string>
     <string name="mcp_recommended_rea_desc">分析 App / APK / JS 包是怎么实现的（需先在「环境安装」装好「逆向分析」）</string>
+    <string name="mcp_multillm_title">multi-llm · 模型顾问团</string>
+    <string name="mcp_multillm_desc">把 ChatGPT / Claude / Gemini / Grok / 通义千问 / DeepSeek 网页版反代成 MCP 工具，AI 可直接咨询其他模型。安装需下载约 150MB（chromium 与 Python 依赖）；首次使用需在 VNC 小窗登录各网站（登录一次长期有效）。</string>
+    <string name="mcp_multillm_install">一键安装</string>
+    <string name="mcp_multillm_attach">接入 MCP</string>
+    <string name="mcp_multillm_installing">安装中…</string>
+    <string name="mcp_multillm_install_failed">模型顾问团安装未完成，可稍后重试（终端执行 aicode → 模型顾问团）</string>
+    <string name="mcp_multillm_attached">模型顾问团已接入下方 MCP 列表</string>
+    <string name="mcp_multillm_running_elsewhere">检测到安装正在进行中，请稍候再试</string>
     <string name="mcp_recommended_context7_desc">免安装免登录，提供最新库/框架文档检索</string>
     <string name="mcp_recommended_footer">点击进入添加流程并预填配置</string>
     <string name="mcp_tools_whitelist_note">白名单模式：仅名单内 %1$d 个工具会被启用（预设自带；此处可单独禁用）</string>
@@ -1399,7 +1405,6 @@
     <string name="rea_status_installed">已安装</string>
     <string name="rea_status_connected">已接入</string>
     <string name="rea_status_not_connected">未接入</string>
-    <string name="rea_status_not_provisioned">容器未初始化：请打开终端完成初始化（或在终端执行 `aicode`）</string>
     <string name="rea_status_unsupported">仅本地容器模式支持</string>
     <string name="rea_install_button">安装逆向分析环境</string>
     <string name="rea_installing">正在安装（首次约几分钟，请保持前台）…</string>
@@ -1414,6 +1419,27 @@
     <string name="rea_usage_title">怎么用</string>
     <string name="rea_usage_body">① 安装环境（自动备好分析引擎，可重复运行）\n② 一键接入（保存立即生效）\n③ 回聊天直接问：这个 App / 这个 APK 是怎么实现的？</string>
     <string name="rea_legal_note">仅用于分析你拥有或获授权分析的软件</string>
+    <string name="rea_status_not_provisioned">容器尚未安装：点击下方按钮打开终端完成安装</string>
+    <string name="rea_open_terminal_button">打开终端完成容器安装</string>
+    <string name="rea_mcp_state_configured">已配置（未连接）</string>
+    <string name="rea_mcp_state_connected">已连接 · %1$d 个工具</string>
+    <string name="rea_mcp_state_connecting">连接中…</string>
+    <string name="rea_mcp_state_failed">连接失败</string>
+    <string name="rea_mcp_state_needs_auth">需要授权</string>
+    <string name="rea_mcp_state_disabled">已禁用</string>
+    <string name="rea_mcp_failed_detail">连接失败：%1$s</string>
+    <string name="rea_mcp_reconnect">重新连接</string>
+    <string name="rea_samples_title">分析目标</string>
+    <string name="rea_rescan">重新扫描</string>
+    <string name="rea_samples_empty">工作区暂未发现可分析文件（APK / DEX / JAR / SO / JS 等，可先拷入或下载目标文件）</string>
+    <string name="rea_analyze_button">分析</string>
+    <string name="rea_analyze_prompt">请按逆向分析方法论帮我分析 %1$s：先给整体结构概览，再逐步深入核心逻辑，过程中用通俗语言讲解（我在学习逆向分析）</string>
+    <string name="rea_tools_title">可用分析工具（%1$d 个）</string>
+    <string name="rea_tasks_title">学习任务模板（点击填入聊天）</string>
+    <string name="rea_task_overview">帮我分析一个 APK 的整体结构：manifest、四大组件、加固/混淆特征</string>
+    <string name="rea_task_class">带我反编译一个类，逐行讲清楚核心逻辑在做什么</string>
+    <string name="rea_task_string">帮我追踪某个字符串 / URL 在代码里的来源与用途（交叉引用）</string>
+    <string name="rea_task_js">帮我分析一个 JS 应用的入口与主要模块划分</string>
     <string name="mcp_add_manual">手动填写</string>
     <string name="mcp_add_manual_desc">逐个填写地址、请求头或启动命令</string>
     <string name="mcp_add_from_json">从 JSON 导入</string>
@@ -1483,7 +1509,7 @@
     <string name="store_team_members">成员：%1$s</string>
     <string name="store_team_online_source">在线 · wshobson/agents 市场（MIT）</string>
     <string name="store_expert_installed_tag">已安装</string>
-    <string name="store_expert_installed_toast">已安装专家团：%1$s（可在聊天页「召唤编队」使用）</string>
+    <string name="store_expert_installed_toast">已安装专家团：%1$s（可在聊天页「召唤专家团」使用）</string>
     <string name="store_expert_install_failed">安装失败，请重试</string>
     <string name="store_tab_mcp">MCP 服务器</string>
     <string name="store_search_hint">搜索技能</string>
@@ -2148,13 +2174,13 @@
     <string name="handoff_prompt_action">交接开新会话</string>
     <string name="handoff_prompt_dismiss">暂不</string>
     <string name="handoff_prompt_generating">正在整理摘要…</string>
-    <string name="settings_teams">编队</string>
-    <string name="settings_teams_empty">暂无编队定义</string>
+    <string name="settings_teams">专家团</string>
+    <string name="settings_teams_empty">暂无专家团定义</string>
     <string name="settings_teams_empty_desc">在 ~/.aicode/teams 或工作区 .aicode/teams 放置 &lt;name&gt;.md 即可新增</string>
-    <string name="settings_teams_hint">编队格式：YAML frontmatter 写 name/description/members，正文为团长提示词；聊天页顶栏的编队按钮可召唤。</string>
-    <string name="team_picker_title">专家团 · 编队</string>
-    <string name="team_picker_none">不使用编队</string>
-    <string name="team_picker_empty">暂无编队定义</string>
+    <string name="settings_teams_hint">专家团格式：YAML frontmatter 写 name/description/members，正文为团长提示词；聊天页顶栏的专家团按钮可召唤。</string>
+    <string name="team_picker_title">专家团</string>
+    <string name="team_picker_none">不使用专家团</string>
+    <string name="team_picker_empty">暂无专家团定义</string>
     <string name="team_members_count">%1$d 名成员</string>
     <string name="vnc_preparing_hint">正在准备 VNC 环境…</string>
     <string name="storage_artifacts_build_dir">构建目录（%1$s）</string>

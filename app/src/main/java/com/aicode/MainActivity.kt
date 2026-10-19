@@ -16,7 +16,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -87,7 +86,6 @@ import com.aicode.core.ui.pageExit
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.core.util.ApkInstaller
-import com.aicode.core.util.ScreenCapture
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import com.aicode.feature.annotation.domain.model.AnnotationMark
 import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
@@ -262,10 +260,13 @@ class MainActivity : ComponentActivity() {
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         }
         setContent {
+            // AUTO 模式的系统深浅判定不用 isSystemInDarkTheme()：语言 wrapper 冻结 uiMode、
+            // configChanges 含 uiMode 不重建，二者叠加导致系统自动切换时该值不更新。
+            // 改读 AIEditorApp.onConfigurationChanged 实时刷新的镜像流。
+            val systemDarkTheme by themeSettings.systemDark.collectAsStateWithLifecycle()
             val themeMode by themeSettings.themeModeFlow.collectAsStateWithLifecycle(initialValue = AppThemeMode.AUTO)
             val themePresetId by themeSettings.themePresetIdFlow.collectAsStateWithLifecycle(initialValue = null)
             val dynamicColor by themeSettings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
-            val systemDarkTheme = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {
                 AppThemeMode.AUTO -> systemDarkTheme
                 AppThemeMode.DARK -> true
@@ -372,6 +373,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 兜底：个别 ROM 前台期间深浅切换不分发 Application.onConfigurationChanged，回前台时主动刷一次。
+        themeSettings.refreshSystemDark()
         // 远程模式回到前台时，若 SSH 断了立即触发重连，不等 supervisor 轮询
         if (executionModeHolder.currentMode() == com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH) {
             lifecycleScope.launch {
@@ -712,28 +715,15 @@ fun AppNavigation(
                 if (!permanentDrawer) scope.launch { drawerState.close() }
             },
             onStartLiveAnnotation = {
-                // 活标注（v2）：先收起抽屉等动画结束再激活标注层，避免把抽屉拍进定格图
+                // 活标注（v2）：先收起抽屉等动画结束再激活标注层，避免把抽屉拍进定格图。
+                // 融合说明：原「截屏标注」入口已并入——不画任何标记直接点浮条「完成」
+                // 即等于原截屏标注（立即定格进编辑器）。
                 scope.launch {
                     if (!permanentDrawer) {
                         drawerState.close()
                         kotlinx.coroutines.delay(350)
                     }
                     liveAnnotationActive = true
-                }
-            },
-            onStartAnnotationCapture = {
-                // 先收起抽屉等动画结束再截屏，否则会把抽屉叠在界面上截进去
-                scope.launch {
-                    if (!permanentDrawer) {
-                        drawerState.close()
-                        kotlinx.coroutines.delay(350)
-                    }
-                    val bitmap = (context as? android.app.Activity)?.let { ScreenCapture.captureActivity(it) }
-                    if (bitmap != null) {
-                        pendingAnnotationBitmap = bitmap
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.annotation_capture_failed), Toast.LENGTH_SHORT).show()
-                    }
                 }
             },
             onNavigateToAnnotations = {
@@ -928,7 +918,17 @@ fun AppNavigation(
             }
             composable("rea") {
                 ReaWorkbenchScreen(
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onOpenTerminal = {
+                        navController.navigate("terminal")
+                    },
+                    onSendToChat = { prompt ->
+                        // 复用外部文本队列链路：预填进当前会话输入框并跳回聊天页
+                        agentViewModel.queueExternalText(prompt)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = false }
+                        }
+                    }
                 )
             }
             composable("settings") {

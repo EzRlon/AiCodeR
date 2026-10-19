@@ -15,8 +15,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,11 +54,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
@@ -84,25 +82,29 @@ import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.X
-import com.aicode.feature.agent.domain.permission.PermissionChoice
-import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
+import compose.icons.feathericons.Zap
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
-import kotlin.math.abs
-import kotlin.math.roundToInt
+import com.aicode.feature.agent.domain.permission.PermissionChoice
+import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
 
 /**
- * 悬浮精灵球（系统级悬浮窗，WindowManager 渲染）。
+ * 悬浮助手球（系统级悬浮窗，WindowManager 渲染）。
  *
- * 形态：可爱的精灵球——会呼吸、眨眼、眼睛跟随拖动方向；贴边时「骑」在屏幕边缘线上
- * （球心正好压在边缘，露出一半）。可拖到屏幕任意位置，松手吸附最近的一侧（上下左右）。
+ * 形态（无脸几何设计，色彩全部走主题语义 token）：
+ * - 待机 peek：贴边停靠的 14×28dp 小胶囊，底色即状态色（idle=primaryContainer / busy=success /
+ *   failed=error），busy 时仅透明度呼吸，待机零重绘——“犹抱琵琶半遮面”；
+ * - 唤起 sphere：点击 peek 原地展开为 40dp 圆球（中央模式符号或待办进度数字，外圈待办进度弧），
+ *   可拖拽换边，松手/面板关闭后动画缩回 peek。
  *
- * 交互：点球展开面板（关键信息 + 关键操作：任务状态、正在做什么、待办进度、回复预览、
- * 待审批的允许/拒绝、快速发送、停止任务、回到 App）。面板点外部或完成操作后自动收起，
- * 精灵球常驻可无限次打开；只有面板「关闭悬浮球」或设置里关掉开关才彻底关闭。
+ * 交互：peek 点击=展开球并弹面板（关键信息+关键操作：任务状态、待办进度、回复预览、
+ * 待审批允许/拒绝、快速发送、停止任务、回到 App）；拖拽=自由移动，松手贴边回待机。
+ * 只有面板「关闭悬浮球」或设置里关掉开关才彻底关闭。
  *
  * 窗口实现：球与面板各自为 WindowManager 直连窗口（窗口根=自有容器，Compose 的
- * ViewTree 三件套用资源 tag 方式挂载）。位置只由 LayoutParams 承载，内容不做平移。
+ * ViewTree 三件套用资源 tag 方式挂载）。位置与尺寸只由 LayoutParams 承载，
+ * 形态迁移用 200ms 尺寸/位置动画（内容随窗口裁剪自然形成吸入形变）。
  */
 class FloatBallOverlay(
     private val context: Context,
@@ -133,8 +135,15 @@ class FloatBallOverlay(
     private val screenWidth: Int get() = screenSize.first
     private val screenHeight: Int get() = screenSize.second
 
-    /** 球的像素直径（44dp）。 */
-    private val ballSize: Int = (44 * context.resources.displayMetrics.density).roundToInt()
+    /** 球体像素直径（唤起态 40dp；待机为骑边 peek 胶囊 14×28dp）。 */
+    private val ballSize: Int = (40 * context.resources.displayMetrics.density).roundToInt()
+    private val peekWidth: Int = (14 * context.resources.displayMetrics.density).roundToInt()
+    private val peekHeight: Int = (28 * context.resources.displayMetrics.density).roundToInt()
+
+    /** 当前形态：待机 peek（贴边小胶囊）→ 点击展开 sphere → 面板关闭后回缩。须为 Compose State：窗口尺寸动画走 LayoutParams 不触发重组，形态切换的内容分支全靠它驱动。 */
+    private var form by mutableStateOf(BallForm.PEEK)
+
+    private enum class BallForm { PEEK, SPHERE }
 
     /** 球窗口与面板窗口各自的 Compose 宿主 owner。 */
     private var ballComposeOwner: OverlayComposeOwner? = null
@@ -199,14 +208,14 @@ class FloatBallOverlay(
             val view = ComposeView(context).withOverlayOwners(owner)
             view.setContent { OverlayTheme { SpriteContent() } }
             val params = WindowManager.LayoutParams(
-                ballSize, ballSize,
+                peekWidth, peekHeight,
                 overlayType(),
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                // 默认骑在右缘、屏幕 1/3 高处
-                x = screenWidth - ballSize / 2
+                // 默认以 peek 待机态贴右缘、屏幕 1/3 高处（犹抱琵琶半遮面：待机只露一枚小胶囊）
+                x = screenWidth - peekWidth
                 y = screenHeight / 3
             }
             windowManager.addView(view, params)
@@ -253,6 +262,12 @@ class FloatBallOverlay(
         panelOpen = false
         panelComposeOwner?.destroy()
         panelComposeOwner = null
+        // 面板关闭后回缩 peek 待机（延迟到面板滑出动画结束后，避免视觉叠影）。
+        if (form == BallForm.SPHERE) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                { if (!panelOpen) snapAndCollapse() }, 420
+            )
+        }
     }
 
     private fun currentParams(): WindowManager.LayoutParams? =
@@ -266,22 +281,51 @@ class FloatBallOverlay(
         windowManager.updateViewLayout(view, params)
     }
 
-    /** 拖动：球心保持在屏内（[-r, screenW-r]），松手由 [snapToEdge] 贴边。 */
+    /** 拖动：窗口整体保持在屏内（peek/球各自按当前尺寸约束），松手由 [snapAndCollapse] 贴边回待机。 */
     private fun dragBy(dx: Int, dy: Int) {
         val params = currentParams() ?: return
-        val r = ballSize / 2
         moveTo(
-            (params.x + dx).coerceIn(-r, screenWidth - r),
-            (params.y + dy).coerceIn(-r, screenHeight - r)
+            (params.x + dx).coerceIn(0, screenWidth - params.width),
+            (params.y + dy).coerceIn(0, screenHeight - params.height)
         )
     }
 
-    /** 松手/旋转后就近贴边：球心骑在最近一条边缘线上（露出一半球体）。 */
-    private fun snapToEdge() {
+    /** 窗口尺寸/位置 200ms 动画：peek↔球形态迁移的过渡（吸入/滑出感）。 */
+    private fun animateWindow(targetW: Int, targetH: Int, targetX: Int, targetY: Int) {
+        val view = ballView ?: return
+        val p = currentParams() ?: return
+        val fromW = p.width
+        val fromH = p.height
+        val fromX = p.x
+        val fromY = p.y
+        android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 200
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { a ->
+                val t = a.animatedValue as Float
+                p.width = lerpInt(fromW, targetW, t)
+                p.height = lerpInt(fromH, targetH, t)
+                p.x = lerpInt(fromX, targetX, t)
+                p.y = lerpInt(fromY, targetY, t)
+                runCatching { windowManager.updateViewLayout(view, p) }
+            }
+            start()
+        }
+    }
+
+    private fun lerpInt(from: Int, to: Int, t: Float) =
+        (from + (to - from) * t).roundToInt()
+
+    /**
+     * 松手/旋转/面板关闭后的归宿：就近贴边并动画缩回 peek 待机胶囊。
+     * peek 整体贴边停靠（不骑缝）：右缘 x=screenW-w，左缘 x=0，上下同理——
+     * 待机时只露一枚小胶囊，“犹抱琵琶半遮面”。
+     */
+    private fun snapAndCollapse() {
         val params = currentParams() ?: return
-        val r = ballSize / 2
-        val cx = params.x + r
-        val cy = params.y + r
+        form = BallForm.PEEK
+        val cx = params.x + params.width / 2
+        val cy = params.y + params.height / 2
         val distLeft = cx
         val distRight = screenWidth - cx
         val distTop = cy
@@ -290,15 +334,37 @@ class FloatBallOverlay(
         var x = params.x
         var y = params.y
         when (min) {
-            distLeft -> x = -r
-            distRight -> x = screenWidth - r
-            distTop -> y = -r
-            else -> y = screenHeight - r
+            distLeft -> { x = 0; y = (params.y).coerceIn(0, screenHeight - peekHeight) }
+            distRight -> { x = screenWidth - peekWidth; y = (params.y).coerceIn(0, screenHeight - peekHeight) }
+            distTop -> { y = 0; x = (params.x).coerceIn(0, screenWidth - peekWidth) }
+            else -> { y = screenHeight - peekHeight; x = (params.x).coerceIn(0, screenWidth - peekWidth) }
         }
-        moveTo(x, y)
+        animateWindow(peekWidth, peekHeight, x, y)
     }
 
-    private fun clampToScreen() = snapToEdge()
+    /** peek 点击：动画展开为全球（在贴边位置原地长大），随后由调用方开面板。 */
+    private fun expandToSphere() {
+        val params = currentParams() ?: return
+        form = BallForm.SPHERE
+        val cx = params.x + params.width / 2
+        val cy = params.y + params.height / 2
+        val distLeft = cx
+        val distRight = screenWidth - cx
+        val distTop = cy
+        val distBottom = screenHeight - cy
+        val min = minOf(distLeft, distRight, distTop, distBottom)
+        var x = params.x
+        var y = params.y
+        when (min) {
+            distLeft -> { x = 0; y = (cy - ballSize / 2).coerceIn(0, screenHeight - ballSize) }
+            distRight -> { x = screenWidth - ballSize; y = (cy - ballSize / 2).coerceIn(0, screenHeight - ballSize) }
+            distTop -> { y = 0; x = (cx - ballSize / 2).coerceIn(0, screenWidth - ballSize) }
+            else -> { y = screenHeight - ballSize; x = (cx - ballSize / 2).coerceIn(0, screenWidth - ballSize) }
+        }
+        animateWindow(ballSize, ballSize, x, y)
+    }
+
+    private fun clampToScreen() = snapAndCollapse()
 
     /** 面板：从球所在侧滑入，展示关键信息与操作。 */
     private fun togglePanel(ballX: Int, ballY: Int) {
@@ -380,8 +446,11 @@ class FloatBallOverlay(
             .collectAsState(initial = null)
         val dynamicColor by themeSettings.dynamicColorFlow.catch { emit(false) }
             .collectAsState(initial = false)
+        // 悬浮窗宿主是 Service（同样被语言 wrapper 包裹），isSystemInDarkTheme() 读冻结值，
+        // 改读系统深浅实时镜像流（AIEditorApp.onConfigurationChanged 驱动）。
+        val systemDark by themeSettings.systemDark.collectAsState(initial = false)
         val darkTheme = when (mode) {
-            AppThemeMode.AUTO -> isSystemInDarkTheme()
+            AppThemeMode.AUTO -> systemDark
             AppThemeMode.DARK -> true
             AppThemeMode.LIGHT -> false
         }
@@ -399,70 +468,37 @@ class FloatBallOverlay(
     private fun SpriteContent() {
         val state by stateStore.state.collectAsState()
 
-        // 呼吸（仅忙碌态，克制）；保留 State，在绘制阶段读取，避免每帧重组整个精灵球。
-        val breathScale = if (state.busy) {
-            val t = rememberInfiniteTransition(label = "sprite-breath")
-            t.animateFloat(
-                initialValue = 0.97f, targetValue = 1.05f,
-                animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "breath"
+        // 忙碌呼吸（仅 busy；待机完全静止零重绘，功耗纪律）。呼吸只作用于透明度，不再缩放整球。
+        // State 留到 graphicsLayer（draw 阶段）才读值：动画每帧只重绘不重组。
+        val breathState = if (state.busy) {
+            rememberInfiniteTransition(label = "peek-breath").animateFloat(
+                initialValue = 0.82f, targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "peek-alpha"
             )
         } else null
 
-        // 眨眼（3.4s 一次，动态精灵感；Compose 动画，成本可忽略）
-        var blink by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) {
-            while (true) {
-                delay(3400)
-                blink = true
-                delay(130)
-                blink = false
-            }
-        }
-
-        // 眼睛看向的方向（拖动时跟手，松手回正）
-        var lookX by remember { mutableStateOf(0f) }
-        var lookY by remember { mutableStateOf(0f) }
-
-        val statusColor = when {
-            state.failed -> MaterialTheme.colorScheme.error
-            state.busy -> MaterialTheme.semanticColors.success
-            else -> MaterialTheme.semanticColors.subtleText
-        }
-        val skinTop by animateColorAsState(
-            targetValue = lerp(statusColor, Color.White, 0.32f),
-            animationSpec = tween(260), label = "skin-top"
-        )
-        val skinBottom by animateColorAsState(
-            targetValue = statusColor,
-            animationSpec = tween(260), label = "skin-bottom"
+        // 状态底色：idle=primaryContainer（融入主题）、busy=success、failed=error。
+        // 无脸设计：生命感交给状态色与形态，不画五官（避免拟人恐怖谷，用户反馈）。
+        val pillColor by animateColorAsState(
+            targetValue = when {
+                state.failed -> MaterialTheme.colorScheme.error
+                state.busy -> MaterialTheme.semanticColors.success
+                else -> MaterialTheme.colorScheme.primaryContainer
+            },
+            animationSpec = tween(220), label = "pill-color"
         )
 
         Box(modifier = Modifier.fillMaxSize()) {
-            // 进度环（待办完成比例；todo 驱动，无 todo 不画）
-            if (state.todoTotal > 0) {
+            // 进度弧（仅唤起态：待办完成比例，todo 驱动；待机 peek 太小不画）。
+            // 注意：DrawScope 非 @Composable 上下文，颜色必须在 Canvas 外取好再传入。
+            if (form == BallForm.SPHERE && state.todoTotal > 0) {
                 val progress = state.todoDone.toFloat() / state.todoTotal
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            val scale = breathScale?.value ?: 1f
-                            scaleX = scale
-                            scaleY = scale
-                        }
-                ) {
-                    val stroke = size.minDimension * 0.07f
+                val arcColor = MaterialTheme.colorScheme.primary
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val stroke = size.minDimension * 0.09f
                     val inset = stroke / 2
                     drawArc(
-                        color = Color.White.copy(alpha = 0.28f),
-                        startAngle = -90f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        topLeft = Offset(inset, inset),
-                        size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
-                        style = Stroke(width = stroke, cap = StrokeCap.Round)
-                    )
-                    drawArc(
-                        color = Color.White,
+                        color = arcColor,
                         startAngle = -90f,
                         sweepAngle = 360f * progress.coerceIn(0f, 1f),
                         useCenter = false,
@@ -473,47 +509,40 @@ class FloatBallOverlay(
                 }
             }
 
-            // 球体
+            // 主体：唤起态=主题色圆球；待机态=贴边小胶囊（犹抱琵琶半遮面）。
+            // 内容随形态切换、窗口尺寸动画过渡，中间态自然形成“球被吸入边缘”的形变。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(3.dp)
-                    .graphicsLayer {
-                        val scale = breathScale?.value ?: 1f
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                    .shadow(6.dp, CircleShape)
-                    .clip(CircleShape)
-                    .background(Brush.verticalGradient(listOf(skinTop, skinBottom)))
+                    .graphicsLayer { alpha = breathState?.value ?: 1f }
+                    .then(
+                        if (form == BallForm.SPHERE) {
+                            Modifier
+                                .shadow(6.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .border(1.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                        } else {
+                            Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(pillColor)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
+                        }
+                    )
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 if (panelOpen) dismissPanel()
-                                // 眼睛看向拖动方向（归一化 -1..1）
-                                val ax = abs(dragAmount.x)
-                                val ay = abs(dragAmount.y)
-                                if (ax > 0.2f || ay > 0.2f) {
-                                    lookX = (dragAmount.x / 26f).coerceIn(-1f, 1f)
-                                    lookY = (dragAmount.y / 26f).coerceIn(-1f, 1f)
-                                }
                                 dragBy(dragAmount.x.roundToInt(), dragAmount.y.roundToInt())
                             },
-                            onDragEnd = {
-                                lookX = 0f
-                                lookY = 0f
-                                snapToEdge()
-                            },
-                            onDragCancel = {
-                                lookX = 0f
-                                lookY = 0f
-                                snapToEdge()
-                            }
+                            onDragEnd = { snapAndCollapse() },
+                            onDragCancel = { snapAndCollapse() }
                         )
                     }
                     .pointerInput(Unit) {
                         detectTapGestures(onTap = {
+                            if (form == BallForm.PEEK) expandToSphere()
                             val params = currentParams() ?: return@detectTapGestures
                             togglePanel(params.x, params.y)
                         })
@@ -521,76 +550,34 @@ class FloatBallOverlay(
                 contentAlignment = Alignment.Center
             ) {
                 // 高光
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 5.dp)
-                        .size(width = 20.dp, height = 9.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.35f))
-                )
-                // 眼睛（跟随方向 + 眨眼）
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SpriteEye(lookX = lookX, lookY = lookY, blink = blink)
-                    SpriteEye(lookX = lookX, lookY = lookY, blink = blink)
-                }
-                // 状态嘴型：busy 小微笑 / failed 皱眉 / idle 淡淡微笑
-                Canvas(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 9.dp)
-                        .size(width = 14.dp, height = 7.dp)
-                ) {
-                    val w = size.width
-                    val h = size.height
-                    if (state.failed) {
-                        // 皱眉：上拱
-                        drawArc(
-                            color = Color.White,
-                            startAngle = 200f, sweepAngle = 140f, useCenter = false,
-                            topLeft = Offset(0f, -h * 0.4f),
-                            size = androidx.compose.ui.geometry.Size(w, h),
-                            style = Stroke(width = 2.2f, cap = StrokeCap.Round)
+                // 中心内容（无脸）：待办进度数字 / 模式符号；待审批时顶部小徽标。
+                if (form == BallForm.SPHERE) {
+                    if (state.todoTotal > 0) {
+                        Text(
+                            text = "${state.todoDone}/${state.todoTotal}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1
                         )
                     } else {
-                        // 微笑
-                        drawArc(
-                            color = Color.White,
-                            startAngle = 15f, sweepAngle = 150f, useCenter = false,
-                            topLeft = Offset(0f, 0f),
-                            size = androidx.compose.ui.geometry.Size(w, h),
-                            style = Stroke(width = 2.2f, cap = StrokeCap.Round)
+                        Icon(
+                            imageVector = FeatherIcons.Zap,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
+                } else if (state.pendingKind != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 3.dp)
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant)
+                    )
                 }
             }
-        }
-    }
-
-    @Composable
-    private fun SpriteEye(lookX: Float, lookY: Float, blink: Boolean) {
-        val openness by animateFloatAsState(
-            targetValue = if (blink) 0.12f else 1f,
-            animationSpec = tween(90), label = "eye-open"
-        )
-        Box(
-            modifier = Modifier
-                .size(width = 11.dp, height = 13.dp)
-                .graphicsLayer { scaleY = openness }
-                .clip(CircleShape)
-                .background(Color.White),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .offset(x = (lookX * 2.2f).dp, y = (lookY * 2.2f).dp)
-                    .size(5.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF263238))
-            )
         }
     }
 

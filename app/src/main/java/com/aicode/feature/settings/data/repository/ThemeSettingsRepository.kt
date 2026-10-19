@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.data.repository
 
 import android.content.Context
+import android.content.res.Configuration
 import com.aicode.R
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -9,6 +10,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -39,6 +43,27 @@ class ThemeSettingsRepository @Inject constructor(
         val DARK_THEME_KEY = booleanPreferencesKey("dark_theme_enabled")
         val THEME_PRESET_KEY = stringPreferencesKey("theme_preset_id")
         val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color_enabled")
+
+        /** 读系统深浅：Application 级 config 由系统实时分发，不受 Activity 语言 wrapper 冻结影响。 */
+        fun readSystemDark(context: Context): Boolean {
+            val mode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            return mode == Configuration.UI_MODE_NIGHT_YES
+        }
+    }
+
+    /**
+     * 系统深浅的实时镜像。MainActivity 的 attachBaseContext 用 createConfigurationContext
+     * 只为覆盖 locale，该 wrapper 的 Configuration 里 uiMode 冻结在创建时刻，加上
+     * configChanges 含 uiMode 不重建，导致 Compose 的 isSystemInDarkTheme() 读到冻结值，
+     * 系统自动深浅切换时全 App 不跟随——本流是唯一可靠的系统深浅源，
+     * 由 AIEditorApp.onConfigurationChanged / MainActivity.onResume 驱动更新。
+     */
+    private val _systemDark = MutableStateFlow(readSystemDark(context))
+    val systemDark: StateFlow<Boolean> = _systemDark.asStateFlow()
+
+    /** 系统深浅变化时同步（AIEditorApp.onConfigurationChanged / onResume 调用）。 */
+    fun refreshSystemDark() {
+        _systemDark.value = readSystemDark(context)
     }
 
     val themeModeFlow: Flow<AppThemeMode> = context.themeDataStore.data.map { prefs ->

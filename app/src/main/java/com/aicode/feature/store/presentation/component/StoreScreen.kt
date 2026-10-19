@@ -2,6 +2,7 @@ package com.aicode.feature.store.presentation.component
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,8 +14,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +27,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,8 +40,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.store.data.TeamStoreItem
@@ -51,6 +61,7 @@ import compose.icons.feathericons.Search
  * 在线商店（「设置 → 在线商店」的内容组件，无自带 Scaffold）：
  * 技能 / MCP 双 Tab、搜索（技能）、分页加载、安装（安装 ≠ 启用）。
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun StoreScreen(
     state: StoreUiState,
@@ -65,6 +76,10 @@ internal fun StoreScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+
+    // 条目详情弹层（用户反馈：希望能点开每个技能/MCP/专家团看完整介绍）
+    var detailItem by remember { mutableStateOf<StoreItem?>(null) }
+    var detailTeam by remember { mutableStateOf<TeamStoreItem?>(null) }
 
     // 一次性提示（安装结果）→ Toast
     LaunchedEffect(state.message) {
@@ -166,7 +181,11 @@ internal fun StoreScreen(
         Spacer(Modifier.size(Spacing.xs))
 
         when {
-            state.tab == StoreKind.EXPERT -> TeamList(state = state, onInstall = onInstallTeam)
+            state.tab == StoreKind.EXPERT -> TeamList(
+                state = state,
+                onInstall = onInstallTeam,
+                onOpen = { detailTeam = it }
+            )
 
             state.loading -> Box(
                 modifier = Modifier
@@ -217,7 +236,8 @@ internal fun StoreScreen(
                         installed = item.id in state.installedIds,
                         installing = state.installingId == item.id,
                         installBusy = state.installingId != null,
-                        onInstall = { onInstall(item) }
+                        onInstall = { onInstall(item) },
+                        onOpen = { detailItem = item }
                     )
                 }
                 if (state.hasMore) {
@@ -241,6 +261,150 @@ internal fun StoreScreen(
             }
         }
     }
+
+    // ── 详情弹层：技能/MCP ──
+    detailItem?.let { item ->
+        val translation = state.translations[item.storeTranslationKey()]
+        AdaptiveModalBottomSheet(onDismissRequest = { detailItem = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Spacing.lg)
+                    .padding(bottom = Spacing.xl),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                val nameZh = translation?.nameZh.orEmpty()
+                Text(
+                    text = if (nameZh.isBlank()) item.name else "${item.name}（${nameZh}）",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                val meta = listOfNotNull(
+                    item.author.takeIf { it.isNotBlank() },
+                    item.version.takeIf { it.isNotBlank() }?.let { "v$it" },
+                    item.category.takeIf { it.isNotBlank() },
+                    item.transportType.takeIf { it.isNotBlank() && item.kind == StoreKind.MCP }
+                ).joinToString(" · ")
+                if (meta.isNotBlank()) {
+                    Text(
+                        text = meta,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (translation?.descriptionZh?.isNotBlank() == true) {
+                    Text(
+                        text = translation.descriptionZh,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (item.description.isNotBlank()) {
+                    Text(
+                        text = item.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (item.detailUrl.isNotBlank()) {
+                    TextButton(onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.detailUrl)))
+                        }
+                    }) {
+                        Icon(FeatherIcons.ExternalLink, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(Spacing.xs))
+                        Text(stringResource(R.string.store_open_source), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                val installed = item.id in state.installedIds
+                val installing = state.installingId == item.id
+                Button2(
+                    text = when {
+                        installed -> stringResource(R.string.store_installed)
+                        installing -> stringResource(R.string.store_installing)
+                        else -> stringResource(R.string.store_install)
+                    },
+                    enabled = !installed && !installing && state.installingId == null,
+                    loading = installing
+                ) {
+                    onInstall(item)
+                }
+            }
+        }
+    }
+
+    // ── 详情弹层：专家团 ──
+    detailTeam?.let { team ->
+        AdaptiveModalBottomSheet(onDismissRequest = { detailTeam = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Spacing.lg)
+                    .padding(bottom = Spacing.xl),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                Text(
+                    text = team.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (team.description.isNotBlank()) {
+                    Text(
+                        text = team.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (team.members.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.store_team_members, team.members.joinToString("、")),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (team.online) {
+                    Text(
+                        text = stringResource(R.string.store_team_online_source),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Button2(
+                    text = when {
+                        team.installed -> stringResource(R.string.store_expert_installed_tag)
+                        state.installingId == team.fileName -> stringResource(R.string.store_installing)
+                        else -> stringResource(R.string.store_expert_install)
+                    },
+                    enabled = !team.installed && state.installingId == null,
+                    loading = state.installingId == team.fileName
+                ) {
+                    onInstallTeam(team)
+                }
+            }
+        }
+    }
+}
+
+/** 详情弹层的安装/状态主按钮（圆角填充，统一商店弹层视觉）。 */
+@Composable
+private fun Button2(text: String, enabled: Boolean, loading: Boolean, onClick: () -> Unit) {
+    androidx.compose.material3.Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(Radius.pill),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(Spacing.xs))
+        }
+        Text(text)
+    }
 }
 
 /** 单条商店卡片：名称/作者/版本/描述 + 安装按钮 + 来源链接。 */
@@ -251,12 +415,14 @@ private fun StoreItemCard(
     installed: Boolean,
     installing: Boolean,
     installBusy: Boolean,
-    onInstall: () -> Unit
+    onInstall: () -> Unit,
+    onOpen: () -> Unit
 ) {
     val context = LocalContext.current
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.semanticColors.cardSurface
+        color = MaterialTheme.semanticColors.cardSurface,
+        modifier = Modifier.clickable(onClick = onOpen)
     ) {
         Column(
             modifier = Modifier
@@ -384,11 +550,12 @@ private fun StoreItemCard(
 /** MCP 条目仅提供本地包（无远程地址）时不支持一键安装。 */
 private fun StoreItem.stdinUnsupported(): Boolean = kind == StoreKind.MCP && stdioOnly
 
-/** 专家团 tab：内置团队包列表（名称/简介/成员/安装状态）；外部暂无成熟的团队商店可接入。 */
+/** 专家团 tab：内置团队包列表（名称/简介/成员/安装状态）；点击卡片进详情。 */
 @Composable
 private fun TeamList(
     state: StoreUiState,
-    onInstall: (TeamStoreItem) -> Unit
+    onInstall: (TeamStoreItem) -> Unit,
+    onOpen: (TeamStoreItem) -> Unit
 ) {
     if (state.teams.isEmpty()) {
         Text(
@@ -413,7 +580,9 @@ private fun TeamList(
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.semanticColors.cardSurface,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpen(team) }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
