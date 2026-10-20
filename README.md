@@ -1,25 +1,113 @@
 <p align="center">
   <img src="docs/icon-aicoder.png" width="112" alt="AiCodeR" />
-  <h1 align="center">AiCodeR</h1>
-  <p align="center">许愿码</p>
+  <h1 align="center">许愿码 AiCodeR</h1>
+  <p align="center">
+    基于 <a href="https://github.com/jieapi/AiCode">AiCode</a> 的社区增强分支 · Android 上的通用 AI Coding Agent
+    <br />
+    在上游完整的移动 AI 开发底座之上，面向真实使用场景做深度增强
+  </p>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="License GPL-3.0" /></a>
+  <img src="https://img.shields.io/badge/Platform-Android-green.svg" alt="Android Platform" />
+  <img src="https://img.shields.io/badge/base-AiCode%20(GPL--3.0)-orange.svg" alt="Upstream AiCode" />
 </p>
 
 ---
 
-## 鸣谢
+## 简介
 
-- **原版 [AiCode](https://github.com/jieapi/aicode) 项目及其开发者与所有贡献者** — AiCodeR 的全部基础：应用架构、Linux 容器与终端、Agent 内核及大量既有功能，都来自上游开发者们的开源工作。没有他们的贡献，就没有本项目的今天。
-- **[REA（Reverse Engineer Anything）](https://github.com/morluto/rea) 及其开发者** — 逆向分析能力的来源：把逆向分析引擎封装为 MCP / CLI 的开源项目，本项目将其集成为手机端开箱即用的能力。
-- 同时致谢上游项目致谢过的灵感与组件来源：[OpenCode](https://github.com/anomalyco/opencode)、[Termux](https://github.com/termux/termux-app)、[Kelivo](https://github.com/Chevey339/kelivo)，以及 [NOTICE](NOTICE) 中列出的全部第三方开源组件。
+许愿码（AiCodeR）是 [AiCode](https://github.com/jieapi/AiCode) 的社区增强分支。上游已经把一套完整的 AI Coding Agent 装进手机：内置 Alpine Linux 容器与终端，AI 能读写文件、执行命令、跑构建，也支持远程 SSH 后端，模型与密钥由用户自行配置。
+
+本项目不重复上游的介绍，只讲一件事：**在同样的底座上，我们新增与改造了什么**。以下全部能力均为本分支新增或重构，上游（jieapi/AiCode）没有。
+
+## 截图
+
+<!-- TODO: 截图待补——使用新版 App 截取后放入 docs/screenshots/ 并在此处补充表格 -->
+
+## 与上游的功能区别
+
+### AI 协作增强
+
+- **模型顾问团（multi-llm）** — 把 ChatGPT / Claude / Gemini / Grok / 通义千问 / DeepSeek 网页版反代成 MCP 工具，一键安装（自动装 chromium 与依赖），AI 可直接咨询其他模型并汇总多方意见
+- **专家团** — 给会话挂上一组成套角色（产品 / 架构 / 前端 / 质检等）一键协作；内置团队包与在线市场，每个子代理可独立选择模型
+- **recall 跨会话检索** — 基于全文索引（FTS4）把历史会话与工作区内容建索引，AI 可按关键词取回被压缩归档的原文；中文子串自动降级模糊匹配，全参数化查询无注入
+- **会话目标（Goal）** — `/goal <目标>` 后 AI 围绕目标自主循环推进，用证据审计完成度，达成或受阻才停
+- **消息类型标签** — 发送前给消息打意图标签（缺陷修复 / 方案计划 / 调研研究等 13 类），AI 据此调整处理策略
+- **自我改进模式** — AI 反思自身表现，把改进沉淀为技能或提示词片段（升级不丢）
+- **上下文工程强化** — 70/93 双阈值自动压缩与自动交接摘要；新会话首条消息误报「压缩失败」已修复；压缩归档内容不丢（配合 recall 取回）
+- **能力感知** — 内置能力地图与场景速查，AI 清楚自己有哪些能力、该怎么组合调用
+
+### 移动化工作流
+
+- **悬浮球（精灵球）** — 三形态设计：待机时是一枚贴边小胶囊（颜色即状态），点击展开为圆球 + mini 会话窗口——切到其它 App 也能看消息流、发消息、批准审批、看待办进度
+- **界面标注（活标注）** — 直接在真实界面上圈画（弹窗照弹、组件可选中），整屏定格含弹层；汇总发给 AI 时每条附结构化坐标，AI 不再只靠看图猜位置
+- **交付物页** — 跨会话聚合 AI 产出的安装包与文件，一键安装 / 用 MT 管理器打开 / 保存到手机 / 分享
+- **Web 预览** — 容器里跑的前端服务在内嵌浏览器直接打开，改完即刷，深色模式跟随
+- **VNC 悬浮窗** — 容器图形画面悬浮在聊天上方，AI 启动图形程序时自动弹出
+- **远程管理** — 局域网网页服务：用电脑浏览器管理手机里的项目文件
+- **测试包一键安装** — 工作区构建出的 APK 集中列出，点一下装到手机，形成「构建 → 安装 → 标注反馈」真机闭环
+
+### 安全与自动化
+
+- **工具授权中心 2.0** — 每个工具三档权限（自动允许 / 每次询问 / 禁止），预置「日常 / 离开模式 / 只读演示」档案一键套用，授权记录可回看
+- **守夜守护（无人值守）** — 离开时让 AI 继续推进：危险操作自动拒绝、弹窗超时自动拒绝，不无限等待
+- **定时任务 / 定时 Plan** — 到点自动执行：容器命令定时跑，或给 AI 一条指令无人值守自主施工（预授权范围内放行、超范围等授权，10 分钟无人应答自动拒绝）；长任务从已批准的计划排期
+- **密钥管理** — 发布签名、SSH 与工作区密钥集中查看、导入导出（统一密钥库，附指纹清单）
+- **备份与迁移扩充** — 会话、AI 资产、密钥库、定时任务、授权档位、守夜与容器设置整体打包导出
+- **通知栏批准与实时进度** — AI 等审批时通知直达，通知栏直接批准或拒绝；工作中有常驻实时进度通知
+
+### CLI 与逆向
+
+- **AI 智能体（终端 CLI）** — 一键安装并运行 Claude Code / Codex / OpenCode 三大 AI CLI，容器实测跑通
+- **Codex 启动自愈** — 针对 Android 容器环境的进程探测限制做三层判定：自动补装缺失依赖、自动降级前台模式，历史版本必现的启动报错不再出现
+- **REA 逆向分析工作台** — 分析没有源码的成品软件（APK / DEX / SO / JS-Electron 包）的实现原理：一键装环境、自动扫描工作区样本、自带学习任务模板。仅限拥有所有权或已获授权的软件
+
+### 语音
+
+- **离线语音输入** — 按住说话松手转文字；系统识别不可用（如无谷歌服务）时自动引导下载离线中文模型（约 42MB，国内直连源、断点续传、完整性校验），下载完自动切换，无需进设置
+
+### 数据与工程质量
+
+- **存储清理 2.0** — 8 类可重建数据分类勾选清理（含检查点快照、容器镜像包、构建缓存白名单），会话级删除（连同子代理会话与检查点）后 VACUUM 真正收缩数据库文件
+- **记忆图谱** — 把项目、会话与子代理画成可点选的关系图，快速回到某条工作线索
+- **在线商店** — 社区技能、MCP 服务器与专家团一键安装（安装 ≠ 启用）
+- **体验打磨** — 深色模式全局跟随、统一动效体系（按压缩放、页面过渡）、左侧栏重设计、模式胶囊化
+- **性能与功耗纪律** — 零常驻轮询、动画只在交互与忙碌态、后台任务克制可取消；低功耗是硬性交付标准
+- **质量工程** — 独立 QA 子代理审查流程 + 1300+ 单元测试 + R8 深度混淆优化
+- **品牌与版本独立** — 独立包名 `com.aicoder`，独立版本线，可与官方版共存不冲突
 
 ## 免责声明
 
-AiCode 按「现状」提供，仅供学习、研究与合法的软件开发用途。严禁将本软件用于任何违法或侵权用途，包括但不限于未经授权入侵、破解、逆向工程他人软件或系统，绕过技术保护措施，窃取或泄露他人数据，传播恶意代码等侵害他人合法权益的行为。
+1. 本项目是社区增强分支，与上游 [jieapi/AiCode](https://github.com/jieapi/AiCode) 及其作者无隶属关系；上游项目的功能与稳定性请参考其官方仓库与文档
+2. 本软件仅供学习、研究与合法的软件开发用途。**严禁**将本软件用于任何违法或侵权用途，包括但不限于未经授权入侵、破解、逆向工程他人软件或系统，绕过技术保护措施，窃取或泄露他人数据，传播恶意代码等侵害他人合法权益的行为
+3. AI 生成的代码与操作仅供辅助参考，**请在采纳前自行审查**；对代码的任何改动请确保有版本控制或备份
+4. 「逆向分析」功能仅限用于**你拥有所有权或已获合法授权**的软件，用于学习与研究；由此产生的法律责任由使用者自行承担
+5. 「守夜守护」「定时任务」等无人值守功能请在授权范围内使用，注意账号与数据安全；长时间无人值守任务建议在受控环境中先充分测试
+6. 本项目不内置任何大模型服务，模型、密钥与端点均由使用者自行配置；使用第三方模型服务的费用与合规性由使用者自行负责
+7. 本软件按「现状」提供，不附带任何明示或默示的担保；使用者应自行承担使用本软件的全部风险与责任，作者与贡献者均不承担任何责任。若不同意上述声明，请立即停止使用并卸载本软件
 
-使用者应自行承担使用本软件的全部风险与责任；对于使用者因使用或无法使用本软件而产生的任何损失，以及其利用本软件实施的任何行为及后果，作者与贡献者均不承担任何责任。
+## 致谢
 
-若不同意上述声明，请立即停止使用并卸载本软件。
+本项目站在巨人的肩膀上，感谢所有上游与开源贡献者。
 
-## 开源协议
+### 上游底座
 
-本项目基于 [GPL-3.0](LICENSE) 协议开源。第三方组件的版权与许可声明见 [NOTICE](NOTICE)。
+- **[AiCode](https://github.com/jieapi/AiCode)**（GPL-3.0）— 本项目的直接底座。AI Agent 框架、Alpine 容器与终端、模型供应商管理、Git 集成、工作区同步、平板适配等基础能力全部来自上游，没有上游就没有本项目
+- **[Termux](https://github.com/termux/termux-app)** 与 **[PRoot](https://github.com/proot-me/proot)** — 经上游引入的 Android 容器技术底座
+
+### 相关开源项目
+
+- **[REA（Reverse Engineer Anything）](https://github.com/morluto/rea)** — 逆向分析能力的来源：把逆向分析引擎封装为 MCP / CLI 的开源项目，本项目将其集成为手机端开箱即用的工作台
+- **[Jetpack Compose](https://developer.android.com/compose) / [Hilt](https://dagger.dev/hilt/) / [Room](https://developer.android.com/training/data-storage/room)** — Android 现代开发技术栈
+- **[Vosk](https://github.com/alphacep/vosk-api)** — 离线语音识别引擎
+- **[nanohttpd](https://github.com/NanoHttpd/nanohttpd)** — 远程管理的局域网 HTTP 服务
+- **[jadx](https://github.com/skylot/jadx)** — REA 逆向分析的 DEX 反编译引擎
+- **[anthropics/skills](https://github.com/anthropics/skills)** 与 **[obra/superpowers](https://github.com/obra/superpowers)** — 内置技能包来源
+- **[multi-llm](https://github.com/EzRlon/mcp-multi-llm)** — 模型顾问团的 MCP 服务端实现
+- 同时致谢上游项目鸣谢过的灵感与组件来源：[OpenCode](https://github.com/anomalyco/opencode)、[Termux](https://github.com/termux/termux-app)、[Kelivo](https://github.com/Chevey339/kelivo)，以及 [NOTICE](NOTICE) 中列出的全部第三方开源组件
+
+### 开源协议
+
+本项目沿用上游的 **[GPL-3.0](LICENSE)** 协议开源，第三方组件的版权与许可声明见 [NOTICE](NOTICE)。使用本项目代码时请同样遵循 GPL-3.0，并保留对上游作者的署名与致谢。
