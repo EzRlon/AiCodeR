@@ -360,7 +360,6 @@
     <string name="float_panel_nothing_running">No running task</string>
     <string name="float_panel_stop">Stop task</string>
     <string name="float_panel_open_app">Open app</string>
-    <string name="float_panel_close_ball">Turn off</string>
     <string name="float_panel_collapse_panel">Collapse panel</string>
     <string name="float_panel_input_hint">Ask the AI…</string>
     <string name="float_panel_stopped">Task stopped</string>
@@ -617,7 +616,10 @@
     <string name="agent_model_not_selected">Not selected</string>
     <!-- About -->
     <string name="about_version">Version</string>
+    <string name="about_app_title">AiCodeR</string>
     <string name="about_github_repo">GitHub Repository</string>
+    <string name="about_upstream">Upstream Base: AiCode</string>
+    <string name="about_upstream_desc">Built on the open-source project AiCode (GPL-3.0) by jieapi — core capabilities come from upstream</string>
     <string name="about_license">Open Source License</string>
     <string name="about_description">AI-powered code editor running on Android · Built-in Terminal · AI Agent · MCP Protocol</string>
     <string name="about_check_update">Check for updates</string>

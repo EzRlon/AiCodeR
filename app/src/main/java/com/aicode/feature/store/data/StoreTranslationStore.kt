@@ -27,6 +27,9 @@ data class StoreTranslation(
 /** 翻译缓存的 key，如 "SKILL:pdf-toolkit" / "MCP:ac.inference.sh/mcp"。 */
 fun StoreItem.storeTranslationKey(): String = "${kind.name}:$id"
 
+/** 专家团条目与 [StoreItem] 共用同一翻译缓存键体系（EXPERT:文件名，与 ViewModel 映射一致）。 */
+fun TeamStoreItem.storeTranslationKey(): String = "${StoreKind.EXPERT.name}:$fileName"
+
 /** 需要翻译的源文指纹：名称与描述组成的稳定哈希。 */
 fun StoreItem.storeTranslationSourceHash(): String = "$name\u0000$description".hashCode().toString()
 

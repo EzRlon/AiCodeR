@@ -338,6 +338,8 @@ internal fun StoreScreen(
 
     // ── 详情弹层：专家团 ──
     detailTeam?.let { team ->
+        val teamTranslation = state.translations[team.storeTranslationKey()]
+        val nameZh = teamTranslation?.nameZh.orEmpty()
         AdaptiveModalBottomSheet(onDismissRequest = { detailTeam = null }) {
             Column(
                 modifier = Modifier
@@ -348,16 +350,23 @@ internal fun StoreScreen(
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 Text(
-                    text = team.name,
+                    text = if (nameZh.isBlank()) team.name else "${team.name}（$nameZh）",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (teamTranslation?.descriptionZh?.isNotBlank() == true) {
+                    Text(
+                        text = teamTranslation.descriptionZh,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 if (team.description.isNotBlank()) {
                     Text(
                         text = team.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 if (team.members.isNotEmpty()) {
@@ -577,6 +586,9 @@ private fun TeamList(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(state.teams, key = { it.fileName }) { team ->
+            val teamTranslation = state.translations[team.storeTranslationKey()]
+            val nameZh = teamTranslation?.nameZh.orEmpty()
+            val descZh = teamTranslation?.descriptionZh.orEmpty()
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.semanticColors.cardSurface,
@@ -590,13 +602,13 @@ private fun TeamList(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = team.name,
+                            text = if (nameZh.isBlank()) team.name else "${team.name}（$nameZh）",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         if (team.description.isNotBlank()) {
                             Text(
-                                text = team.description,
+                                text = if (descZh.isBlank()) team.description else descZh,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 3,

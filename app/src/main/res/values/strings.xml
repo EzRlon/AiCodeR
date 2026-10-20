@@ -361,7 +361,6 @@
     <string name="float_panel_nothing_running">当前没有运行中的任务</string>
     <string name="float_panel_stop">停止任务</string>
     <string name="float_panel_open_app">回到 App</string>
-    <string name="float_panel_close_ball">关闭悬浮球</string>
     <string name="float_panel_collapse_panel">收起面板</string>
     <string name="float_panel_input_hint">给 AI 发指令…</string>
     <string name="float_panel_stopped">已停止任务</string>
@@ -618,7 +617,10 @@
     <string name="agent_model_not_selected">未选择</string>
     <!-- About -->
     <string name="about_version">版本</string>
+    <string name="about_app_title">许愿码 AiCodeR</string>
     <string name="about_github_repo">GitHub 仓库</string>
+    <string name="about_upstream">上游底座 AiCode</string>
+    <string name="about_upstream_desc">本项目基于 jieapi 开发的开源项目 AiCode（GPL-3.0）增强，基础能力来自上游</string>
     <string name="about_license">开源许可证</string>
     <string name="about_description">在 Android 设备上运行的 AI 驱动代码编辑器 · 内置终端 · AI Agent · MCP 协议</string>
     <string name="about_check_update">检查更新</string>

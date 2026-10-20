@@ -112,7 +112,7 @@ internal fun AboutSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
-        AboutHeaderCard(appName = stringResource(R.string.app_name), appIcon = appIcon)
+        AboutHeaderCard(appIcon = appIcon)
 
         SettingsGroup {
             // 版本：点击手动检查更新
@@ -184,11 +184,19 @@ internal fun AboutSection(
                 }
             )
             SettingsDivider()
-            // GitHub 仓库
+            // GitHub 仓库（本项目 EzRlon/AiCodeR）
             SettingsRow(
                 icon = FeatherIcons.Github,
                 title = stringResource(R.string.about_github_repo),
                 onClick = { openUrl(context, GITHUB_REPO_URL) }
+            )
+            SettingsDivider()
+            // 上游底座：本项目基于的官方 AiCode
+            SettingsRow(
+                icon = FeatherIcons.Globe,
+                title = stringResource(R.string.about_upstream),
+                subtitle = stringResource(R.string.about_upstream_desc),
+                onClick = { openUrl(context, UPSTREAM_REPO_URL) }
             )
             SettingsDivider()
             // 许可证
@@ -237,9 +245,9 @@ internal fun AboutSection(
     }
 }
 
-/** 顶部信息卡：左 app 图标，右上 app 名，右下一句简介。 */
+/** 顶部信息卡：左 app 图标，右上应用名（中文名+英文标识），右下一句简介。 */
 @Composable
-private fun AboutHeaderCard(appName: String, appIcon: androidx.compose.ui.graphics.ImageBitmap?) {
+private fun AboutHeaderCard(appIcon: androidx.compose.ui.graphics.ImageBitmap?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -266,7 +274,7 @@ private fun AboutHeaderCard(appName: String, appIcon: androidx.compose.ui.graphi
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    text = appName,
+                    text = stringResource(R.string.about_app_title),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -555,6 +563,7 @@ private fun loadAppIconBitmap(context: Context): ImageBitmap? {
     }.getOrNull()
 }
 
-private const val GITHUB_REPO_URL = "https://github.com/jieapi/aicode"
-private const val LICENSE_URL = "https://github.com/jieapi/aicode/blob/main/LICENSE"
+private const val GITHUB_REPO_URL = "https://github.com/EzRlon/AiCodeR"
+private const val UPSTREAM_REPO_URL = "https://github.com/jieapi/aicode"
+private const val LICENSE_URL = "https://github.com/EzRlon/AiCodeR/blob/main/LICENSE"
 private const val ICON_PX_DP = 48

@@ -109,7 +109,6 @@ import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Mic
 import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Power
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.Tool
 import compose.icons.feathericons.Zap
@@ -864,20 +863,6 @@ class FloatBallOverlay(
                         Icon(
                             imageVector = FeatherIcons.ArrowUpRight,
                             contentDescription = stringResource(R.string.float_panel_open_app),
-                            modifier = Modifier.size(closeSize * 0.4f),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            onDismiss()
-                            this@FloatBallOverlay.onClose()
-                        },
-                        modifier = Modifier.size(closeSize * 0.7f)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Power,
-                            contentDescription = stringResource(R.string.float_panel_close_ball),
                             modifier = Modifier.size(closeSize * 0.4f),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
