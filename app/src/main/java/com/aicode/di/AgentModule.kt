@@ -91,6 +91,7 @@ import com.aicode.feature.agent.domain.notification.DefaultAgentEventInjector
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.tool.mcp.ManageMcpTool
+import com.aicode.feature.agent.domain.tool.recall.RecallTool
 import com.aicode.feature.agent.domain.tool.memory.MemoryTool
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
@@ -392,6 +393,7 @@ object AgentModule {
         goalStatusTool: GoalStatusTool,
         todoTool: TodoTool,
         memoryTool: MemoryTool,
+        recallTool: RecallTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
         browserTool: BrowserTool
@@ -417,6 +419,7 @@ object AgentModule {
             register("goalStatus", goalStatusTool)
             register("todo", todoTool)
             register("memory", memoryTool)
+            register("recall", recallTool)
             register("task", taskTool)
             register("messageParent", messageParentTool)
             register("browser", browserTool)

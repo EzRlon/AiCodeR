@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.RewriteQueriesToDropUnusedColumns
 import androidx.room.Transaction
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import kotlinx.coroutines.flow.Flow
@@ -101,6 +102,111 @@ interface AgentMessageDao {
     suspend fun searchMessages(query: String): List<AgentMessageEntity>
 
     /**
+     * recall 全文检索（FTS4）：从消息档案取回历史片段——含被上下文压缩归档的原文（只标 isCompacted 未删）。
+     * [match] 为 FTS4 MATCH 表达式，由调用方把检索词转成带引号的安全形式。
+     */
+    @Query(
+        """
+        SELECT m.id AS messageId, m.sessionId AS sessionId, s.title AS sessionTitle,
+               m.role AS role, m.content AS content, m.timestamp AS timestamp
+        FROM agent_messages_fts
+        JOIN agent_messages m ON m.rowid = agent_messages_fts.docid
+        JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE agent_messages_fts MATCH :match
+          AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+        ORDER BY m.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recallSearch(match: String, limit: Int): List<ChatSearchMatch>
+
+    @Query(
+        """
+        SELECT * FROM (
+            SELECT m.id AS messageId, m.sessionId AS sessionId, s.title AS sessionTitle,
+                   m.role AS role, m.content AS content, m.timestamp AS timestamp
+            FROM agent_messages_fts
+            JOIN agent_messages m ON m.rowid = agent_messages_fts.docid
+            JOIN chat_sessions s ON s.id = m.sessionId
+            WHERE agent_messages_fts MATCH :match
+              AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+        ) WHERE sessionId = :sessionId
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recallSearchInSession(match: String, sessionId: String, limit: Int): List<ChatSearchMatch>
+
+    @RewriteQueriesToDropUnusedColumns
+    @Query(
+        """
+        SELECT * FROM (
+            SELECT m.id AS messageId, m.sessionId AS sessionId, s.title AS sessionTitle,
+                   m.role AS role, m.content AS content, m.timestamp AS timestamp,
+                   s.workspacePath AS workspacePath
+            FROM agent_messages_fts
+            JOIN agent_messages m ON m.rowid = agent_messages_fts.docid
+            JOIN chat_sessions s ON s.id = m.sessionId
+            WHERE agent_messages_fts MATCH :match
+              AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+        ) WHERE workspacePath = :workspacePath
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recallSearchInWorkspace(match: String, workspacePath: String, limit: Int): List<ChatSearchMatch>
+
+    /**
+     * recall 的 CJK 降级路径：FTS4 simple tokenizer 把连续汉字切成单个整体 token，中文子串
+     * （如「崩溃」查「发生崩溃了」）不可能命中，含中文的查询只能走 LIKE 模糊匹配。
+     * [likeQuery] 已由调用方转义 LIKE 通配符（! % _），配合 ESCAPE '!'；排除压缩摘要/标记行
+     * （recall 语义是取回原文，不是取回 AI 生成的摘要）。
+     */
+    @Query(
+        """
+        SELECT m.id AS messageId, m.sessionId AS sessionId, s.title AS sessionTitle,
+               m.role AS role, m.content AS content, m.timestamp AS timestamp
+        FROM agent_messages m
+        JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND m.content LIKE '%' || :likeQuery || '%' ESCAPE '!' 
+        ORDER BY m.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recallLikeAll(likeQuery: String, limit: Int): List<ChatSearchMatch>
+
+    @Query(
+        """
+        SELECT m.id AS messageId, m.sessionId AS sessionId, s.title AS sessionTitle,
+               m.role AS role, m.content AS content, m.timestamp AS timestamp
+        FROM agent_messages m
+        JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE m.sessionId = :sessionId
+          AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND m.content LIKE '%' || :likeQuery || '%' ESCAPE '!' 
+        ORDER BY m.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recallLikeInSession(likeQuery: String, sessionId: String, limit: Int): List<ChatSearchMatch>
+
+    @Query(
+        """
+        SELECT m.id AS messageId, m.sessionId AS sessionId, s.title AS sessionTitle,
+               m.role AS role, m.content AS content, m.timestamp AS timestamp
+        FROM agent_messages m
+        JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE s.workspacePath = :workspacePath
+          AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND m.content LIKE '%' || :likeQuery || '%' ESCAPE '!' 
+        ORDER BY m.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recallLikeInWorkspace(likeQuery: String, workspacePath: String, limit: Int): List<ChatSearchMatch>
+
+    /**
      * 跨会话搜索某工作区下的聊天记录：命中用户 / 助手正文，排除已压缩与内部摘要行。
      * [escapedQuery] 已由调用方转义 LIKE 通配符（`!` `%` `_`），配合 SQL 里的 ESCAPE '!'。
      */
@@ -129,6 +235,19 @@ interface AgentMessageDao {
     /** 指定会话中时间戳不早于 [timestamp] 的消息条数（含并列时间戳），供定位时确定所需分页上限。 */
     @Query("SELECT COUNT(*) FROM agent_messages WHERE sessionId = :sessionId AND timestamp >= :timestamp")
     suspend fun countMessagesFromTimestamp(sessionId: String, timestamp: Long): Int
+
+    /** 记忆图谱：各会话的消息数与最后活动时间（一次聚合全表，IO 线程调用）。 */
+    @Query(
+        """
+        SELECT m.sessionId AS sessionId, COUNT(*) AS messageCount, MAX(m.timestamp) AS lastActiveAt
+        FROM agent_messages m GROUP BY m.sessionId
+        """
+    )
+    suspend fun sessionActivity(): List<SessionActivityRow>
+
+    /** 记忆图谱详情卡：指定会话最后一条消息正文（无则 null）。 */
+    @Query("SELECT content FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT 1")
+    suspend fun lastMessageContent(sessionId: String): String?
 
     @Query("SELECT * FROM agent_messages ORDER BY timestamp ASC")
     suspend fun getAllOnce(): List<AgentMessageEntity>
@@ -207,4 +326,11 @@ data class SessionStorageUsage(
     val title: String?,
     val messageCount: Int,
     val bytes: Long
+)
+
+/** 记忆图谱的会话活动聚合（[AgentMessageDao.sessionActivity] 的投影）。 */
+data class SessionActivityRow(
+    val sessionId: String,
+    val messageCount: Int,
+    val lastActiveAt: Long
 )

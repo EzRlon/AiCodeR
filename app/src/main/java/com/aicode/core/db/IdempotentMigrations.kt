@@ -80,6 +80,27 @@ internal class Migration64To65 : Migration(64, 65) {
     }
 }
 
+/**
+ * 幂等版 66→67（替代 `67_add_message_fts.sql` 执行）：建 agent_messages 的 FTS4 影子表。
+ * 不能用 SQL 文件轨：SqlScriptSplitter 不识别 CREATE TRIGGER 的 BEGIN…END 块，触发器体内的分号
+ * 会被当语句边界拆断，覆盖升级首启必崩。execSQL 逐条执行不受影响。
+ * 表结构与触发器名、DDL 与编译时 Room 导出的 schemas/67.json 完全一致（触发器是 Room 对
+ * contentEntity FTS 表的官方同步触发器，只在全新建库时由 Room 创建，旧库迁移必须显式补建）。
+ */
+internal class Migration66To67 : Migration(66, 67) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS `agent_messages_fts` USING FTS4(`content` TEXT NOT NULL, content=`agent_messages`)"
+        )
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_agent_messages_fts_BEFORE_UPDATE BEFORE UPDATE ON `agent_messages` BEGIN DELETE FROM `agent_messages_fts` WHERE `docid`=OLD.`rowid`; END")
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_agent_messages_fts_BEFORE_DELETE BEFORE DELETE ON `agent_messages` BEGIN DELETE FROM `agent_messages_fts` WHERE `docid`=OLD.`rowid`; END")
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_agent_messages_fts_AFTER_UPDATE AFTER UPDATE ON `agent_messages` BEGIN INSERT INTO `agent_messages_fts`(`docid`, `content`) VALUES (NEW.`rowid`, NEW.`content`); END")
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_agent_messages_fts_AFTER_INSERT AFTER INSERT ON `agent_messages` BEGIN INSERT INTO `agent_messages_fts`(`docid`, `content`) VALUES (NEW.`rowid`, NEW.`content`); END")
+        // 存量回填不放迁移内：rebuild 全量 tokenize 大库秒级、迁移在主线程会黑屏——
+        // 由 AIEditorApp 启动后在后台协程幂等执行（FTS 行数 < 消息行数即 rebuild）
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {
