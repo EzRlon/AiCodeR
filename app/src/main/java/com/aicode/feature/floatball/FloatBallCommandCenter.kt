@@ -19,10 +19,38 @@ object FloatBallCommandCenter {
     @Volatile
     var stop: (() -> Boolean)? = null
 
+    /** 新建会话（复用空会话逻辑同 App 内「新会话」按钮）；null 表示 ViewModel 未就绪。 */
+    @Volatile
+    var newSession: (() -> Unit)? = null
+
     /**
      * 处理最早待决的工具授权：choice 为用户的允许/拒绝。
      * 走带审计的 resolve 路径（source=FLOAT_BALL）；返回是否命中了挂起请求。
      */
     @Volatile
     var resolveApproval: ((com.aicode.feature.agent.domain.permission.PermissionChoice) -> Boolean)? = null
+
+    /** FB2：切换当前会话工作模式（BUILD/PLAN/AUTO），与 App 内模式按钮同逻辑。 */
+    @Volatile
+    var setMode: ((com.aicode.feature.agent.domain.model.AgentMode) -> Unit)? = null
+
+    /** FB2：悬浮窗输入 → App 草稿（同一份草稿，App 底栏与面板实时同步）。 */
+    @Volatile
+    var updateDraft: ((String) -> Unit)? = null
+
+    /** FB2：悬浮窗内嵌模型选择的数据快照（按需拉取，随 App 模型列表变化）。 */
+    data class FloatModelPickerData(
+        val currentProviderId: String?,
+        val currentModel: String?,
+        val providers: List<com.aicode.feature.settings.domain.model.AIProviderConfig>,
+        val metadata: Map<String, com.aicode.feature.settings.domain.model.ModelMetadata>
+    )
+
+    /** FB2：拉取模型选择数据（providers/当前选中/元数据）。 */
+    @Volatile
+    var modelData: (() -> FloatModelPickerData?)? = null
+
+    /** FB2：选定模型（providerId, modelId），与 App 内模型 sheet 同一落点。 */
+    @Volatile
+    var selectModel: ((String, String) -> Unit)? = null
 }

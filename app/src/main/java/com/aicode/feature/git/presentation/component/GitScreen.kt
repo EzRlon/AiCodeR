@@ -203,7 +203,15 @@ fun GitScreen(
             Column(modifier = Modifier.fillMaxSize()) {
             when {
                 state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.git_loading_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 state.notARepo -> NotARepoState(
                     busy = state.busy,
@@ -295,8 +303,10 @@ fun GitScreen(
         }
 
         // 底部渐变蒙版 + 悬浮 tab 组：内容可滚动到屏幕底部穿过 tab 栏，被渐变遮罩（同主页输入框）。
-        // 仅仓库态显示：加载中/非仓库态时 HorizontalPager 未组合，点击 tab 无内容可切换。
-        if (!state.loading && !state.notARepo) {
+        // 非仓库态不显示；仓库态在快照加载期间也常驻——否则容器冷启动跑 git 命令的几秒里
+        // 底栏整个缺席，页面下部空白（深色下尤其像白屏故障）。pagerState 独立于 Pager 内容，
+        // 加载中点 tab 只改页码，加载完成后直接落在对应页，无崩溃面。
+        if (!state.notARepo) {
             FloatingTabBar(
                 pagerState = pagerState,
                 items = listOf(

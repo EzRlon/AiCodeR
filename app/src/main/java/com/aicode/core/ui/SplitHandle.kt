@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -39,10 +40,12 @@ private val HandleTouchWidth = 14.dp
 fun VerticalSplitHandle(
     anchorX: Int,
     onDragDelta: (Float) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onDragStateChanged: (Boolean) -> Unit = {}
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val dragging by interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(dragging) { onDragStateChanged(dragging) }
     val description = stringResource(R.string.workbench_split_handle)
     Box(
         modifier = modifier

@@ -103,6 +103,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import com.aicode.core.ui.drawerWidth
 import com.aicode.core.ui.pageEnter
+import com.aicode.core.ui.pressScale
 import com.aicode.core.ui.pageExit
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
@@ -220,6 +221,7 @@ private fun DrawerVerticalTabs(
             Box {
                 Surface(
                     modifier = Modifier
+                        .pressScale(interactionSource, pressedScale = 0.92f, label = "drawer-tab-press")
                         .width(drawerTabWidth)
                         .height(34.dp)
                         .selectable(

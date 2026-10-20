@@ -1,5 +1,7 @@
 package com.aicode.core.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -20,10 +22,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.contentColorFor
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
@@ -105,12 +110,25 @@ fun AdaptiveModalBottomSheet(
             }
         }
     } else {
+        // 宽屏 Dialog 本体无入场动画：补淡入 + 0.92→1 缩放（与 AnchorMenuPopup 同节奏），
+        // 消除与窄屏 sheet（M3 默认动画）之间的形态不一致。
+        val appear = remember { Animatable(0f) }
+        LaunchedEffect(Unit) {
+            appear.animateTo(1f, tween(durationMillis = Motion.NORMAL, easing = Motion.Easing))
+        }
         Dialog(
             onDismissRequest = onDismissRequest,
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Surface(
                 modifier = modifier
+                    .graphicsLayer {
+                        alpha = appear.value
+                        val scale = 0.92f + 0.08f * appear.value
+                        scaleX = scale
+                        scaleY = scale
+                        transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    }
                     .widthIn(min = 280.dp, max = dialogMaxWidth)
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.lg, vertical = Spacing.xl)

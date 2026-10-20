@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -542,6 +543,8 @@ fun AppNavigation(
     var paneEditorPath by rememberSaveable { mutableStateOf("") }
     var paneEditorLine by rememberSaveable { mutableIntStateOf(0) }
     var paneSplit by rememberSaveable { mutableFloatStateOf(DEFAULT_PANE_SPLIT) }
+    // 分割线拖动中右栏宽度直接 snap 跟手，只在开/关门沿切换时补间（顶层声明供两处作用域共用）
+    var paneDragging by remember { mutableStateOf(false) }
     // AI 智能体（终端 CLI）管理弹层：顶栏入口打开，启动后自动切到终端看会话。
     var showAgentCliSheet by rememberSaveable { mutableStateOf(false) }
     // 右栏编辑器有未保存修改时，换文件前先弹保存提示（窄窗全屏编辑器由返回键拦截，不经过这里）。
@@ -830,7 +833,14 @@ fun AppNavigation(
                                 )
                             }
                         }
-                        if (paneOpen) {
+                        // 右栏开合走补间而不是直接增删，否则内容区宽度突变（与左侧栏同一节奏）；
+                        // 分割线拖动进行中直接 snap 跟手，只在开/关门沿切换时补间过渡
+                        val paneWidthFraction by animateFloatAsState(
+                            targetValue = if (paneOpen) 1f - paneSplit else 0f,
+                            animationSpec = if (paneDragging) snap() else tween(durationMillis = PAGE_MOTION_MS),
+                            label = "workbench-pane-width"
+                        )
+                        if (paneWidthFraction > 0f) {
                             VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             WorkbenchPaneContent(
                                 kind = paneKind,
@@ -841,7 +851,7 @@ fun AppNavigation(
                                 // rc5 的平板右栏脏状态确认：主分支把调用重构进了 if (paneOpen)，
                                 // 故把该参数落在这里，而不是保留旧位置那份重复调用
                                 editorLeaveGuard = editorLeaveGuard,
-                                modifier = Modifier.weight(1f - paneSplit)
+                                modifier = Modifier.weight(paneWidthFraction, fill = false)
                             )
                         }
                     }
@@ -865,7 +875,8 @@ fun AppNavigation(
                                     paneSplit = (paneSplit + dx / rowWidthPx)
                                         .coerceIn(MIN_PANE_SPLIT, MAX_PANE_SPLIT)
                                 }
-                            }
+                            },
+                            onDragStateChanged = { paneDragging = it }
                         )
                     }
                 }
@@ -1320,6 +1331,11 @@ private fun toastFileOpFailed(context: android.content.Context, messageRes: Int)
  * 聊天面板在会话就绪后合并进输入框草稿。冷启动在 onCreate 投递，热启动在 onNewIntent 投递。
  */
 private fun handleSendTextIntent(activity: MainActivity, intent: Intent?) {
+    // 崩溃页「一键修复」：带完整报告冷/热启动，转入会话由 AI 诊断修复。
+    intent?.getStringExtra(CrashActivity.EXTRA_FIX_REPORT)?.takeIf { it.isNotBlank() }?.let { report ->
+        ViewModelProvider(activity)[AIAgentViewModel::class.java].queueExternalText(report)
+        return
+    }
     if (intent?.action != Intent.ACTION_SEND) return
     if (intent.type != null && intent.type != "text/plain") return
     val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: return

@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
@@ -14,6 +15,8 @@ import androidx.core.app.ServiceCompat
 import com.aicode.MainActivity
 import com.aicode.core.util.FileLogger
 import com.aicode.R
+import com.aicode.feature.agent.domain.container.ConnectionState
+import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.floatball.FloatBallOverlay
 import com.aicode.feature.floatball.FloatBallStateStore
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -24,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -48,6 +52,13 @@ class TerminalKeepaliveService : Service() {
     @Inject
     lateinit var themeSettings: ThemeSettingsRepository
 
+    /** 悬浮球 mini 会话窗口（FB1）的状态镜像：面板消息流/标题从这里只读消费。 */
+    @Inject
+    lateinit var sessionHub: com.aicode.feature.floatball.FloatBallSessionHub
+
+    @Inject
+    lateinit var remoteSshConnection: RemoteSshConnection
+
     /** 悬浮球开关（内存态；onCreate 从持久化恢复）。悬浮球也由本服务承载——全应用只保留一条常驻通知。 */
     private var floatBallOn = false
 
@@ -58,6 +69,9 @@ class TerminalKeepaliveService : Service() {
     /** 前台保活期间持有的 Wi-Fi 锁：避免切后台/息屏后 Wi-Fi 进入省电使长连接被回收。 */
     private val wifiLocks = mutableListOf<WifiManager.WifiLock>()
     private var wifiLocksInitialized = false
+
+    /** 远程 SSH 已连接期间需 Wi-Fi 锁防息屏断连；仅常驻开关/悬浮球不构成持锁理由。 */
+    private var remoteConnected = false
 
     inner class LocalBinder : Binder() {
         fun getService(): TerminalKeepaliveService = this@TerminalKeepaliveService
@@ -80,8 +94,18 @@ class TerminalKeepaliveService : Service() {
                 attachFloatBall()
                 FileLogger.i(TAG, "Restored float ball after restart")
             }
-            if (!persistent && !floatBallOn) {
+            // 远程连接中不允许因「无会话无开关」退出：L2 的锁保护对象就是这个长连接。
+            if (!persistent && !floatBallOn &&
+                remoteSshConnection.connectionState.value != ConnectionState.CONNECTED
+            ) {
                 stopSelf()
+            }
+        }
+        // L2：随远程连接状态实时收敛 Wi-Fi 锁（连接中持锁、断开放锁）。
+        serviceScope.launch {
+            remoteSshConnection.connectionState.collect { state ->
+                remoteConnected = state == ConnectionState.CONNECTED
+                updateWifiLocks()
             }
         }
     }
@@ -113,7 +137,7 @@ class TerminalKeepaliveService : Service() {
             }
             ACTION_STOP_SESSION -> {
                 sessionCount = (sessionCount - 1).coerceAtLeast(0)
-                if (sessionCount == 0 && !persistent && !floatBallOn) {
+                if (sessionCount == 0 && !persistent && !floatBallOn && !remoteConnected) {
                     stopSelf(startId)
                     FileLogger.i(TAG, "All sessions ended, stopping service")
                 } else {
@@ -128,7 +152,7 @@ class TerminalKeepaliveService : Service() {
             }
             ACTION_DISABLE_PERSISTENT -> {
                 persistent = false
-                if (sessionCount == 0 && !floatBallOn) {
+                if (sessionCount == 0 && !floatBallOn && !remoteConnected) {
                     stopSelf(startId)
                     FileLogger.i(TAG, "Persistent keepalive disabled, no sessions, stopping service")
                 } else {
@@ -142,7 +166,7 @@ class TerminalKeepaliveService : Service() {
                     attachFloatBall()
                 } else {
                     removeOverlay()
-                    if (!persistent && sessionCount == 0) {
+                    if (!persistent && sessionCount == 0 && !remoteConnected) {
                         stopSelf(startId)
                     } else {
                         ensureForeground()
@@ -151,6 +175,8 @@ class TerminalKeepaliveService : Service() {
                 FileLogger.i(TAG, "Float ball synced: enabled=$floatBallOn")
             }
         }
+        // L2：会话计数/开关变化后按持锁条件收敛 Wi-Fi 锁。
+        updateWifiLocks()
         return START_STICKY
     }
 
@@ -172,6 +198,7 @@ class TerminalKeepaliveService : Service() {
             sessionCount > 0 ->
                 getString(R.string.notification_keepalive_running_sessions, sessionCount) + ballSuffix
             floatBallOn && !persistent -> getString(R.string.notification_float_ball_only)
+            remoteConnected -> getString(R.string.notification_remote_active) + ballSuffix
             else -> getString(R.string.notification_keepalive_enabled) + ballSuffix
         }
         val openAppIntent = PendingIntent.getActivity(
@@ -192,8 +219,12 @@ class TerminalKeepaliveService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .build()
 
-        runCatching { startForeground(NOTIFICATION_ID, notification) }
-            .onSuccess { acquireWifiLocks() }
+        // L3：API 34+ 用 specialUse 前台类型（Manifest 同步声明），低版本不带类型。
+        val fgsType = if (Build.VERSION.SDK_INT >= 34) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else 0
+        runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fgsType) }
+            .onSuccess { updateWifiLocks() }
             .onFailure { FileLogger.e(TAG, "startForeground failed", it) }
     }
 
@@ -205,13 +236,13 @@ class TerminalKeepaliveService : Service() {
             return
         }
         ensureForeground()
-        overlay = FloatBallOverlay(this, floatBallStateStore, themeSettings) {
+        overlay = FloatBallOverlay(this, floatBallStateStore, themeSettings, sessionHub) {
             // 用户点「关闭悬浮球」：关开关、撤窗口，服务按其余职责决定去留
             removeOverlay()
             floatBallOn = false
             serviceScope.launch {
                 runCatching { generalSettings.setFloatBallEnabled(false) }
-                if (!persistent && sessionCount == 0) stopSelf()
+                if (!persistent && sessionCount == 0 && !remoteConnected) stopSelf()
             }
         }
         // 赋值后再挂载（attach 幂等）：挂载失败时回调能拿到已赋值的 overlay 完成清理。
@@ -221,6 +252,11 @@ class TerminalKeepaliveService : Service() {
     private fun removeOverlay() {
         overlay?.detach()
         overlay = null
+    }
+
+    /** L2 持锁条件：后台 AI 会话进行中或远程 SSH 已连接；常驻开关/悬浮球本身不持锁。 */
+    private fun updateWifiLocks() {
+        if (sessionCount > 0 || remoteConnected) acquireWifiLocks() else releaseWifiLocks()
     }
 
     /**

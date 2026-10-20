@@ -1,6 +1,7 @@
 package com.aicode.feature.floatball
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.os.Build
@@ -13,20 +14,31 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,11 +49,16 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -58,10 +75,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -82,6 +101,17 @@ import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.X
+import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.ArrowUp
+import compose.icons.feathericons.ArrowUpRight
+import compose.icons.feathericons.Edit3
+import compose.icons.feathericons.Clipboard
+import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.Mic
+import compose.icons.feathericons.Plus
+import compose.icons.feathericons.Power
+import compose.icons.feathericons.Square
+import compose.icons.feathericons.Tool
 import compose.icons.feathericons.Zap
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -110,6 +140,7 @@ class FloatBallOverlay(
     private val context: Context,
     private val stateStore: FloatBallStateStore,
     private val themeSettings: ThemeSettingsRepository,
+    private val sessionHub: FloatBallSessionHub,
     private val onClose: () -> Unit
 ) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
@@ -153,6 +184,9 @@ class FloatBallOverlay(
 
     private companion object {
         const val TAG = "FloatBallOverlay"
+        const val PANEL_PREFS = "floatball_panel"
+        const val PANEL_KEY_W = "panel_w_dp"
+        const val PANEL_KEY_H = "panel_h_dp"
     }
 
     /** Service 窗口里的 ComposeView 需要 ViewTree 三件套，否则组合在 attach 时抛异常。 */
@@ -373,10 +407,13 @@ class FloatBallOverlay(
             return
         }
         val r = ballSize / 2
-        // 小屏/横屏下收缩面板，避免固定尺寸超出屏幕（anchor 反算 min>max 会抛异常）。
+        // mini 会话面板尺寸记忆（FB1）：默认 320×460dp，拖拽把手调整后持久化，下次打开沿用
+        val prefs = context.getSharedPreferences(PANEL_PREFS, Context.MODE_PRIVATE)
         val margin = dp(6)
-        val panelWidth = minOf(dp(300), screenWidth - margin * 2).coerceAtLeast(dp(220))
-        val panelHeight = minOf(dp(372), screenHeight - dp(24)).coerceAtLeast(dp(200))
+        val maxW = screenWidth - margin * 2
+        val maxH = screenHeight - dp(24)
+        val panelWidth = dp(prefs.getInt(PANEL_KEY_W, 320)).coerceIn(dp(240), minOf(dp(520), maxW))
+        val panelHeight = dp(prefs.getInt(PANEL_KEY_H, 460)).coerceIn(dp(300), maxH)
         val cx = ballX + r
         val onLeft = cx < screenWidth / 2
         val anchorX = (if (onLeft) margin else screenWidth - panelWidth - margin)
@@ -435,6 +472,29 @@ class FloatBallOverlay(
             panelComposeOwner = null
             panelOpen = false
         }
+    }
+
+    /** mini 会话面板拖动挪位置：更新窗口 x/y 并钳制在屏内（边距与 resize 同源）。 */
+    fun movePanelBy(deltaXPx: Int, deltaYPx: Int) {
+        val host = panelWindow ?: return
+        val params = host.layoutParams as? WindowManager.LayoutParams ?: return
+        params.x = (params.x + deltaXPx).coerceIn(0, (screenWidth - params.width).coerceAtLeast(0))
+        params.y = (params.y + deltaYPx).coerceIn(0, (screenHeight - params.height).coerceAtLeast(0))
+        runCatching { windowManager.updateViewLayout(host, params) }
+    }
+
+    /** mini 会话面板拖拽调大小：更新窗口尺寸并持久化（dp 记忆，下次打开沿用）。 */
+    fun resizePanelBy(deltaXPx: Int, deltaYPx: Int) {
+        val host = panelWindow ?: return
+        val params = host.layoutParams as? WindowManager.LayoutParams ?: return
+        val dm = context.resources.displayMetrics
+        params.width = (params.width + deltaXPx).coerceIn(dp(240), screenWidth - dp(12))
+        params.height = (params.height + deltaYPx).coerceIn(dp(300), screenHeight - dp(24))
+        runCatching { windowManager.updateViewLayout(host, params) }
+        context.getSharedPreferences(PANEL_PREFS, Context.MODE_PRIVATE).edit()
+            .putInt(PANEL_KEY_W, (params.width / dm.density).toInt())
+            .putInt(PANEL_KEY_H, (params.height / dm.density).toInt())
+            .apply()
     }
 
     /** 悬浮窗独立于 Activity 的组合树，需自建主题才能跟随 App 的深浅/配色/动态取色。 */
@@ -590,9 +650,38 @@ class FloatBallOverlay(
         onInputFocused: () -> Unit
     ) {
         val state by stateStore.state.collectAsState()
+        // FB2：输入草稿与 App 底栏同源（同一份 inputDraft，App/悬浮窗实时同步）
+        val hub by sessionHub.state.collectAsState()
         var input by remember { mutableStateOf("") }
+        input = hub.draft
+        val updateInput: (String) -> Unit = { text ->
+            input = text
+            FloatBallCommandCenter.updateDraft?.invoke(text)
+        }
+        // 悬浮窗内嵌模型选择：数据来自 App 模型列表快照，选中走同一落点
+        var panelView by remember { mutableStateOf("chat") } // chat / modelPicker（悬浮窗内弹 Dialog 必崩 BadTokenException，模型选择改纯 Compose 视图切换）
+        var modelPickerSnapshot by remember { mutableStateOf<FloatBallCommandCenter.FloatModelPickerData?>(null) }
+        var modelQuery by remember { mutableStateOf("") }
         var hint by remember { mutableStateOf<String?>(null) }
         var closing by remember { mutableStateOf(false) }
+
+        var collapseTick by remember { mutableStateOf(0) }
+        // FB2：发送链（键盘 onSend / 发送按钮共用；发送后清空同步草稿流）
+        val doSend: () -> Unit = {
+            val text = input.trim()
+            if (text.isNotEmpty()) {
+                val sender = FloatBallCommandCenter.send
+                when {
+                    sender == null -> hint = context.getString(R.string.float_panel_send_need_app)
+                    sender(text) -> {
+                        updateInput("")
+                        hint = context.getString(R.string.float_panel_sent)
+                        collapseTick++
+                    }
+                    else -> hint = context.getString(R.string.float_panel_send_paused)
+                }
+            }
+        }
 
         // 提示气泡 1.6s 自动清空
         LaunchedEffect(hint) {
@@ -601,16 +690,37 @@ class FloatBallOverlay(
             if (hint == msg) hint = null
         }
 
-        // 滑入/滑出：进场从球侧滑入；操作完成后滑出并真正销毁窗口
+        var voiceTapActive by remember { mutableStateOf(false) }
+        var voiceProcessing by remember { mutableStateOf(false) }
+        val voiceController = remember(hub.voiceEngine) {
+            com.aicode.feature.agent.presentation.component.VoiceSession.create(
+                context,
+                hub.voiceEngine ?: com.aicode.feature.settings.data.repository.VoiceEngine.SYSTEM
+            )
+        }
+        DisposableEffect(voiceController) {
+            voiceController.onResult = { text ->
+                voiceProcessing = false
+                voiceTapActive = false
+                updateInput(text.trim())
+            }
+            voiceController.onError = {
+                voiceProcessing = false
+                voiceTapActive = false
+                hint = context.getString(R.string.chat_voice_failed)
+            }
+            onDispose { voiceController.destroy() }
+        }
+
+        // 进出场：单一进度驱动 alpha/scale/位移三通道。进场用轻微过冲 spring（0.88→1 缩放 +
+        // 从球侧 28dp 滑入 + 淡入，锚点 TransformOrigin 钉在球侧，观感是「从球里丝滑长出来」）；
+        // 出场对称回缩（tween 保证在 210ms 销毁延迟内走完）。
         var entered by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { entered = true }
-        val slide = animateFloatAsState(
-            targetValue = if (closing) 1f else if (entered) 0f else 1f,
-            animationSpec = tween(200), label = "panel-slide"
-        )
-        val alpha = animateFloatAsState(
-            targetValue = if (closing) 0f else 1f,
-            animationSpec = tween(180), label = "panel-alpha"
+        val appear by animateFloatAsState(
+            targetValue = if (closing) 0f else if (entered) 1f else 0f,
+            animationSpec = if (closing) tween(200) else spring(dampingRatio = 0.82f, stiffness = 380f),
+            label = "panel-appear"
         )
         LaunchedEffect(closing) {
             if (!closing) return@LaunchedEffect
@@ -619,7 +729,6 @@ class FloatBallOverlay(
         }
 
         // 操作完成后的自动收起（观看/处理完关键信息即收回，可无限次再打开）。
-        var collapseTick by remember { mutableStateOf(0) }
         LaunchedEffect(collapseTick) {
             if (collapseTick > 0) {
                 delay(800)
@@ -627,8 +736,35 @@ class FloatBallOverlay(
             }
         }
 
-        val slideOffset = (if (fromLeft) -1f else 1f) * 32f * slide.value
+        val slideOffset = (if (fromLeft) -1f else 1f) * 28f * (1f - appear)
 
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // 沉浸式关闭按钮尺寸：随面板宽度比例伸缩（用户反馈：原 30dp 太小）
+        val closeSize = (maxWidth * 0.11f).coerceIn(36.dp, 54.dp)
+        // 气泡宽度上限（BoxWithConstraints 直接作用域内物化：嵌套 Column/item lambda 拿不到该 receiver）
+        val bubbleMaxWidth = maxWidth * 0.88f
+        if (panelView == "modelPicker") {
+            // 模型选择视图：纯 Compose 渲染（悬浮窗内弹 Dialog/ModalBottomSheet 必崩 BadTokenException）
+            Surface(
+                shape = RoundedCornerShape(Radius.lg),
+                color = MaterialTheme.semanticColors.cardSurface,
+                shadowElevation = 10.dp,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                modelPickerSnapshot?.let { data ->
+                    ModelPickerView(
+                        data = data,
+                        query = modelQuery,
+                        onQueryChange = { modelQuery = it },
+                        onSelect = { p, m ->
+                            sessionHub.selectModel(p, m)
+                            panelView = "chat"
+                        },
+                        onBack = { panelView = "chat" }
+                    )
+                }
+            }
+        } else {
         Surface(
             shape = RoundedCornerShape(Radius.lg),
             color = MaterialTheme.semanticColors.cardSurface,
@@ -636,17 +772,32 @@ class FloatBallOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .offset(x = slideOffset.dp)
-                .graphicsLayer { this.alpha = alpha.value }
+                .graphicsLayer {
+                    alpha = appear.coerceIn(0f, 1f)
+                    val scale = 0.88f + 0.12f * appear
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(if (fromLeft) 0f else 1f, 0.5f)
+                }
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                // 1) 状态行
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // 1) 状态行（整行即拖拽把手：按住头部任意空白处即可挪动面板位置；图标点击不受影响）
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                movePanelBy(dragAmount.x.roundToInt(), dragAmount.y.roundToInt())
+                            }
+                        }
+                ) {
                     Box(
                         modifier = Modifier
                             .size(9.dp)
@@ -682,16 +833,128 @@ class FloatBallOverlay(
                         )
                         Spacer(Modifier.width(6.dp))
                     }
-                    TextButton(
+                    // 新建会话：复用 App 内「新会话」逻辑（空会话直接复用不堆积），新会话后留在面板继续对话
+                    IconButton(
+                        onClick = {
+                            val creator = FloatBallCommandCenter.newSession
+                            if (creator == null) {
+                                hint = context.getString(R.string.float_panel_send_need_app)
+                            } else {
+                                creator()
+                                hint = context.getString(R.string.float_panel_session_created)
+                            }
+                        },
+                        modifier = Modifier.size(closeSize * 0.7f)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Edit3,
+                            contentDescription = stringResource(R.string.chat_new_session),
+                            modifier = Modifier.size(closeSize * 0.4f),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // FB2：回 App / 关闭悬浮球收纳进头部（原底部操作排移除）
+                    IconButton(
+                        onClick = {
+                            FloatBallCommandCenter.openApp?.invoke()
+                            onDismiss()
+                        },
+                        modifier = Modifier.size(closeSize * 0.7f)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.ArrowUpRight,
+                            contentDescription = stringResource(R.string.float_panel_open_app),
+                            modifier = Modifier.size(closeSize * 0.4f),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            onDismiss()
+                            this@FloatBallOverlay.onClose()
+                        },
+                        modifier = Modifier.size(closeSize * 0.7f)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Power,
+                            contentDescription = stringResource(R.string.float_panel_close_ball),
+                            modifier = Modifier.size(closeSize * 0.4f),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // 沉浸式关闭（第六条反馈）：无底框融入面板，尺寸随窗口比例放大
+                    IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(30.dp)
+                        modifier = Modifier.size(closeSize)
                     ) {
                         Icon(
                             imageVector = FeatherIcons.X,
                             contentDescription = stringResource(R.string.float_panel_collapse_panel),
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(closeSize * 0.45f),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+
+                // ── 消息流（FB1 mini 会话窗口）：最近 30 条快照，最新在底，自动滚底 ──
+                val chatListState = rememberLazyListState()
+                LaunchedEffect(hub.messages.size, hub.sessionId) {
+                    if (hub.messages.isNotEmpty()) chatListState.scrollToItem(hub.messages.lastIndex)
+                }
+                Text(
+                    text = hub.sessionTitle?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.float_panel_untitled_session),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (hub.messages.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = stringResource(R.string.float_panel_chat_empty),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        state = chatListState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        itemsIndexed(hub.messages) { _, msg ->
+                            val isUser = msg.role == "USER"
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = when {
+                                        msg.isVerification -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                        isUser -> MaterialTheme.colorScheme.primaryContainer
+                                        msg.isError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                        else -> MaterialTheme.semanticColors.mutedSurface
+                                    },
+                                    modifier = Modifier.widthIn(max = bubbleMaxWidth)
+                                ) {
+                                    Text(
+                                        text = if (msg.role == "TOOL") "⚙ " + msg.text else msg.text,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -740,23 +1003,7 @@ class FloatBallOverlay(
                     }
                 }
 
-                // 4) 回复预览（关键信息）
-                state.replyPreview?.let { preview ->
-                    Surface(
-                        shape = RoundedCornerShape(Radius.sm),
-                        color = MaterialTheme.semanticColors.mutedSurface,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = preview,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
-                        )
-                    }
-                }
+                // 4) （回复预览已由消息流取代——FB1 后面板直接看得到完整最近对话）
 
                 // 5) 待审批（关键阻塞直达处理）
                 state.pendingKind?.let { kind ->
@@ -820,95 +1067,150 @@ class FloatBallOverlay(
                     }
                 }
 
-                // 6) 快速发送
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    BasicTextField(
+                // 6) 底栏（FB2）：输入框与 App 内同款样式；右侧语音 / 发送(停止)（App 内 SendButton 同款尺寸）
+                Row(verticalAlignment = Alignment.Bottom) {
+                    TextField(
                         value = input,
-                        onValueChange = { input = it },
-                        textStyle = TextStyle(
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
-                        singleLine = true,
-                        decorationBox = { inner ->
-                            Box {
-                                if (input.isEmpty()) {
-                                    Text(
-                                        text = stringResource(R.string.float_panel_input_hint),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                inner()
-                            }
-                        },
+                        onValueChange = updateInput,
                         modifier = Modifier
                             .weight(1f)
-                            .onFocusChanged { if (it.isFocused) onInputFocused() }
-                            .background(
-                                MaterialTheme.semanticColors.mutedSurface,
-                                RoundedCornerShape(Radius.sm)
+                            .heightIn(min = 44.dp, max = 120.dp),
+                        placeholder = {
+                            Text(
+                                text = if (state.busy) stringResource(R.string.chat_queue_hint)
+                                else stringResource(R.string.chat_input_placeholder),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    TextButton(
-                        onClick = {
-                            val text = input.trim()
-                            if (text.isEmpty()) return@TextButton
-                            val sender = FloatBallCommandCenter.send
-                            when {
-                                sender == null -> hint = context.getString(R.string.float_panel_send_need_app)
-                                sender(text) -> {
-                                    input = ""
-                                    hint = context.getString(R.string.float_panel_sent)
-                                    collapseTick++
-                                }
-                                else -> hint = context.getString(R.string.float_panel_send_paused)
-                            }
                         },
-                        enabled = input.isNotBlank()
-                    ) { Text(stringResource(R.string.float_panel_send)) }
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { doSend() }),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent
+                        )
+                    )
                 }
 
-                // 7) 操作排
+                // 7) 工具排（FB2）：模式循环 / 模型切换（语音与发送已移至底栏，与 App 内同位）
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    if (state.canStop) {
-                        TextButton(
-                            onClick = {
-                                val result = FloatBallCommandCenter.stop?.invoke()
-                                hint = context.getString(
-                                    when (result) {
-                                        true -> R.string.float_panel_stopped
-                                        false -> R.string.float_panel_nothing_running
-                                        null -> R.string.float_panel_send_need_app
-                                    }
-                                )
-                                if (result == true) collapseTick++
-                            }
-                        ) {
-                            Text(
-                                text = stringResource(R.string.float_panel_stop),
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
+                    val currentMode = hub.mode ?: com.aicode.feature.agent.domain.model.AgentMode.BUILD
+                    val modeEntries = com.aicode.feature.agent.domain.model.AgentMode.entries
+                    val nextMode = modeEntries[(modeEntries.indexOf(currentMode) + 1) % modeEntries.size]
+                    // 1) 模式循环：构建 → 计划 → 自动 → 构建（App 内三按钮合并为一个循环切换，运行中即时生效）
+                    IconButton(
+                        onClick = {
+                            val setter = FloatBallCommandCenter.setMode
+                            if (setter == null) hint = context.getString(R.string.float_panel_send_need_app)
+                            else setter(nextMode)
+                        },
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Icon(
+                            imageVector = when (currentMode) {
+                                com.aicode.feature.agent.domain.model.AgentMode.BUILD -> FeatherIcons.Tool
+                                com.aicode.feature.agent.domain.model.AgentMode.PLAN -> FeatherIcons.Clipboard
+                                else -> FeatherIcons.Zap
+                            },
+                            contentDescription = currentMode.name,
+                            tint = when (currentMode) {
+                                com.aicode.feature.agent.domain.model.AgentMode.BUILD -> MaterialTheme.semanticColors.success
+                                com.aicode.feature.agent.domain.model.AgentMode.PLAN -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.error
+                            },
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
-                    TextButton(onClick = {
-                        FloatBallCommandCenter.openApp?.invoke()
-                        onDismiss()
-                    }) { Text(stringResource(R.string.float_panel_open_app)) }
+                    // 2) 模型选择：悬浮窗内嵌同款模型列表（Hub 自足提供数据与写回，不依赖页面存活）
+                    IconButton(
+                        onClick = {
+                            val data = sessionHub.modelData()
+                            if (data == null) hint = context.getString(R.string.float_panel_send_need_app)
+                            else {
+                                modelPickerSnapshot = data
+                                modelQuery = ""
+                                panelView = "modelPicker"
+                            }
+                        },
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Cpu,
+                            contentDescription = stringResource(R.string.float_panel_pick_model),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = {
-                        onDismiss()
-                        this@FloatBallOverlay.onClose()
-                    }) {
-                        Text(
-                            text = stringResource(R.string.float_panel_close_ball),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall
+                    // 语音（App 内点击聆听同业务）：识别文本回填输入框
+                    IconButton(
+                        onClick = {
+                            if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+                                android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                hint = context.getString(R.string.float_panel_voice_need_app)
+                                return@IconButton
+                            }
+                            if (voiceTapActive) {
+                                if (!voiceProcessing) {
+                                    voiceProcessing = true
+                                    voiceController.finish()
+                                }
+                            } else if (!voiceProcessing) {
+                                voiceTapActive = true
+                                voiceController.start()
+                            }
+                        },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Mic,
+                            contentDescription = stringResource(R.string.float_panel_voice),
+                            tint = if (voiceTapActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    // 发送（App 内 SendButton 同款 36dp 圆钮，箭头恒白；忙时空输入=停止）
+                    val canSend = input.isNotBlank()
+                    val showStop = state.busy && !canSend
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    showStop -> MaterialTheme.colorScheme.error
+                                    state.busy -> com.aicode.core.theme.Brand.Orange
+                                    canSend -> MaterialTheme.semanticColors.success
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+                            )
+                            .clickable {
+                                if (showStop) {
+                                    val result = FloatBallCommandCenter.stop?.invoke()
+                                    hint = context.getString(
+                                        when (result) {
+                                            true -> R.string.float_panel_stopped
+                                            false -> R.string.float_panel_nothing_running
+                                            null -> R.string.float_panel_send_need_app
+                                        }
+                                    )
+                                } else doSend()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (showStop) FeatherIcons.Square else FeatherIcons.ArrowUp,
+                            contentDescription = stringResource(R.string.chat_send),
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -921,6 +1223,148 @@ class FloatBallOverlay(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+            }
+        }
+            // 右下角拖拽调大小把手（三道斜线）：拖动即实时改窗口尺寸并持久化
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(26.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            resizePanelBy(dragAmount.x.roundToInt(), dragAmount.y.roundToInt())
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // DrawScope 非 @Composable 上下文：颜色必须先在外面取好再传入（项目内既有坑）
+                val handleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                Canvas(modifier = Modifier.fillMaxSize().padding(5.dp)) {
+                    for (i in 1..3) {
+                        val off = i * (size.width / 4f)
+                        drawLine(
+                            color = handleColor,
+                            start = Offset(size.width - off, size.height),
+                            end = Offset(size.width, size.height - off),
+                            strokeWidth = 2.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+                }
+            }
+        }
+        }
+    }
+}
+
+/**
+ * 模型选择视图（FB2）：悬浮窗内的纯 Compose 列表——provider 分组 + 搜索过滤，
+ * 选中走与 App 内模型 sheet 同一落点（[FloatBallCommandCenter.selectModel]）。
+ * 不能用 ModalBottomSheet/Dialog：悬浮窗窗口无 Activity token，弹窗必崩（BadTokenException）。
+ */
+@Composable
+private fun ModelPickerView(
+    data: FloatBallCommandCenter.FloatModelPickerData,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSelect: (String, String) -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = FeatherIcons.ArrowLeft,
+                    contentDescription = stringResource(R.string.common_back),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Text(
+                text = stringResource(R.string.float_panel_pick_model),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            placeholder = { Text(stringResource(R.string.float_panel_model_search), style = MaterialTheme.typography.bodySmall) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            val q = query.trim()
+            val providers = data.providers.filter { it.isEnabled }
+            val hitProviders = providers.filter { p ->
+                q.isBlank() || p.name.contains(q, ignoreCase = true) ||
+                    p.models.any { it.contains(q, ignoreCase = true) }
+            }
+            if (hitProviders.isEmpty()) {
+                item(key = "empty") {
+                    Text(
+                        text = stringResource(R.string.float_panel_model_none),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                }
+            }
+            hitProviders.forEach { p ->
+                val models = if (q.isBlank()) p.models
+                else p.models.filter { it.contains(q, ignoreCase = true) }
+                item(key = "provider-${p.id}") {
+                    Text(
+                        text = p.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                    )
+                }
+                items(models.size) { idx ->
+                    val model = models[idx]
+                    val selected = p.id == data.currentProviderId && model == data.currentModel
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                else Color.Transparent
+                            )
+                            .clickable { onSelect(p.id, model) }
+                            .padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = model,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (selected) {
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
         }
