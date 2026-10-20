@@ -275,6 +275,14 @@ class CheckpointManagerSessionIsolationTest {
         override suspend fun deleteCheckpointsBefore(cutoffTimestamp: Long) {
             checkpoints.removeAll { it.createdAt < cutoffTimestamp }
         }
+
+        override suspend fun deleteAllFileSnapshots() {
+            snapshots.clear()
+        }
+
+        override suspend fun deleteAllCheckpoints() {
+            checkpoints.clear()
+        }
     }
 
     private class LocalFileAccess : FileAccessProvider {

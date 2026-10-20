@@ -42,7 +42,7 @@ class CliAgentManager @Inject constructor(
     /** 在新终端标签里启动 CLI 交互会话（notify=false：退出后 shell 保活）。返回标签 id。须在主线程调用。 */
     suspend fun launch(agent: CliAgent): String =
         terminalSessionProvider.startBackgroundCommand(
-            command = agent.command,
+            command = agent.launchCommand,
             title = agent.displayName,
             notify = false
         )

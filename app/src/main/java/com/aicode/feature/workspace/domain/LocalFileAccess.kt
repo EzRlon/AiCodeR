@@ -1,6 +1,7 @@
 package com.aicode.feature.workspace.domain
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeDelete
 import com.aicode.core.util.boundedLines
 import java.io.File
 import java.io.FileOutputStream
@@ -198,7 +199,9 @@ class LocalFileAccess @Inject constructor(
     override fun deleteRecursively(path: String) {
         val file = resolve(path)
         if (!file.exists()) return
-        if (!file.deleteRecursively()) throw IOException("delete failed: ${file.absolutePath}")
+        // NOFOLLOW 删除：用户/外部 App 可在工作区投放符号链接，deleteRecursively 会跟链接下钻删到目标
+        SafeDelete.deleteTree(file)
+        if (file.exists()) throw IOException("delete failed: ${file.absolutePath}")
     }
 
     override fun rename(path: String, newPath: String) {
@@ -223,7 +226,7 @@ class LocalFileAccess @Inject constructor(
         }
         if (target.exists()) {
             if (!overwrite) throw FileAlreadyExistsException(target)
-            target.deleteRecursively()
+            SafeDelete.deleteTree(target)
         }
         target.parentFile?.mkdirs()
         if (source.isDirectory) {
@@ -244,7 +247,7 @@ class LocalFileAccess @Inject constructor(
         }
         if (target.exists()) {
             if (!overwrite) throw FileAlreadyExistsException(target)
-            target.deleteRecursively()
+            SafeDelete.deleteTree(target)
         }
         target.parentFile?.mkdirs()
         val moved = try {
@@ -259,7 +262,8 @@ class LocalFileAccess @Inject constructor(
         } else {
             source.copyTo(target, overwrite = false)
         }
-        if (!source.deleteRecursively()) throw IOException("delete-after-copy failed: ${source.absolutePath}")
+        SafeDelete.deleteTree(source)
+        if (source.exists()) throw IOException("delete-after-copy failed: ${source.absolutePath}")
     }
 
     override fun mkdirs(path: String) {

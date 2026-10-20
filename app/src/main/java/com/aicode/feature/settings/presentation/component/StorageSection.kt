@@ -94,6 +94,7 @@ internal fun StorageSectionHost(
         onToggleExpand = viewModel::toggleExpanded,
         onToggleCleanup = viewModel::toggleCleanup,
         onToggleArtifact = viewModel::toggleArtifact,
+        onToggleSession = viewModel::toggleSession,
         onCleanSelected = viewModel::cleanSelected,
         onDeleteArtifact = viewModel::deleteArtifact,
         onRevealInTree = onRevealInTree
@@ -111,6 +112,7 @@ internal fun StorageSection(
     onToggleExpand: (StorageCategory) -> Unit,
     onToggleCleanup: (CleanupKind) -> Unit,
     onToggleArtifact: (String) -> Unit,
+    onToggleSession: (String) -> Unit,
     onCleanSelected: () -> Unit,
     onDeleteArtifact: (String) -> Unit,
     onRevealInTree: ((String) -> Unit)? = null
@@ -141,11 +143,16 @@ internal fun StorageSection(
                     val entry = state.entries[category]
                     val details = entry?.details.orEmpty().filter {
                         category != StorageCategory.AiConfig ||
-                            it.key == StorageDetailKey.TOOL_OUTPUT || it.key == StorageDetailKey.VISION_SESSIONS
+                            it.key == StorageDetailKey.TOOL_OUTPUT || it.key == StorageDetailKey.VISION_SESSIONS ||
+                            it.key == StorageDetailKey.GENERATED_IMAGES
                     }
                     val cleanupKind = when (category) {
                         StorageCategory.Logs -> CleanupKind.Logs
                         StorageCategory.Caches -> CleanupKind.Caches
+                        StorageCategory.Checkpoints -> CleanupKind.Checkpoints
+                        StorageCategory.ContainerImages -> CleanupKind.ContainerImages
+                        // 容器数据行勾选即执行「容器内构建缓存」清理（脚本只清白名单缓存目录）
+                        StorageCategory.Container -> CleanupKind.ContainerCaches
                         else -> null
                     }
                     CategoryRow(
@@ -164,18 +171,22 @@ internal fun StorageSection(
                             val detailCleanup = when (detail.key) {
                                 StorageDetailKey.TOOL_OUTPUT -> CleanupKind.ToolOutput
                                 StorageDetailKey.VISION_SESSIONS -> CleanupKind.VisionSessions
+                                StorageDetailKey.GENERATED_IMAGES -> CleanupKind.GeneratedImages
                                 else -> null
                             }
+                            val sessionKey = detail.key?.takeIf { it.startsWith(StorageDetailKey.CHAT_SESSION_PREFIX) }
                             DetailRow(
                                 detail = detail,
                                 cleanupKind = detailCleanup,
                                 artifact = detail.path != null,
+                                sessionKey = sessionKey,
                                 selected = (detailCleanup != null && detailCleanup in state.selectedCleanup) ||
-                                    (detail.path != null && detail.path in state.selectedArtifacts),
+                                    (detail.path != null && detail.path in state.selectedArtifacts) ||
+                                    (sessionKey != null && sessionKey in state.selectedSessions),
                                 cleaning = state.cleaning,
                                 onSelect = {
                                     if (detailCleanup != null) onToggleCleanup(detailCleanup)
-                                    else detail.path?.let(onToggleArtifact)
+                                    else sessionKey?.let(onToggleSession) ?: detail.path?.let(onToggleArtifact)
                                 },
                                 onClick = detail.path?.let { { actionDetail = detail } }
                             )
@@ -234,6 +245,16 @@ internal fun StorageSection(
                                 R.string.storage_clean_confirm_artifacts,
                                 state.selectedArtifacts.size,
                                 formatStorageSize(state.artifactSelectedBytes)
+                            ),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    if (state.selectedSessions.isNotEmpty()) {
+                        Text(
+                            stringResource(
+                                R.string.storage_clean_confirm_sessions,
+                                state.selectedSessions.size,
+                                formatStorageSize(state.sessionSelectedBytes)
                             ),
                             fontWeight = FontWeight.Medium
                         )
@@ -506,6 +527,7 @@ private fun DetailRow(
     detail: StorageDetail,
     cleanupKind: CleanupKind?,
     artifact: Boolean,
+    sessionKey: String?,
     selected: Boolean,
     cleaning: Boolean,
     onSelect: () -> Unit,
@@ -540,7 +562,7 @@ private fun DetailRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.semanticColors.subtleText
             )
-            if (cleanupKind != null || artifact) {
+            if (cleanupKind != null || artifact || sessionKey != null) {
                 Checkbox(
                     checked = selected && detail.bytes > 0L,
                     onCheckedChange = { onSelect() },

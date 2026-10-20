@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.container
 import android.content.Context
 import android.system.Os
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeDelete
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,8 +15,6 @@ import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.zip.GZIPInputStream
 import javax.inject.Inject
@@ -34,6 +33,7 @@ class ContainerInstaller @Inject constructor(
     companion object {
         private const val TAG = "ContainerInstaller"
         @Volatile private var docsExtractedSession = false
+        @Volatile private var multiLlmExtractedSession = false
 
         /**
          * 从 assets 提取文档到 ~/.aicode/docs (内置使用指导)，支持 guide/ advanced/ 等分类子目录。
@@ -51,6 +51,26 @@ class ContainerInstaller @Inject constructor(
                 docsExtractedSession = true
             }.onFailure {
                 FileLogger.w(TAG, "提取内置文档失败: ${it.message}", it)
+            }
+        }
+
+        /**
+         * 从 assets 提取 multi-llm（模型顾问团）服务端源码到 ~/.aicode/multi-llm/。
+         * 提取前整目录删除：源码随 App 升级演进，只覆盖不清理会残留旧模块；
+         * 运行时（pip 依赖目录）在相邻的 multi-llm-venv/，互不影响。
+         */
+        fun extractMultiLlm(context: Context) {
+            if (multiLlmExtractedSession) return
+            val destDir = File(File(context.filesDir, "aicode"), "multi-llm")
+            runCatching {
+                // 不能用 deleteRecursively：会跟随目录符号链接下钻（multi-llm 是用户/AI 可改动的
+                // 源码目录，链接到相邻 venv 等外部时会误删目标）；SafeDelete 为 NOFOLLOW 遍历。
+                SafeDelete.deleteTree(destDir)
+                destDir.mkdirs()
+                extractAssetsRecursive(context, "aicode/multi-llm", destDir)
+                multiLlmExtractedSession = true
+            }.onFailure {
+                FileLogger.w(TAG, "提取 multi-llm 服务端源码失败: ${it.message}", it)
             }
         }
 
@@ -86,8 +106,8 @@ class ContainerInstaller @Inject constructor(
                 for (entry in entries) {
                     val dest = File(destDir, entry)
                     // 先删再释放：内置技能随版本可能删减/移动文件，只覆盖不清理会残留旧文件。
-                    // 用 deleteTree 而非 File.deleteRecursively：skills 与用户内容共享，符号链接只删链接、不下钻。
-                    deleteTree(dest, 0) {}
+                    // 用 SafeDelete 而非 File.deleteRecursively：skills 与用户内容共享，符号链接只删链接、不下钻。
+                    SafeDelete.deleteTree(dest)
                     extractAssetsRecursive(context, "skills/$entry", dest)
                 }
             }.onFailure {
@@ -96,43 +116,9 @@ class ContainerInstaller @Inject constructor(
         }
 
         /**
-         * 递归删除 [root]（符号链接安全：链接只删链接本身、不跟随下钻），返回从 [startCount] 起算的
-         * 累计已删条目数，每 [DELETE_PROGRESS_STEP] 项回调一次。rootfs 清理与内置技能目录清理
-         * （[extractBuiltinSkills]）共用。
-         *
-         * 不用 [File.deleteRecursively]：它按 `File.isDirectory` 判断，会跟随符号链接下钻——rootfs 的
-         * /bin、/usr/lib 下满是 symlink，跟随不仅白跑一遍链接目标（大容器上慢出好几倍），指向自身祖先时
-         * 还会一路下钻到路径超长才停，更别说链接指向 rootfs 外面时会删掉别处的数据。这里用
-         * NOFOLLOW_LINKS 判定目录，符号链接一律当普通条目 unlink。技能目录与用户内容共享，同理必须
-         * NOFOLLOW，避免跟随链接误删目录外数据。
+         * 递归删除已改用 [com.aicode.core.util.SafeDelete.deleteTree]（符号链接安全，NOFOLLOW），
+         * rootfs 清理与内置技能目录清理共用；本类不再保留私有实现。
          */
-        private fun deleteTree(root: File, startCount: Int, onProgress: (Int) -> Unit): Int {
-            var count = startCount
-            val pending = ArrayDeque<File>()
-            val dirs = ArrayDeque<File>()
-            pending.addLast(root)
-            while (pending.isNotEmpty()) {
-                val entry = pending.removeLast()
-                if (isRealDirectory(entry)) {
-                    dirs.addLast(entry)
-                    entry.listFiles()?.forEach { pending.addLast(it) }
-                } else if (entry.delete()) {
-                    count++
-                    if (count % DELETE_PROGRESS_STEP == 0) onProgress(count)
-                }
-            }
-            // 目录得等自己空了才删得掉：dirs 按自浅入深的发现顺序入队，从队尾往回删即先深后浅。
-            while (dirs.isNotEmpty()) {
-                if (dirs.removeLast().delete()) count++
-            }
-            onProgress(count)
-            return count
-        }
-
-        /** 是否真目录：符号链接即便指向目录也返回 false，防止删除时跟着链接下钻。 */
-        private fun isRealDirectory(file: File): Boolean = runCatching {
-            Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory
-        }.getOrDefault(false)
 
         /** 递归复制 assets 下的目录到目标目录，支持子目录（如 prompts/agent/、docs/guide/）。 */
         private fun extractAssetsRecursive(context: Context, assetDir: String, destDir: File) {
@@ -153,7 +139,7 @@ class ContainerInstaller @Inject constructor(
         }
 
         /**
-         * 从 assets 提取内置编队定义（专家团）到 ~/.aicode/teams/。
+         * 从 assets 提取内置专家团定义（专家团）到 ~/.aicode/teams/。
          * 若文件已存在则不覆盖，以保留用户的修改与删除后的重建选择。
          */
         fun extractTeams(context: Context) {
@@ -170,7 +156,7 @@ class ContainerInstaller @Inject constructor(
                     }
                 }
             }.onFailure {
-                FileLogger.w(TAG, "提取内置编队定义失败: ${it.message}", it)
+                FileLogger.w(TAG, "提取内置专家团定义失败: ${it.message}", it)
             }
         }
 
@@ -336,9 +322,6 @@ class ContainerInstaller @Inject constructor(
          * 换 assets 时同步更新这里，让「装了哪一版」在日志里有据可查。
          */
         private const val ROOTFS_ASSET_VERSION = "3.21.8"
-
-        /** 删 rootfs 时每删这么多条目回调一次进度（太密会刷爆 UI 状态流）。 */
-        private const val DELETE_PROGRESS_STEP = 2000
     }
 
     /** assets 内的架构特定目录 */
@@ -643,7 +626,7 @@ class ContainerInstaller @Inject constructor(
     private fun purgeRootfs(dir: File, marker: File, onProgress: (Int) -> Unit) {
         if (!dir.exists()) return
         marker.delete()
-        val count = deleteTree(dir, 0, onProgress)
+        val count = SafeDelete.deleteTree(dir, onProgress = onProgress)
         FileLogger.i(TAG, "已删除 rootfs ${dir.name}，共 $count 项")
     }
 

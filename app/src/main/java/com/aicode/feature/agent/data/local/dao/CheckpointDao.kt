@@ -41,4 +41,10 @@ interface CheckpointDao {
 
     @Query("DELETE FROM session_checkpoints WHERE createdAt < :cutoffTimestamp")
     suspend fun deleteCheckpointsBefore(cutoffTimestamp: Long)
+
+    @Query("DELETE FROM checkpoint_file_snapshots")
+    suspend fun deleteAllFileSnapshots()
+
+    @Query("DELETE FROM session_checkpoints")
+    suspend fun deleteAllCheckpoints()
 }

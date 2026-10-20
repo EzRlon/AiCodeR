@@ -5,17 +5,17 @@ import com.aicode.feature.workspace.domain.FileAccessProvider
 import org.yaml.snakeyaml.Yaml
 
 /**
- * 解析单个编队定义文件（`teams/<name>.md`）：YAML frontmatter 为配置，正文为团长提示词。
+ * 解析单个专家团定义文件（`teams/<name>.md`）：YAML frontmatter 为配置，正文为团长提示词。
  * 与 [com.aicode.feature.agent.domain.subagent.AgentDefinitionParser] 同一套 frontmatter 约定。
  */
 object TeamDefinitionParser {
     private const val TAG = "TeamDefinitionParser"
     private const val MAX_DESC_CHARS = 500
 
-    /** 正文为空视为非法定义（编队必须有团长提示词），返回 null。定义文件经 [provider] 以容器路径读取。 */
+    /** 正文为空视为非法定义（专家团必须有团长提示词），返回 null。定义文件经 [provider] 以容器路径读取。 */
     fun parse(provider: FileAccessProvider, filePath: String): TeamDefinition? {
         val text = runCatching { provider.readFile(filePath) }.getOrElse {
-            FileLogger.w(TAG, "读取编队定义失败: $filePath", it)
+            FileLogger.w(TAG, "读取专家团定义失败: $filePath", it)
             return null
         }
 
@@ -57,7 +57,7 @@ object TeamDefinitionParser {
         val map = try {
             Yaml().load<Map<String, Any>>(block) ?: emptyMap()
         } catch (e: Exception) {
-            FileLogger.w(TAG, "解析编队定义 YAML 失败", e)
+            FileLogger.w(TAG, "解析专家团定义 YAML 失败", e)
             emptyMap()
         }
         return map to rest

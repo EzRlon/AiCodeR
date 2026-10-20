@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -171,6 +172,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var skillConfigRepository: com.aicode.feature.agent.domain.skill.SkillConfigRepository
 
+    /** 会话数据库：启动后用于 FTS 存量回填判定（迁移 67 只建表不回填，避免主线程黑屏）。 */
+    @Inject
+    lateinit var agentDatabase: com.aicode.feature.agent.data.local.database.AgentDatabase
+
     /** 旧 Room git 凭据一次性迁移器：启动即把旧表数据写入 git-credentials 文件后删表（真源已迁到文件）。 */
     @Inject
     lateinit var legacyCredentialMigrator: com.aicode.feature.credentials.data.LegacyCredentialMigrator
@@ -293,6 +298,20 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 用户自定义覆盖放在 ~/.aicode/prompts.custom/，同名即覆盖，不被升级覆盖。
         appScope.launch {
             ContainerInstaller.extractPrompts(this@AIEditorApp)
+        }
+        // FTS 存量回填：迁移 67 只建表+触发器（迁移内 rebuild 会主线程黑屏数秒），存量消息
+        // 在启动后延迟回填；FTS 行数 < 消息行数即执行 rebuild（幂等，新消息由触发器实时入索引）
+        appScope.launch {
+            delay(5_000)
+            runCatching {
+                val db = agentDatabase.openHelper.writableDatabase
+                val ftsCount = db.query("SELECT COUNT(*) FROM agent_messages_fts").use { c -> c.moveToFirst(); c.getInt(0) }
+                val msgCount = db.query("SELECT COUNT(*) FROM agent_messages").use { c -> c.moveToFirst(); c.getInt(0) }
+                if (msgCount > 0 && ftsCount < msgCount) {
+                    db.execSQL("INSERT INTO agent_messages_fts(agent_messages_fts) VALUES('rebuild')")
+                    FileLogger.i("AIEditorApp", "FTS 存量回填完成：$msgCount 条消息")
+                }
+            }.onFailure { FileLogger.w("AIEditorApp", "FTS 存量回填失败（下次启动重试）", it) }
         }
         // 启动即把内置技能释放到 ~/.aicode/skills/（覆盖式，随 App 升级自动更新；
         // 内置技能请勿直接修改，同名用户技能会被内置版覆盖）。

@@ -127,7 +127,7 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
-    /** 编队团长指令：会话召唤了编队时注入（团长提示词 + 成员名单）；子代理路径不注入。 */
+    /** 专家团团长指令：会话召唤了专家团时注入（团长提示词 + 成员名单）；子代理路径不注入。 */
     private inner class TeamLeaderSource : PromptSource {
         override fun build(ctx: AgentContext): String {
             val team = teamRepository.resolve(ctx.teamName) ?: return ""
@@ -136,7 +136,7 @@ class SystemPromptProvider @Inject constructor(
                 if (desc.isNotBlank()) "- $memberName: $desc" else "- $memberName"
             }
             return buildString {
-                append("## 编队：").append(team.name).append('\n')
+                append("## 专家团：").append(team.name).append('\n')
                 append(team.prompt)
                 if (memberLines.isNotBlank()) {
                     append("\n\n你的成员（用 task 工具按 agent 名派发）：\n").append(memberLines)
@@ -306,7 +306,7 @@ class SystemPromptProvider @Inject constructor(
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
-        // 编队团长指令附加在末尾：会话级内容、变更少，对前缀 KV Cache 影响最小。
+        // 专家团团长指令附加在末尾：会话级内容、变更少，对前缀 KV Cache 影响最小。
         val teamContent = teamLeaderSource.build(agentContext)
         val withTeam = if (teamContent.isNullOrBlank()) staticContent else "$staticContent\n\n$teamContent"
         return collapseBlankLines(withTeam)

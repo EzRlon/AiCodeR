@@ -14,6 +14,7 @@ import com.aicode.feature.agent.data.local.dao.RecentCallRecord
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.local.entity.PermissionAuditEntity
 import com.aicode.feature.agent.domain.container.ConnectionState
+import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerInstaller
@@ -404,6 +405,7 @@ class SettingsViewModel @Inject constructor(
     private val containerImageVersionProbe: ContainerImageVersionProbe,
     private val containerInstaller: ContainerInstaller,
     private val containerOsDetector: ContainerOsDetector,
+    private val commandEngine: CommandEngine,
     private val executionModeRepository: ExecutionModeRepository,
     private val executionModeHolder: ExecutionModeHolder,
     private val remoteSshConnection: RemoteSshConnection,
@@ -442,6 +444,16 @@ class SettingsViewModel @Inject constructor(
 
         /** 「全部测试」单个模型的超时（毫秒）：防单个挂死请求拖垮整批。 */
         const val BULK_TEST_TIMEOUT_MS = 30_000L
+
+        /** multi-llm（模型顾问团）：内置 MCP 预设的服务名与运行参数（服务端源码与依赖由「模型顾问团」场景安装）。 */
+        const val MULTI_LLM_SERVER_NAME = "multi-llm"
+        val MULTI_LLM_PRESET = McpServerConfig(
+            name = MULTI_LLM_SERVER_NAME,
+            command = "python3",
+            args = listOf("/root/.aicode/multi-llm/server.py"),
+            env = mapOf("PYTHONPATH" to "/root/.aicode/multi-llm-venv/site"),
+            enabled = true
+        )
     }
 
     /** 终端个性化配置。 */
@@ -733,6 +745,102 @@ class SettingsViewModel @Inject constructor(
 
     private val _mcpImportState = MutableStateFlow(McpImportUiState())
     val mcpImportState: StateFlow<McpImportUiState> = _mcpImportState.asStateFlow()
+
+    // ── multi-llm（模型顾问团）内置安装与接入 ────────────────────────
+
+    /** 安装态：CHECKING 检测中 / UNSUPPORTED 远程模式不支持 / READY 环境就绪待接入 / NOT_INSTALLED 未安装。 */
+    enum class MultiLlmEnv { CHECKING, UNSUPPORTED, READY, NOT_INSTALLED }
+
+    private val _multiLlmEnv = MutableStateFlow(MultiLlmEnv.CHECKING)
+    val multiLlmEnv: StateFlow<MultiLlmEnv> = _multiLlmEnv.asStateFlow()
+
+    private val _multiLlmInstalling = MutableStateFlow(false)
+    val multiLlmInstalling: StateFlow<Boolean> = _multiLlmInstalling.asStateFlow()
+
+    private val _multiLlmMessage = MutableStateFlow<String?>(null)
+    val multiLlmMessage: StateFlow<String?> = _multiLlmMessage.asStateFlow()
+
+    /** 列表里已存在 multi-llm 条目（无论启用与否）即视为已接入，内置卡片隐藏。 */
+    val multiLlmConfigured: StateFlow<Boolean> = _mcpEntries
+        .map { entries -> entries.any { it.server.name == MULTI_LLM_SERVER_NAME } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 环境探测：远程模式不支持；本地容器检测安装标记与依赖导入自检（同 REA 的最终权威判据思路）。 */
+    fun refreshMultiLlmEnv() {
+        viewModelScope.launch {
+            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH) {
+                _multiLlmEnv.value = MultiLlmEnv.UNSUPPORTED
+                return@launch
+            }
+            val r = commandEngine.runCommandSyncIfReady(
+                "test -f /root/.aicode/multi-llm/server.py -a -f /root/.aicode/multi-llm-venv/.installed && " +
+                    "PYTHONPATH=/root/.aicode/multi-llm-venv/site python3 -c 'import mcp, playwright' >/dev/null 2>&1 && echo ML_READY"
+            )
+            _multiLlmEnv.value = if (r?.exitCode == 0 && r.output.contains("ML_READY")) {
+                MultiLlmEnv.READY
+            } else {
+                MultiLlmEnv.NOT_INSTALLED
+            }
+        }
+    }
+
+    /** 一键安装：跑「模型顾问团」场景脚本（幂等），成功后自动接入 MCP。 */
+    fun installMultiLlm() {
+        if (_multiLlmInstalling.value) return
+        viewModelScope.launch {
+            _multiLlmInstalling.value = true
+            _multiLlmMessage.value = null
+            // 防重：页面销毁后安装仍可能在后台跑（同 REA 的 pgrep 探测，[p] 防自匹配）
+            val runningElsewhere = runCatching {
+                commandEngine.runCommandSyncIfReady(
+                    "pgrep -f '[p]rovision.sh --install multillm' >/dev/null 2>&1 && echo RUNNING"
+                )?.output?.contains("RUNNING") == true
+            }.getOrDefault(false)
+            if (runningElsewhere) {
+                _multiLlmInstalling.value = false
+                _multiLlmMessage.value = context.getString(R.string.mcp_multillm_running_elsewhere)
+                return@launch
+            }
+            val ok = runCatching {
+                commandEngine.runCommandSyncWithExit(
+                    command = "sh ~/.aicode/provision.sh --install multillm",
+                    timeoutMs = 1_200_000L
+                ).exitCode == 0
+            }.getOrDefault(false)
+            if (ok) {
+                attachMultiLlmInternal()
+            } else {
+                _multiLlmMessage.value = context.getString(R.string.mcp_multillm_install_failed)
+            }
+            refreshMultiLlmEnv()
+            _multiLlmInstalling.value = false
+        }
+    }
+
+    /** 环境已就绪时直接接入（写入全局配置并重连）。 */
+    fun attachMultiLlm() {
+        if (_multiLlmInstalling.value) return
+        viewModelScope.launch {
+            _multiLlmInstalling.value = true
+            attachMultiLlmInternal()
+            refreshMultiLlmEnv()
+            _multiLlmInstalling.value = false
+        }
+    }
+
+    private suspend fun attachMultiLlmInternal() {
+        val ok = runCatching {
+            val servers = mcpConfigRepository.getGlobalServers().toMutableList()
+            servers.removeIf { it.name == MULTI_LLM_SERVER_NAME }
+            servers.add(MULTI_LLM_PRESET)
+            mcpConfigRepository.setGlobalServers(servers)
+            mcpManager.reloadServer(MULTI_LLM_SERVER_NAME)
+            true
+        }.getOrDefault(false)
+        _multiLlmMessage.value = context.getString(
+            if (ok) R.string.mcp_multillm_attached else R.string.mcp_multillm_install_failed
+        )
+    }
 
     private val _fetchState = MutableStateFlow<FetchState>(FetchState.Idle)
     val fetchState: StateFlow<FetchState> = _fetchState.asStateFlow()
@@ -2138,7 +2246,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 编队定义列表（供「编队」设置区展示）。 */
+    /** 专家团定义列表（供「专家团」设置区展示）。 */
     fun listTeams(): List<TeamDefinitionEntry> = teamRepository.listAll()
 
     /** 自我改进模式开关：开启后系统提示词注入自我改进指令。 */

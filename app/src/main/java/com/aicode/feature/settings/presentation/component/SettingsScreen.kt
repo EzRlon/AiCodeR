@@ -232,6 +232,10 @@ fun SettingsScreen(
     val mcpAuthState by viewModel.mcpAuthState.collectAsStateWithLifecycle()
     val mcpImportState by viewModel.mcpImportState.collectAsStateWithLifecycle()
     val mcpEntries by viewModel.mcpEntries.collectAsStateWithLifecycle()
+    val multiLlmEnv by viewModel.multiLlmEnv.collectAsStateWithLifecycle()
+    val multiLlmConfigured by viewModel.multiLlmConfigured.collectAsStateWithLifecycle()
+    val multiLlmInstalling by viewModel.multiLlmInstalling.collectAsStateWithLifecycle()
+    val multiLlmMessage by viewModel.multiLlmMessage.collectAsStateWithLifecycle()
     val mcpStatuses by viewModel.mcpStatuses.collectAsStateWithLifecycle()
     val mcpReloading by viewModel.mcpReloading.collectAsStateWithLifecycle()
     val skills by viewModel.skills.collectAsStateWithLifecycle()
@@ -330,6 +334,10 @@ fun SettingsScreen(
 
     var section by remember { mutableStateOf(SettingsSection.Menu) }
     var logReturnSection by remember { mutableStateOf(SettingsSection.Menu) }
+    // 进入 MCP 页时刷新一次 multi-llm 环境探测（安装完成回到本页也能立即看到最新状态）
+    LaunchedEffect(section) {
+        if (section == SettingsSection.Mcp) viewModel.refreshMultiLlmEnv()
+    }
     var editingProvider by remember { mutableStateOf<AIProviderConfig?>(null) }
     var showAddProviderSheet by remember { mutableStateOf(false) }
     var providerPresetPrefill by remember { mutableStateOf<ProviderPreset?>(null) }
@@ -1107,6 +1115,12 @@ fun SettingsScreen(
                     entries = mcpEntries,
                     statuses = mcpStatuses,
                     reloading = mcpReloading,
+                    multiLlmConfigured = multiLlmConfigured,
+                    multiLlmEnv = multiLlmEnv,
+                    multiLlmInstalling = multiLlmInstalling,
+                    multiLlmMessage = multiLlmMessage,
+                    onInstallMultiLlm = { viewModel.installMultiLlm() },
+                    onAttachMultiLlm = { viewModel.attachMultiLlm() },
                     onReload = { viewModel.reloadMcp() },
                     onToggle = { name, enabled, scope -> viewModel.setMcpServerEnabled(name, enabled, scope) },
                     onEdit = {
@@ -1914,12 +1928,6 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.Users,
-                title = stringResource(SettingsSection.SubAgents.titleRes),
-                onClick = { onOpen(SettingsSection.SubAgents) }
-            )
-            SettingsDivider()
-            SettingsRow(
                 icon = FeatherIcons.Layers,
                 title = stringResource(SettingsSection.Teams.titleRes),
                 onClick = { onOpen(SettingsSection.Teams) }
@@ -1929,6 +1937,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Package,
                 title = stringResource(SettingsSection.Store.titleRes),
                 onClick = { onOpen(SettingsSection.Store) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Users,
+                title = stringResource(SettingsSection.SubAgents.titleRes),
+                onClick = { onOpen(SettingsSection.SubAgents) }
             )
             SettingsDivider()
             SettingsRow(

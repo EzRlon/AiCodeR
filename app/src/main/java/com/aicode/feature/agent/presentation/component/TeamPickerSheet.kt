@@ -33,8 +33,8 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 
 /**
- * 编队选择面板：列出全部编队（内置释放的 + 全局 + 项目级），选中后本会话注入团长指令；
- * 「不使用编队」清除。选择即刻生效于后续回合。
+ * 专家团选择面板：列出全部专家团（内置释放的 + 全局 + 项目级），选中后本会话注入团长指令；
+ * 「不使用专家团」清除。选择即刻生效于后续回合。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -5,7 +5,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 全局编队定义来源：`~/.aicode/teams`，跨项目共享。
+ * 全局专家团定义来源：`~/.aicode/teams`，跨项目共享。
  * 以容器路径经 [FileAccessProvider] 访问，跟随当前执行环境（本地宿主目录或远程 SSH 服务器）。
  */
 @Singleton

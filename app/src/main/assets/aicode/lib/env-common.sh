@@ -12,8 +12,9 @@
 # 多镜像候选（按优先级排序，换源时自动探测跳过不可用；阿里云对服务器访问全量 403 放最后，探测会跳过）
 MIRRORS="mirrors.huaweicloud.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.cloud.tencent.com mirrors.aliyun.com"
 MIRROR=""
-# 基础工具（不参与自定义勾选，始终安装）：git/ripgrep 是 AI 工作流与版本管理基础，bash/curl 是通用依赖
-BASE_PKGS="bash curl ripgrep git"
+# 基础工具（不参与自定义勾选，始终安装）：git/ripgrep 是 AI 工作流与版本管理基础，bash/curl 是通用依赖；
+# procps 提供完整版 ps（BusyBox ps 无 lstart 选项，Codex 等依赖 procps 语法的 CLI 守护进程需要）
+BASE_PKGS="bash curl ripgrep git procps"
 
 # ── 诊断日志：写入宿主可见的 $HOME/.aicode/provision.log（容器内 /root/.aicode 绑定到 App 私有目录）。
 # 终端 PTY 起不来或卡住时，App 侧「容器诊断」会把本文件尾部一并打进日志，用于判断脚本执行到了哪一步、
@@ -60,7 +61,10 @@ pkg_add() {
     case "$PMGR" in
         apk)
             apk update
-            apk add --no-cache "$@"
+            # PRoot 实测坑：apk add 对已装包必 exit 2 且无明细，整批装会整体失败——按缺补装
+            for p in "$@"; do
+                apk info -e "$p" >/dev/null 2>&1 || apk add --no-cache "$p" || return 1
+            done
             ;;
         apt)
             export DEBIAN_FRONTEND=noninteractive
@@ -610,7 +614,7 @@ EOF
 # ── 场景框架 ──
 # 每个开发环境一个脚本，放在 lib/scenarios/ 下，定义 scenario_name_<id> 与 install_scenario_<id>；
 # SCENARIO_IDS 决定菜单顺序。android / flutter 较重，逻辑在各自文件里（共用 lib/android-sdk.sh）。
-SCENARIO_IDS="common python node android flutter java go rust php qemu rea base"
+SCENARIO_IDS="common python node android flutter java go rust php qemu rea multillm base"
 
 # 载入共享工具与各场景脚本（android-sdk.sh 供 android / flutter 场景共用）
 [ -f "$AICODE_LIB_DIR/android-sdk.sh" ] && . "$AICODE_LIB_DIR/android-sdk.sh"

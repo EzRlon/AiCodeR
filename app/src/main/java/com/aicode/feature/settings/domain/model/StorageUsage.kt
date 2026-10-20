@@ -52,6 +52,13 @@ data class StorageEntry(
 object StorageDetailKey {
     const val TOOL_OUTPUT = "toolOutput"
     const val VISION_SESSIONS = "visionSessions"
+    const val GENERATED_IMAGES = "generatedImages"
+
+    /** 容器内构建缓存（容器数据分类下的探测行，供 ContainerCaches 勾选清理）。 */
+    const val CONTAINER_CACHES = "containerCaches"
+
+    /** 聊天记录页按会话勾选删除的前缀（后接会话 id）。 */
+    const val CHAT_SESSION_PREFIX = "chat-session:"
 }
 
 /** 可清理项：都是能自动重建或仅影响历史回看的临时数据，不含用户内容。 */
@@ -62,7 +69,11 @@ enum class CleanupKind(
     Caches(R.string.storage_clean_caches, R.string.storage_clean_caches_desc),
     Logs(R.string.storage_clean_logs, R.string.storage_clean_logs_desc),
     ToolOutput(R.string.storage_clean_tool_output, R.string.storage_clean_tool_output_desc),
-    VisionSessions(R.string.storage_clean_vision, R.string.storage_clean_vision_desc)
+    VisionSessions(R.string.storage_clean_vision, R.string.storage_clean_vision_desc),
+    Checkpoints(R.string.storage_clean_checkpoints, R.string.storage_clean_checkpoints_desc),
+    ContainerImages(R.string.storage_clean_images, R.string.storage_clean_images_desc),
+    GeneratedImages(R.string.storage_clean_generated, R.string.storage_clean_generated_desc),
+    ContainerCaches(R.string.storage_clean_container_caches, R.string.storage_clean_container_caches_desc)
 }
 
 /** 所在存储卷的容量信息（App 私有目录所在卷）。 */

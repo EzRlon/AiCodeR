@@ -65,7 +65,7 @@ data class BackupOptions(
     val permissionRules: Boolean = true,
     val appSettings: Boolean = true,
     val workspaceFiles: Boolean = false,
-    /** 全局 ~/.aicode 下的自定义资产：技能 / 子代理 / 编队 / 自定义提示词 / 记忆 / 笔记 + 根级配置（git 凭据、hooks 等）。 */
+    /** 全局 ~/.aicode 下的自定义资产：技能 / 子代理 / 专家团 / 自定义提示词 / 记忆 / 笔记 + 根级配置（git 凭据、hooks 等）。 */
     val aiAssets: Boolean = true,
     /** 统一密钥库（~/.aicode/keys，含发布签名与 SSH 私钥）；默认关，勾选时 UI 给出警示。 */
     val keys: Boolean = false

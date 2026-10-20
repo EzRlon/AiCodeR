@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -44,6 +46,7 @@ import com.aicode.feature.agent.domain.mcp.McpScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
+import com.aicode.feature.settings.presentation.SettingsViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.ChevronRight
@@ -60,45 +63,64 @@ internal fun McpSection(
     entries: List<McpServerEntry>,
     statuses: List<McpServerStatus>,
     reloading: Boolean,
+    multiLlmConfigured: Boolean,
+    multiLlmEnv: SettingsViewModel.MultiLlmEnv,
+    multiLlmInstalling: Boolean,
+    multiLlmMessage: String?,
+    onInstallMultiLlm: () -> Unit,
+    onAttachMultiLlm: () -> Unit,
     onReload: () -> Unit,
     onToggle: (String, Boolean, McpScope) -> Unit,
     onEdit: (McpServerEntry) -> Unit,
     onDelete: (String, McpScope) -> Unit
 ) {
+    val showMultiLlmCard = !multiLlmConfigured && multiLlmEnv != SettingsViewModel.MultiLlmEnv.UNSUPPORTED
     if (entries.isEmpty()) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(vertical = 48.dp),
-            contentAlignment = Alignment.Center
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.lg)
+                .padding(top = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
+            if (showMultiLlmCard) {
+                MultiLlmCard(multiLlmEnv, multiLlmInstalling, multiLlmMessage, onInstallMultiLlm, onAttachMultiLlm)
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
-                    contentAlignment = Alignment.Center
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
                 ) {
-                    Icon(
-                        FeatherIcons.Terminal,
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(Radius.lg)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            FeatherIcons.Terminal,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.mcp_empty),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = stringResource(R.string.mcp_empty_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = stringResource(R.string.mcp_empty),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.mcp_empty_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
         return
@@ -129,6 +151,10 @@ internal fun McpSection(
                 placeholder = stringResource(R.string.mcp_search_placeholder),
                 modifier = Modifier.padding(bottom = Spacing.xs)
             )
+        }
+
+        if (showMultiLlmCard) {
+            MultiLlmCard(multiLlmEnv, multiLlmInstalling, multiLlmMessage, onInstallMultiLlm, onAttachMultiLlm)
         }
 
         if (filteredEntries.isEmpty()) {
@@ -167,6 +193,67 @@ internal fun McpSection(
                         status = statuses.firstOrNull { it.name == entry.server.name },
                         onClick = { onEdit(entry) },
                         onDelete = { onDelete(entry.server.name, entry.scope) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 内置「模型顾问团」安装/接入卡片：列表里还没有 multi-llm 条目且本地容器模式时显示。 */
+@Composable
+private fun MultiLlmCard(
+    env: SettingsViewModel.MultiLlmEnv,
+    installing: Boolean,
+    message: String?,
+    onInstall: () -> Unit,
+    onAttach: () -> Unit
+) {
+    SettingsGroup {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md)
+        ) {
+            Text(
+                text = stringResource(R.string.mcp_multillm_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.mcp_multillm_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            message?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = { if (env == SettingsViewModel.MultiLlmEnv.READY) onAttach() else onInstall() },
+                enabled = !installing,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                if (installing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.mcp_multillm_installing))
+                } else {
+                    Text(
+                        stringResource(
+                            if (env == SettingsViewModel.MultiLlmEnv.READY) R.string.mcp_multillm_attach
+                            else R.string.mcp_multillm_install
+                        )
                     )
                 }
             }

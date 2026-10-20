@@ -9,6 +9,8 @@ import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerProfile
+import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
+import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.agent.domain.tool.ToolOutputStore
 import com.aicode.feature.agent.domain.tool.file.VisionSessionStore
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
@@ -51,7 +53,9 @@ class StorageUsageScanner @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val toolOutputStore: ToolOutputStore,
     private val visionSessionStore: VisionSessionStore,
-    private val agentMessageDao: AgentMessageDao
+    private val agentMessageDao: AgentMessageDao,
+    private val checkpointManager: CheckpointManager,
+    private val commandEngine: CommandEngine
 ) {
 
     /**
@@ -90,7 +94,30 @@ class StorageUsageScanner @Inject constructor(
             CleanupKind.Logs -> FileLogger.clearLogs() + AILogger.clearLogs()
             CleanupKind.ToolOutput -> clearDirContents(toolOutputStore.outputDir)
             CleanupKind.VisionSessions -> clearDirContents(visionSessionStore.sessionDir)
+            // 先量后删：清空检查点（含数据库记录与快照文件），回滚历史不可恢复
+            CleanupKind.Checkpoints -> {
+                val size = dirSize(File(context.filesDir, CHECKPOINTS_DIR))
+                checkpointManager.clearAllCheckpoints()
+                size
+            }
+            CleanupKind.ContainerImages -> clearDirContents(File(context.filesDir, IMAGES_DIR))
+            CleanupKind.GeneratedImages -> clearDirContents(File(containerInstaller.aicodeDir, GENERATED_IMAGES_DIR))
+            // 容器内构建缓存（Gradle/npm/Maven/通用 cache）：删除后下次构建自动重新下载；
+            // du 先统计再删，容器未就绪时静默返回 0
+            CleanupKind.ContainerCaches -> cleanContainerCaches()
         }
+    }
+
+    /**
+     * 清理容器内构建缓存。目标均为可重建缓存（不碰源码/容器系统目录/工作区）；
+     * 单命令先 du -sk 汇总后 rm，输出首行即释放的 KB 数。
+     */
+    private suspend fun cleanContainerCaches(): Long {
+        val result = commandEngine.runCommandSyncIfReady(
+            command = CONTAINER_CACHE_SCRIPT,
+            timeoutMs = 600_000L
+        ) ?: return 0L
+        return (result.output.lineSequence().firstOrNull()?.trim()?.toLongOrNull() ?: 0L) * 1024L
     }
 
     /**
@@ -132,7 +159,8 @@ class StorageUsageScanner @Inject constructor(
                     label = usage.title?.takeIf { it.isNotBlank() }
                         ?: context.getString(R.string.storage_untitled_session),
                     bytes = usage.bytes,
-                    note = context.getString(R.string.storage_chat_messages, usage.messageCount)
+                    note = context.getString(R.string.storage_chat_messages, usage.messageCount),
+                    key = StorageDetailKey.CHAT_SESSION_PREFIX + usage.sessionId
                 )
             }
         return StorageEntry(StorageCategory.Chat, bytes, details)
@@ -176,6 +204,22 @@ class StorageUsageScanner @Inject constructor(
                 ?.forEach { (name, size) ->
                     details += StorageDetail(label = "/$name", bytes = size, indent = true)
                 }
+        }
+        // 容器内构建缓存大小探测（只读 du，路径与清理脚本一致）：给「容器数据」行提供
+        // ContainerCaches 的可清理大小；扫描链路本身在 IO 协程，容器命令不占主线程
+        runCatching {
+            val kb = commandEngine.runCommandSyncIfReady(
+                command = CONTAINER_CACHE_DU,
+                timeoutMs = 60_000L
+            )?.output?.lineSequence()?.firstOrNull()?.trim()?.toLongOrNull() ?: 0L
+            if (kb > 0) {
+                details += StorageDetail(
+                    label = context.getString(R.string.storage_clean_container_caches),
+                    bytes = kb * 1024L,
+                    key = StorageDetailKey.CONTAINER_CACHES,
+                    indent = true
+                )
+            }
         }
         return StorageEntry(StorageCategory.Container, total, details)
     }
@@ -282,6 +326,13 @@ class StorageUsageScanner @Inject constructor(
             result += artifactDetail(project, dir, dir.lastModified(),
                 label = context.getString(R.string.storage_artifacts_venv), isDirectory = true)
         }
+        // 聊天附件（随会话上传/生成的图片等，存于项目 .aicode/attachments）单独成行可勾选清理
+        File(project, ATTACHMENTS_RELATIVE).takeIf { it.isDirectory }?.let { dir ->
+            if (dirSize(dir, cancelled) > 0) {
+                result += artifactDetail(project, dir, dir.lastModified(),
+                    label = context.getString(R.string.storage_artifacts_attachments), isDirectory = true)
+            }
+        }
         downloads.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
             result += artifactDetail(project, file, mtime, label = file.name)
         }
@@ -316,7 +367,8 @@ class StorageUsageScanner @Inject constructor(
         val root = containerInstaller.aicodeDir
         val cleanableKeys = mapOf(
             toolOutputStore.outputDir.name to StorageDetailKey.TOOL_OUTPUT,
-            visionSessionStore.sessionDir.name to StorageDetailKey.VISION_SESSIONS
+            visionSessionStore.sessionDir.name to StorageDetailKey.VISION_SESSIONS,
+            GENERATED_IMAGES_DIR to StorageDetailKey.GENERATED_IMAGES
         )
         val details = root.listFiles { f: File -> f.isDirectory }
             ?.map {
@@ -396,6 +448,27 @@ class StorageUsageScanner @Inject constructor(
         private const val AICODE_DIR = "aicode"
         private const val PREFS_DIR = "shared_prefs"
         private const val ATTACHMENTS_RELATIVE = ".aicode/attachments"
+        private const val GENERATED_IMAGES_DIR = "generated-images"
+
+        /** 容器内可重建缓存目录白名单（探测与清理严格同源；避开 /root/.cache 下的手工资产）。 */
+        private val CONTAINER_CACHE_DIRS = listOf(
+            "/root/.gradle/caches", "/root/.npm/_cacache", "/root/.m2/repository", "/root/.cache/pip", "/root/.cache/uv"
+        )
+
+        /** 只 du 不删（容器缓存大小探测用），路径与 [CONTAINER_CACHE_SCRIPT] 严格一致。 */
+        private val CONTAINER_CACHE_DU =
+            "du -sk ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null | " +
+                "awk '{s+=\$1} END {print s+0}'"
+
+        /**
+         * 容器内构建缓存清理脚本：du -sk 汇总后 rm（均为可重建缓存；不碰源码/工作区/容器
+         * 系统目录；不用 /root/.cache 整目录——实测其下有手工装的 chromium 等不可重建资产）。
+         * 输出首行 = 释放的 KB 数。
+         */
+        private val CONTAINER_CACHE_SCRIPT =
+            "du -sk ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null | " +
+                "awk '{s+=\$1} END {print s+0}'; " +
+                "rm -rf ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null; true"
 
         /** 已被其它分类覆盖的 filesDir 子项，不再计入「其他数据」。 */
         private val CLASSIFIED_DIRS = setOf(

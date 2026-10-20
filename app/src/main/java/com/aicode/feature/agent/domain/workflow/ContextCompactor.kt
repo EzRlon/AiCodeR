@@ -152,20 +152,33 @@ class ContextCompactor @Inject constructor(
         val threshold = (inputBudget * generalSettingsRepository.compactionThresholdPercent() / 100.0).toInt()
         if (messages.isEmpty() || (!force && currentTokens < threshold && currentTokens < inputBudget)) return unchanged
 
+        // 切点计算提前到 CompactionStarted 之前：没有可压缩历史（消息全部在保留窗口内）
+        // 是正常状态而非故障——固定开销（系统提示词+工具 schema）单独越过阈值时，每个
+        // 新会话的首轮都会触发到这里，若照旧 check 硬报错，每新建一个会话第一条消息
+        // 必弹「上下文压缩失败」。与「低于阈值不触发」同路径静默跳过：不发任何事件，UI 无感。
+        var splitIndex = CompactionText.selectTailStartIndex(messages, inputBudget)
+        if (force && splitIndex <= 0) splitIndex = messages.lastIndex
+        splitIndex = CompactionText.adjustSplitIndex(messages, splitIndex)
+        val head = messages.take(splitIndex)
+        val headMaterial = removeCompactionPairs(head)
+        val skipReason = when {
+            splitIndex <= 0 -> "无可压缩历史（消息全部在保留窗口内），跳过压缩"
+            headMaterial.isEmpty() ->
+                "无新历史可压缩（切点前全是既有摘要），跳过压缩"
+            else -> null
+        }
+        if (skipReason != null) {
+            FileLogger.i(TAG, skipReason)
+            return unchanged
+        }
+        val material = headMaterial
+
         onEvent(AgentEvent.CompactionStarted(currentTokens))
         val originalOutputLimit = aiProvider.maxOutputTokens
         val markerTimestamp = if (sessionId != null) messagePersistenceUseCase.nextTimestamp() else null
         val summaryTimestamp = if (sessionId != null) messagePersistenceUseCase.nextTimestamp() else null
         try {
-            var splitIndex = CompactionText.selectTailStartIndex(messages, inputBudget)
-            if (force && splitIndex <= 0) splitIndex = messages.lastIndex
-            splitIndex = CompactionText.adjustSplitIndex(messages, splitIndex)
-            check(splitIndex > 0) { "No compressible history before the retained tool unit" }
-            val head = messages.take(splitIndex)
             val tail = messages.drop(splitIndex)
-            val material = removeCompactionPairs(head)
-            check(material.isNotEmpty()) { "No new history to summarize" }
-
             val headIds = head.map { it.id }.filter { it.isNotBlank() }.distinct()
             if (sessionId != null) {
                 check(headIds.isNotEmpty() && head.all { it.id.isNotBlank() }) { "History has no stable persistence IDs" }

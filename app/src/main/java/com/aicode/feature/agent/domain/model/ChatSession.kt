@@ -54,6 +54,6 @@ data class ChatSession(
     val parentId: String? = null,
     /** 子代理会话：派生子代理的类型（如 coder / researcher）；null 表示普通根会话。 */
     val subagentType: String? = null,
-    /** 会话级召唤的编队名（对应 teams/<name>.md）；null 表示未使用编队。 */
+    /** 会话级召唤的专家团名（对应 teams/<name>.md）；null 表示未使用专家团。 */
     val teamName: String? = null
 )

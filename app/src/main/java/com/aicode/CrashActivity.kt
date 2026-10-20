@@ -58,6 +58,7 @@ import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.X
+import compose.icons.feathericons.Zap
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,6 +99,19 @@ class CrashActivity : ComponentActivity() {
                         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cm.setPrimaryClip(ClipData.newPlainText("crash", report))
                         Toast.makeText(this, R.string.crash_copied, Toast.LENGTH_SHORT).show()
+                    },
+                    onFix = {
+                        // 一键修复：清崩溃标记，带完整报告拉起主界面转入会话由 AI 诊断修复。
+                        AIEditorApp.resetCrashState(applicationContext)
+                        val payload = getString(R.string.crash_fix_prompt) + "\n\n" +
+                            report.take(MAX_FIX_REPORT)
+                        startActivity(
+                            Intent(this, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                                putExtra(EXTRA_FIX_REPORT, payload)
+                            }
+                        )
+                        finish()
                     },
                     onRestart = {
                         // 用户主动点击重启：清除崩溃标记与计数，允许主进程尝试冷启动
@@ -177,6 +191,10 @@ class CrashActivity : ComponentActivity() {
             ?.let { "$it/logs/" } ?: "filesDir/logs/"
 
     companion object {
+        const val EXTRA_FIX_REPORT = "extra_ai_fix_report"
+
+        /** 修复报告经 Intent 跨进程传递，Binder 事务上限 1MB 但保险按 45k 截断。 */
+        const val MAX_FIX_REPORT = 45_000
         const val EXTRA_THREAD_NAME = "thread_name"
         const val EXTRA_STACK = "stack"
         const val EXTRA_SCREEN = "screen"
@@ -198,6 +216,7 @@ private fun CrashScreen(
     device: String,
     time: String,
     onCopy: () -> Unit,
+    onFix: () -> Unit,
     onRestart: () -> Unit,
     onExit: () -> Unit,
 ) {
@@ -265,30 +284,42 @@ private fun CrashScreen(
                 color = pageBg,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    OutlinedButton(
-                        onClick = onCopy,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(FeatherIcons.Copy, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(Spacing.xs))
-                        Text(stringResource(R.string.crash_copy), maxLines = 1)
-                    }
+                    // 主操作独占一行，避免三键挤一行在窄屏剪断文案
                     Button(
-                        onClick = onRestart,
-                        modifier = Modifier.weight(1f),
+                        onClick = onFix,
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(FeatherIcons.RefreshCw, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(FeatherIcons.Zap, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(Spacing.xs))
-                        Text(stringResource(R.string.crash_restart), maxLines = 1)
+                        Text(stringResource(R.string.crash_fix), maxLines = 1)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                        OutlinedButton(
+                            onClick = onCopy,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(FeatherIcons.Copy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(Spacing.xs))
+                            Text(stringResource(R.string.crash_copy), maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onRestart,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(FeatherIcons.RefreshCw, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(Spacing.xs))
+                            Text(stringResource(R.string.crash_restart), maxLines = 1)
+                        }
                     }
                 }
             }

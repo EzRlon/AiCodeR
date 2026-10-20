@@ -1,88 +1,65 @@
 package com.aicode.feature.memorygraph.presentation
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
+import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.RefreshCw
 import com.aicode.R
-import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
-import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.presentation.AgentUIState
-
-/** 项目（工作区）节点固定 id：不归任何会话，仅作根节点。 */
-private const val PROJECT_NODE_ID = "__project__"
-
-private val NodeWidth = 152.dp
-private val NodeHeight = 56.dp
-private val ColumnGap = 24.dp
-private val SubGap = 16.dp
-private val LevelGap = 104.dp
-
-private enum class GraphNodeKind { PROJECT, SESSION, SUBAGENT }
-
-private data class GraphNode(
-    val id: String,
-    val kind: GraphNodeKind,
-    val title: String,
-    val subtitle: String?,
-    val sessionId: String?,
-    val running: Boolean,
-    val x: Dp,
-    val y: Dp,
-)
-
-private data class GraphLayout(
-    val nodes: List<GraphNode>,
-    val edges: List<Pair<String, String>>,
-    val width: Dp,
-    val height: Dp,
-)
+import com.aicode.feature.agent.domain.model.ChatSession
+import com.aicode.feature.agent.domain.model.GoalStatus
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * 记忆图谱（P1 精简版）：用现有会话数据把「项目 → 会话 → 子代理」画成一张可点选的图。
+ * 记忆图谱 v2：工作线索泳道。
  *
- * 纯只读视图，不落库、不调用模型——数据全部来自主会话已加载的 [ChatSession] 与运行状态。点击会话/子代理
- * 节点回调 [onOpenSession] 切回对应会话。
+ * 调研同类实现（OpenAI Agents Tracing / agent-cockpit / claude-agent-orchestrator 泳道范式）后，
+ * 把旧「静态树形节点图」重构为**垂直线索卡片流**——手机竖屏下每条工作线索一张时光卡片：
+ * 状态呼吸点、持续目标与状态徽章、待办进度、消息量、token 消耗、相对时间、最后消息摘要、内嵌子代理行。
+ * 点击卡片内联展开详情（目标全文 + 最后消息摘要 + 检查点数 + 打开会话）。
+ * 数据由 [MemoryGraphViewModel] 聚合（IO 线程）：消息活动、待办进度、检查点、最后消息摘要。
  */
 @Composable
 fun MemoryGraphScreen(
@@ -93,29 +70,138 @@ fun MemoryGraphScreen(
     currentSessionId: String?,
     onOpenSession: (String) -> Unit,
     onBack: () -> Unit,
+    viewModel: MemoryGraphViewModel = hiltViewModel(),
 ) {
-    var runningOnly by rememberSaveable { mutableStateOf(true) }
+    var filter by rememberSaveable { mutableStateOf("all") } // all / running / goal / today
+    var expandedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    val activity by viewModel.activity.collectAsStateWithLifecycle()
+    val detail by viewModel.detail.collectAsStateWithLifecycle()
 
-    val layout = remember(sessions, subSessionsByParent, agentStates, workspacePath, runningOnly) {
-        buildLayout(workspacePath, sessions, subSessionsByParent, agentStates, runningOnly)
+    androidx.compose.runtime.LaunchedEffect(workspacePath) { viewModel.refresh() }
+
+    fun isRunning(id: String): Boolean =
+        agentStates[id] is AgentUIState.Loading || agentStates[id] is AgentUIState.Streaming
+
+    val roots = sessions.filter { it.parentId == null }
+        .sortedByDescending { activity[it.id]?.lastActiveAt ?: it.updatedAt }
+    val visibleRoots = roots.filter { session ->
+        when (filter) {
+            "running" -> isRunning(session.id) ||
+                subSessionsByParent[session.id].orEmpty().any { isRunning(it.id) }
+            "goal" -> !session.goal.isNullOrBlank()
+            "today" -> {
+                val last = activity[session.id]?.lastActiveAt ?: session.updatedAt
+                DateUtils.isToday(last)
+            }
+            else -> true
+        }
     }
+
+    val totalTokens = sessions.sumOf { it.totalInputTokens + it.totalOutputTokens }
+    val runningCount = roots.count { isRunning(it.id) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        MemoryGraphHeader(
-            workspacePath = workspacePath,
-            runningOnly = runningOnly,
-            sessionCount = layout.nodes.count { it.kind == GraphNodeKind.SESSION },
-            childCount = layout.nodes.count { it.kind == GraphNodeKind.SUBAGENT },
-            onToggleRunningOnly = { runningOnly = !runningOnly },
-            onBack = onBack,
-        )
+        // ── 头部 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    FeatherIcons.ArrowLeft,
+                    contentDescription = stringResource(R.string.memory_graph_title),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.memory_graph_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = workspacePath.substringAfterLast('/').ifBlank { workspacePath },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = { viewModel.refresh() }, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    FeatherIcons.RefreshCw,
+                    contentDescription = stringResource(R.string.memory_graph_refresh),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+
+        // ── 统计条 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+        ) {
+            Text(
+                text = stringResource(R.string.memory_graph_stat_threads, visibleRoots.size),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = stringResource(R.string.memory_graph_stat_running, runningCount),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = stringResource(R.string.memory_graph_stat_tokens, formatTokens(totalTokens)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        // ── 筛选 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            FilterChip(
+                selected = filter == "all",
+                onClick = { filter = "all" },
+                label = { Text(stringResource(R.string.memory_graph_filter_all)) },
+            )
+            FilterChip(
+                selected = filter == "running",
+                onClick = { filter = "running" },
+                label = { Text(stringResource(R.string.memory_graph_filter_running)) },
+            )
+            FilterChip(
+                selected = filter == "goal",
+                onClick = { filter = "goal" },
+                label = { Text(stringResource(R.string.memory_graph_filter_goal)) },
+            )
+            FilterChip(
+                selected = filter == "today",
+                onClick = { filter = "today" },
+                label = { Text(stringResource(R.string.memory_graph_filter_today)) },
+            )
+        }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        if (layout.nodes.none { it.sessionId != null }) {
+        // ── 线索泳道 ──
+        if (visibleRoots.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = stringResource(R.string.memory_graph_empty),
@@ -124,36 +210,41 @@ fun MemoryGraphScreen(
                 )
             }
         } else {
-            val hScroll = rememberScrollState()
-            val vScroll = rememberScrollState()
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .horizontalScroll(hScroll)
-                    .verticalScroll(vScroll)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
-                Box(modifier = Modifier.size(layout.width, layout.height)) {
-                    val edgeColor = MaterialTheme.colorScheme.outlineVariant
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        layout.edges.forEach { (fromId, toId) ->
-                            val from = layout.nodes.firstOrNull { it.id == fromId } ?: return@forEach
-                            val to = layout.nodes.firstOrNull { it.id == toId } ?: return@forEach
-                            drawLine(
-                                color = edgeColor,
-                                start = Offset(from.x.toPx() + NodeWidth.toPx() / 2f, from.y.toPx() + NodeHeight.toPx()),
-                                end = Offset(to.x.toPx() + NodeWidth.toPx() / 2f, to.y.toPx()),
-                                strokeWidth = 2f,
-                            )
-                        }
-                    }
-                    layout.nodes.forEach { node ->
-                        GraphNodeCard(
-                            node = node,
-                            selected = node.sessionId != null && node.sessionId == currentSessionId,
-                            modifier = Modifier
-                                .offset(x = node.x, y = node.y)
-                                .size(NodeWidth, NodeHeight),
-                            onClick = { node.sessionId?.let(onOpenSession) },
+                visibleRoots.forEach { session ->
+                    val stat = activity[session.id]
+                    val subs = subSessionsByParent[session.id].orEmpty()
+                    val expanded = session.id in expandedIds
+                    val running = isRunning(session.id)
+                    item(key = session.id) {
+                        SessionLaneCard(
+                            session = session,
+                            stat = stat,
+                            subs = subs,
+                            running = running,
+                            isCurrent = session.id == currentSessionId,
+                            expanded = expanded,
+                            detail = detail?.takeIf { it.sessionId == session.id },
+                            onToggle = {
+                                expandedIds = if (expanded) expandedIds - session.id
+                                else expandedIds + session.id
+                                if (!expanded) {
+                                    viewModel.openDetail(
+                                        sessionId = session.id,
+                                        title = session.title,
+                                        goal = session.goal,
+                                        goalStatus = session.goalStatus?.name,
+                                        activity = stat
+                                    )
+                                }
+                            },
+                            onOpenSession = { onOpenSession(session.id) },
+                            onOpenSubSession = { onOpenSession(it) },
+                            isSubRunning = ::isRunning,
                         )
                     }
                 }
@@ -162,112 +253,211 @@ fun MemoryGraphScreen(
     }
 }
 
+/** 单条工作线索的时光卡片（泳道行）。 */
 @Composable
-private fun MemoryGraphHeader(
-    workspacePath: String,
-    runningOnly: Boolean,
-    sessionCount: Int,
-    childCount: Int,
-    onToggleRunningOnly: () -> Unit,
-    onBack: () -> Unit,
+private fun SessionLaneCard(
+    session: ChatSession,
+    stat: MemoryGraphViewModel.SessionActivity?,
+    subs: List<ChatSession>,
+    running: Boolean,
+    isCurrent: Boolean,
+    expanded: Boolean,
+    detail: MemoryGraphViewModel.SessionDetail?,
+    onToggle: () -> Unit,
+    onOpenSession: () -> Unit,
+    onOpenSubSession: (String) -> Unit,
+    isSubRunning: (String) -> Boolean,
 ) {
-    val displayName = workspacePath.substringAfterLast('/').ifBlank { workspacePath }
-    Row(
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            if (isCurrent) 2.dp else 1.dp,
+            if (running) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
+            .clickable(onClick = onToggle),
     ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                FeatherIcons.ArrowLeft,
-                contentDescription = stringResource(R.string.memory_graph_title),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.memory_graph_title),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = displayName.ifBlank { stringResource(R.string.memory_graph_project) },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Text(
-            text = "$sessionCount · $childCount",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.width(Spacing.sm))
-        FilterChip(
-            selected = runningOnly,
-            onClick = onToggleRunningOnly,
-            label = { Text(stringResource(R.string.memory_graph_running_only)) },
-        )
-    }
-}
-
-@Composable
-private fun GraphNodeCard(
-    node: GraphNode,
-    selected: Boolean,
-    modifier: Modifier,
-    onClick: () -> Unit,
-) {
-    val borderColor = when {
-        selected -> MaterialTheme.colorScheme.primary
-        node.running -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.outlineVariant
-    }
-    Surface(
-        modifier = modifier.clickable(enabled = node.sessionId != null, onClick = onClick),
-        shape = RoundedCornerShape(Radius.md),
-        color = if (node.kind == GraphNodeKind.PROJECT) {
-            MaterialTheme.colorScheme.surfaceVariant
-        } else {
-            MaterialTheme.colorScheme.surface
-        },
-        border = BorderStroke(if (selected) 2.dp else 1.dp, borderColor),
-    ) {
-        Row(
+        Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            if (node.running) {
+            // 头行：状态点 + 标题 + 模式徽章
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(9.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
+                        .background(
+                            when {
+                                session.goalStatus == GoalStatus.BLOCKED -> MaterialTheme.colorScheme.error
+                                running -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            }
+                        )
                 )
-                Spacer(modifier = Modifier.width(Spacing.xs))
-            }
-            Column(modifier = Modifier.weight(1f)) {
+                Spacer(Modifier.width(Spacing.xs))
                 Text(
-                    text = node.title.ifBlank { stringResource(R.string.memory_graph_session) },
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = session.title.ifBlank { stringResource(R.string.memory_graph_session) },
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                node.subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = session.mode.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // 目标行
+            session.goal?.takeIf { it.isNotBlank() }?.let { goal ->
+                Text(
+                    text = "🎯 " + goal.replace(Regex("\\s+"), " "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // 待办进度
+            val todoTotal = stat?.todoTotal ?: 0
+            if (todoTotal > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LinearProgressIndicator(
+                        progress = { (stat?.todoDone ?: 0).toFloat() / todoTotal },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(4.dp),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
                     Text(
-                        text = it,
+                        text = stringResource(
+                            R.string.memory_graph_detail_todo,
+                            stat?.todoDone ?: 0, todoTotal
+                        ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // 统计行：消息 / token / 相对时间
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text(
+                    text = stringResource(R.string.memory_graph_detail_messages, stat?.messageCount ?: 0),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.memory_graph_stat_tokens_short,
+                        formatTokens(session.totalInputTokens + session.totalOutputTokens)
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = relativeTime(stat?.lastActiveAt ?: session.updatedAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // 子代理行（内嵌泳道层级）
+            subs.forEach { sub ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Spacing.lg)
+                        .clickable { onOpenSubSession(sub.id) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSubRunning(sub.id)) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        text = sub.subagentType ?: stringResource(R.string.memory_graph_session),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(end = Spacing.xs),
+                    )
+                    Text(
+                        text = sub.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            // 内联展开详情
+            if (expanded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (detail != null) {
+                    detail.goal?.takeIf { it.isNotBlank() }?.let { goal ->
+                        Text(
+                            text = stringResource(R.string.memory_graph_detail_goal) + "：" + goal,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    detail.lastMessagePreview?.takeIf { it.isNotBlank() }?.let { preview ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.memory_graph_detail_last_msg) + "：" + preview,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            )
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+                        Text(
+                            text = stringResource(R.string.memory_graph_detail_checkpoints, detail.checkpointCount),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        detail.goalStatus?.let {
+                            Text(
+                                text = "goal: $it",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenSession),
+                ) {
+                    Text(
+                        text = stringResource(R.string.memory_graph_detail_open),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 9.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
             }
@@ -275,99 +465,31 @@ private fun GraphNodeCard(
     }
 }
 
-/**
- * 由会话数据推导节点坐标：项目居中置顶，每个根会话占一个横排「块」（宽度随子代理数量变化），
- * 子代理排在其父会话下方。不做力导向，保证布局稳定、可预测。
- */
-private fun buildLayout(
-    workspacePath: String,
-    sessions: List<ChatSession>,
-    subSessionsByParent: Map<String, List<ChatSession>>,
-    agentStates: Map<String, AgentUIState>,
-    runningOnly: Boolean,
-): GraphLayout {
-    fun isRunning(id: String): Boolean {
-        val state = agentStates[id]
-        return state is AgentUIState.Loading || state is AgentUIState.Streaming
-    }
-
-    val visibleSessions = sessions.mapNotNull { root ->
-        val subs = subSessionsByParent[root.id].orEmpty().filter { !runningOnly || isRunning(it.id) }
-        val visible = !runningOnly || isRunning(root.id) || subs.isNotEmpty()
-        if (visible) root to subs else null
-    }
-
-    val displayName = workspacePath.substringAfterLast('/').ifBlank { workspacePath }
-
-    val nodes = mutableListOf<GraphNode>()
-    val edges = mutableListOf<Pair<String, String>>()
-
-    // 先横向排布每个根会话的块，累加出总宽；项目节点再整体居中。
-    var cursor = ColumnGap
-    val blockStartX = mutableListOf<Dp>()
-    visibleSessions.forEach { (_, subs) ->
-        blockStartX.add(cursor)
-        val columns = maxOf(1, subs.size)
-        cursor += NodeWidth * columns + SubGap * (columns - 1) + ColumnGap
-    }
-    val totalWidth = maxOf(cursor, NodeWidth + ColumnGap * 2)
-    val projectX = (totalWidth - NodeWidth) / 2
-
-    val sessionY = Spacing.lg + NodeHeight + LevelGap
-    val subagentY = sessionY + NodeHeight + LevelGap
-
-    nodes.add(
-        GraphNode(
-            id = PROJECT_NODE_ID,
-            kind = GraphNodeKind.PROJECT,
-            title = displayName.ifBlank { workspacePath },
-            subtitle = null,
-            sessionId = null,
-            running = false,
-            x = projectX,
-            y = Spacing.lg,
-        )
+@Composable
+private fun StatBadge(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
 
-    visibleSessions.forEachIndexed { index, (root, subs) ->
-        val blockStart = blockStartX[index]
-        val columns = maxOf(1, subs.size)
-        val blockWidth = NodeWidth * columns + SubGap * (columns - 1)
-        val sessionX = blockStart + (blockWidth - NodeWidth) / 2
-        nodes.add(
-            GraphNode(
-                id = root.id,
-                kind = GraphNodeKind.SESSION,
-                title = root.title,
-                subtitle = root.model,
-                sessionId = root.id,
-                running = isRunning(root.id),
-                x = sessionX,
-                y = sessionY,
-            )
-        )
-        edges.add(PROJECT_NODE_ID to root.id)
-        subs.forEachIndexed { subIndex, sub ->
-            nodes.add(
-                GraphNode(
-                    id = sub.id,
-                    kind = GraphNodeKind.SUBAGENT,
-                    title = sub.title,
-                    subtitle = sub.subagentType,
-                    sessionId = sub.id,
-                    running = isRunning(sub.id),
-                    x = blockStart + (NodeWidth + SubGap) * subIndex,
-                    y = subagentY,
-                )
-            )
-            edges.add(root.id to sub.id)
-        }
-    }
+/** token 数缩写：1234 → 1.2k，1234567 → 1.2M。 */
+internal fun formatTokens(tokens: Int): String = when {
+    tokens >= 1_000_000 -> "%.1fM".format(java.util.Locale.US, tokens / 1_000_000f)
+    tokens >= 1_000 -> "%.1fk".format(java.util.Locale.US, tokens / 1_000f)
+    else -> tokens.toString()
+}
 
-    val height = if (visibleSessions.isEmpty()) {
-        Spacing.lg + NodeHeight + Spacing.lg
-    } else {
-        subagentY + NodeHeight + Spacing.lg
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / 昨天 / MM-dd。 */
+internal fun relativeTime(timestamp: Long): String {
+    if (timestamp <= 0) return ""
+    val diff = System.currentTimeMillis() - timestamp
+    return when {
+        diff < 60_000L -> "刚刚"
+        diff < 3_600_000L -> "${diff / 60_000L} 分钟前"
+        diff < 86_400_000L -> "${diff / 3_600_000L} 小时前"
+        diff < 172_800_000L -> "昨天"
+        else -> SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(timestamp))
     }
-    return GraphLayout(nodes = nodes, edges = edges, width = totalWidth, height = height)
 }

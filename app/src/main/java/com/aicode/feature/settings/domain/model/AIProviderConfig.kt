@@ -97,23 +97,32 @@ data class ProviderKey(
 const val DEFAULT_KEY_WEIGHT: Int = 1
 const val MAX_KEY_WEIGHT: Int = 1_000_000
 
-/** 绝不包含空白的字段（API Key / URL / 代理主机）：连中间空白一并去掉。 */
+/** 绝不包含空白的字段（URL / 代理主机）：连中间空白一并去掉。 */
 private fun String.stripAllWhitespace(): String = filterNot { it.isWhitespace() }
+
+/**
+ * API Key 只能保留 HTTP 头接受的 ASCII 可打印字符。
+ * 粘贴时常混入中文标签/全角标点，OkHttp 拼 Authorization 头会直接抛
+ * `Unexpected char 0xXXXX in Authorization value`，请求根本发不出去。
+ * 非 ASCII 字符在合法 Key 里不可能出现，读取时清洗可让已存的脏 Key 自动恢复。
+ */
+private fun String.stripToHeaderSafeAscii(): String = filter { it in '!'..'~' }
 
 /** 允许内部空格的字段（名称 / 模型名 / UA / 路径 / 代理账号）：去换行与制表符，再 trim 首尾。 */
 private fun String.stripLineBreaks(): String =
     filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
 
 /**
- * 清洗手填/粘贴的提供商配置。粘贴 API Key 常带入换行或首尾空格，直接拼进 Authorization
- * 头会被 OkHttp 拒绝（Unexpected char 0x0a in Authorization value）；baseUrl / 代理主机带空白则
- * 拼出非法 URL。写入与读取两侧各清洗一次，已存的脏数据不靠迁移也能恢复可用。
+ * 清洗手填/粘贴的提供商配置。粘贴 API Key 常带入换行、空格或中文标签，直接拼进 Authorization
+ * 头会被 OkHttp 拒绝（Unexpected char 0x0a / 0x505a in Authorization value），因此 Key 只保留
+ * ASCII 可打印字符；baseUrl / 代理主机带空白则拼出非法 URL。写入与读取两侧各清洗一次，
+ * 已存的脏数据不靠迁移也能恢复可用。
  */
 fun AIProviderConfig.sanitized(): AIProviderConfig = copy(
     name = name.stripLineBreaks(),
-    apiKey = apiKey.stripAllWhitespace(),
+    apiKey = apiKey.stripToHeaderSafeAscii(),
     apiKeys = apiKeys
-        .map { it.copy(value = it.value.stripAllWhitespace(), weight = it.weight.coerceIn(0, MAX_KEY_WEIGHT)) }
+        .map { it.copy(value = it.value.stripToHeaderSafeAscii(), weight = it.weight.coerceIn(0, MAX_KEY_WEIGHT)) }
         .filter { it.value.isNotEmpty() }
         .distinctBy { it.value },
     keySwitchStatusCodes = keySwitchStatusCodes.filter { it in 100..599 }.distinct(),

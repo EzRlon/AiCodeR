@@ -69,7 +69,7 @@ AI 在派发前会弹窗向你确认授权；获得同意后子代理将在后�
 - **纯只读安全**：仅开放了代码与文件检索工具（`readFile`、`list`、`search`、`websearch`、`webfetch`、`loadSkill`），**不包含任何写文件与执行终端命令的工具**，不会对项目造成改动，也不需要频繁弹窗授权；
 - **模型定制**：默认继承当前会话的模型；也可在设置 → 默认模型 → 智能体模型中给 Explore 单独选模型（设置页覆盖），或在 `explore.md` 中直接填 `provider` 与 `model`（定义优先于设置页）。
 
-### 角色编队（PM / Architect / Frontend / Backend / qa）
+### 角色专家团（PM / Architect / Frontend / Backend / qa）
 
 内置五个角色子代理，对应一次完整研发流程中的分工：
 

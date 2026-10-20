@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.checkpoint
 
 import android.content.Context
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeDelete
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.entity.CheckpointEntity
 import com.aicode.feature.agent.data.local.entity.CheckpointFileSnapshotEntity
@@ -245,8 +246,22 @@ class CheckpointManager @Inject constructor(
         checkpointDao.deleteCheckpointsForSession(sessionId)
         val sessionDir = File(baseCheckpointDir, sessionId)
         if (sessionDir.exists()) {
-            sessionDir.deleteRecursively()
+            SafeDelete.deleteTree(sessionDir)
         }
+    }
+
+    /**
+     * 清空全部检查点（存储页「检查点」清理项）：所有会话的快照记录与文件一并删除，
+     * 清理后无法再回滚到任何历史检查点。进行中会话的活动标记一并清除。
+     */
+    suspend fun clearAllCheckpoints() = withContext(Dispatchers.IO) {
+        activeCheckpointIds.clear()
+        checkpointDao.deleteAllFileSnapshots()
+        checkpointDao.deleteAllCheckpoints()
+        if (baseCheckpointDir.exists()) {
+            SafeDelete.deleteTree(baseCheckpointDir)
+        }
+        FileLogger.i(TAG, "已清空全部检查点快照")
     }
 
     private companion object {

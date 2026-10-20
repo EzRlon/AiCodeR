@@ -145,9 +145,23 @@ class ContextCompactorTest {
         val original = history(100)
         assertFalse(compactor.compactIfNeeded(original, provider).compacted)
         coVerify(exactly = 0) { provider.complete(any(), any(), any(), any()) }
+        // 高 usage 越过阈值、但历史本身无料可压（尾部预算覆盖全部消息）：静默跳过不发事件
+        // ——批次 A 修复的新契约（新会话首条消息不再误报「上下文压缩失败」），force 时同样适用
         val events = mutableListOf<AgentEvent>()
-        compactor.compactIfNeeded(original, provider, currentInputTokens = 99_999, onEvent = { events.add(it) })
+        val result = compactor.compactIfNeeded(original, provider, currentInputTokens = 99_999, onEvent = { events.add(it) })
+        assertFalse(result.compacted)
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun highUsageWithMaterialEmitsCompactionStarted() = runTest {
+        prepare()
+        val big = history(100_000)
+        coEvery { provider.complete(any(), any(), any(), any()) } returns AIResponse("Summary", stopReason = "stop")
+        val events = mutableListOf<AgentEvent>()
+        val result = compactor.compactIfNeeded(big, provider, currentInputTokens = 99_999, onEvent = { events.add(it) })
         assertTrue(events.any { it is AgentEvent.CompactionStarted })
+        assertTrue(result.compacted)
     }
 
     @Test

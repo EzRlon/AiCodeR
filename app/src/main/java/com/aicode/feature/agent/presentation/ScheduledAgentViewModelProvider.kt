@@ -101,6 +101,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val voiceSettingsRepository: VoiceSettingsRepository,
     private val voskModelManager: com.aicode.feature.agent.domain.voice.VoskModelManager,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
+    private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -148,6 +149,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         voiceSettingsRepository,
         voskModelManager,
         floatBallStateStore,
+        floatBallSessionHub,
         context
     )
 }

@@ -3,7 +3,7 @@ package com.aicode.feature.agent.domain.team
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.workspace.domain.FileAccessProvider
 
-/** 编队定义来源：一个目录下的 `*.md`，每个文件一个编队。 */
+/** 专家团定义来源：一个目录下的 `*.md`，每个文件一个专家团。 */
 interface TeamDefinitionSource {
     fun listDefinitions(): List<TeamDefinition>
 }
@@ -20,7 +20,7 @@ internal object TeamDirectoryScanner {
             .mapNotNull { entry -> TeamDefinitionParser.parse(provider, "$base/${entry.name}") }
             .sortedBy { it.name.lowercase() }
     }.getOrElse { e ->
-        FileLogger.w(TAG, "扫描编队定义目录失败: $root", e)
+        FileLogger.w(TAG, "扫描专家团定义目录失败: $root", e)
         emptyList()
     }
 }

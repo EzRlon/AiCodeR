@@ -9,7 +9,9 @@ data class CliAgent(
     /** 锁定的实测可用版本，保证一键安装可复现。 */
     val version: String,
     val command: String,
-    val websiteUrl: String
+    val websiteUrl: String,
+    /** 终端标签里实际执行的启动命令；默认裸命令，需要启动前自愈/预处理的智能体覆写。 */
+    val launchCommand: String = command
 ) {
     /**
      * 固定版本的安装命令；npm 缺失时提示先装 Node.js 环境（aicode 菜单）。
@@ -39,6 +41,33 @@ data class CliAgent(
         "command -v $command >/dev/null 2>&1 && $command --version 2>/dev/null | head -1"
 }
 
+/**
+ * Codex 启动自愈脚本。其后台守护进程读进程启动时间用 procps 语法（`ps -p <pid> -o lstart=`），
+ * BusyBox ps 不认；更深的限制是 Android 宿主对容器 /proc 的挂载策略（hidepid，/proc/stat
+ * 不可读）——lstart 需要 /proc/stat 的 btime 换算，此环境装真 procps 也恒失败。
+ * 三层判定：① lstart 可用直接启动；② /proc/stat 不可读（procps 无解）→ 如实提示后
+ * --no-daemon 前台模式（交互功能完整，仅无后台守护）；③ 其余（BusyBox ps 但 /proc 开放）
+ * 按缺补装 procps 后重试（apk 对已装包必 exit 2，须预检），仍失败再降级 --no-daemon。
+ */
+private fun selfHealingLaunch(command: String): String =
+    "if ps -p 1 -o lstart= >/dev/null 2>&1; then " +
+        "$command; " +
+    "elif ! [ -r /proc/stat ]; then " +
+        "echo '容器 /proc 受限（宿主挂载策略），以前台模式启动 Codex（--no-daemon）。'; " +
+        "$command --no-daemon; " +
+    "else " +
+        "echo '检测到 BusyBox ps（Codex 守护进程依赖 procps），正在补装…'; " +
+        "apk info -e procps >/dev/null 2>&1 || apk add procps 2>/dev/null || " +
+        "apt-get install -y procps 2>/dev/null || dnf install -y procps 2>/dev/null || " +
+        "yum install -y procps 2>/dev/null || pacman -Sy --noconfirm procps-ng 2>/dev/null; " +
+        "if ps -p 1 -o lstart= >/dev/null 2>&1; then " +
+            "$command; " +
+        "else " +
+            "echo 'procps 补装失败（请检查网络），降级为前台模式（--no-daemon）启动。'; " +
+            "$command --no-daemon; " +
+        "fi; " +
+    "fi"
+
 /** 内置智能体目录：三个容器实测跑通的 AI CLI。 */
 object CliAgentCatalog {
     val ALL: List<CliAgent> = listOf(
@@ -56,7 +85,8 @@ object CliAgentCatalog {
             npmPackage = "@openai/codex",
             version = "0.162.1",
             command = "codex",
-            websiteUrl = "https://developers.openai.com/codex"
+            websiteUrl = "https://developers.openai.com/codex",
+            launchCommand = selfHealingLaunch("codex")
         ),
         CliAgent(
             id = "opencode",
