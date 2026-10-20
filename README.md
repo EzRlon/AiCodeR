@@ -30,7 +30,6 @@
 
 ### AI 协作增强
 
-- **模型顾问团（multi-llm）** — 把 ChatGPT / Claude / Gemini / Grok / 通义千问 / DeepSeek 网页版反代成 MCP 工具，一键安装（自动装 chromium 与依赖），AI 可直接咨询其他模型并汇总多方意见
 - **专家团** — 给会话挂上一组成套角色（产品 / 架构 / 前端 / 质检等）一键协作；内置团队包与在线市场，每个子代理可独立选择模型
 - **recall 跨会话检索** — 基于全文索引（FTS4）把历史会话与工作区内容建索引，AI 可按关键词取回被压缩归档的原文；中文子串自动降级模糊匹配，全参数化查询无注入
 - **会话目标（Goal）** — `/goal <目标>` 后 AI 围绕目标自主循环推进，用证据审计完成度，达成或受阻才停
@@ -105,7 +104,6 @@
 - **[nanohttpd](https://github.com/NanoHttpd/nanohttpd)** — 远程管理的局域网 HTTP 服务
 - **[jadx](https://github.com/skylot/jadx)** — REA 逆向分析的 DEX 反编译引擎
 - **[anthropics/skills](https://github.com/anthropics/skills)** 与 **[obra/superpowers](https://github.com/obra/superpowers)** — 内置技能包来源
-- **[multi-llm](https://github.com/EzRlon/mcp-multi-llm)** — 模型顾问团的 MCP 服务端实现
 - 同时致谢上游项目鸣谢过的灵感与组件来源：[OpenCode](https://github.com/anomalyco/opencode)、[Termux](https://github.com/termux/termux-app)、[Kelivo](https://github.com/Chevey339/kelivo)，以及 [NOTICE](NOTICE) 中列出的全部第三方开源组件
 
 ### 开源协议
