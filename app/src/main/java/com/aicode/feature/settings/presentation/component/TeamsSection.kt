@@ -16,7 +16,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
 
 /**
- * 「编队」设置区：只读展示全部编队定义（内置释放到 `~/.aicode/teams` 的与项目级 `.aicode/teams` 的）。
+ * 「专家团」设置区：只读展示全部专家团定义（内置释放到 `~/.aicode/teams` 的与项目级 `.aicode/teams` 的）。
  * 新增/编辑直接写 `teams/<name>.md`：frontmatter 含 name/description/members，正文为团长提示词。
  */
 @Composable

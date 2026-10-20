@@ -14,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.aicode.MainActivity
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.escapeLikePattern
 import com.aicode.core.util.GitIgnoreMatcher
 import com.aicode.core.util.toUserMessage
 import com.aicode.core.util.formatCostUsd
@@ -128,6 +129,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
@@ -228,6 +230,7 @@ class AIAgentViewModel @Inject constructor(
     private val voiceSettingsRepository: VoiceSettingsRepository,
     private val voskModelManager: VoskModelManager,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
+    private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -599,7 +602,7 @@ class AIAgentViewModel @Inject constructor(
                         val hits = withContext(Dispatchers.IO) {
                             agentMessageDao.searchInWorkspace(
                                 workspace,
-                                escapeLike(keyword),
+                                escapeLikePattern(keyword),
                                 chatSearchLimit
                             ).map { m ->
                                 ChatSearchHit(
@@ -654,9 +657,6 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /** 转义 LIKE 通配符，配合 SQL 里的 ESCAPE '!'（转义字符本身需最先处理）。 */
-    private fun escapeLike(raw: String): String =
-        raw.replace("!", "!!").replace("%", "!%").replace("_", "!_")
-
     /** 以命中词为中心截取片段：折叠换行空白，两端按需加省略号；未命中时退回开头一段。 */
     private fun buildSnippet(content: String, keyword: String): String {
         val flat = content.replace(Regex("\\s+"), " ").trim()
@@ -1489,6 +1489,33 @@ class AIAgentViewModel @Inject constructor(
     }
 
     init {
+        // 悬浮球 mini 会话窗口（FB1）：把当前会话的消息快照/标题/运行态镜像到进程级 Hub，
+        // 悬浮窗面板只读消费；发送/停止命令仍走 FloatBallCommandCenter（主界面注册）。
+        viewModelScope.launch {
+            combine(messagesState, currentSessionId, sessions, agentState) { m, sid, list, st ->
+                val session = list.firstOrNull { it.id == sid }
+                floatBallSessionHub.updateSession(
+                    sessionId = sid,
+                    title = session?.title,
+                    running = st is AgentUIState.Streaming || st is AgentUIState.Loading
+                )
+                floatBallSessionHub.updateSessionModel(session?.providerId, session?.model)
+                floatBallSessionHub.updateMessages(
+                    m.messages.map { msg ->
+                        com.aicode.feature.floatball.FloatBallSessionHub.HubMessage(
+                            role = msg.role.name,
+                            text = msg.content.replace(Regex("\\s+"), " ").take(300),
+                            isError = msg.isError,
+                            isVerification = msg.isVerificationReport
+                        )
+                    }
+                )
+            }.collect()
+        }
+        // FB2：草稿镜像（悬浮窗输入框与 App 底栏同源）
+        viewModelScope.launch {
+            inputDraft.collect { floatBallSessionHub.updateDraft(it) }
+        }
         // F2/F7：离线模型就绪且系统识别确认不可用时自动切离线引擎，语音输入立即可用。
         viewModelScope.launch {
             voskModelManager.state
@@ -2587,7 +2614,7 @@ class AIAgentViewModel @Inject constructor(
             reasoningEffort = old.reasoningEffort
         ).copy(
             title = handoffTitle(old.title),
-            // 交接不丢现场：目标、模式、编队一并带到新会话（goal 自主循环/编队协作不因交接中断）。
+            // 交接不丢现场：目标、模式、专家团一并带到新会话（goal 自主循环/专家团协作不因交接中断）。
             mode = old.mode,
             goal = old.goal,
             goalStatus = old.goalStatus,
@@ -2678,7 +2705,7 @@ class AIAgentViewModel @Inject constructor(
 
     private val _teamName = MutableStateFlow<String?>(null)
 
-    /** 当前会话召唤的编队名；null 表示未使用编队。 */
+    /** 当前会话召唤的专家团名；null 表示未使用专家团。 */
     val teamName: StateFlow<String?> = _teamName.asStateFlow()
 
     private val floatBallSendBridge: (String) -> Boolean = { text ->
@@ -2713,7 +2740,7 @@ class AIAgentViewModel @Inject constructor(
     }
 
     init {
-        // 跟随会话切换/冷启动刷新当前编队（单一同步点）
+        // 跟随会话切换/冷启动刷新当前专家团（单一同步点）
         viewModelScope.launch {
             _currentSessionId.collect { id ->
                 _teamName.value = if (id.isNullOrBlank()) null else sessionUseCase.getSessionById(id)?.teamName
@@ -2725,6 +2752,10 @@ class AIAgentViewModel @Inject constructor(
         FloatBallCommandCenter.openApp = floatBallOpenAppBridge
         FloatBallCommandCenter.stop = floatBallStopBridge
         FloatBallCommandCenter.resolveApproval = floatBallApprovalBridge
+        FloatBallCommandCenter.setMode = { setSessionMode(it) }
+        FloatBallCommandCenter.updateDraft = { updateInputDraft(it) }
+        FloatBallCommandCenter.newSession = { newSession() }
+        // 模型选择数据/选定由 AIChatPanel 注册（providers/modelMetadata 数据源在那里）
 
         // 悬浮球关键信息同步：各来源分别收集、更新快照后统一推送（避免多流 combine 的重载限制）。
         var fbTodos: List<TodoItem> = emptyList()
@@ -2787,10 +2818,15 @@ class AIAgentViewModel @Inject constructor(
         if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
         if (FloatBallCommandCenter.stop === floatBallStopBridge) FloatBallCommandCenter.stop = null
         if (FloatBallCommandCenter.resolveApproval === floatBallApprovalBridge) FloatBallCommandCenter.resolveApproval = null
+        if (FloatBallCommandCenter.setMode != null) FloatBallCommandCenter.setMode = null
+        if (FloatBallCommandCenter.updateDraft != null) FloatBallCommandCenter.updateDraft = null
+        if (FloatBallCommandCenter.newSession != null) FloatBallCommandCenter.newSession = null
+        if (FloatBallCommandCenter.modelData != null) FloatBallCommandCenter.modelData = null
+        if (FloatBallCommandCenter.selectModel != null) FloatBallCommandCenter.selectModel = null
         super.onCleared()
     }
 
-    /** 更新当前会话的编队（null 清除）。 */
+    /** 更新当前会话的专家团（null 清除）。 */
     fun setSessionTeam(name: String?) = viewModelScope.launch {
         val sid = _currentSessionId.value
         if (sid.isNullOrBlank()) return@launch
@@ -2798,7 +2834,7 @@ class AIAgentViewModel @Inject constructor(
         _teamName.value = name
     }
 
-    /** 编队定义列表（供选择器展示；实时扫描，用户改动文件后立即可见）。 */
+    /** 专家团定义列表（供选择器展示；实时扫描，用户改动文件后立即可见）。 */
     fun listTeams(): List<TeamDefinitionEntry> = teamRepository.listAll()
 
     fun resolveToolPermission(id: String, choice: PermissionChoice) {
@@ -3011,6 +3047,8 @@ class AIAgentViewModel @Inject constructor(
 
     fun setSessionMode(mode: AgentMode) {
         val sid = _currentSessionId.value ?: return
+        // FB2：镜像到悬浮球 Hub（面板模式循环按钮显示当前模式）
+        floatBallSessionHub.updateModeEngine(mode, floatBallSessionHub.state.value.voiceEngine)
         viewModelScope.launch {
             sessionUseCase.updateMode(sid, mode.name)
             // 工作期间切换：把新模式作为系统事件投递给运行中的 agent，本轮即时生效（见 StatefulAgentWorkflow）。

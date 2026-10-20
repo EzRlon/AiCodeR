@@ -22,6 +22,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import com.aicode.feature.floatball.FloatBallCommandCenter
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -385,7 +386,12 @@ internal fun buildChatItems(
             it.role == MessageRole.ASSISTANT && !it.isPersistentInTurn()
         }
         val running = turn.key == activeTurnKey
-        val resultId = if (running) null else turn.messages.lastOrNull { it.isResultCandidate() }?.id
+        // 结果兑底：纯工具调用收尾（最终 AssistantText 无正文被 messagesState 过滤）时
+        // isResultCandidate 为空，回退取轮内最后一条非 USER 行（最后一条 TOOL 结果/助手行）常显，
+        // 保证任何一轮至少有一条可见 AI 痕迹（否则叠加折叠后「整轮只剩用户消息」，会被误读为历史丢失）
+        val resultId = if (running) null
+        else turn.messages.lastOrNull { it.isResultCandidate() }?.id
+            ?: turn.messages.lastOrNull { it.role != MessageRole.USER }?.id
         // 展开态：手动覆盖优先；默认「运行中展开、完成后收起进『构造过程』」——运行中能看到思考与
         // 施工进展，收工后只留用户消息与最终实施结果，会话保持清爽。
         val expanded = turnOverrides[turn.key] ?: running
@@ -1440,6 +1446,8 @@ fun AIChatPanel(
         val nearBottom = followBottom || listState.firstVisibleItemIndex >= chatItems.size - 4
         if (!nearBottom) return@LaunchedEffect
         followBottom = false
+        // 等 placement 动画（150ms）跑完再滚：滑行途中叠加滚动会放大交叉叠印（F6）
+        delay(CHAT_ITEM_PLACEMENT_ANIM_MS + 20L)
         withFrameNanos { }
         listState.animateScrollToItem(target)
     }
@@ -1854,15 +1862,15 @@ fun AIChatPanel(
                     ) {
                         itemsIndexed(chatItems, key = { _, item -> item.key }, contentType = { _, item -> item.contentType }) { _, item ->
                             // 轮完成「结果置前」翻转时，轮头与结果区换位：placement 动画平滑过渡。
-                            // fadeIn 保持关闭（TOOL 卡片另有自己的入场动画，避免叠加）；
-                            // fadeOut 给一短淡：翻转时消失的流式尾巴等不再瞬时硬切，降低与滑入
-                            // item 的交叉叠印窗口（验收反馈 F6：偶发文字叠印；时长已从 220 收紧到 150）。
+                            // fadeIn/fadeOut 全关：fadeOut 的 ghost 会在旧位置悬浮绘制、与新就位
+                            // item 叠印（验收反馈 F6 的真凶，切回会话恰逢收工翻转时最明显），
+                            // 宁可消失时瞬时硬切也不叠印。
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .animateItem(
                                         fadeInSpec = null,
-                                        fadeOutSpec = tween(durationMillis = 120),
+                                        fadeOutSpec = null,
                                         placementSpec = tween(
                                             durationMillis = CHAT_ITEM_PLACEMENT_ANIM_MS,
                                             easing = FastOutSlowInEasing
@@ -2055,7 +2063,7 @@ fun AIChatPanel(
 
             val teamName by viewModel.teamName.collectAsStateWithLifecycle()
             if (showTeamPicker) {
-                // 每次打开实时扫描编队目录，用户改动定义文件后立即可见
+                // 每次打开实时扫描专家团目录，用户改动定义文件后立即可见
                 val teams = remember(showTeamPicker) { viewModel.listTeams() }
                 TeamPickerSheet(
                     teams = teams,
@@ -2117,6 +2125,8 @@ fun AIChatPanel(
                     }
                 )
             }
+
+            // 悬浮球（FB2）：模型选择已下沉至 FloatBallSessionHub 自足提供（不依赖页面存活），此处无需注册
 
             ChatInputBar(
                 value = inputText,
@@ -2228,8 +2238,8 @@ fun AIChatPanel(
                 },
                 isScrolling = listState.isScrollInProgress,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
-                onSelectModelInOnboarding = onSelectModelInOnboarding,
                 onModelSheetDismiss = onDismissModelSheetInOnboarding,
+                onSelectModelInOnboarding = onSelectModelInOnboarding,
                 modifier = Modifier
                     .fillMaxWidth()
                     .onboardingTarget(OnboardingStep.SEND_MESSAGE)
