@@ -1562,7 +1562,15 @@ fun AIChatPanel(
                 intentType = intentType
             )
             // 暂停会话会拒绝发送：保留草稿与附件，避免用户输入被清空丢失。
-            if (!accepted) return@sendMessage
+            // 拒绝必须有可见反馈（用户反馈：终止后发送无任何反应像失灵）。
+            if (!accepted) {
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.chat_send_rejected_paused),
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                return@sendMessage
+            }
             viewModel.clearInputDraft()
             pendingAttachments = emptyList()
             followBottom = true

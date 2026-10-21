@@ -399,6 +399,7 @@
     <string name="annotation_status_review">To verify</string>
     <string name="annotation_status_closed">Closed</string>
 
+    <string name="chat_send_rejected_paused">Session paused — handle the handoff panel (or start a new session) first</string>
     <string name="chat_turn_artifacts">%1$d artifact(s) from this run</string>
 
     <!-- Web preview -->

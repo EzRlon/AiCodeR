@@ -400,6 +400,7 @@
     <string name="annotation_status_review">待复验</string>
     <string name="annotation_status_closed">关闭</string>
 
+    <string name="chat_send_rejected_paused">会话已暂停：请先处理交接面板（或开新会话）后再发送</string>
     <string name="chat_turn_artifacts">本轮产物 %1$d 个文件</string>
 
     <!-- Web 预览 -->

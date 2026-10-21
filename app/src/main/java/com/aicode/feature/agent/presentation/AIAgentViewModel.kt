@@ -1942,6 +1942,11 @@ class AIAgentViewModel @Inject constructor(
             )
             val currentList = _queuedRequests.value[sid] ?: emptyList()
             _queuedRequests.value = _queuedRequests.value + (sid to (currentList + req))
+            // 入队后补一次调度（防御性）：队列正常由活跃 job 的完成回调消费，
+            // 若存在「job 已死但占用标记未清」的边缘状态，这里兜底启动队首。
+            // processNextInQueue 自带三重守卫（暂停会话/命令占用/活跃 job），
+            // 正常路径下是安全的空操作；不会与其它消费入口双重消费（主线程串行 + 同步注册）。
+            processNextInQueue(sid)
         } else {
             executeAgentRequestStream(
                 request = request,
@@ -2027,6 +2032,9 @@ class AIAgentViewModel @Inject constructor(
     private fun processNextInQueue(sessionId: String) {
         // 暂停会话不消费队列：保留待发请求，交接后用户到新会话重新发起。
         if (sessionId in pausedHandoffSessions) return
+        // 斜杠命令执行期不消费：动作类命令内联跑、不注册 sessionJobs，若此时消费
+        // 会与命令并行启动 agent 回合（同会话状态竞态）；命令 finally 收尾时会自行接续队列。
+        if (sessionId in _runningCommandSessions.value) return
         // 已有活跃 job（可能是本次收尾前由通知合并/flush 等入口启动的）时不消费，
         // 避免队列被多个收尾入口重复消费、同一会话并发跑两个 job。
         if (sessionJobs[sessionId]?.isActive == true) return
