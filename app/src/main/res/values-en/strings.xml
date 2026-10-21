@@ -399,11 +399,6 @@
     <string name="annotation_status_review">To verify</string>
     <string name="annotation_status_closed">Closed</string>
 
-    <!-- Test builds -->
-    <string name="test_build_title">Test builds</string>
-    <string name="test_build_refresh">Rescan</string>
-    <string name="test_build_empty">No APK found — build one in the workspace first</string>
-    <string name="test_build_install">Install</string>
     <string name="chat_turn_artifacts">%1$d artifact(s) from this run</string>
 
     <!-- Web preview -->
@@ -618,7 +613,7 @@
     <string name="about_version">Version</string>
     <string name="about_app_title">AiCodeR</string>
     <string name="about_github_repo">GitHub Repository</string>
-    <string name="about_upstream">Upstream Base: AiCode</string>
+    <string name="about_upstream">Upstream Project: AiCode</string>
     <string name="about_upstream_desc">Built on the open-source project AiCode (GPL-3.0) by jieapi — core capabilities come from upstream</string>
     <string name="about_license">Open Source License</string>
     <string name="about_description">AI-powered code editor running on Android · Built-in Terminal · AI Agent · MCP Protocol</string>

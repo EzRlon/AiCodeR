@@ -37,6 +37,7 @@ test -f app/keystore.properties && echo "keystore.properties OK"
 | 文件/目录 | 放置目标 | 说明 |
 |---|---|---|
 | `ai-config/AGENTS.md` | **工作区根**（clone 目录的上一级，或直接以本仓库为项目根时已就位） | App 项目规则注入源 |
+| `ai-config/agents/` | 项目 `.aicode/agents/`（内置版已随 App 在 assets/agents/） | 子代理定义（qa/optimizer） |
 | `ai-config/notes/`、`ai-config/memory/` | 项目 `.aicode/notes/`、`.aicode/memory/` | 交接档案与项目记忆（28+21 个文件） |
 | `ai-config/global-notes/`、`ai-config/global-memory/` | `~/.aicode/notes/`、`~/.aicode/memory/` | 全局笔记与用户偏好 |
 | `ai-config/prompt-overrides/` | `~/.aicode/prompts/` | **谨慎**：这是旧版提示词定制（含心跳汇报纪律等），可能落后于新版内置提示词（仓库 assets 已新增 41/45 两个新文件）。**默认不恢复**；确需恢复先逐文件与 `app/src/main/assets/prompts/` 比对，避免盖掉新版改进 |

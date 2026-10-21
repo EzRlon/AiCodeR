@@ -92,7 +92,6 @@ import com.aicode.feature.annotation.domain.model.AnnotationMark
 import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
 import com.aicode.feature.annotation.presentation.component.AnnotationLedgerScreen
 import com.aicode.feature.annotation.presentation.component.LiveAnnotationOverlay
-import com.aicode.feature.installer.presentation.component.TestBuildListScreen
 import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
@@ -733,10 +732,6 @@ fun AppNavigation(
                 navController.navigate("annotations")
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
             },
-            onNavigateToTestBuilds = {
-                navController.navigate("testbuilds")
-                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
-            },
             onNavigateToRea = {
                 navController.navigate("rea")
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
@@ -920,11 +915,6 @@ fun AppNavigation(
                             popUpTo("chat") { inclusive = false }
                         }
                     }
-                )
-            }
-            composable("testbuilds") {
-                TestBuildListScreen(
-                    onBack = { navController.popBackStack() }
                 )
             }
             composable("rea") {

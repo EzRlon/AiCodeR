@@ -20,6 +20,12 @@
 
 ## 发版后队列（按优先级）
 
+### 2026-10-21 optimizer 全盘复审增量（发版前三路审查之外的行号修正与新项）
+- 旧项行号已全部修正并回写至本文件上表（如 WakeLock 1372-1407、通知 cancel 83-85、SSH 探活 244-262、双 WiFi 锁 261-292、itemsIndexed 919、思考计时 607-613、反向依赖 StatefulAgentWorkflow:44、MultiLlm 非原子 839-852）；AIAgentViewModel 3849→3866 行（本批草稿节流新增后）
+- **新 P1×1 待排期**：FloatBallOverlay.kt:643-645 面板组合期 `input = hub.draft` 回写本地 state，与 FloatBallCommandCenter.updateDraft→VM→hub 回声链成环——快速输入偶发丢字；修复选项：组合期回写改 LaunchedEffect(hub.draft)，或面板持独立 buffer 单向出（改浮窗核心交互，需真机验证）
+- **新 P2×5 待排期**：①FloatBallSessionHub.kt:70-96 copy-then-set 无锁多写者（改 StateFlow.update{}）②VncOverlayViewModel.kt:76-89 本地模式 5s 回环探测（改指数退避）③StoreViewModel.kt:386-395 loadTeams 切 tab 重复拉网（结果内存缓存+重试入口）④MarkdownPreviewWebView.kt:60-62 每资源请求 FileLogger.v（DIAG 门控）⑤AgentMessageDao.kt:152-190 recall LIKE 全表扫描（已知权衡，可限时间窗）
+- **本批已修复（2026-10-21，用户点名内存/性能）**：①ScheduledAiTaskWorker 结果摘要改 DAO LIMIT 1 查询（原全量载入数千条消息，12h 长任务内存尖峰）②AIAgentViewModel 草稿落盘防抖 500ms（原每键入一次 XML 序列化写盘；清空立即落盘 + onCleared flush；悬浮球镜像链路自动同步节流）
+
 ### 性能与功耗（性能报告 8 项，全部「记录在案」未动——发版前动 WakeLock/轮询门控是功能故障高危区）
 1. AIAgentViewModel.kt:407/1369-1417/1470：WakeLock 前台也全回合持有 → 改仅后台持锁（enablePersistent 状态翻转时调用）。**改动需真机验证后台任务不被冻结**。
 2. FileChangeHub.kt:56/334：快照轮询兜底对所有订阅默认 2s → 小目录/非递归订阅默认关、后台暂停 workspace 级。

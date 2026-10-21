@@ -91,7 +91,7 @@
 
 本项目站在巨人的肩膀上，感谢所有上游与开源贡献者。
 
-### 上游底座
+### 上游项目（AiCode）
 
 - **[AiCode](https://github.com/jieapi/AiCode)**（GPL-3.0）— 本项目的直接底座。AI Agent 框架、Alpine 容器与终端、模型供应商管理、Git 集成、工作区同步、平板适配等基础能力全部来自上游，没有上游就没有本项目
 - **[Termux](https://github.com/termux/termux-app)** 与 **[PRoot](https://github.com/proot-me/proot)** — 经上游引入的 Android 容器技术底座

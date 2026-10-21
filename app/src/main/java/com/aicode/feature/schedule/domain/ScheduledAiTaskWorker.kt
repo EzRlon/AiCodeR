@@ -18,7 +18,6 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.presentation.AIAgentViewModel
-import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.ScheduledAgentViewModelProvider
 import com.aicode.feature.schedule.data.ScheduledTaskRepository
 import dagger.assisted.Assisted
@@ -184,12 +183,13 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
     private fun parseRunMode(raw: String): AgentMode =
         runCatching { AgentMode.valueOf(raw) }.getOrDefault(AgentMode.BUILD)
 
-    /** 取会话最后一条有内容的 assistant 消息作为结果摘要。 */
-    private suspend fun lastAssistantSnippet(sessionId: String): String {
-        val messages = runCatching { agentMessageDao.getMessagesBySessionOnce(sessionId) }.getOrDefault(emptyList())
-        val last = messages.lastOrNull { it.role == MessageRole.ASSISTANT.name && it.content.isNotBlank() }
-        return (last?.content ?: "").trim().take(MAX_OUTPUT_CHARS)
-    }
+    /** 取会话最后一条有内容的 assistant 消息作为结果摘要（DAO 层 LIMIT 1，避免长任务数千条消息全量进内存）。 */
+    private suspend fun lastAssistantSnippet(sessionId: String): String =
+        runCatching { agentMessageDao.lastAssistantContent(sessionId) }
+            .getOrNull()
+            ?.trim()
+            ?.take(MAX_OUTPUT_CHARS)
+            ?: ""
 
     /** 任务完成/失败通知（渠道复用 agent_complete，点击进 App 看运行会话）。 */
     private fun notifyCompletion(task: ScheduledTask, success: Boolean) {

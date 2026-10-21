@@ -1248,12 +1248,9 @@ internal fun SendButton(
         canSend -> MaterialTheme.semanticColors.success
         else -> MaterialTheme.colorScheme.primary
     }
-    // 前景色相对按钮底色而非主题：深色主题下的亮绿底用主题 onSurface（近白）会看不清。
-    val iconTint = when {
-        !clickable -> MaterialTheme.colorScheme.onSurfaceVariant
-        buttonColor.luminance() > 0.5f -> Color(0xFF1C1C1E)
-        else -> Color.White
-    }
+    // 前景箭头恒白（用户反馈：浅色模式下亮绿底箭头也应是白色）；仅禁用态用次级色。
+    // 历史注：曾按底色亮度自适应（亮底配深箭头），2026-10-21 用户拍板改为恒白。
+    val iconTint = if (clickable) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
     val arcColor = buttonColor.copy(alpha = 0.85f)
     val clampedProgress = tokenProgress.coerceIn(0f, 1f)
     Box(

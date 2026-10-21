@@ -147,7 +147,6 @@ import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Server
-import compose.icons.feathericons.Package
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.HardDrive
@@ -329,8 +328,6 @@ fun ChatDrawerContent(
     onRefreshDeliverables: () -> Unit = {},
     /** 交付物操作菜单所需的文件访问（保存到手机/MT/分享等）；null 时行点击仅提示。 */
     deliverableFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider? = null,
-    /** 测试包入口：打开工作区 APK 列表；null 则隐藏该入口。 */
-    onNavigateToTestBuilds: (() -> Unit)? = null,
     onNavigateToRea: (() -> Unit)? = null,
     /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
     onNavigateToPreview: (() -> Unit)? = null,
@@ -607,15 +604,6 @@ fun ChatDrawerContent(
                         icon = FeatherIcons.Layers,
                         title = stringResource(R.string.annotation_ledger_title),
                         onClick = onNavigateToAnnotations,
-                        compact = true
-                    )
-                    SettingsDivider()
-                }
-                if (onNavigateToTestBuilds != null) {
-                    SettingsRow(
-                        icon = FeatherIcons.Package,
-                        title = stringResource(R.string.test_build_title),
-                        onClick = onNavigateToTestBuilds,
                         compact = true
                     )
                     SettingsDivider()

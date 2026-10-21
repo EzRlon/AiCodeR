@@ -249,6 +249,10 @@ interface AgentMessageDao {
     @Query("SELECT content FROM agent_messages WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT 1")
     suspend fun lastMessageContent(sessionId: String): String?
 
+    /** 定时任务结果摘要：指定会话最后一条有内容的 assistant 正文（无则 null）——避免全量载入会话消息取末条。 */
+    @Query("SELECT content FROM agent_messages WHERE sessionId = :sessionId AND role = 'ASSISTANT' AND content != '' ORDER BY timestamp DESC LIMIT 1")
+    suspend fun lastAssistantContent(sessionId: String): String?
+
     @Query("SELECT * FROM agent_messages ORDER BY timestamp ASC")
     suspend fun getAllOnce(): List<AgentMessageEntity>
 

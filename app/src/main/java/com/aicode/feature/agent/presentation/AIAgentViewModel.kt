@@ -422,16 +422,34 @@ class AIAgentViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /** 草稿落盘防抖：待写入 SharedPreferences 的暂存区与合并写入任务（避免每键入一次落盘）。 */
+    private val pendingDraftWrites = mutableMapOf<String, String>()
+    private var draftPersistJob: Job? = null
+
     fun updateInputDraft(text: String) {
         val id = _currentSessionId.value ?: return
-        val editor = draftPrefs.edit()
         if (text.isEmpty()) {
             _inputDrafts.value = _inputDrafts.value - id
-            editor.remove(id)
-        } else {
-            _inputDrafts.value = _inputDrafts.value + (id to text)
-            editor.putString(id, text)
+            pendingDraftWrites.remove(id)
+            // 清空立即落盘：防止切换会话后残留旧草稿
+            draftPrefs.edit().remove(id).apply()
+            return
         }
+        _inputDrafts.value = _inputDrafts.value + (id to text)
+        // 高频落盘节流：内存态即时更新，SharedPreferences 合并写入延后 500ms（优化器审查：原每键入一次 XML 序列化写盘）
+        pendingDraftWrites[id] = text
+        draftPersistJob?.cancel()
+        draftPersistJob = viewModelScope.launch {
+            delay(500)
+            flushDraftWrites()
+        }
+    }
+
+    private fun flushDraftWrites() {
+        if (pendingDraftWrites.isEmpty()) return
+        val editor = draftPrefs.edit()
+        pendingDraftWrites.forEach { (k, v) -> editor.putString(k, v) }
+        pendingDraftWrites.clear()
         editor.apply()
     }
 
@@ -2813,6 +2831,8 @@ class AIAgentViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        // 兑现未落盘的输入草稿（防抖窗口内退出时补写，最多丢 500ms 的最后几次键入）
+        runCatching { flushDraftWrites() }
         // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
         if (FloatBallCommandCenter.send === floatBallSendBridge) FloatBallCommandCenter.send = null
         if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
