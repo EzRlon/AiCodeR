@@ -25,4 +25,16 @@
     <color name="primary">#007ACC</color>
     <color name="splash_background_color">#F9FAFA</color>
     <color name="window_background_color">#FFFFFF</color>
+    <color name="window_background_color_dark">#07111F</color>
+    <color name="window_background_color_black">#000000</color>
+
+    <!-- 首帧窗口底色覆盖主题：夜色资源固定 #07111F 只与「深色主题＋系统深色」同色；
+         极黑/系统浅色＋App 深色时由 MainActivity 按当前主题模式同步切换，消除首帧闪色。 -->
+    <style name="Theme.AICode.DarkBg" parent="Theme.AICode">
+        <item name="android:windowBackground">@color/window_background_color_dark</item>
+    </style>
+
+    <style name="Theme.AICode.BlackBg" parent="Theme.AICode">
+        <item name="android:windowBackground">@color/window_background_color_black</item>
+    </style>
 </resources>

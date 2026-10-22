@@ -245,6 +245,7 @@
     <string name="settings_title_follow_chat">Follow current chat model</string>
     <string name="settings_image_gen_unconfigured">Not configured</string>    <string name="settings_theme_title">Appearance</string>    <string name="theme_auto">Auto</string>
     <string name="theme_dark">Dark</string>
+    <string name="theme_black">Pitch black (OLED)</string>
     <string name="theme_light">Light</string>
     <string name="theme_mode_section">Appearance mode</string>
     <string name="theme_preset_section">Color theme</string>

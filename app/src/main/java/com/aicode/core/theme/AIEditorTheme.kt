@@ -192,6 +192,71 @@ object StorageUsagePalette {
     val Apk = Color(0xFF64748B)
 }
 
+/**
+ * 极黑（OLED）：背景/卡片全部纯黑，黑色像素不发光直接省电。
+ * 独立于配色预设（纯黑是硬承诺），主色沿用深色族的强调色保证可读性。
+ */
+internal val BlackColorScheme = darkColorScheme(
+    primary = Color(0xFF60A5FA),
+    onPrimary = Color(0xFF082F49),
+    primaryContainer = Color(0xFF0F3A63),
+    onPrimaryContainer = Color(0xFFDBEAFE),
+    secondary = Color(0xFF7DD3FC),
+    onSecondary = Color(0xFF082F49),
+    secondaryContainer = Color(0xFF0C4A6E),
+    onSecondaryContainer = Color(0xFFBAE6FD),
+    tertiary = Color(0xFF22C55E),
+    tertiaryContainer = Color(0xFF14532D),
+    onTertiaryContainer = Color(0xFFBBF7D0),
+    background = Color.Black,
+    onBackground = Color(0xFFE8EDF5),
+    surface = Color.Black,
+    onSurface = Color(0xFFE8EDF5),
+    surfaceVariant = Color(0xFF121212),
+    onSurfaceVariant = Color(0xFFA8B3C4),
+    surfaceTint = Color.Transparent,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF050505),
+    surfaceContainer = Color(0xFF0A0A0A),
+    surfaceContainerHigh = Color(0xFF101010),
+    surfaceContainerHighest = Color(0xFF161616),
+    surfaceBright = Color(0xFF1C1C1C),
+    surfaceDim = Color.Black,
+    outline = Color(0xFF4B5563),
+    outlineVariant = Color(0xFF303030),
+    error = Color(0xFFF87171),
+    onError = Color(0xFF450A0A),
+    errorContainer = Color(0xFF7F1D1D),
+    onErrorContainer = Color(0xFFFECACA)
+)
+
+/** 极黑模式的语义色：面用纯黑/近黑，功能色沿用深色族。 */
+val BlackSemanticColors = AppSemanticColors(
+    success = Color(0xFF4ADE80),
+    onSuccess = Color(0xFF052E16),
+    successContainer = Color(0x59052E16),
+    onSuccessContainer = Color(0xFFBBF7D0),
+    warning = Color(0xFFFBBF24),
+    onWarning = Color(0xFF78350F),
+    warningContainer = Color(0x5978350F),
+    onWarningContainer = Color(0xFFFDE68A),
+    info = Color(0xFF38BDF8),
+    onInfo = Color(0xFF0C4A6E),
+    infoContainer = Color(0x590C4A6E),
+    onInfoContainer = Color(0xFFBAE6FD),
+    diffAdd = Color(0xFF4ADE80),
+    diffAddBg = Color(0x334ADE80),
+    diffRemove = Color(0xFFF87171),
+    diffRemoveBg = Color(0x33F87171),
+    subtleText = Color(0xFF8B95A5),
+    subtleBorder = Color(0xFF222222),
+    cardSurface = Color(0xFF0A0A0A),
+    pageBackground = Color.Black,
+    mutedSurface = Color(0xFF121212),
+    capsuleSurface = Color(0xFF1A1A1A),
+    buttonMutedBg = Color(0xFF1A1A1A)
+)
+
 internal val DarkColorScheme = darkColorScheme(
     primary = Color(0xFF60A5FA),
     onPrimary = Color(0xFF082F49),
@@ -282,11 +347,14 @@ fun AIEditorTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     preset: AppThemePreset = AppThemePreset.DEFAULT,
     dynamicColor: Boolean = false,
+    amoledBlack: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    val themeColors = remember(darkTheme, preset, dynamicColor, context) {
-        if (dynamicColor) {
+    val themeColors = remember(amoledBlack, darkTheme, preset, dynamicColor, context) {
+        if (amoledBlack) {
+            AppThemeColors(BlackColorScheme, BlackSemanticColors)
+        } else if (dynamicColor) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val dynamicScheme =
                     if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

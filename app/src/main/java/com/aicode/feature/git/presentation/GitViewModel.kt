@@ -816,6 +816,7 @@ class GitViewModel @Inject constructor(
         return when (themeMode) {
             AppThemeMode.AUTO -> systemDark
             AppThemeMode.DARK -> true
+            AppThemeMode.BLACK -> true
             AppThemeMode.LIGHT -> false
         }
     }

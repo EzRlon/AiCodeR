@@ -140,6 +140,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -211,6 +212,26 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // 首帧窗口底色随应用主题模式同步取值：夜色资源固定 #07111F 只与「系统深色＋App 深色」
+        // 同色，极黑会先闪蓝、系统浅色＋App 深色会先闪白。注入已完成（Hilt 在 super 链内注入），
+        // 内容视图尚未创建，此处阻塞读一次主题偏好（DataStore 首读，毫秒级）换覆盖主题。
+        runCatching {
+            val mode = kotlinx.coroutines.runBlocking { themeSettings.themeModeFlow.first() }
+            // 用 Application 级 uiMode 判系统深浅（不受 Activity 语言 wrapper 冻结影响）
+            val systemDark = (applicationContext.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val effectiveDark = when (mode) {
+                AppThemeMode.AUTO -> systemDark
+                AppThemeMode.DARK, AppThemeMode.BLACK -> true
+                AppThemeMode.LIGHT -> false
+            }
+            when {
+                mode == AppThemeMode.BLACK -> setTheme(R.style.Theme_AICode_BlackBg)
+                effectiveDark -> setTheme(R.style.Theme_AICode_DarkBg)
+            }
+        }
+
         handleSendTextIntent(this, intent)
 
         // 音量键直接控制媒体音量：浏览器/视频等媒体播放场景符合直觉（否则调的是铃声音量）。
@@ -270,6 +291,7 @@ class MainActivity : ComponentActivity() {
             val darkTheme = when (themeMode) {
                 AppThemeMode.AUTO -> systemDarkTheme
                 AppThemeMode.DARK -> true
+                AppThemeMode.BLACK -> true
                 AppThemeMode.LIGHT -> false
             }
             val view = LocalView.current
@@ -300,7 +322,8 @@ class MainActivity : ComponentActivity() {
             AIEditorTheme(
                 darkTheme = darkTheme,
                 preset = AppThemePreset.findById(themePresetId),
-                dynamicColor = dynamicColor
+                dynamicColor = dynamicColor,
+                amoledBlack = themeMode == AppThemeMode.BLACK
             ) {
                 // 窗口底色与当前主题背景同步（含强制深浅与自定义预设）：启动窗/重建过渡到首帧
                 // 之间露出的窗口区域不闪色（“切回闪光/页面顶部异常”的加强）。

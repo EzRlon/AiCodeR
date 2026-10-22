@@ -1845,13 +1845,16 @@ internal fun SettingsMenu(
                 title = stringResource(R.string.settings_theme_title),
                 onClick = onOpenThemeSheet,
                 trailing = {
-                    val colorLabel = if (dynamicColorEnabled) {
+                    val modeLabel = stringResource(themeMode.labelRes)
+                    // 极黑模式下配色预设/莫奈被忽略，摘要只显示模式避免误导
+                    val text = if (themeMode == AppThemeMode.BLACK) modeLabel
+                    else "$modeLabel · " + if (dynamicColorEnabled) {
                         stringResource(R.string.theme_dynamic_color)
                     } else {
                         stringResource(AppThemePreset.findById(themePresetId).nameRes)
                     }
                     Text(
-                        text = "${stringResource(themeMode.labelRes)} · $colorLabel",
+                        text = text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
                     )

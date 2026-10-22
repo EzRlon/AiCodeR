@@ -26,6 +26,7 @@ private val Context.themeDataStore by preferencesDataStore(
 enum class AppThemeMode(val labelRes: Int) {
     AUTO(R.string.theme_auto),
     DARK(R.string.theme_dark),
+    BLACK(R.string.theme_black),
     LIGHT(R.string.theme_light);
 
     companion object {

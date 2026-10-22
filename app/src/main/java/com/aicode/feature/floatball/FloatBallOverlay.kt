@@ -529,12 +529,14 @@ class FloatBallOverlay(
         val darkTheme = when (mode) {
             AppThemeMode.AUTO -> systemDark
             AppThemeMode.DARK -> true
+            AppThemeMode.BLACK -> true
             AppThemeMode.LIGHT -> false
         }
         AIEditorTheme(
             darkTheme = darkTheme,
             preset = AppThemePreset.findById(presetId),
             dynamicColor = dynamicColor,
+            amoledBlack = mode == AppThemeMode.BLACK,
             content = content
         )
     }

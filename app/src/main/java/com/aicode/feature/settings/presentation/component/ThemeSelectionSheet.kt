@@ -120,7 +120,7 @@ internal fun ThemeSelectionSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.lg)
-                    .alpha(if (dynamicColorEnabled) 0.4f else 1f),
+                    .alpha(if (dynamicColorEnabled || selected == AppThemeMode.BLACK) 0.4f else 1f),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
@@ -129,7 +129,7 @@ internal fun ThemeSelectionSheet(
                         preset = preset,
                         darkTheme = isDarkTheme,
                         isSelected = preset.id == activePreset.id,
-                        enabled = !dynamicColorEnabled,
+                        enabled = !dynamicColorEnabled && selected != AppThemeMode.BLACK,
                         onSelect = { onPresetSelected(preset.id) }
                     )
                 }
@@ -141,6 +141,7 @@ internal fun ThemeSelectionSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .alpha(if (selected == AppThemeMode.BLACK) 0.4f else 1f)
                     .padding(horizontal = Spacing.lg, vertical = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -158,8 +159,9 @@ internal fun ThemeSelectionSheet(
                 }
                 Spacer(Modifier.width(Spacing.md))
                 AppSwitch(
-                    checked = dynamicColorEnabled,
-                    onCheckedChange = onDynamicColorChanged
+                    checked = dynamicColorEnabled && selected != AppThemeMode.BLACK,
+                    onCheckedChange = { if (selected != AppThemeMode.BLACK) onDynamicColorChanged(it) },
+                    enabled = selected != AppThemeMode.BLACK
                 )
             }
         }
