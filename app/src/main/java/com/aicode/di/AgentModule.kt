@@ -96,6 +96,7 @@ import com.aicode.feature.agent.domain.tool.memory.MemoryTool
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
 import com.aicode.feature.agent.domain.tool.goal.GoalStatusTool
+import com.aicode.feature.agent.domain.tool.team.SummonTeamTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
@@ -391,6 +392,7 @@ object AgentModule {
         webFetchTool: WebFetchTool,
         planModeTool: PlanModeTool,
         goalStatusTool: GoalStatusTool,
+        summonTeamTool: SummonTeamTool,
         todoTool: TodoTool,
         memoryTool: MemoryTool,
         recallTool: RecallTool,
@@ -417,6 +419,7 @@ object AgentModule {
             register("webfetch", webFetchTool)
             register("planMode", planModeTool)
             register("goalStatus", goalStatusTool)
+            register("summon_team", summonTeamTool)
             register("todo", todoTool)
             register("memory", memoryTool)
             register("recall", recallTool)

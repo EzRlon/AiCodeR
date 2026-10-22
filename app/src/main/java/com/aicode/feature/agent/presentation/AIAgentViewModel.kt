@@ -2215,7 +2215,7 @@ class AIAgentViewModel @Inject constructor(
                     val allowed = agentDefinition.filterToolNames(allTools.map { it.name }).toSet()
                     allTools.filter { it.name in allowed }
                 }
-                isSub -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL }
+                isSub -> allTools.filterNot { it.name == AgentDefinition.NESTED_TOOL || it.name == "summon_team" }
                 else -> allTools.filterNot { it.name == AgentDefinition.PARENT_MESSAGE_TOOL }
             }.let { list ->
                 // goal 自主循环期间禁用 PLAN（其退出门禁需人工审查）；非 goal 期间不暴露 goalStatus 工具。
@@ -2766,10 +2766,10 @@ class AIAgentViewModel @Inject constructor(
     }
 
     init {
-        // 跟随会话切换/冷启动刷新当前专家团（单一同步点）
+        // 跟随会话切换/冷启动/工具内绑定刷新当前专家团（单一同步点；summon_team 工具直接落库，经 DB 流反映到顶栏）
         viewModelScope.launch {
-            _currentSessionId.collect { id ->
-                _teamName.value = if (id.isNullOrBlank()) null else sessionUseCase.getSessionById(id)?.teamName
+            currentSessionState.collect { session ->
+                _teamName.value = session?.teamName
             }
         }
         // 悬浮球命令桥：面板「发送 / 回到 App」经此进入主会话流程（享受队列/暂停拦截等既有保护）。

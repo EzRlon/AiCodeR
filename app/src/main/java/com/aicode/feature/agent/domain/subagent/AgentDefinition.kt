@@ -83,7 +83,8 @@ data class AgentDefinition(
         } else {
             afterDeny.filter { name -> allowedTools.any { matches(it, name) } }
         }
-        return afterAllow.filterNot { it == NESTED_TOOL }
+        // 子代理不可嵌套派子代理，也不可召唤专家团（团队绑定属会话级状态，污染子会话）
+        return afterAllow.filterNot { it == NESTED_TOOL || it == "summon_team" }
     }
 
     private fun matches(pattern: String, toolName: String): Boolean {
