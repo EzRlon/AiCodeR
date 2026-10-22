@@ -133,6 +133,18 @@ class CheckpointManager @Inject constructor(
     }
 
     /**
+     * 本会话最近被 AI 编辑过的文件路径：按快照时间倒序、按路径去重后取前 [limit] 个。
+     * 快照只在 editFile/writeFile 执行前记录（见 [beforeFileModified]），因此该清单恰好是
+     * 「AI 改过的文件」；路径为模型视角的容器路径，可直接交给 FileAccessProvider 读取。
+     */
+    suspend fun recentEditedFilePaths(sessionId: String, limit: Int): List<String> = withContext(Dispatchers.IO) {
+        checkpointDao.getRecentSnapshotsForSession(sessionId)
+            .distinctBy { it.filePath }
+            .take(limit)
+            .map { it.filePath }
+    }
+
+    /**
      * 将代码回滚到指定 Checkpoint 节点的初始状态。
      *
      * ### 并发保护

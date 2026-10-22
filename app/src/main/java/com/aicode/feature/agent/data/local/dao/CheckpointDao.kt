@@ -30,6 +30,14 @@ interface CheckpointDao {
     @Query("SELECT * FROM checkpoint_file_snapshots WHERE checkpointId = :checkpointId")
     suspend fun getFileSnapshotsForCheckpoint(checkpointId: String): List<CheckpointFileSnapshotEntity>
 
+    /** 按快照时间倒序取本会话全部文件快照，供「最近编辑文件」查询去重后取最新。 */
+    @Query(
+        "SELECT s.* FROM checkpoint_file_snapshots s " +
+            "INNER JOIN session_checkpoints c ON s.checkpointId = c.id " +
+            "WHERE c.sessionId = :sessionId ORDER BY s.createdAt DESC"
+    )
+    suspend fun getRecentSnapshotsForSession(sessionId: String): List<CheckpointFileSnapshotEntity>
+
     @Query("SELECT COUNT(*) FROM checkpoint_file_snapshots WHERE checkpointId = :checkpointId AND filePath = :filePath")
     suspend fun countSnapshot(checkpointId: String, filePath: String): Int
 

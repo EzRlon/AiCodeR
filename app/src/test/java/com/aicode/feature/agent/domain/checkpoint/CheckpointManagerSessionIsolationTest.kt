@@ -260,6 +260,11 @@ class CheckpointManagerSessionIsolationTest {
         override suspend fun getFileSnapshotsForCheckpoint(checkpointId: String): List<CheckpointFileSnapshotEntity> =
             snapshots.filter { it.checkpointId == checkpointId }
 
+        override suspend fun getRecentSnapshotsForSession(sessionId: String): List<CheckpointFileSnapshotEntity> {
+            val ids = checkpoints.filter { it.sessionId == sessionId }.map { it.id }.toSet()
+            return snapshots.filter { it.checkpointId in ids }.sortedByDescending { it.createdAt }
+        }
+
         override suspend fun countSnapshot(checkpointId: String, filePath: String): Int =
             snapshots.count { it.checkpointId == checkpointId && it.filePath == filePath }
 

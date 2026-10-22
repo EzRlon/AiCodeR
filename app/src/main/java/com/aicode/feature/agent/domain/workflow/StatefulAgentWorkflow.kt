@@ -140,6 +140,25 @@ class StatefulAgentWorkflow @Inject constructor(
         /** 模型直出图片落盘目录（与 GenerateImageTool 保持一致）。 */
         const val GENERATED_IMAGE_DIR = "~/.aicode/generated-images"
         const val MAX_GENERATED_IMAGE_BYTES = 20L * 1024 * 1024
+        /** 微压缩：发送副本里保留最近 N 条工具结果全文，更早的长结果替换为占位符。 */
+        const val MICRO_COMPACT_KEEP_TOOL_RESULTS = 5
+        /** 短于该长度的工具结果不值得投影（占位符本身也占 token 且抹掉有用细节）。 */
+        const val MICRO_COMPACT_MIN_CHARS = 800
+        /** 工作集恢复：超过该字节数的文件不读入（预算只需要头几 K，整份载入大文件是内存尖峰）。 */
+        const val WORKING_SET_FILE_MAX_BYTES = 1_000_000L
+        // 有界捕获：结果可能是紧凑单行 JSON（无空白分隔），\S+ 会吞到串尾，必须排除 ] 与引号
+        val TOOL_OUTPUT_ARCHIVE_PATH = Regex("完整内容已保存到 ([^\\s\\]\"]+)")
+        /** 压缩失败熔断：连续失败次数达到该值后暂停尝试。 */
+        const val COMPACTION_FAILURES_TO_TRIP = 3
+        /** 熔断后暂停的 LLM 调用轮数，期满恢复尝试。 */
+        const val COMPACTION_PAUSE_ROUNDS = 10
+        /** 压缩后工作集恢复：至多重读的最近编辑文件数与总字符预算（头部截断，均分给剩余文件）。 */
+        const val WORKING_SET_MAX_FILES = 5
+        const val WORKING_SET_TOTAL_MAX_CHARS = 40_000
+        /** 工作集恢复消息的标记与说明（喙给模型的系统性内容，同 CONTEXT_COMPACTION_MARKER 风格）。 */
+        const val WORKING_SET_RESTORE_MARKER = "[Working set restored after context compaction]"
+        const val WORKING_SET_RESTORE_INTRO =
+            "【压缩后工作集恢复】上下文刚完成压缩。以下是压缩前最近编辑文件的当前内容快照，用于立即恢复对在改文件的工作记忆；超长部分已按预算截断。"
     }
 
     /**
@@ -270,7 +289,120 @@ class StatefulAgentWorkflow @Inject constructor(
         // 摘要仍用专用压缩模型（尊重用户选择），但保留最近消息的窗口预算按主聊天模型算，
         // 与自动压缩一致——否则小窗口的压缩模型会让手动压缩保留的最近上下文偏少。
         val result = contextCompactor.compactIfNeeded(history, compactionProvider, sessionId, force = true, windowProvider = provider, onEvent = onEvent)
+        if (result.compacted) {
+            // 手动压缩没有在跑的 workflow 内存态可注入，下一回合历史从 DB 重建——
+            // 恢复消息必须落库且可回放（不排除出历史）才能在下回合生效。
+            buildWorkingSetRestoreMessage(sessionId)?.let { restore ->
+                val metadata = modelMetadataService.resolve(provider.providerId, when (provider) {
+                    is AnthropicAdapter -> ProviderType.ANTHROPIC
+                    is GeminiAdapter -> ProviderType.GEMINI
+                    else -> ProviderType.OPENAI
+                }, provider.model)
+                val budget = ModelContextPolicy.effectiveInputBudget(metadata)
+                val used = ContextTokenEstimator.estimate("", result.messages, emptyList())
+                if (used + ContextTokenEstimator.estimate(restore) < budget) {
+                    persistWorkingSetRestore(sessionId, restore, excludeFromHistory = false)
+                } else {
+                    FileLogger.w(TAG, "手动压缩后工作集恢复超输入预算，跳过注入（used=$used budget=$budget）")
+                }
+            }
+        }
         return result.compacted
+    }
+
+    /**
+     * 工作集恢复注入前的预算护栏：把恢复消息计入后重估，达到输入预算即放弃注入——
+     * 「为救上下文而注入的内容」不能反过来把请求推过预算杀死本轮（小窗口模型尤其如此）。
+     * 调用点均在压缩成功后、baseline 清零处，裸估算与 inputBudget 直接比较即等价。
+     */
+    private suspend fun restoreFitsBudget(
+        systemPrompt: String,
+        baseMessages: List<AgentMessage>,
+        restore: AgentMessage,
+        tools: List<AgentTool>,
+        inputBudget: Int
+    ): Boolean {
+        val estimate = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            ContextTokenEstimator.estimate(systemPrompt, baseMessages + restore, tools)
+        }
+        if (estimate < inputBudget) return true
+        FileLogger.w(TAG, "工作集恢复超输入预算，放弃注入（estimate=$estimate budget=$inputBudget）")
+        return false
+    }
+
+    /**
+     * 压缩后工作集恢复：把最近编辑的至多 [WORKING_SET_MAX_FILES] 个文件的当前内容重读，
+     * 组装为一条注入消息，定点补偿压缩摘要对在改文件细节的丢失。
+     * 总字符预算按剩余文件均分、单文件从头部截断；任一文件读取失败即跳过；
+     * 查不到可恢复文件时返回 null。
+     */
+    private suspend fun buildWorkingSetRestoreMessage(sessionId: String): AgentMessage.UserMessage? {
+        val paths = runCatching { checkpointManager.recentEditedFilePaths(sessionId, WORKING_SET_MAX_FILES) }
+            .onFailure { FileLogger.w(TAG, "查询最近编辑文件失败，跳过工作集恢复", it) }
+            .getOrDefault(emptyList())
+        if (paths.isEmpty()) return null
+        val filesText = withContext(Dispatchers.IO) {
+            val sb = StringBuilder()
+            var remaining = WORKING_SET_TOTAL_MAX_CHARS
+            for ((index, path) in paths.withIndex()) {
+                val perFileBudget = remaining / (paths.size - index)
+                if (perFileBudget <= 0) break
+                val content = runCatching {
+                    if (!fileAccess.exists(path)) null
+                    else {
+                        // 先预判体积：readFile 是全量读入，大文件为取预算头几 K 不值得整份载入
+                        val size = fileAccess.fileSize(path)
+                        if (size > WORKING_SET_FILE_MAX_BYTES) {
+                            FileLogger.w(TAG, "工作集恢复跳过大文件: $path ($size bytes)")
+                            null
+                        } else {
+                            val acc = StringBuilder()
+                            for (line in fileAccess.readLines(path)) {
+                                if (acc.length + line.length + 1 > perFileBudget) break
+                                acc.appendLine(line)
+                            }
+                            acc.toString().ifBlank { null }
+                        }
+                    }
+                }.onFailure { FileLogger.w(TAG, "工作集恢复读取文件失败，跳过: $path", it) }.getOrNull()
+                if (content.isNullOrBlank()) continue
+                sb.append("\n<file path=\"").append(path).append("\">\n").append(content)
+                if (content.length == perFileBudget) sb.append("\n…[已按预算截断]")
+                sb.append("\n</file>\n")
+                remaining -= content.length
+            }
+            sb.toString()
+        }
+        if (filesText.isBlank()) return null
+        // id 必须稳定且与落库行一致：后续压缩若把该消息划入 head，会校验 id 已持久化。
+        return AgentMessage.UserMessage(
+            id = UUID.randomUUID().toString(),
+            content = "$WORKING_SET_RESTORE_MARKER\n$WORKING_SET_RESTORE_INTRO\n$filesText"
+        )
+    }
+
+    /**
+     * 落库工作集恢复消息。excludeFromHistory=true（自动压缩路径）时仅作归档：
+     * 满足后续压缩的持久化 ID 校验，但 buildHistory 不回放，下回合上下文不再包含；
+     * false（手动 /compress）时可回放，恢复消息随下回合重建的历史生效。
+     * 内容带 BACKGROUND_NOTIFICATION_PREFIX，UI 渲染为轻量提示条而非用户气泡。
+     */
+    private suspend fun persistWorkingSetRestore(
+        sessionId: String?,
+        restore: AgentMessage.UserMessage,
+        excludeFromHistory: Boolean
+    ) {
+        if (sessionId == null) return
+        runCatching {
+            messagePersistenceUseCase.persist(
+                sessionId,
+                com.aicode.feature.agent.presentation.MessageRole.USER,
+                "${com.aicode.feature.agent.presentation.BACKGROUND_NOTIFICATION_PREFIX}\n${restore.content}",
+                id = restore.id,
+                isContextExcluded = excludeFromHistory
+            )
+            messagePersistenceUseCase.invalidateHistory(sessionId)
+        }.onFailure { FileLogger.w(TAG, "工作集恢复消息落库失败", it) }
     }
 
     override suspend fun handoffInputBudget(sessionId: String): Int? = runCatching {
@@ -495,8 +627,10 @@ class StatefulAgentWorkflow @Inject constructor(
             elapsedMs = (System.nanoTime() - promptStartedNs) / 1_000_000,
             details = "operation=$promptStartedNs promptChars=${systemPrompt.length}"
         )
-        // 压缩失败后本轮（本次用户请求内）不再重复尝试压缩，避免每次 LLM 调用都白试一次。
-        var compactionAttemptFailed = false
+        // 压缩失败熔断：连续失败未达阈值时容忍重试（可能是偶发故障），
+        // 达到阈值后暂停 N 轮 LLM 调用不试压缩，避免反复白试烧 token；暂停期满自动恢复尝试。
+        var compactionFailures = 0
+        var compactionPauseRounds = 0
         val inputBudget = ModelContextPolicy.effectiveInputBudget(metadata)
         if (aiProvider is AnthropicAdapter) {
             aiProvider.maxOutputTokens = ModelContextPolicy.outputReserveTokens(metadata)
@@ -536,7 +670,9 @@ class StatefulAgentWorkflow @Inject constructor(
                         // 压缩轮：若配置了压缩专用模型，使用独立压缩模型压缩
                         val compactionProvider = resolveCompactionFallbackProvider(currentContext.sessionId) ?: providerInUse
                         var compactedMessages = state.messages
-                        if (!compactionAttemptFailed) {
+                        if (compactionPauseRounds > 0) {
+                            compactionPauseRounds--
+                        } else {
                             val estimate = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                                 ContextTokenEstimator.estimate(systemPrompt, state.messages, currentTools)
                             }
@@ -544,16 +680,36 @@ class StatefulAgentWorkflow @Inject constructor(
                             val compaction = contextCompactor.compactIfNeeded(state.messages, compactionProvider, context.sessionId,
                                 windowProvider = aiProvider, systemPrompt = systemPrompt, tools = currentTools,
                                 currentInputTokens = predictedInput) { event ->
-                                if (event is AgentEvent.CompactionFailed) compactionAttemptFailed = true
+                                if (event is AgentEvent.CompactionFailed) {
+                                    compactionFailures++
+                                    if (compactionFailures >= COMPACTION_FAILURES_TO_TRIP) {
+                                        compactionFailures = 0
+                                        compactionPauseRounds = COMPACTION_PAUSE_ROUNDS
+                                    }
+                                }
                                 send(event)
                             }
                             compactedMessages = compaction.messages
                             if (compaction.compacted) {
-                                state = state.copy(messages = compaction.messages)
+                                // 压缩刚抹掉大部分历史：立即把最近编辑文件的当前内容注回本轮上下文。
+                                // 落库为归档行（isContextExcluded）：保证后续压缩的持久化 ID 校验可过，
+                                // 且不回放进后续回合（定点补偿只服务本轮继续执行）。
+                                val restore = currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
+                                    ?.takeIf { restoreFitsBudget(systemPrompt, compaction.messages, it, currentTools, inputBudget) }
+                                if (restore != null) {
+                                    state = state.copy(messages = compaction.messages + restore)
+                                    compactedMessages = state.messages
+                                    persistWorkingSetRestore(currentContext.sessionId, restore, excludeFromHistory = true)
+                                } else {
+                                    state = state.copy(messages = compaction.messages)
+                                }
                                 baselineUsage = 0
                                 baselineEstimate = 0
+                                compactionFailures = 0
                             }
                         }
+                        // 微压缩：只投影发送副本（在全量压缩之后、估算之前），state/DB/摘要输入均保持原文。
+                        compactedMessages = microCompactToolResults(compactedMessages)
                         val requestEstimate = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                             ContextTokenEstimator.estimate(systemPrompt, compactedMessages, currentTools)
                         }
@@ -594,10 +750,16 @@ class StatefulAgentWorkflow @Inject constructor(
                                     currentContext.sessionId, force = true, windowProvider = aiProvider,
                                     systemPrompt = systemPrompt, tools = currentTools, currentInputTokens = predictedInput) { send(it) }
                                 if (recovery.compacted) {
-                                    state = state.copy(messages = recovery.messages)
+                                    val restore = currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
+                                        ?.takeIf { restoreFitsBudget(systemPrompt, recovery.messages, it, currentTools, inputBudget) }
+                                    val restored = if (restore != null) recovery.messages + restore else recovery.messages
+                                    if (restore != null) {
+                                        persistWorkingSetRestore(currentContext.sessionId, restore, excludeFromHistory = true)
+                                    }
+                                    state = state.copy(messages = restored)
                                     baselineUsage = 0
                                     baselineEstimate = 0
-                                    actionQueue.addLast(AgentAction.InitRequest(recovery.messages))
+                                    actionQueue.addLast(AgentAction.InitRequest(restored))
                                     continue
                                 }
                             }
@@ -664,10 +826,16 @@ class StatefulAgentWorkflow @Inject constructor(
                                     currentContext.sessionId, force = true, windowProvider = aiProvider,
                                     systemPrompt = systemPrompt, tools = currentTools, currentInputTokens = predictedInput) { send(it) }
                                 if (recovery.compacted) {
-                                    state = state.copy(messages = recovery.messages)
+                                    val restore = currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
+                                        ?.takeIf { restoreFitsBudget(systemPrompt, recovery.messages, it, currentTools, inputBudget) }
+                                    val restored = if (restore != null) recovery.messages + restore else recovery.messages
+                                    if (restore != null) {
+                                        persistWorkingSetRestore(currentContext.sessionId, restore, excludeFromHistory = true)
+                                    }
+                                    state = state.copy(messages = restored)
                                     baselineUsage = 0
                                     baselineEstimate = 0
-                                    actionQueue.addLast(AgentAction.InitRequest(recovery.messages))
+                                    actionQueue.addLast(AgentAction.InitRequest(restored))
                                     callError = e.message
                                     continue
                                 }
@@ -1101,6 +1269,40 @@ class StatefulAgentWorkflow @Inject constructor(
                 is AgentMessage.ToolResultMessage ->
                     if (msg.images.isEmpty()) msg else msg.copy(images = emptyList())
                 is AgentMessage.AssistantMessage -> msg
+            }
+        }
+    }
+
+    /**
+     * 微压缩：保留最近 [MICRO_COMPACT_KEEP_TOOL_RESULTS] 条工具结果全文，更早的长结果替换为占位符。
+     * 只影响本次发送（同 sanitizeImagesForModel 模式）：state.messages 与 DB 始终是原文，
+     * 全量压缩摘要、溢出恢复、回滚、下一回合重建全部读到原文。
+     * 占位符保留工具名与存档路径（长输出的 output_path 提示不能丢）；措辞区分读写类工具，
+     * 避免诱导模型盲目重放 editFile/terminal 等非幂等调用。必须 map/copy 产出新列表：
+     * buildHistory 返回进程级共享缓存实例，不可原地改写；且输出确定性保证跨轮前缀缓存字节稳定。
+     */
+    private fun microCompactToolResults(messages: List<AgentMessage>): List<AgentMessage> {
+        val toolResultIndexes = messages.withIndex()
+            .filter { it.value is AgentMessage.ToolResultMessage }
+            .map { it.index }
+        val cutoff = toolResultIndexes.getOrNull(toolResultIndexes.size - MICRO_COMPACT_KEEP_TOOL_RESULTS)
+            ?: return messages
+        return messages.mapIndexed { index, msg ->
+            val toolResult = msg as? AgentMessage.ToolResultMessage
+            if (toolResult == null || index >= cutoff || toolResult.result.length <= MICRO_COMPACT_MIN_CHARS) {
+                msg
+            } else {
+                val archivePath = TOOL_OUTPUT_ARCHIVE_PATH.find(toolResult.result)?.groupValues?.getOrNull(1)
+                val placeholder = buildString {
+                    append("[工具结果已清理（上下文微压缩）：工具 ")
+                    append(toolResult.toolName)
+                    append("。读取类工具可直接重新调用取回；写类/有副作用的工具请先核实当前状态，勿盲目重放。")
+                    if (archivePath != null) {
+                        append("完整内容已存档：")
+                        append(archivePath)
+                    }
+                }
+                toolResult.copy(result = placeholder, modelResult = null)
             }
         }
     }
