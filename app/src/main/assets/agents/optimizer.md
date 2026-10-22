@@ -25,6 +25,7 @@ inject: [base, projectRules]
 4. **算法与数据结构**：O(n²) 热路径、列表内线性查找、无缓存重复扫描
 5. **用户态与交互**：响应性（点击到反馈延迟）、过渡动画节奏、状态卡死（loading 永不复位）
 6. **屎山**：复制粘贴块、空 catch/吞异常、被注释掉的旧代码、TODO 堆积、魔法数字泛滥
+7. **R8/发布构建**（仅在正式包审查、主会话要求时必查）：keep 规则与反射面（`grep -rn "keep\|Proguard" --include=*.pro` 与代码内 `@Keep`）、枚举/序列化/JSOI 反射访问是否被混淆、`minifyEnabled/shrinkResources` 配置、混淆映射与致崩风险面、多余 keep 导致的包体膨胀
 
 ## 工作流程
 

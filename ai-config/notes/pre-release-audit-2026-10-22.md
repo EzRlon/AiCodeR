@@ -26,3 +26,8 @@
 - 不修（有理由）：禁用态视觉线索——反馈8 就是用户拍板「蓝色空闲态箭头也要白」，加 alpha 与之矛盾；TextField 36dp 最小高度实际生效——静态无法确认，列入真机验收项。
 - optimizer P1-1 主线程大图解码已修：decodeSampledBitmap（降采样+OOM 重试）+ Dispatchers.Default。
 - 未当批修的 optimizer P2（第 3-9 条）已归档上方。
+
+## 商店加载优化批次 qa 遗留 P2（2026-10-22 审查，延后处理）
+
+1. **同 tab 双在飞请求陈旧覆盖**（StoreViewModel.kt 首页刷新守卫处）：快速「切走再切回」同一 tab 时新旧协程都在飞，旧响应后到会以旧数据覆盖新数据并重复写缓存；数据等价无实害，根治用代次号（generation counter）。
+2. **翻译管线重复触发**（kickTranslation 缓存路径+网络路径各一次）：第二次取消首次任务重跑全量缓存读取与过滤；取消语义正确仅浪费，可改为 refresh 替换后只对增量条目 kick。
