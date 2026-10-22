@@ -83,7 +83,7 @@ private const val BAR_PREF_Y = "y"
 private enum class LiveTool { RECT, LINE, ARROW, STROKE, TEXT, SELECT }
 
 /**
- * 界面标注 v2「活标注」：真实界面之上的透明标注层。
+ * 标注中心「活标注」：真实界面之上的透明标注层。
  *
  * 交互（见 live-annotation-plan）：
  * - 操作态（默认）：本层无手势，触摸全部穿透——弹窗照弹、按钮照点（核心诉求）；
@@ -93,6 +93,7 @@ private enum class LiveTool { RECT, LINE, ARROW, STROKE, TEXT, SELECT }
  */
 @Composable
 internal fun LiveAnnotationOverlay(
+    instantCapture: Boolean = false,
     onExit: () -> Unit,
     onComplete: (Bitmap, List<AnnotationMark>) -> Unit
 ) {
@@ -151,6 +152,9 @@ internal fun LiveAnnotationOverlay(
         captureInFlight = true
         captureLauncher.launch(intent)
     }
+
+    // 截屏标注（合并入口）：进入即直接发起定格，不经过画笔阶段
+    LaunchedEffect(Unit) { if (instantCapture) startCapture() }
 
     fun commitText() {
         val text = textDraft.trim()

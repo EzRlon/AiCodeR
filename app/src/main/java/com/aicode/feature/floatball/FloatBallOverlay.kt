@@ -7,6 +7,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -15,6 +16,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -47,6 +52,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
@@ -61,14 +67,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -101,19 +111,23 @@ import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.X
+import compose.icons.feathericons.ArrowDown
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.ArrowUpRight
+import compose.icons.feathericons.Bookmark
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Mic
+import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.Tool
 import compose.icons.feathericons.Zap
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.catch
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
@@ -146,6 +160,9 @@ class FloatBallOverlay(
     private var ballView: ComposeView? = null
     private var panelWindow: android.view.View? = null
     private var panelOpen = false
+
+    /** 面板钉住（反馈5）：钉住时不自动收起、不可拖动、点外部不关闭；由面板 UI 回写，点外部判定在 Compose 之外。 */
+    private var panelPinned = false
 
     /** 屏幕尺寸缓存：拖动每帧都要用，避免每次都走 WindowManager 的系统调用（IPC）。 */
     private var cachedScreenSize: Pair<Int, Int>? = null
@@ -293,6 +310,7 @@ class FloatBallOverlay(
         panelWindow?.let { runCatching { windowManager.removeView(it) } }
         panelWindow = null
         panelOpen = false
+        panelPinned = false
         panelComposeOwner?.destroy()
         panelComposeOwner = null
         // 面板关闭后回缩 peek 待机（延迟到面板滑出动画结束后，避免视觉叠影）。
@@ -437,7 +455,7 @@ class FloatBallOverlay(
             val host = object : android.widget.FrameLayout(context) {
                 override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
                     if (ev.actionMasked == android.view.MotionEvent.ACTION_OUTSIDE) {
-                        dismissPanel()
+                        if (!panelPinned) dismissPanel()
                         return true
                     }
                     return super.dispatchTouchEvent(ev)
@@ -663,6 +681,11 @@ class FloatBallOverlay(
         var modelQuery by remember { mutableStateOf("") }
         var hint by remember { mutableStateOf<String?>(null) }
         var closing by remember { mutableStateOf(false) }
+        // 反馈5：钉住后不自动收起/不可拖动/点外部不关闭；同步到 service 字段供 Compose 外的 ACTION_OUTSIDE 判定
+        var pinned by remember { mutableStateOf(false) }
+        // 反馈1：输入窗默认收起为底栏图标，点击向上展开；发送后自动收起（反馈2）
+        var inputOpen by remember { mutableStateOf(false) }
+        val inputFocus = remember { FocusRequester() }
 
         var collapseTick by remember { mutableStateOf(0) }
         // FB2：发送链（键盘 onSend / 发送按钮共用；发送后清空同步草稿流）
@@ -674,6 +697,7 @@ class FloatBallOverlay(
                     sender == null -> hint = context.getString(R.string.float_panel_send_need_app)
                     sender(text) -> {
                         updateInput("")
+                        inputOpen = false
                         hint = context.getString(R.string.float_panel_sent)
                         collapseTick++
                     }
@@ -702,6 +726,8 @@ class FloatBallOverlay(
                 voiceProcessing = false
                 voiceTapActive = false
                 updateInput(text.trim())
+                // 语音回填时输入窗多半处于收起态，展开让用户看到/修改识别结果
+                inputOpen = true
             }
             voiceController.onError = {
                 voiceProcessing = false
@@ -728,10 +754,11 @@ class FloatBallOverlay(
         }
 
         // 操作完成后的自动收起（观看/处理完关键信息即收回，可无限次再打开）。
+        // 钉住判定放在 delay 之后复查：发送后 800ms 窗口内点钉住，不能被已排期的收起抢掉（qa/optimizer 双点名的竞态）。
         LaunchedEffect(collapseTick) {
             if (collapseTick > 0) {
                 delay(800)
-                closing = true
+                if (!pinned) closing = true
             }
         }
 
@@ -790,8 +817,9 @@ class FloatBallOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .pointerInput(Unit) {
-                            detectDragGestures { change, dragAmount ->
+                        .pointerInput(pinned) {
+                            // 钉住时头部拖拽把手失效（反馈5）
+                            if (!pinned) detectDragGestures { change, dragAmount ->
                                 change.consume()
                                 movePanelBy(dragAmount.x.roundToInt(), dragAmount.y.roundToInt())
                             }
@@ -831,6 +859,22 @@ class FloatBallOverlay(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.width(6.dp))
+                    }
+                    // 钉住（反馈5）：开启后面板不自动收起、不可拖动、点外部不关闭
+                    IconButton(
+                        onClick = {
+                            pinned = !pinned
+                            panelPinned = pinned
+                            if (pinned) closing = false
+                        },
+                        modifier = Modifier.size(closeSize * 0.7f)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Bookmark,
+                            contentDescription = stringResource(R.string.float_panel_pin),
+                            modifier = Modifier.size(closeSize * 0.4f),
+                            tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     // 新建会话：复用 App 内「新会话」逻辑（空会话直接复用不堆积），新会话后留在面板继续对话
                     IconButton(
@@ -881,10 +925,18 @@ class FloatBallOverlay(
                     }
                 }
 
-                // ── 消息流（FB1 mini 会话窗口）：最近 30 条快照，最新在底，自动滚底 ──
+                // ── 消息流（FB1 mini 会话窗口）：最近 30 条快照，最新在底 ──
                 val chatListState = rememberLazyListState()
+                // 反馈7：仅当用户本就停在底部时才自动滚底，不拽回正在上翻阅读的用户
+                val atBottom by remember {
+                    derivedStateOf {
+                        val li = chatListState.layoutInfo
+                        li.totalItemsCount == 0 ||
+                            li.visibleItemsInfo.lastOrNull()?.index == li.totalItemsCount - 1
+                    }
+                }
                 LaunchedEffect(hub.messages.size, hub.sessionId) {
-                    if (hub.messages.isNotEmpty()) chatListState.scrollToItem(hub.messages.lastIndex)
+                    if (hub.messages.isNotEmpty() && atBottom) chatListState.scrollToItem(hub.messages.lastIndex)
                 }
                 Text(
                     text = hub.sessionTitle?.takeIf { it.isNotBlank() }
@@ -908,36 +960,69 @@ class FloatBallOverlay(
                         )
                     }
                 } else {
-                    LazyColumn(
-                        state = chatListState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        itemsIndexed(hub.messages) { _, msg ->
-                            val isUser = msg.role == "USER"
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = when {
-                                        msg.isVerification -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-                                        isUser -> MaterialTheme.colorScheme.primaryContainer
-                                        msg.isError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
-                                        else -> MaterialTheme.semanticColors.mutedSurface
-                                    },
-                                    modifier = Modifier.widthIn(max = bubbleMaxWidth)
+                    // 反馈7：会话区叠加一键回底按钮，不在底部时显示
+                    val listScope = rememberCoroutineScope()
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        LazyColumn(
+                            state = chatListState,
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            itemsIndexed(hub.messages) { _, msg ->
+                                val isUser = msg.role == "USER"
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
                                 ) {
-                                    Text(
-                                        text = if (msg.role == "TOOL") "⚙ " + msg.text else msg.text,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
-                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = when {
+                                            msg.isVerification -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                            isUser -> MaterialTheme.colorScheme.primaryContainer
+                                            msg.isError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                            else -> MaterialTheme.colorScheme.surfaceVariant
+                                        },
+                                        modifier = Modifier.widthIn(max = bubbleMaxWidth)
+                                    ) {
+                                        Text(
+                                            text = if (msg.role == "TOOL") "⚙ " + msg.text else msg.text,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                                        )
+                                    }
                                 }
+                            }
+                        }
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = !atBottom,
+                            enter = fadeIn(tween(150)),
+                            exit = fadeOut(tween(150)),
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 2.dp, bottom = 4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                    .clickable {
+                                        if (hub.messages.isNotEmpty()) {
+                                            listScope.launch {
+                                                chatListState.animateScrollToItem(hub.messages.lastIndex)
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = FeatherIcons.ArrowDown,
+                                    contentDescription = stringResource(R.string.float_panel_scroll_bottom),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
@@ -1052,32 +1137,39 @@ class FloatBallOverlay(
                     }
                 }
 
-                // 6) 底栏（FB2）：输入框与 App 内同款样式；右侧语音 / 发送(停止)（App 内 SendButton 同款尺寸）
-                Row(verticalAlignment = Alignment.Bottom) {
-                    TextField(
-                        value = input,
-                        onValueChange = updateInput,
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp, max = 120.dp),
-                        placeholder = {
-                            Text(
-                                text = if (state.busy) stringResource(R.string.chat_queue_hint)
-                                else stringResource(R.string.chat_input_placeholder),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                // 6) 展开式输入窗（反馈1/2/3/4）：底栏只留入口图标，点击向上展开；发送后自动收起；
+                //    展开时与工具排之间以细分隔线分界；无占位提示文字（悬浮窗用户熟悉软件逻辑）
+                AnimatedVisibility(
+                    visible = inputOpen,
+                    enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+                    exit = shrinkVertically(tween(180)) + fadeOut(tween(180))
+                ) {
+                    Column {
+                        LaunchedEffect(Unit) { inputFocus.requestFocus() }
+                        TextField(
+                            value = input,
+                            onValueChange = updateInput,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 36.dp, max = 110.dp)
+                                .focusRequester(inputFocus)
+                                .onFocusChanged { if (it.isFocused && !pinned) onInputFocused() },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { doSend() }),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent
                             )
-                        },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { doSend() }),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor = Color.Transparent
                         )
-                    )
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+                        )
+                    }
                 }
 
                 // 7) 工具排（FB2）：模式循环 / 模型切换（语音与发送已移至底栏，与 App 内同位）
@@ -1129,6 +1221,19 @@ class FloatBallOverlay(
                             imageVector = FeatherIcons.Cpu,
                             contentDescription = stringResource(R.string.float_panel_pick_model),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // 输入入口（反馈1）：文本输入收进底栏中部图标，点击在工具排上方展开输入窗
+                    IconButton(
+                        onClick = { inputOpen = !inputOpen },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.MessageSquare,
+                            contentDescription = stringResource(R.string.float_panel_input),
+                            tint = if (inputOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -1187,6 +1292,9 @@ class FloatBallOverlay(
                                             null -> R.string.float_panel_send_need_app
                                         }
                                     )
+                                } else if (input.isBlank() && !inputOpen) {
+                                    // 输入窗收起时空点发送：展开输入窗而不是静默无响应（qa P2）
+                                    inputOpen = true
                                 } else doSend()
                             },
                         contentAlignment = Alignment.Center

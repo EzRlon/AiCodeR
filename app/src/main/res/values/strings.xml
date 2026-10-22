@@ -363,6 +363,9 @@
     <string name="float_panel_open_app">回到 App</string>
     <string name="float_panel_collapse_panel">收起面板</string>
     <string name="float_panel_input_hint">给 AI 发指令…</string>
+    <string name="float_panel_input">输入指令</string>
+    <string name="float_panel_pin">钉住窗口（不自动收起、不可拖动）</string>
+    <string name="float_panel_scroll_bottom">翻到最新消息</string>
     <string name="float_panel_stopped">已停止任务</string>
     <string name="float_panel_queued_suffix">＋%1$d 排队</string>
     <string name="notification_channel_agent_complete">Agent 完成通知</string>
@@ -374,8 +377,12 @@
     <string name="permission_notification_reject">拒绝</string>
 
     <!-- 截图标注账本 -->
-    <string name="annotation_live_entry">界面标注</string>
-    <string name="annotation_ledger_title">标注账本</string>
+    <string name="annotation_hub_entry">标注中心</string>
+    <string name="annotation_hub_title">标注中心</string>
+    <string name="annotation_capture_live">活标注</string>
+    <string name="annotation_capture_live_sub">回原界面直接圈画</string>
+    <string name="annotation_capture_shot">截屏标注</string>
+    <string name="annotation_capture_shot_sub">定格当前屏进编辑器</string>
     <string name="annotation_type_bug">bug</string>
     <string name="annotation_type_to_change">要改</string>
     <string name="annotation_type_dont">不要</string>
@@ -383,9 +390,9 @@
     <string name="annotation_undo">撤销一笔</string>
     <string name="annotation_note_hint">补充说明（可选）</string>
     <string name="annotation_save">保存</string>
-    <string name="annotation_saved">已保存到标注账本</string>
+    <string name="annotation_saved">已保存到标注中心</string>
     <string name="annotation_save_failed">保存失败，请重试</string>
-    <string name="annotation_ledger_empty">收集来自界面标注和截图标注的反馈信息</string>
+    <string name="annotation_ledger_empty">暂无标注，从上方入口捕捉第一条反馈吧</string>
     <string name="annotation_no_note">（未填说明）</string>
     <string name="annotation_loading">加载中…</string>
     <string name="annotation_delete">删除这条标注</string>

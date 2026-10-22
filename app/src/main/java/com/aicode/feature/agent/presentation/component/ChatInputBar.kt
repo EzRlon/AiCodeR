@@ -1248,9 +1248,9 @@ internal fun SendButton(
         canSend -> MaterialTheme.semanticColors.success
         else -> MaterialTheme.colorScheme.primary
     }
-    // 前景箭头恒白（用户反馈：浅色模式下亮绿底箭头也应是白色）；仅禁用态用次级色。
-    // 历史注：曾按底色亮度自适应（亮底配深箭头），2026-10-21 用户拍板改为恒白。
-    val iconTint = if (clickable) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+    // 前景箭头恒白（用户反馈：浅色模式下蓝底/亮绿底箭头都应是白色）；四态底色均足够深，白箭头对比都成立。
+    // 历史：曾按底色亮度自适应，后按用户拍板改恒白，2026-10-22 再次反馈补齐空闲蓝底态。
+    val iconTint = Color.White
     val arcColor = buttonColor.copy(alpha = 0.85f)
     val clampedProgress = tokenProgress.coerceIn(0f, 1f)
     Box(

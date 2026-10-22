@@ -142,7 +142,6 @@ import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
-import compose.icons.feathericons.Layers
 import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Search
@@ -318,9 +317,7 @@ fun ChatDrawerContent(
     onCancelPasteOverwrite: () -> Unit,
     onClearClipboard: () -> Unit,
     onNavigateToBrowser: (() -> Unit)? = null,
-    /** 界面标注（活标注：真实界面叠标注层，完成时整屏捕获含弹窗；不画标记直接完成=原截屏标注）。 */
-    onStartLiveAnnotation: (() -> Unit)? = null,
-    /** 标注账本入口：打开账本列表页；null 则隐藏该入口。 */
+    /** 标注中心入口：活标注/截屏标注/账本统一界面；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
     /** 交付物列表（左栏第三页）：会话附件 + 工作区安装包，时间倒序。 */
     deliverables: List<AIAgentViewModel.DeliverableItem> = emptyList(),
@@ -590,19 +587,10 @@ fun ChatDrawerContent(
                     )
                     SettingsDivider()
                 }
-                if (onStartLiveAnnotation != null) {
-                    SettingsRow(
-                        icon = FeatherIcons.Crosshair,
-                        title = stringResource(R.string.annotation_live_entry),
-                        onClick = onStartLiveAnnotation,
-                        compact = true
-                    )
-                    SettingsDivider()
-                }
                 if (onNavigateToAnnotations != null) {
                     SettingsRow(
-                        icon = FeatherIcons.Layers,
-                        title = stringResource(R.string.annotation_ledger_title),
+                        icon = FeatherIcons.Crosshair,
+                        title = stringResource(R.string.annotation_hub_entry),
                         onClick = onNavigateToAnnotations,
                         compact = true
                     )

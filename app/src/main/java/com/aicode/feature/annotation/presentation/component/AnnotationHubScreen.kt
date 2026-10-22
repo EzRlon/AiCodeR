@@ -1,6 +1,5 @@
 package com.aicode.feature.annotation.presentation.component
 
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -44,7 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,6 +56,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.decodeSampledBitmap
+import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.annotation.domain.model.AnnotationItem
@@ -65,19 +67,27 @@ import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import androidx.compose.ui.text.rememberTextMeasurer
+import compose.icons.feathericons.Camera
+import compose.icons.feathericons.Crosshair
 import compose.icons.feathericons.Send
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * 截图标注账本：列表（类型色点 + 说明 + 状态 + 时间）+ 详情预览（原图重绘标注 + 状态流转）
+ * 标注中心：活标注 / 截屏标注 / 标注账本三合一的统一界面。
+ * 顶部为两张同风格捕捉卡片（活标注=回退到原界面圈画；截屏标注=定格当前屏直接进编辑器），
+ * 下方即账本列表（类型色点 + 说明 + 状态 + 时间）+ 详情预览（原图重绘标注 + 状态流转）
  * + 顶部「汇总发给 AI」（文本与图片附件一起注入聊天输入框）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun AnnotationLedgerScreen(
+internal fun AnnotationHubScreen(
     onBack: () -> Unit,
+    onStartLiveAnnotation: () -> Unit,
+    onStartScreenshotAnnotation: () -> Unit,
     onSummaryReady: (text: String, items: List<AnnotationItem>) -> Unit,
     viewModel: AnnotationViewModel = hiltViewModel()
 ) {
@@ -89,7 +99,7 @@ internal fun AnnotationLedgerScreen(
         containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.annotation_ledger_title)) },
+                title = { Text(stringResource(R.string.annotation_hub_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -121,18 +131,34 @@ internal fun AnnotationLedgerScreen(
                 .padding(padding)
         ) {
             if (items.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.annotation_ledger_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center)
-                )
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    AnnotationCaptureCards(
+                        onStartLiveAnnotation = onStartLiveAnnotation,
+                        onStartScreenshotAnnotation = onStartScreenshotAnnotation
+                    )
+                    Text(
+                        text = stringResource(R.string.annotation_ledger_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = Spacing.lg)
+                    )
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
+                    item(key = "capture") {
+                        AnnotationCaptureCards(
+                            onStartLiveAnnotation = onStartLiveAnnotation,
+                            onStartScreenshotAnnotation = onStartScreenshotAnnotation
+                        )
+                    }
                     items(items, key = { it.id }) { item ->
                         SwipeToDeleteRow(onDelete = { viewModel.delete(item) }) {
                             AnnotationRow(item = item, onClick = { detailItem = item })
@@ -157,6 +183,75 @@ internal fun AnnotationLedgerScreen(
             },
             onDismiss = { detailItem = null }
         )
+    }
+}
+
+/** 顶部捕捉区：两张同风格卡片，覆盖活标注与截屏标注两种捕捉方式（反馈9 合并入口）。 */
+@Composable
+private fun AnnotationCaptureCards(
+    onStartLiveAnnotation: () -> Unit,
+    onStartScreenshotAnnotation: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        AnnotationCaptureCard(
+            icon = FeatherIcons.Crosshair,
+            title = stringResource(R.string.annotation_capture_live),
+            subtitle = stringResource(R.string.annotation_capture_live_sub),
+            onClick = onStartLiveAnnotation,
+            modifier = Modifier.weight(1f)
+        )
+        AnnotationCaptureCard(
+            icon = FeatherIcons.Camera,
+            title = stringResource(R.string.annotation_capture_shot),
+            subtitle = stringResource(R.string.annotation_capture_shot_sub),
+            onClick = onStartScreenshotAnnotation,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnnotationCaptureCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(Radius.mdLarge),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+        onClick = onClick,
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
@@ -233,9 +328,15 @@ private fun AnnotationDetailDialog(
     onDismiss: () -> Unit
 ) {
     val marks = remember(item.id) { AnnotationMarksCodec.decode(item.marksJson) }
-    val bitmapState by produceState<android.graphics.Bitmap?>(initialValue = null, item.id) {
+    // 整屏截图全尺寸解码约 10MB ARGB：降采样 + 切默认线程（optimizer P1：主线程解码卡顿）
+    val decodeSpec = rememberViewerDecodeSpec()
+    val bitmapState by produceState<ImageBitmap?>(initialValue = null, item.id) {
         val bytes = viewModel.readImageBytes(item)
-        value = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        value = bytes?.let { data ->
+            withContext(Dispatchers.Default) {
+                decodeSampledBitmap(data, decodeSpec.maxEdge, decodeSpec.maxPixels)
+            }
+        }
     }
     var statusMenuOpen by remember { mutableStateOf(false) }
 
@@ -326,7 +427,7 @@ private fun AnnotationDetailDialog(
                             computeFitRect(areaWidthPx, areaHeightPx, bitmap.width.toFloat(), bitmap.height.toFloat())
                         }
                         Image(
-                            bitmap = remember(bitmap) { bitmap.asImageBitmap() },
+                            bitmap = bitmap,
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize()
                         )

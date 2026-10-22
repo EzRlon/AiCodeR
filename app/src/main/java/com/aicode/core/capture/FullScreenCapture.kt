@@ -13,7 +13,7 @@ import android.os.Looper
 import com.aicode.core.util.FileLogger
 
 /**
- * 整屏一帧捕获（MediaProjection）：供「界面标注」定格画面使用。
+ * 整屏一帧捕获（MediaProjection）：供「标注中心」定格画面使用。
  *
  * 与窗口级截图不同，它能拍到 Dialog/Popup 等独立窗口层的内容——用户先点开弹窗再标注，
  * 定格图里就真的包含弹窗。仅在需要时抓一帧即释放虚拟显示器与投影，不做常驻录屏。

@@ -362,6 +362,9 @@
     <string name="float_panel_open_app">Open app</string>
     <string name="float_panel_collapse_panel">Collapse panel</string>
     <string name="float_panel_input_hint">Ask the AI…</string>
+    <string name="float_panel_input">Input</string>
+    <string name="float_panel_pin">Pin window (no auto-collapse, no dragging)</string>
+    <string name="float_panel_scroll_bottom">Jump to latest</string>
     <string name="float_panel_stopped">Task stopped</string>
     <string name="float_panel_queued_suffix">+%1$d queued</string>
     <string name="notification_channel_agent_complete">Agent completion notifications</string>
@@ -373,8 +376,12 @@
     <string name="permission_notification_reject">Reject</string>
 
     <!-- Screenshot annotation ledger -->
-    <string name="annotation_live_entry">Annotate</string>
-    <string name="annotation_ledger_title">Annotations</string>
+    <string name="annotation_hub_entry">Annotation Hub</string>
+    <string name="annotation_hub_title">Annotation Hub</string>
+    <string name="annotation_capture_live">Live mark</string>
+    <string name="annotation_capture_live_sub">Mark on the live screen</string>
+    <string name="annotation_capture_shot">Screenshot mark</string>
+    <string name="annotation_capture_shot_sub">Freeze screen into editor</string>
     <string name="annotation_type_bug">Bug</string>
     <string name="annotation_type_to_change">To change</string>
     <string name="annotation_type_dont">Don\'t</string>
@@ -382,9 +389,9 @@
     <string name="annotation_undo">Undo last mark</string>
     <string name="annotation_note_hint">Add a note (optional)</string>
     <string name="annotation_save">Save</string>
-    <string name="annotation_saved">Saved to annotation ledger</string>
+    <string name="annotation_saved">Saved to Annotation Hub</string>
     <string name="annotation_save_failed">Save failed, please retry</string>
-    <string name="annotation_ledger_empty">Feedback collected from live annotations and screenshot annotations</string>
+    <string name="annotation_ledger_empty">No annotations yet — capture your first one above</string>
     <string name="annotation_no_note">(no note)</string>
     <string name="annotation_loading">Loading…</string>
     <string name="annotation_delete">Delete this annotation</string>
