@@ -117,7 +117,9 @@ android {
         //      保活需换 specialUse。
         // 代价：不能上 Google Play。
         targetSdk = 28
-        versionCode = gitCommitCount()
+        // +1 偏移：正式包常在提交前构建交付（提交等用户测试后补），若直接用提交数会与上一发版同号。
+        // 偏移使交付包 versionCode 恒领先提交数 1，单调且不撞号。
+        versionCode = gitCommitCount() + 1
         versionName = gitVersionName()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
