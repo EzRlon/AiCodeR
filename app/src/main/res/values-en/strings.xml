@@ -2653,6 +2653,25 @@
     <string name="memory_graph_project">Project</string>
     <string name="memory_graph_session">Session</string>
     <string name="editor_note_mode">Note mode</string>
+
+    <!-- REA workbench compliance -->
+    <string name="rea_compliance_banner">For analyzing software you own or are authorized to analyze only; comply with local laws and software licenses</string>
+    <string name="rea_consent_title">Before you start</string>
+    <string name="rea_consent_body">This workbench is for learning and research: analyze software you own or are licensed to analyze. Do not use it to crack others\' software, steal trade secrets, or break any law; you are solely responsible for your use. The tools listed (decompiling, code extraction, etc.) have deep access to software — use them only for legitimate purposes.</string>
+    <string name="rea_consent_checkbox">I have read and understood the above</string>
+    <string name="rea_consent_confirm">Agree and continue</string>
+    <string name="rea_consent_decline">Not now</string>
+    <string name="rea_section_prepare">Prepare</string>
+    <string name="rea_section_analyze">Analyze</string>
+    <string name="rea_section_guide">Guide</string>
+    <string name="rea_pick_file_button">Pick APK/file</string>
+    <string name="rea_import_done">Imported to workspace; see it in the sample list</string>
+    <string name="rea_import_failed">Import failed: cannot read the selected file</string>
+    <string name="rea_sample_deleted">Sample deleted</string>
+    <string name="rea_sample_delete_failed">Delete failed</string>
+    <string name="rea_delete_sample_title">Delete sample</string>
+    <string name="rea_delete_sample_text">Delete “%1$s” from the workspace? This cannot be undone.</string>
+    <string name="rea_delete_sample_confirm">Delete</string>
     <!-- Storage recommended cleanup -->
     <string name="storage_rec_title">Recommended cleanup</string>
     <string name="storage_rec_scan">Scan</string>

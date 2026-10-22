@@ -1,7 +1,11 @@
 package com.aicode.feature.settings.presentation.component
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -59,13 +65,16 @@ import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
+import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Play
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Send
+import compose.icons.feathericons.Trash2
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.text.SimpleDateFormat
@@ -98,6 +107,7 @@ class ReaWorkbenchViewModel @Inject constructor(
     private val mcpManager: McpManager,
     private val modeHolder: ExecutionModeHolder,
     private val fileAccess: FileAccessProvider,
+    private val generalSettingsRepository: GeneralSettingsRepository,
 ) : ViewModel() {
 
     enum class EnvState { Checking, NotProvisioned, NotInstalled, Installed, Unsupported }
@@ -146,6 +156,14 @@ class ReaWorkbenchViewModel @Inject constructor(
     /** 环境组件摘要（node / jdk / jadx jar 实测版本行）。 */
     private val _components = MutableStateFlow<String?>(null)
     val components: StateFlow<String?> = _components.asStateFlow()
+
+    /** 首次知情告知是否已同意；null=加载中（不弹窗，避免误闪）。 */
+    val consentAcknowledged: StateFlow<Boolean?> = generalSettingsRepository.reaConsentAcknowledgedFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun acknowledgeConsent() {
+        viewModelScope.launch { generalSettingsRepository.setReaConsentAcknowledged() }
+    }
 
     init {
         refresh()
@@ -303,6 +321,47 @@ class ReaWorkbenchViewModel @Inject constructor(
         }
     }
 
+    /** SAF 导入分析目标：复制进工作区根，随后重扫样本列表。 */
+    fun importSample(uri: Uri) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: return@runCatching false
+                    val safeName = name.substringAfterLast('/').trim()
+                        .takeIf { it.isNotEmpty() && !it.startsWith(".") }
+                        ?: return@runCatching false
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        fileAccess.writeStream("${WorkspacePathMapper.CONTAINER_ROOT}/$safeName", input)
+                    } != null
+                }.getOrDefault(false)
+            }
+            _message.value = context.getString(
+                if (ok) R.string.rea_import_done else R.string.rea_import_failed
+            )
+            if (ok) scanSamples()
+        }
+    }
+
+    /** 删除工作区内的样本文件。 */
+    fun deleteSample(sample: ReaSample) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { fileAccess.delete(sample.path); true }.getOrDefault(false)
+            }
+            _message.value = context.getString(
+                if (ok) R.string.rea_sample_deleted else R.string.rea_sample_delete_failed
+            )
+            if (ok) scanSamples()
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+        }
+    }.getOrNull()
+
     private companion object {
         const val REA_SERVER_NAME = "rea"
         const val SCAN_DEPTH = 4
@@ -332,8 +391,15 @@ fun ReaWorkbenchScreen(
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
     val components by viewModel.components.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
+    val consentAcknowledged by viewModel.consentAcknowledged.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var toolsExpanded by remember { mutableStateOf(false) }
+    var sampleToDelete by remember { mutableStateOf<ReaWorkbenchViewModel.ReaSample?>(null) }
+
+    // SAF 选择分析目标：选中的文件复制进工作区，成为可分析的样本
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.importSample(uri)
+    }
 
     // 安装中退出页面不中止安装（进程在后台继续）——拦截返回时明确告知
     BackHandler(enabled = installing) {
@@ -344,6 +410,63 @@ fun ReaWorkbenchScreen(
         val m = message ?: return@LaunchedEffect
         Toast.makeText(context, m, Toast.LENGTH_LONG).show()
         viewModel.consumeMessage()
+    }
+
+    // 首次知情告知：勾选同意才可进入；不同意即退出页面（不拦截在页内）
+    if (consentAcknowledged == false) {
+        var consentChecked by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text(stringResource(R.string.rea_consent_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    Text(
+                        text = stringResource(R.string.rea_consent_body),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = consentChecked, onCheckedChange = { consentChecked = it })
+                        Text(
+                            text = stringResource(R.string.rea_consent_checkbox),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.clickable { consentChecked = !consentChecked }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = consentChecked, onClick = { viewModel.acknowledgeConsent() }) {
+                    Text(stringResource(R.string.rea_consent_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onBack) {
+                    Text(stringResource(R.string.rea_consent_decline))
+                }
+            }
+        )
+    }
+
+    // 样本删除确认：目标是工作区内的用户文件，不可静默删
+    sampleToDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { sampleToDelete = null },
+            title = { Text(stringResource(R.string.rea_delete_sample_title)) },
+            text = { Text(stringResource(R.string.rea_delete_sample_text, target.name), style = MaterialTheme.typography.bodySmall) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteSample(target)
+                    sampleToDelete = null
+                }) {
+                    Text(stringResource(R.string.rea_delete_sample_confirm), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sampleToDelete = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -382,6 +505,22 @@ fun ReaWorkbenchScreen(
             verticalArrangement = Arrangement.spacedBy(Spacing.md)
         ) {
             Spacer(Modifier.height(Spacing.xs))
+
+            // 常驻合规警告横幅：正用途提示，任何状态下都可见
+            Surface(
+                shape = RoundedCornerShape(Radius.md),
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = stringResource(R.string.rea_compliance_banner),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                )
+            }
+
+            SectionHeader(stringResource(R.string.rea_section_prepare))
 
             // ── 状态卡：环境 + MCP 真实连接态（配置存在 ≠ 连接可用）──
             Surface(
@@ -473,8 +612,9 @@ fun ReaWorkbenchScreen(
                 else -> Unit // Checking / Unsupported：状态卡中已给出说明
             }
 
-            // ── 分析目标（样本）区：选择文件 → 一键派发分析 ──
+            // ── 分析区：选择/导入目标 → 一键派发分析 ──
             if (env == ReaWorkbenchViewModel.EnvState.Installed) {
+                SectionHeader(stringResource(R.string.rea_section_analyze))
                 Surface(
                     shape = RoundedCornerShape(Radius.lg),
                     color = MaterialTheme.colorScheme.surface,
@@ -492,8 +632,19 @@ fun ReaWorkbenchScreen(
                             if (scanning) {
                                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                             } else {
-                                TextButton(onClick = { viewModel.scanSamples() }) {
-                                    Text(stringResource(R.string.rea_rescan), style = MaterialTheme.typography.labelMedium)
+                                Row {
+                                    TextButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
+                                        Icon(
+                                            FeatherIcons.FolderPlus,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(stringResource(R.string.rea_pick_file_button), style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    TextButton(onClick = { viewModel.scanSamples() }) {
+                                        Text(stringResource(R.string.rea_rescan), style = MaterialTheme.typography.labelMedium)
+                                    }
                                 }
                             }
                         }
@@ -512,7 +663,8 @@ fun ReaWorkbenchScreen(
                                             onSendToChat(
                                                 context.getString(R.string.rea_analyze_prompt, sample.path)
                                             )
-                                        }
+                                        },
+                                        onDelete = { sampleToDelete = sample }
                                     )
                                 }
                             }
@@ -521,7 +673,60 @@ fun ReaWorkbenchScreen(
                 }
             }
 
-            // ── 工具清单：连接成功后展示实际可用的 REA 工具（学习者知道自己有什么能力）──
+            // ── 学习路径：常见分析任务模板（点击预填进聊天）──
+            if (env == ReaWorkbenchViewModel.EnvState.Installed && mcpConfigured) {
+                Surface(
+                    shape = RoundedCornerShape(Radius.lg),
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(Spacing.md)) {
+                        Text(
+                            text = stringResource(R.string.rea_tasks_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(Spacing.xs))
+                        TaskTemplateRow(stringResource(R.string.rea_task_overview)) { onSendToChat(it) }
+                        TaskTemplateRow(stringResource(R.string.rea_task_class)) { onSendToChat(it) }
+                        TaskTemplateRow(stringResource(R.string.rea_task_string)) { onSendToChat(it) }
+                        TaskTemplateRow(stringResource(R.string.rea_task_js)) { onSendToChat(it) }
+                    }
+                }
+            }
+
+            // ── 引导区：使用说明 + 合规声明 + 工具清单（折叠沉底）──
+            SectionHeader(stringResource(R.string.rea_section_guide))
+
+            Surface(
+                shape = RoundedCornerShape(Radius.lg),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(Spacing.md)) {
+                    Text(
+                        text = stringResource(R.string.rea_usage_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(Spacing.xs))
+                    Text(
+                        text = stringResource(R.string.rea_usage_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                    Text(
+                        text = stringResource(R.string.rea_legal_note),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // 工具清单：连接成功后展示实际可用的 REA 工具（折叠沉底，不与准备/分析争视觉权重）
             if (mcpToolNames.isNotEmpty()) {
                 Surface(
                     shape = RoundedCornerShape(Radius.lg),
@@ -560,64 +765,18 @@ fun ReaWorkbenchScreen(
                 }
             }
 
-            // ── 学习路径：常见分析任务模板（点击预填进聊天）──
-            if (env == ReaWorkbenchViewModel.EnvState.Installed && mcpConfigured) {
-                Surface(
-                    shape = RoundedCornerShape(Radius.lg),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(Spacing.md)) {
-                        Text(
-                            text = stringResource(R.string.rea_tasks_title),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.height(Spacing.xs))
-                        TaskTemplateRow(stringResource(R.string.rea_task_overview)) { onSendToChat(it) }
-                        TaskTemplateRow(stringResource(R.string.rea_task_class)) { onSendToChat(it) }
-                        TaskTemplateRow(stringResource(R.string.rea_task_string)) { onSendToChat(it) }
-                        TaskTemplateRow(stringResource(R.string.rea_task_js)) { onSendToChat(it) }
-                    }
-                }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(Radius.lg),
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(Spacing.md)) {
-                    Text(
-                        text = stringResource(R.string.rea_usage_title),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.height(Spacing.xs))
-                    Text(
-                        text = stringResource(R.string.rea_usage_body),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
-                    Text(
-                        text = stringResource(R.string.rea_legal_note),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-
             Spacer(Modifier.height(Spacing.xl))
         }
     }
 }
 
-/** 样本行：文件名/大小/时间 + 「分析」动作（预填派发进聊天）。 */
+/** 样本行：文件名/大小/时间 + 「分析」动作（预填派发进聊天）+ 删除。 */
 @Composable
-private fun SampleRow(sample: ReaWorkbenchViewModel.ReaSample, onAnalyze: () -> Unit) {
+private fun SampleRow(
+    sample: ReaWorkbenchViewModel.ReaSample,
+    onAnalyze: () -> Unit,
+    onDelete: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -641,12 +800,32 @@ private fun SampleRow(sample: ReaWorkbenchViewModel.ReaSample, onAnalyze: () -> 
             )
         }
         Spacer(Modifier.width(Spacing.sm))
+        IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+            Icon(
+                FeatherIcons.Trash2,
+                contentDescription = stringResource(R.string.rea_delete_sample_title),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp)
+            )
+        }
         TextButton(onClick = onAnalyze) {
             Icon(FeatherIcons.Send, contentDescription = null, modifier = Modifier.size(13.dp))
             Spacer(Modifier.width(4.dp))
             Text(stringResource(R.string.rea_analyze_button), style = MaterialTheme.typography.labelMedium)
         }
     }
+}
+
+/** 三区分区标题（准备 / 分析 / 引导）。 */
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = Spacing.xs)
+    )
 }
 
 /** 学习任务模板行：点击把模板指令预填进聊天输入框。 */

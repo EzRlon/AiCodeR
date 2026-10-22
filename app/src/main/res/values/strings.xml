@@ -2653,6 +2653,25 @@
     <string name="memory_graph_project">项目</string>
     <string name="memory_graph_session">会话</string>
     <string name="editor_note_mode">笔记模式</string>
+
+    <!-- REA workbench compliance -->
+    <string name="rea_compliance_banner">仅用于分析你拥有或获授权分析的软件，请遵守当地法律与软件许可协议</string>
+    <string name="rea_consent_title">使用前须知</string>
+    <string name="rea_consent_body">逆向分析工作台用于学习与研究：分析你拥有版权或已获授权的软件。请勿用于破解他人软件、窃取商业机密或任何违法行为；使用产生的一切后果由你本人承担。工具清单中的能力（反编译、代码抽取等）具有对软件的深度访问能力，请只在正当范围内使用。</string>
+    <string name="rea_consent_checkbox">我已阅读并理解上述内容</string>
+    <string name="rea_consent_confirm">同意并进入</string>
+    <string name="rea_consent_decline">暂不使用</string>
+    <string name="rea_section_prepare">准备</string>
+    <string name="rea_section_analyze">分析</string>
+    <string name="rea_section_guide">引导</string>
+    <string name="rea_pick_file_button">选择 APK/文件</string>
+    <string name="rea_import_done">已导入工作区，可在分析列表中查看</string>
+    <string name="rea_import_failed">导入失败：无法读取所选文件</string>
+    <string name="rea_sample_deleted">样本已删除</string>
+    <string name="rea_sample_delete_failed">删除失败</string>
+    <string name="rea_delete_sample_title">删除样本</string>
+    <string name="rea_delete_sample_text">从工作区删除「%1$s」？该文件不可恢复。</string>
+    <string name="rea_delete_sample_confirm">删除</string>
     <!-- Storage recommended cleanup -->
     <string name="storage_rec_title">推荐清理</string>
     <string name="storage_rec_scan">扫描推荐</string>
