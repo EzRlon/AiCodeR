@@ -71,11 +71,16 @@ class SessionUseCase @Inject constructor(
     /** 删除会话及其全部子代理会话（消息 + 会话记录一并删除）。返回被删除的会话 id 列表。 */
     suspend fun deleteSession(id: String): List<String> {
         val deleted = mutableListOf(id)
-        // 递归收集子会话（v1 仅一层，循环即可）
-        chatSessionDao.getSubSessionsByParentOnce(id).forEach { child ->
-            agentMessageDao.deleteBySession(child.id)
-            chatSessionDao.delete(child.id)
-            deleted.add(child.id)
+        // 逐层收集子会话直到没有子代：工具层已禁止子代理嵌套，正常只有一层，
+        // 这里防御性下钻，保证历史/异常数据里更深的层级也不会残留成孤儿。
+        val queue = ArrayDeque(listOf(id))
+        while (queue.isNotEmpty()) {
+            chatSessionDao.getSubSessionsByParentOnce(queue.removeFirst()).forEach { child ->
+                agentMessageDao.deleteBySession(child.id)
+                chatSessionDao.delete(child.id)
+                deleted.add(child.id)
+                queue.addLast(child.id)
+            }
         }
         agentMessageDao.deleteBySession(id)
         chatSessionDao.delete(id)

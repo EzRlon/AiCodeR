@@ -63,6 +63,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.StorageUsagePalette
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.settings.domain.model.CleanupKind
+import com.aicode.feature.settings.domain.model.CleanupRecommendation
 import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
@@ -97,6 +98,11 @@ internal fun StorageSectionHost(
         onToggleSession = viewModel::toggleSession,
         onCleanSelected = viewModel::cleanSelected,
         onDeleteArtifact = viewModel::deleteArtifact,
+        onToggleRecommendExpanded = viewModel::toggleRecommendExpanded,
+        onScanRecommendations = viewModel::scanRecommendations,
+        onToggleRecommendation = viewModel::toggleRecommendation,
+        onCleanRecommendations = viewModel::cleanRecommendations,
+        onToggleRuntimeHealth = viewModel::toggleRuntimeHealthExpanded,
         onRevealInTree = onRevealInTree
     )
 }
@@ -115,12 +121,18 @@ internal fun StorageSection(
     onToggleSession: (String) -> Unit,
     onCleanSelected: () -> Unit,
     onDeleteArtifact: (String) -> Unit,
+    onToggleRecommendExpanded: () -> Unit,
+    onScanRecommendations: () -> Unit,
+    onToggleRecommendation: (String) -> Unit,
+    onCleanRecommendations: () -> Unit,
+    onToggleRuntimeHealth: () -> Unit,
     onRevealInTree: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var pendingCleanup by remember { mutableStateOf(false) }
+    var pendingRecommendClean by remember { mutableStateOf(false) }
     var actionDetail by remember { mutableStateOf<StorageDetail?>(null) }
     var deleteTarget by remember { mutableStateOf<StorageDetail?>(null) }
 
@@ -135,6 +147,14 @@ internal fun StorageSection(
         ) {
             Spacer(Modifier.height(Spacing.sm))
             OverviewCard(state)
+
+            RecommendedCleanupCard(
+                state = state,
+                onToggleExpanded = onToggleRecommendExpanded,
+                onScan = onScanRecommendations,
+                onToggleItem = onToggleRecommendation,
+                onClean = { pendingRecommendClean = true }
+            )
 
             SettingsGroupHeader(text = stringResource(R.string.storage_section_breakdown))
             SettingsGroup {
@@ -199,6 +219,11 @@ internal fun StorageSection(
             state.freedBytes?.let { freed ->
                 FootNote(stringResource(R.string.storage_freed, formatStorageSize(freed)))
             }
+
+            RuntimeHealthSection(
+                state = state,
+                onToggle = onToggleRuntimeHealth
+            )
         }
 
         Surface(color = MaterialTheme.semanticColors.pageBackground) {
@@ -270,6 +295,46 @@ internal fun StorageSection(
             },
             dismissButton = {
                 TextButton(onClick = { pendingCleanup = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
+    if (pendingRecommendClean) {
+        val selected = state.recommendations.filter { it.id in state.selectedRecommendations }
+        AlertDialog(
+            onDismissRequest = { pendingRecommendClean = false },
+            title = { Text(stringResource(R.string.storage_rec_confirm_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                ) {
+                    Text(stringResource(
+                        R.string.storage_clean_confirm_selected,
+                        formatStorageSize(state.recommendationSelectedBytes)
+                    ))
+                    selected.forEach { item ->
+                        Column {
+                            Text(item.label, fontWeight = FontWeight.Medium)
+                            Text(
+                                stringResource(item.reason.labelRes) + " · " + formatStorageSize(item.bytes),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Text(stringResource(R.string.storage_rec_confirm_scope), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRecommendClean = false
+                    onCleanRecommendations()
+                }) { Text(stringResource(R.string.storage_rec_clean)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRecommendClean = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             }
@@ -383,6 +448,221 @@ internal fun StorageSection(
         )
     }
 }
+
+/**
+ * 推荐清理卡：头部「预计可释放 X（高置信 Y）」＋扫描按钮；展开后逐条勾选，
+ * 推荐级默认勾、需确认级默认不勾；一键清除走逐条预览确认弹窗。
+ */
+@Composable
+private fun RecommendedCleanupCard(
+    state: StorageUiState,
+    onToggleExpanded: () -> Unit,
+    onScan: () -> Unit,
+    onToggleItem: (String) -> Unit,
+    onClean: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Radius.lg),
+        color = MaterialTheme.semanticColors.cardSurface
+    ) {
+        Column(modifier = Modifier.padding(Spacing.lg)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.storage_rec_title),
+                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+                    color = MaterialTheme.semanticColors.subtleText,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onScan, enabled = !state.recommendScanning && !state.cleaning) {
+                    Text(stringResource(R.string.storage_rec_scan))
+                }
+            }
+            Spacer(Modifier.height(Spacing.xs))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .let { if (state.recommendations.isNotEmpty()) it.clickable(onClick = onToggleExpanded) else it },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    when {
+                        state.recommendScanning -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(Spacing.sm))
+                                Text(
+                                    text = stringResource(R.string.storage_rec_scanning),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                        state.recommendations.isEmpty() -> Text(
+                            text = stringResource(
+                                if (state.recommendScannedAt == null) R.string.storage_rec_not_scanned
+                                else R.string.storage_rec_empty
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        else -> {
+                            Text(
+                                text = stringResource(
+                                    R.string.storage_rec_header,
+                                    formatStorageSize(state.recommendations.sumOf { it.bytes }),
+                                    formatStorageSize(state.recommendedBytes)
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (state.recommendFromCache && state.recommendScannedAt != null) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.storage_rec_last_scan,
+                                        formatScanTime(state.recommendScannedAt)
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.semanticColors.subtleText
+                                )
+                            }
+                        }
+                    }
+                }
+                if (state.recommendations.isNotEmpty()) {
+                    Spacer(Modifier.width(Spacing.xs))
+                    ExpandableChevronIcon(
+                        expanded = state.recommendExpanded,
+                        style = ChevronRotationStyle.RIGHT_DOWN,
+                        size = 18.dp,
+                        tint = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            }
+            if (state.recommendExpanded && state.recommendations.isNotEmpty()) {
+                Spacer(Modifier.height(Spacing.sm))
+                state.recommendations.forEach { item ->
+                    RecommendationRow(
+                        item = item,
+                        selected = item.id in state.selectedRecommendations,
+                        enabled = !state.cleaning && !state.recommendScanning,
+                        onToggle = { onToggleItem(item.id) }
+                    )
+                }
+                Spacer(Modifier.height(Spacing.sm))
+                Button(
+                    onClick = onClean,
+                    enabled = state.recommendationSelectedBytes > 0L && !state.cleaning && !state.recommendScanning,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(Radius.lg)
+                ) {
+                    Text(stringResource(
+                        R.string.storage_rec_clean_selected,
+                        formatStorageSize(state.recommendationSelectedBytes)
+                    ))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendationRow(
+    item: CleanupRecommendation,
+    selected: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = item.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = stringResource(item.reason.labelRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.semanticColors.subtleText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.width(Spacing.sm))
+        Text(
+            text = formatStorageSize(item.bytes),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.semanticColors.subtleText
+        )
+        Checkbox(checked = selected, onCheckedChange = { onToggle() }, enabled = enabled)
+    }
+}
+
+/** 运行健康（只读）：常驻服务 / 周期任务 / 活跃扫描的状态清单，异常项标红；展开时按需加载一次。 */
+@Composable
+private fun RuntimeHealthSection(
+    state: StorageUiState,
+    onToggle: () -> Unit
+) {
+    CollapsibleGroupHeader(
+        text = stringResource(R.string.storage_health_title),
+        expanded = state.runtimeHealthExpanded,
+        onToggle = onToggle
+    )
+    if (!state.runtimeHealthExpanded) return
+    SettingsGroup {
+        if (state.runtimeHealthLoading) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.storage_health_loading),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.semanticColors.subtleText
+                )
+            }
+        } else {
+            state.runtimeHealth.forEachIndexed { index, item ->
+                if (index > 0) SettingsDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.title,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = item.detail,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (item.abnormal) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 缓存结论的展示时间。 */
+private fun formatScanTime(ts: Long): String =
+    java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
 
 @Composable
 private fun OverviewCard(state: StorageUiState) {

@@ -2653,4 +2653,44 @@
     <string name="memory_graph_project">项目</string>
     <string name="memory_graph_session">会话</string>
     <string name="editor_note_mode">笔记模式</string>
+    <!-- Storage recommended cleanup -->
+    <string name="storage_rec_title">推荐清理</string>
+    <string name="storage_rec_scan">扫描推荐</string>
+    <string name="storage_rec_scanning">扫描中…</string>
+    <string name="storage_rec_header">预计可释放 %1$s（高置信 %2$s）</string>
+    <string name="storage_rec_last_scan">上次扫描 %1$s 的结果</string>
+    <string name="storage_rec_not_scanned">尚未扫描，点「扫描推荐」开始</string>
+    <string name="storage_rec_empty">暂无推荐，存储很干净</string>
+    <string name="storage_rec_clean">清除</string>
+    <string name="storage_rec_clean_selected">一键清除已选（%1$s）</string>
+    <string name="storage_rec_confirm_title">确认清除以下推荐项</string>
+    <string name="storage_rec_confirm_scope">仅删除上方列出的项目，不影响工作区、配置与任何会话数据。</string>
+    <string name="storage_rec_reason_rebuildable">可安全重建的临时数据</string>
+    <string name="storage_rec_reason_unused">30 天未使用</string>
+    <string name="storage_rec_reason_no_session">无对应会话</string>
+    <string name="storage_rec_reason_no_container">无对应容器引用</string>
+    <string name="storage_rec_stale_tool_output">工具输出存档（30 天以上）</string>
+    <string name="storage_rec_stale_generated_images">AI 生成图片（30 天以上）</string>
+    <string name="storage_rec_orphan_checkpoint">孤儿检查点快照 %1$s…</string>
+    <string name="storage_rec_orphan_ai_log">AI 会话日志 %1$s…</string>
+
+    <!-- Runtime health (read-only) -->
+    <string name="storage_health_title">运行健康</string>
+    <string name="storage_health_loading">读取中…</string>
+    <string name="storage_health_keepalive">常驻保活服务</string>
+    <string name="storage_health_running">运行中</string>
+    <string name="storage_health_stopped">未运行</string>
+    <string name="storage_health_weekly_scan">每周推荐扫描</string>
+    <string name="storage_health_work_enqueued">已排期</string>
+    <string name="storage_health_work_succeeded">上次执行成功</string>
+    <string name="storage_health_work_cancelled">已取消，建议重新打开存储页重新注册</string>
+    <string name="storage_health_failed">执行失败，建议重新打开存储页重试</string>
+    <string name="storage_health_task">定时任务</string>
+    <string name="storage_health_never_ran">尚未运行</string>
+    <string name="storage_health_last_run_ok">上次运行成功%1$s</string>
+    <string name="storage_health_last_run_failed">上次运行失败%1$s</string>
+    <string name="storage_health_last_run_interrupted">上次运行被中断，请检查任务配置</string>
+    <string name="storage_health_active_scan">活跃扫描</string>
+    <string name="storage_health_scanning_now">存储统计进行中</string>
+    <string name="storage_health_idle">空闲</string>
 </resources>

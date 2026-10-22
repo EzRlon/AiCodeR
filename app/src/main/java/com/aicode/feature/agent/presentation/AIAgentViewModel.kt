@@ -3508,8 +3508,9 @@ class AIAgentViewModel @Inject constructor(
             if (deletedSession?.parentId != null) {
                 subAgentEventBus.release(id)
             }
-            checkpointManager.clearSessionCheckpoints(id)
             val deleted = sessionUseCase.deleteSession(id)
+            // 级联删除的子会话的检查点也要清，只清目标 id 会残留子代理的快照目录
+            deleted.forEach { checkpointManager.clearSessionCheckpoints(it) }
             allDeletedIds.addAll(deleted)
         }
 
@@ -3550,8 +3551,9 @@ class AIAgentViewModel @Inject constructor(
         val deletedSession = sessionUseCase.getSessionById(id)
         val stoppedSubAgent = deletedSession?.takeIf { it.parentId != null && subAgentEventBus.release(id) }
 
-        checkpointManager.clearSessionCheckpoints(id)
         val deletedIds = sessionUseCase.deleteSession(id)
+        // 级联删除的子会话的检查点也要清，只清目标 id 会残留子代理的快照目录
+        deletedIds.forEach { checkpointManager.clearSessionCheckpoints(it) }
 
         deletedIds.forEach { sid ->
             subAgentEventBus.release(sid)

@@ -2653,4 +2653,44 @@
     <string name="memory_graph_project">Project</string>
     <string name="memory_graph_session">Session</string>
     <string name="editor_note_mode">Note mode</string>
+    <!-- Storage recommended cleanup -->
+    <string name="storage_rec_title">Recommended cleanup</string>
+    <string name="storage_rec_scan">Scan</string>
+    <string name="storage_rec_scanning">Scanning…</string>
+    <string name="storage_rec_header">Can free %1$s (%2$s high confidence)</string>
+    <string name="storage_rec_last_scan">Result of last scan on %1$s</string>
+    <string name="storage_rec_not_scanned">Not scanned yet. Tap “Scan” to start.</string>
+    <string name="storage_rec_empty">No suggestions. Your storage is clean.</string>
+    <string name="storage_rec_clean">Clean</string>
+    <string name="storage_rec_clean_selected">Clean selected (%1$s)</string>
+    <string name="storage_rec_confirm_title">Confirm cleanup</string>
+    <string name="storage_rec_confirm_scope">Only the items listed above are removed. Workspaces, settings and session data are untouched.</string>
+    <string name="storage_rec_reason_rebuildable">Safe to rebuild</string>
+    <string name="storage_rec_reason_unused">Unused for 30 days</string>
+    <string name="storage_rec_reason_no_session">No matching session</string>
+    <string name="storage_rec_reason_no_container">No matching container</string>
+    <string name="storage_rec_stale_tool_output">Tool output archives (older than 30 days)</string>
+    <string name="storage_rec_stale_generated_images">Generated images (older than 30 days)</string>
+    <string name="storage_rec_orphan_checkpoint">Orphan checkpoint %1$s…</string>
+    <string name="storage_rec_orphan_ai_log">AI session log %1$s…</string>
+
+    <!-- Runtime health (read-only) -->
+    <string name="storage_health_title">Runtime health</string>
+    <string name="storage_health_loading">Loading…</string>
+    <string name="storage_health_keepalive">Keep-alive service</string>
+    <string name="storage_health_running">Running</string>
+    <string name="storage_health_stopped">Not running</string>
+    <string name="storage_health_weekly_scan">Weekly cleanup scan</string>
+    <string name="storage_health_work_enqueued">Scheduled</string>
+    <string name="storage_health_work_succeeded">Last run succeeded</string>
+    <string name="storage_health_work_cancelled">Cancelled — reopen the storage page to re-register</string>
+    <string name="storage_health_failed">Failed — reopen the storage page to retry</string>
+    <string name="storage_health_task">Scheduled task</string>
+    <string name="storage_health_never_ran">Never ran</string>
+    <string name="storage_health_last_run_ok">Last run succeeded %1$s</string>
+    <string name="storage_health_last_run_failed">Last run failed %1$s</string>
+    <string name="storage_health_last_run_interrupted">Last run was interrupted. Check the task settings.</string>
+    <string name="storage_health_active_scan">Active scans</string>
+    <string name="storage_health_scanning_now">Storage scan in progress</string>
+    <string name="storage_health_idle">Idle</string>
 </resources>
