@@ -2712,4 +2712,18 @@
     <string name="storage_health_active_scan">活跃扫描</string>
     <string name="storage_health_scanning_now">存储统计进行中</string>
     <string name="storage_health_idle">空闲</string>
+
+    <!-- Store install security scan -->
+    <string name="store_scan_section_title">安全扫描</string>
+    <string name="store_scan_passed">通过：未发现风险特征</string>
+    <string name="store_scan_warn_found">发现 %1$d 处可疑特征</string>
+    <string name="store_scan_block_found">发现 %1$d 处高危特征</string>
+    <string name="store_scan_warn_title">安装前安全扫描：发现可疑内容</string>
+    <string name="store_scan_block_title">安全扫描：发现高危内容</string>
+    <string name="store_scan_warn_body">该条目内容命中以下可疑特征，请逐条确认后再决定是否安装：</string>
+    <string name="store_scan_block_body">该条目内容命中以下高危特征，可能诱导 AI 越权、外发数据或执行恶意指令，请谨慎决定：</string>
+    <string name="store_scan_hit_line">第 %1$d 行</string>
+    <string name="store_scan_confirm_warn">我已知晓风险，继续安装</string>
+    <string name="store_scan_confirm_block">我确认仍要安装</string>
+    <string name="store_scan_cancel">取消</string>
 </resources>

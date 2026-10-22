@@ -8,6 +8,7 @@ import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.store.data.StoreApiClient
+import com.aicode.feature.store.data.StoreCatalogCache
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
 import com.aicode.feature.store.data.TeamStoreItem
@@ -18,7 +19,10 @@ import com.aicode.feature.store.data.nextCursorOrNull
 import com.aicode.feature.store.data.storeTranslationKey
 import com.aicode.feature.store.data.storeTranslationSourceHash
 import com.aicode.feature.store.data.toStoreItem
+import com.aicode.feature.store.domain.ScanResult
+import com.aicode.feature.store.domain.StoreInstallScanner
 import com.aicode.feature.store.domain.StoreInstaller
+import com.aicode.feature.store.domain.SkillInstallPlan
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +37,44 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+/**
+ * 扫描命中后挂起的安装：携带完成安装所需的全部数据，确认后无需重新下载。
+ * [key] 用于安装中状态与扫描结论缓存，[title] 展示在确认弹窗。
+ */
+sealed class PendingScanGate {
+    abstract val scan: ScanResult
+    abstract val key: String
+    abstract val title: String
+
+    data class Skill(val plan: SkillInstallPlan) : PendingScanGate() {
+        override val scan: ScanResult get() = plan.scan
+        override val key: String get() = plan.item.id
+        override val title: String get() = plan.item.name
+    }
+
+    data class Mcp(val item: StoreItem, override val scan: ScanResult) : PendingScanGate() {
+        override val key: String get() = item.id
+        override val title: String get() = item.name
+    }
+
+    data class Team(val plan: TeamInstallPlan) : PendingScanGate() {
+        override val scan: ScanResult get() = plan.scan
+        override val key: String get() = plan.item.fileName
+        override val title: String get() = plan.item.name
+    }
+}
+
+/**
+ * 专家团安装计划：内容已就绪、扫描已出结论，确认后直接写盘。
+ * [agents] 为（目标文件名，正文）；builtin = 成员名，online = 清洗后的定义名。
+ */
+data class TeamInstallPlan(
+    val item: TeamStoreItem,
+    val scan: ScanResult,
+    val teamText: String,
+    val agents: List<Pair<String, String>>
+)
 
 /** 商店页 UI 状态。 */
 data class StoreUiState(
@@ -59,7 +101,11 @@ data class StoreUiState(
     /** 翻译失败（默认模型不可用/返回异常）：提示行带重试入口，避免静默回退英文。 */
     val translationFailed: Boolean = false,
     /** 内置专家团（团队包）列表（EXPERT tab）。 */
-    val teams: List<TeamStoreItem> = emptyList()
+    val teams: List<TeamStoreItem> = emptyList(),
+    /** 扫描命中后挂起的安装（非空时展示确认 / 警示弹窗）；确认或取消后置回 null。 */
+    val pendingScan: PendingScanGate? = null,
+    /** 条目 key → 最近一次安装前安全扫描结论（详情弹层「安全扫描」区块展示）。 */
+    val lastScans: Map<String, ScanResult> = emptyMap()
 )
 
 /**
@@ -76,6 +122,8 @@ class StoreViewModel @Inject constructor(
     private val mcpConfig: McpConfigRepository,
     private val translationService: StoreTranslationService,
     private val translationStore: StoreTranslationStore,
+    private val catalogCache: StoreCatalogCache,
+    private val scanner: StoreInstallScanner,
     private val languageSettings: LanguageSettingsRepository,
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
     baseClient: okhttp3.OkHttpClient,
@@ -103,6 +151,9 @@ class StoreViewModel @Inject constructor(
 
     private var page = 1
     private var mcpCursor: String? = null
+
+    /** MCP 首页之后是否已翻页：后台刷新仅在本值为 false 时替换列表，避免覆盖用户已加载的页。 */
+    private var mcpAdvanced = false
 
     /** 翻译任务：单 Job 串行，列表重新加载时取消旧任务重开（见 [kickTranslation]）。 */
     private var translationJob: Job? = null
@@ -179,29 +230,69 @@ class StoreViewModel @Inject constructor(
 
     private fun loadSkills(nextPage: Boolean) {
         viewModelScope.launch {
-            if (nextPage) _state.update { it.copy(loadingMore = true) } else {
-                page = 1
+            if (nextPage) {
+                _state.update { it.copy(loadingMore = true) }
+                val target = page + 1
+                api.listSkills(page = target, limit = PAGE_SIZE).fold(
+                    onSuccess = { resp ->
+                        if (_state.value.tab != StoreKind.SKILL) return@fold
+                        page = target
+                        val incoming = resp.results.map { it.toStoreItem() }
+                        _state.update {
+                            it.copy(
+                                items = it.items + incoming,
+                                loading = false,
+                                loadingMore = false,
+                                hasMore = incoming.size >= PAGE_SIZE
+                            )
+                        }
+                        refreshInstalled()
+                        kickTranslation()
+                    },
+                    onFailure = { e ->
+                        if (_state.value.tab != StoreKind.SKILL) return@fold
+                        _state.update {
+                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                        }
+                    }
+                )
+                return@launch
+            }
+            // 首页：目录缓存秒出，网络后台刷新替换（stale-while-revalidate）
+            page = 1
+            val cached = catalogCache.readSkills()
+            if (cached != null) {
+                val items = cached.results.map { it.toStoreItem() }
+                _state.update {
+                    it.copy(items = items, loading = false, error = null, searching = false, hasMore = items.size >= PAGE_SIZE)
+                }
+                refreshInstalled()
+                kickTranslation()
+            } else {
                 _state.update { it.copy(loading = true, error = null, searching = false) }
             }
-            val target = if (nextPage) page + 1 else 1
-            api.listSkills(page = target, limit = PAGE_SIZE).fold(
+            api.listSkills(page = 1, limit = PAGE_SIZE).fold(
                 onSuccess = { resp ->
-                    page = target
+                    catalogCache.saveSkills(resp)
+                    // 守卫：切 tab / 已翻页 / 搜索中（搜索结果不能被浏览列表冲掉）
+                    if (_state.value.tab != StoreKind.SKILL || page != 1 ||
+                        _state.value.searching || _state.value.query.isNotBlank()) return@fold
                     val incoming = resp.results.map { it.toStoreItem() }
                     _state.update {
-                        it.copy(
-                            items = if (nextPage) it.items + incoming else incoming,
-                            loading = false,
-                            loadingMore = false,
-                            hasMore = incoming.size >= PAGE_SIZE
-                        )
+                        it.copy(items = incoming, loading = false, loadingMore = false, hasMore = incoming.size >= PAGE_SIZE)
                     }
                     refreshInstalled()
                     kickTranslation()
                 },
                 onFailure = { e ->
+                    if (_state.value.tab != StoreKind.SKILL) return@fold
+                    // 已有缓存展示时静默保持，不打断浏览；仅空列表时报错
                     _state.update {
-                        it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                        if (it.items.isEmpty()) {
+                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                        } else {
+                            it.copy(loading = false, loadingMore = false)
+                        }
                     }
                 }
             )
@@ -210,31 +301,76 @@ class StoreViewModel @Inject constructor(
 
     private fun loadMcp(next: Boolean) {
         viewModelScope.launch {
-            if (next) _state.update { it.copy(loadingMore = true) } else {
-                mcpCursor = null
+            if (next) {
+                _state.update { it.copy(loadingMore = true) }
+                mcpAdvanced = true
+                api.listMcpServers(cursor = mcpCursor, limit = MCP_PAGE_SIZE).fold(
+                    onSuccess = { resp ->
+                        if (_state.value.tab != StoreKind.MCP) return@fold
+                        mcpCursor = resp.nextCursorOrNull()
+                        val incoming = resp.servers.map { it.server.toStoreItem() }
+                        // 去重：MCP Registry 可能返回重复 name，导致 LazyColumn key 冲突
+                        val dedupedIncoming = incoming.distinctBy { it.id }
+                        _state.update {
+                            it.copy(
+                                items = (it.items + dedupedIncoming).distinctBy { item -> item.id },
+                                loading = false,
+                                loadingMore = false,
+                                hasMore = mcpCursor != null
+                            )
+                        }
+                        refreshInstalled()
+                        kickTranslation()
+                    },
+                    onFailure = { e ->
+                        if (_state.value.tab != StoreKind.MCP) return@fold
+                        // 翻页失败回置守卫：仍在飞的首页刷新结果不应被丢弃
+                        mcpAdvanced = false
+                        _state.update {
+                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                        }
+                    }
+                )
+                return@launch
+            }
+            // 首页：目录缓存秒出，网络后台刷新替换（stale-while-revalidate）
+            mcpCursor = null
+            mcpAdvanced = false
+            val cached = catalogCache.readMcp()
+            if (cached != null) {
+                mcpCursor = cached.nextCursorOrNull()
+                val items = cached.servers.map { it.server.toStoreItem() }.distinctBy { it.id }
+                _state.update {
+                    it.copy(items = items, loading = false, error = null, searching = false, hasMore = mcpCursor != null)
+                }
+                refreshInstalled()
+                kickTranslation()
+            } else {
                 _state.update { it.copy(loading = true, error = null, searching = false) }
             }
-            api.listMcpServers(cursor = if (next) mcpCursor else null, limit = MCP_PAGE_SIZE).fold(
+            api.listMcpServers(cursor = null, limit = MCP_PAGE_SIZE).fold(
                 onSuccess = { resp ->
+                    catalogCache.saveMcp(resp)
+                    // 守卫：切 tab / 已翻页 / 搜索中（搜索结果不能被浏览列表冲掉）
+                    if (_state.value.tab != StoreKind.MCP || mcpAdvanced ||
+                        _state.value.searching || _state.value.query.isNotBlank()) return@fold
                     mcpCursor = resp.nextCursorOrNull()
                     val incoming = resp.servers.map { it.server.toStoreItem() }
-                    // 去重：MCP Registry 可能返回重复 name，导致 LazyColumn key 冲突
                     val dedupedIncoming = incoming.distinctBy { it.id }
                     _state.update {
-                        val merged = if (next) (it.items + dedupedIncoming).distinctBy { it.id } else dedupedIncoming
-                        it.copy(
-                            items = merged,
-                            loading = false,
-                            loadingMore = false,
-                            hasMore = mcpCursor != null
-                        )
+                        it.copy(items = dedupedIncoming, loading = false, loadingMore = false, hasMore = mcpCursor != null)
                     }
                     refreshInstalled()
                     kickTranslation()
                 },
                 onFailure = { e ->
+                    if (_state.value.tab != StoreKind.MCP) return@fold
                     _state.update {
-                        it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                        if (it.items.isEmpty()) {
+                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                        } else {
+                            it.copy(loading = false, loadingMore = false)
+                        }
                     }
                 }
             )
@@ -243,85 +379,168 @@ class StoreViewModel @Inject constructor(
 
     /** 安装当前 tab 的条目：[item] 为 null 时表示缓存失效需重拉列表（此处不需要）。 */
     fun install(item: StoreItem) {
-        if (_state.value.installingId != null) return
+        if (_state.value.installingId != null || _state.value.pendingScan != null) return
         viewModelScope.launch {
             _state.update { it.copy(installingId = item.id) }
-            val result = runCatching {
+            try {
                 when (item.kind) {
-                    StoreKind.SKILL -> "已安装技能「${installer.installSkill(item)}」（默认未启用，可在技能页开启）"
-                    StoreKind.MCP -> "已添加 MCP 服务器「${installer.installMcp(item)}」（默认未启用，可在 MCP 页开启）"
+                    StoreKind.SKILL -> {
+                        val plan = installer.planSkillInstall(item)
+                        recordScan(plan.item.id, plan.scan)
+                        resolveGate(PendingScanGate.Skill(plan)) {
+                            "已安装技能「${installer.commitSkillInstall(plan)}」（默认未启用，可在技能页开启）"
+                        }
+                    }
+                    StoreKind.MCP -> {
+                        val scan = installer.scanMcp(item)
+                        recordScan(item.id, scan)
+                        resolveGate(PendingScanGate.Mcp(item, scan)) {
+                            "已添加 MCP 服务器「${installer.installMcp(item)}」（默认未启用，可在 MCP 页开启）"
+                        }
+                    }
                     StoreKind.EXPERT -> {
                         FileLogger.w(TAG, "install() 收到专家条目，已忽略")
-                        "专家请在内置专家页安装"
+                        _state.update { it.copy(installingId = null, message = "专家请在内置专家页安装") }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(installingId = null, message = e.message ?: "安装失败") }
             }
-            result.fold(
-                onSuccess = { msg ->
-                    _state.update { it.copy(installingId = null, message = msg) }
-                    refreshInstalled()
-                },
-                onFailure = { e ->
-                    _state.update { it.copy(installingId = null, message = e.message ?: "安装失败") }
-                }
-            )
         }
+    }
+
+    /** PASS 直接装（用户无感）；WARN/BLOCK 挂起等待用户确认（[onConfirm] 在确认后执行）。 */
+    private suspend fun resolveGate(gate: PendingScanGate, onConfirm: suspend () -> String) {
+        if (gate.scan is ScanResult.Pass) {
+            _state.update { it.copy(installingId = null, message = onConfirm()) }
+            refreshInstalled()
+        } else {
+            _state.update { it.copy(installingId = null, pendingScan = gate) }
+        }
+    }
+
+    /** 用户在扫描弹窗确认「继续安装」：从挂起态取回数据直接落盘（不重新下载）。 */
+    fun confirmPendingScan() {
+        val gate = _state.value.pendingScan ?: return
+        _state.update { it.copy(pendingScan = null, installingId = gate.key) }
+        viewModelScope.launch {
+            try {
+                var teamInstalled = false
+                val msg = when (gate) {
+                    is PendingScanGate.Skill ->
+                        "已安装技能「${installer.commitSkillInstall(gate.plan)}」（默认未启用，可在技能页开启）"
+                    is PendingScanGate.Mcp ->
+                        "已添加 MCP 服务器「${installer.installMcp(gate.item)}」（默认未启用，可在 MCP 页开启）"
+                    is PendingScanGate.Team -> {
+                        teamInstalled = withContext(Dispatchers.IO) { commitTeam(gate.plan) }
+                        if (teamInstalled) {
+                            context.getString(R.string.store_expert_installed_toast, gate.plan.item.name)
+                        } else {
+                            context.getString(R.string.store_expert_install_failed)
+                        }
+                    }
+                }
+                _state.update { s ->
+                    s.copy(
+                        installingId = null,
+                        message = msg,
+                        teams = if (gate is PendingScanGate.Team && teamInstalled) {
+                            s.teams.map {
+                                if (it.fileName == gate.plan.item.fileName) it.copy(installed = true) else it
+                            }
+                        } else {
+                            s.teams
+                        }
+                    )
+                }
+                refreshInstalled()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(installingId = null, message = e.message ?: "安装失败") }
+            }
+        }
+    }
+
+    /** 用户在扫描弹窗取消：丢弃挂起的安装（已下载内容一并丢弃，下次安装重新走完整流程）。 */
+    fun dismissPendingScan() {
+        _state.update { it.copy(pendingScan = null) }
+    }
+
+    private fun recordScan(key: String, scan: ScanResult) {
+        _state.update { it.copy(lastScans = it.lastScans + (key to scan)) }
     }
 
     fun consumeMessage() {
         _state.update { it.copy(message = null) }
     }
 
-    /** 加载内置专家团（assets/teams 团队包）：解析 frontmatter；已安装 = ~/.aicode/teams 存在同名文件。 */
+    /** 加载专家团：内置团队（本地 assets）与上次在线市场缓存立即展示，在线市场后台刷新替换。 */
     fun loadTeams() {
         viewModelScope.launch {
-            val teams = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.assets.list("teams").orEmpty()
-                        .filter { it.endsWith(".md") }
-                        .mapNotNull { file ->
-                            val text = context.assets.open("teams/$file")
-                                .bufferedReader().use { it.readText() }
-                            val name = Regex("(?m)^name:\\s*(.+)$").find(text)
-                                ?.groupValues?.get(1)?.trim()
-                                ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-                            val desc = Regex("(?m)^description:\\s*(.+)$").find(text)
-                                ?.groupValues?.get(1)?.trim().orEmpty()
-                            val memberText = Regex("(?m)^members:\\s*\\[(.+?)]\\s*$").find(text)
-                                ?.groupValues?.get(1).orEmpty()
-                            val members = memberText.split(',')
-                                .map { it.trim() }
-                                .filter { it.isNotEmpty() }
-                            TeamStoreItem(
-                                fileName = file,
-                                name = name,
-                                description = desc,
-                                members = members,
-                                installed = runCatching {
-                                    fileAccess.exists("~/.aicode/teams/$file")
-                                }.getOrDefault(false)
-                            )
-                        }.sortedBy { it.name.lowercase() }
-                }.getOrElse { e ->
-                    FileLogger.w(TAG, "加载内置专家团失败", e)
-                    emptyList()
-                }
+            val builtin = withContext(Dispatchers.IO) { parseBuiltinTeams() }
+            // 上次在线市场缓存立即合并；安装状态以本地现状为准（缓存可能是安装前存的）
+            val cachedOnline = catalogCache.readOnlineTeams().orEmpty().map { team ->
+                team.copy(installed = runCatching {
+                    val path = if (team.online) "~/.aicode/teams/${team.name}.md" else "~/.aicode/teams/${team.fileName}"
+                    fileAccess.exists(path)
+                }.getOrDefault(false))
             }
-            // 在线专家团市场（wshobson/agents，经 gh-proxy 镜像）：失败静默，仅展示内置
-            val online = withContext(Dispatchers.IO) { fetchOnlineTeams() }
-            _state.update { it.copy(teams = teams + online) }
+            _state.update { it.copy(teams = builtin + cachedOnline) }
             // 专家团条目一并进翻译管线（用户反馈：专家团名称/描述此前不翻译）
             kickTranslation()
+            // 在线市场刷新：失败或空结果保持缓存展示（上游字段漂移时 0 条不是真实状态），成功才替换
+            val online = withContext(Dispatchers.IO) { fetchOnlineTeams() }
+            if (_state.value.tab != StoreKind.EXPERT) return@launch
+            if (!online.isNullOrEmpty()) {
+                catalogCache.saveOnlineTeams(online)
+                _state.update { it.copy(teams = builtin + online) }
+                kickTranslation()
+            }
         }
     }
 
-    /** 拉取在线专家团市场清单（Claude Code 插件市场格式：.claude-plugin/marketplace.json）。 */
-    private fun fetchOnlineTeams(): List<TeamStoreItem> = runCatching {
+    /** 解析内置专家团（assets/teams 团队包 frontmatter）；已安装 = ~/.aicode/teams 存在同名文件。 */
+    private fun parseBuiltinTeams(): List<TeamStoreItem> = runCatching {
+        context.assets.list("teams").orEmpty()
+            .filter { it.endsWith(".md") }
+            .mapNotNull { file ->
+                val text = context.assets.open("teams/$file")
+                    .bufferedReader().use { it.readText() }
+                val name = Regex("(?m)^name:\\s*(.+)$").find(text)
+                    ?.groupValues?.get(1)?.trim()
+                    ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val desc = Regex("(?m)^description:\\s*(.+)$").find(text)
+                    ?.groupValues?.get(1)?.trim().orEmpty()
+                val memberText = Regex("(?m)^members:\\s*\\[(.+?)]\\s*$").find(text)
+                    ?.groupValues?.get(1).orEmpty()
+                val members = memberText.split(',')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                TeamStoreItem(
+                    fileName = file,
+                    name = name,
+                    description = desc,
+                    members = members,
+                    installed = runCatching {
+                        fileAccess.exists("~/.aicode/teams/$file")
+                    }.getOrDefault(false)
+                )
+            }.sortedBy { it.name.lowercase() }
+    }.getOrElse { e ->
+        FileLogger.w(TAG, "加载内置专家团失败", e)
+        emptyList()
+    }
+
+    /** 拉取在线专家团市场清单（Claude Code 插件市场格式）；失败返回 null（调用方保持缓存展示）。 */
+    private fun fetchOnlineTeams(): List<TeamStoreItem>? = runCatching {
         val request = okhttp3.Request.Builder().url(MARKET_URL).build()
         storeClient.newCall(request).execute().use { resp ->
-            if (!resp.isSuccessful) return@runCatching emptyList()
+            if (!resp.isSuccessful) return@runCatching null
             val root = org.json.JSONObject(resp.body?.string().orEmpty())
-            val arr = root.optJSONArray("plugins") ?: return@runCatching emptyList()
+            val arr = root.optJSONArray("plugins") ?: return@runCatching null
             val plugins = ArrayList<TeamStoreItem>()
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
@@ -346,87 +565,130 @@ class StoreViewModel @Inject constructor(
         }
     }.getOrElse { e ->
         FileLogger.w(TAG, "拉取在线专家团市场失败", e)
-        emptyList()
+        null
     }
 
-    /** 安装专家团：内置团队写团队定义并补齐成员；在线团队下载成员定义后生成团队。 */
+    /** 安装专家团：内容就绪 + 安全扫描后写盘；扫描命中时挂起等待用户确认。 */
     fun installTeam(item: TeamStoreItem) {
-        if (_state.value.installingId != null) return
+        if (_state.value.installingId != null || _state.value.pendingScan != null) return
         viewModelScope.launch {
             _state.update { it.copy(installingId = item.fileName) }
-            val ok = withContext(Dispatchers.IO) {
-                if (item.online) installOnlineTeam(item) else installBuiltinTeam(item)
-            }
-            _state.update { s ->
-                s.copy(
-                    installingId = null,
-                    teams = s.teams.map {
-                        if (it.fileName == item.fileName && ok) it.copy(installed = true) else it
-                    },
-                    message = if (ok) {
-                        context.getString(R.string.store_expert_installed_toast, item.name)
-                    } else {
-                        context.getString(R.string.store_expert_install_failed)
+            try {
+                val plan = withContext(Dispatchers.IO) { prepareTeamPlan(item) }
+                recordScan(item.fileName, plan.scan)
+                if (plan.scan is ScanResult.Pass) {
+                    val ok = withContext(Dispatchers.IO) { commitTeam(plan) }
+                    _state.update { s ->
+                        s.copy(
+                            installingId = null,
+                            teams = s.teams.map {
+                                if (it.fileName == item.fileName && ok) it.copy(installed = true) else it
+                            },
+                            message = if (ok) {
+                                context.getString(R.string.store_expert_installed_toast, item.name)
+                            } else {
+                                context.getString(R.string.store_expert_install_failed)
+                            }
+                        )
                     }
-                )
+                } else {
+                    _state.update {
+                        it.copy(installingId = null, pendingScan = PendingScanGate.Team(plan))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "安装专家团失败: ${item.name}", e)
+                _state.update {
+                    it.copy(installingId = null, message = e.message ?: "安装失败，请重试")
+                }
             }
         }
     }
 
-    /** 内置团队：写入团队定义，并补齐成员专家定义（已存在则不覆盖）。 */
-    private fun installBuiltinTeam(item: TeamStoreItem): Boolean = runCatching {
-        val teamText = context.assets.open("teams/${item.fileName}")
-            .bufferedReader().use { it.readText() }
-        fileAccess.writeFile("~/.aicode/teams/${item.fileName}", teamText)
-        item.members.forEach { member ->
-            val agentText = runCatching {
-                context.assets.open("agents/$member.md").bufferedReader().use { it.readText() }
-            }.getOrNull() ?: return@forEach
-            if (!fileAccess.exists("~/.aicode/agents/$member.md")) {
-                fileAccess.writeFile("~/.aicode/agents/$member.md", agentText)
+    /** 专家团安装第一阶段：收齐将写入的全部文本（内置读 assets / 在线下载），过安全扫描。 */
+    private fun prepareTeamPlan(item: TeamStoreItem): TeamInstallPlan {
+        val (teamText, agents) = if (item.online) prepareOnlineTeam(item) else prepareBuiltinTeam(item)
+        val scan = scanner.scanTexts(
+            listOf("团队定义 ${item.fileName}" to teamText) +
+                agents.map { (name, text) -> "成员 $name" to text }
+        )
+        return TeamInstallPlan(item, scan, teamText, agents)
+    }
+
+    /** 专家团安装第二阶段：把计划中的内容写盘（内置成员不覆盖已有定义）。 */
+    private fun commitTeam(plan: TeamInstallPlan): Boolean = runCatching {
+        val teamPath = if (plan.item.online) {
+            // name/成员名均来自远端不可信源（市场 JSON 经镜像），含路径分隔符即可写出目录外
+            val safeTeam = safeName(plan.item.name) ?: return@runCatching false
+            "~/.aicode/teams/$safeTeam.md"
+        } else {
+            "~/.aicode/teams/${plan.item.fileName}"
+        }
+        fileAccess.writeFile(teamPath, plan.teamText)
+        plan.agents.forEach { (member, text) ->
+            val safeMember = safeName(member) ?: return@forEach
+            if (!fileAccess.exists("~/.aicode/agents/$safeMember.md")) {
+                fileAccess.writeFile("~/.aicode/agents/$safeMember.md", text)
             }
         }
         true
     }.getOrElse { e ->
-        FileLogger.w(TAG, "安装内置专家团失败", e)
+        FileLogger.w(TAG, "安装专家团失败", e)
         false
     }
 
+    /** 远端提供的名称在拼进盘上路径前统一安全化：只留字母/数字/汉字/空格/._-，剔除分隔符与首部点号。 */
+    private fun safeName(raw: String): String? {
+        val cleaned = raw.filter { it.isLetterOrDigit() || it in "-_. " }.trim()
+        return cleaned.takeIf { it.isNotEmpty() && !it.startsWith(".") }
+    }
+
+    /** 内置团队：读团队定义与成员专家 assets 原文（已存在则不覆盖的逻辑在 [commitTeam]）。 */
+    private fun prepareBuiltinTeam(item: TeamStoreItem): Pair<String, List<Pair<String, String>>> {
+        val teamText = context.assets.open("teams/${item.fileName}")
+            .bufferedReader().use { it.readText() }
+        val agents = item.members.mapNotNull { member ->
+            runCatching {
+                context.assets.open("agents/$member.md").bufferedReader().use { it.readText() }
+            }.getOrNull()?.let { member to it }
+        }
+        return teamText to agents
+    }
+
     /**
-     * 在线团队（wshobson/agents 插件）：列出插件 agents 目录 → 逐个下载并清洗 frontmatter
-     * （外部工具名与本地不一致，剔除 tools/model 行，默认全工具由权限引擎兜底）→
-     * 写入 ~/.aicode/agents，再生成可直接召唤的团队定义。
+     * 在线团队（wshobson/agents 插件）安装内容准备：列出插件 agents 目录 → 逐个下载并清洗
+     * frontmatter（外部工具名与本地不一致，剔除 tools/model 行，默认全工具由权限引擎兜底）→
+     * 生成可直接召唤的团队定义。写盘动作在扫描确认后由 [commitTeam] 执行。
      */
-    private fun installOnlineTeam(item: TeamStoreItem): Boolean = runCatching {
-        val base = item.pluginBase ?: return false
-        val files = fetchAgentFiles(base) ?: return false
-        if (files.isEmpty()) return false
-        val installedNames = ArrayList<String>()
+    private fun prepareOnlineTeam(item: TeamStoreItem): Pair<String, List<Pair<String, String>>> {
+        val base = item.pluginBase ?: throw IllegalStateException("该团队缺少插件目录信息")
+        val files = fetchAgentFiles(base) ?: throw IllegalStateException("读取插件目录失败")
+        if (files.isEmpty()) throw IllegalStateException("插件中没有成员定义")
+        val agents = ArrayList<Pair<String, String>>()
         for ((fileName, downloadUrl) in files) {
             val text = downloadText(downloadUrl) ?: continue
             val cleaned = sanitizeExternalAgent(text)
-            val defName = Regex("(?m)^name:\\s*(.+)$").find(cleaned)?.groupValues?.get(1)?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: fileName.removeSuffix(".md")
-            fileAccess.writeFile("~/.aicode/agents/$defName.md", cleaned)
-            installedNames.add(defName)
+            val defName = safeName(
+                Regex("(?m)^name:\\s*(.+)$").find(cleaned)?.groupValues?.get(1)?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: fileName.removeSuffix(".md")
+            ) ?: continue
+            agents.add(defName to cleaned)
         }
-        if (installedNames.isEmpty()) return false
+        if (agents.isEmpty()) throw IllegalStateException("成员定义下载失败")
         val description = item.description.replace('\n', ' ').take(180)
         val team = buildString {
             appendLine("---")
             appendLine("name: ${item.name}")
             appendLine("description: $description")
-            appendLine("members: [${installedNames.joinToString(", ")}]")
+            appendLine("members: [${agents.map { it.first }.joinToString(", ")}]")
             appendLine("---")
-            appendLine("你是「${item.name}」专家团的团长。可派发的成员子代理：${installedNames.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
+            appendLine("你是「${item.name}」专家团的团长。可派发的成员子代理：${agents.map { it.first }.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
             appendLine("收到任务后先判断涉及哪些环节，再决定派谁与顺序；派活时写清目标、已知上下文、边界与期望产出（成员看不到你与用户的对话）；成员回报后整合结果并向用户交付。")
         }
-        fileAccess.writeFile("~/.aicode/teams/${item.name}.md", team)
-        true
-    }.getOrElse { e ->
-        FileLogger.w(TAG, "安装在线专家团失败: ${item.name}", e)
-        false
+        return team to agents
     }
 
     /** GitHub contents API 列插件 agents 目录；raw 直链统一改走 gh-proxy 镜像（国内可直连）。 */

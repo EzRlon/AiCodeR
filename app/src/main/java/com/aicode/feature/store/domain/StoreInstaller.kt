@@ -32,10 +32,20 @@ internal data class GitHubSource(
 )
 
 /**
+ * 技能安装计划：文件已下载、安全扫描已出结论，尚未写盘；确认后交 [StoreInstaller.commitSkillInstall]。
+ */
+data class SkillInstallPlan(
+    val item: StoreItem,
+    val files: Map<String, ByteArray>,
+    val scan: ScanResult
+)
+
+/**
  * 在线商店安装器：把商店条目落到本地（**安装 ≠ 启用**）。
  *
  * - 技能：下载 repoUrl 指向的 GitHub 目录（contents API 递归）→ 内存 zip →
  *   复用 [SkillRepository.importZip]（校验/写盘/防越界同 App 内导入）→ 写入禁用名单（默认不生效）；
+ *   写盘前经 [StoreInstallScanner] 内容扫描（[planSkillInstall] 扫描、[commitSkillInstall] 落盘）；
  * - MCP（仅 streamable-http / sse 远程型）：追加 [McpServerConfig]（enabled=false）到全局配置。
  *
  * 失败统一抛出带中文信息的异常，UI 直接展示。
@@ -45,7 +55,8 @@ class StoreInstaller @Inject constructor(
     private val api: StoreApiClient,
     private val skillRepository: SkillRepository,
     private val skillConfig: SkillConfigRepository,
-    private val mcpConfig: McpConfigRepository
+    private val mcpConfig: McpConfigRepository,
+    private val scanner: StoreInstallScanner
 ) {
     private companion object {
         const val TAG = "StoreInstaller"
@@ -58,15 +69,26 @@ class StoreInstaller @Inject constructor(
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 安装技能（到全局作用域，默认禁用）。返回实际写入的技能名（frontmatter name 优先）。 */
-    suspend fun installSkill(item: StoreItem): String {
+    /**
+     * 安装技能第一阶段：下载全部文件并做安全扫描（不写盘）。扫描命中 WARN/BLOCK 时
+     * 由调用方挂起等待用户确认，确认后用 [commitSkillInstall] 完成安装（无需重新下载）。
+     */
+    suspend fun planSkillInstall(item: StoreItem): SkillInstallPlan {
         val detail = api.skillDetail(item.id).getOrElse {
             throw IllegalStateException("获取技能详情失败：${it.message ?: "网络错误"}")
         }
         val src = parseGitHubSource(detail.repoUrl)
             ?: throw IllegalStateException("该技能未提供可下载的仓库地址（repoUrl），请打开详情页手动安装")
         val files = downloadDirectory(src)
-        val zip = zipFiles(topDir = item.id, files = files)
+        val scan = withContext(Dispatchers.Default) { scanner.scanFiles(files) }
+        return SkillInstallPlan(item, files, scan)
+    }
+
+    /** 安装技能第二阶段：内存 zip → 导入（全局作用域，默认禁用）。返回实际写入的技能名。 */
+    suspend fun commitSkillInstall(plan: SkillInstallPlan): String {
+        val item = plan.item
+        // 内存 zip 同样不能在主线程跑（中端机大技能可掉帧数百 ms），与扫描同调度
+        val zip = withContext(Dispatchers.Default) { zipFiles(topDir = item.id, files = plan.files) }
         // 写盘与配置更新切到 IO：调用方（VM）在主线程调度，文件操作不能阻塞 UI
         val report = withContext(Dispatchers.IO) {
             skillRepository.importZip(zip.inputStream(), fallbackName = item.name, scope = SkillScope.GLOBAL)
@@ -85,6 +107,15 @@ class StoreInstaller @Inject constructor(
         FileLogger.i(TAG, "已安装技能（待启用）: $imported")
         return imported
     }
+
+    /** 安装 MCP 前的内容扫描：可扫文本 = 条目名称 / 描述 / 远程地址。 */
+    fun scanMcp(item: StoreItem): ScanResult = scanner.scanTexts(
+        listOf(
+            "名称" to item.name,
+            "描述" to item.description,
+            "远程地址" to item.remoteUrl.orEmpty()
+        )
+    )
 
     /** 安装 MCP 服务器（仅远程 http/sse 型，默认禁用）。返回写入的配置名。 */
     suspend fun installMcp(item: StoreItem): String {

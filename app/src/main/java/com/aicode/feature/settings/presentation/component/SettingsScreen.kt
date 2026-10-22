@@ -763,7 +763,9 @@ fun SettingsScreen(
                             onInstall = { storeViewModel.install(it) },
                             onInstallTeam = { storeViewModel.installTeam(it) },
                             onConsumeMessage = { storeViewModel.consumeMessage() },
-                            onRetryTranslation = { storeViewModel.retryTranslation() }
+                            onRetryTranslation = { storeViewModel.retryTranslation() },
+                            onConfirmScan = { storeViewModel.confirmPendingScan() },
+                            onDismissScan = { storeViewModel.dismissPendingScan() }
                         )
                     }
                 }

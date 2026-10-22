@@ -12,6 +12,7 @@ enum class StoreKind { SKILL, MCP, EXPERT }
  * 内置专家团条目：成套团队（团队定义 + 成员专家），一键安装到 ~/.aicode/teams 与 ~/.aicode/agents。
  * members 对应团队定义的成员子代理名，安装时一并补齐其 agent 定义。
  */
+@Serializable
 data class TeamStoreItem(
     val fileName: String,
     val name: String,

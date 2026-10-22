@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,6 +52,10 @@ import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
 import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.store.data.storeTranslationKey
+import com.aicode.feature.store.domain.ScanHit
+import com.aicode.feature.store.domain.ScanLevel
+import com.aicode.feature.store.domain.ScanResult
+import com.aicode.feature.store.presentation.PendingScanGate
 import com.aicode.feature.store.presentation.StoreUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Download
@@ -73,6 +78,8 @@ internal fun StoreScreen(
     onInstallTeam: (TeamStoreItem) -> Unit,
     onConsumeMessage: () -> Unit,
     onRetryTranslation: () -> Unit = {},
+    onConfirmScan: () -> Unit = {},
+    onDismissScan: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -319,6 +326,8 @@ internal fun StoreScreen(
                         Text(stringResource(R.string.store_open_source), style = MaterialTheme.typography.labelMedium)
                     }
                 }
+                // 最近一次安装扫描的结论（PASS 也展示，让用户知道扫描存在）
+                state.lastScans[item.id]?.let { scan -> ScanStatusBlock(scan) }
                 val installed = item.id in state.installedIds
                 val installing = state.installingId == item.id
                 Button2(
@@ -383,6 +392,7 @@ internal fun StoreScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                state.lastScans[team.fileName]?.let { scan -> ScanStatusBlock(scan) }
                 Button2(
                     text = when {
                         team.installed -> stringResource(R.string.store_expert_installed_tag)
@@ -396,6 +406,130 @@ internal fun StoreScreen(
                 }
             }
         }
+    }
+
+    // ── 安装安全扫描：WARN 确认 / BLOCK 红色警示（最终决定权在用户） ──
+    state.pendingScan?.let { gate ->
+        ScanAlertDialog(gate = gate, onConfirm = onConfirmScan, onDismiss = onDismissScan)
+    }
+}
+
+/** 安装安全扫描弹窗：WARN 黄色确认；BLOCK 红色警示 + 显式二次放行。 */
+@Composable
+private fun ScanAlertDialog(gate: PendingScanGate, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val block = gate.scan is ScanResult.Block
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(
+                    if (block) R.string.store_scan_block_title else R.string.store_scan_warn_title
+                ),
+                color = if (block) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                Text(
+                    text = stringResource(
+                        if (block) R.string.store_scan_block_body else R.string.store_scan_warn_body
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                gate.scan.hits.forEach { hit -> ScanHitRow(hit) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = stringResource(
+                        if (block) R.string.store_scan_confirm_block else R.string.store_scan_confirm_warn
+                    ),
+                    color = if (block) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.store_scan_cancel))
+            }
+        }
+    )
+}
+
+/** 详情弹层的「安全扫描」区块：展示该条目最近一次安装扫描的结论（命中时列出前几条）。 */
+@Composable
+private fun ScanStatusBlock(scan: ScanResult) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = stringResource(R.string.store_scan_section_title),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        when (scan) {
+            is ScanResult.Pass -> Text(
+                text = stringResource(R.string.store_scan_passed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            is ScanResult.Warn -> {
+                Text(
+                    text = stringResource(R.string.store_scan_warn_found, scan.hits.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.semanticColors.warning
+                )
+                scan.hits.take(3).forEach { hit -> ScanHitRow(hit) }
+            }
+            is ScanResult.Block -> {
+                Text(
+                    text = stringResource(R.string.store_scan_block_found, scan.hits.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                scan.hits.take(3).forEach { hit -> ScanHitRow(hit) }
+            }
+        }
+    }
+}
+
+/** 单条命中：类别 · 规则（· 来源 · 行号）+ 原文片段。 */
+@Composable
+private fun ScanHitRow(hit: ScanHit) {
+    val riskColor = if (hit.severity == ScanLevel.BLOCK) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.semanticColors.warning
+    }
+    val lineText = if (hit.line > 0) stringResource(R.string.store_scan_hit_line, hit.line) else null
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(
+            text = buildString {
+                append(hit.category)
+                append(" · ")
+                append(hit.rule)
+                if (hit.source.isNotBlank()) {
+                    append("（")
+                    append(hit.source)
+                    append("）")
+                }
+                if (lineText != null) {
+                    append(" · ")
+                    append(lineText)
+                }
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = riskColor
+        )
+        Text(
+            text = "「${hit.snippet}」",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

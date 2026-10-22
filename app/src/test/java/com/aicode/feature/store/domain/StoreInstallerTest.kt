@@ -18,7 +18,8 @@ class StoreInstallerTest {
         api = mockk(relaxed = true),
         skillRepository = mockk(relaxed = true),
         skillConfig = mockk(relaxed = true),
-        mcpConfig = mockk(relaxed = true)
+        mcpConfig = mockk(relaxed = true),
+        scanner = StoreInstallScanner(mockk(relaxed = true))
     )
 
     // ── parseGitHubSource ──────────────────────────────────────────

@@ -34,7 +34,7 @@ fun TeamStoreItem.storeTranslationKey(): String = "${StoreKind.EXPERT.name}:$fil
 fun StoreItem.storeTranslationSourceHash(): String = "$name\u0000$description".hashCode().toString()
 
 /**
- * 商店条目翻译的本地缓存存储（存于 app 缓存目录，可随时被系统清理）。
+ * 商店条目翻译的本地缓存存储（存于 app 持久目录 filesDir，不随系统清理丢失）。
  * key 为「类型:条目id」复合键；只在界面语言为中文时写入与展示。
  */
 @Singleton
@@ -75,7 +75,17 @@ class StoreTranslationStore @Inject constructor(
         }
     }
 
-    private fun file(): File = File(context.cacheDir, FILE_NAME)
+    private fun file(): File {
+        // 迁移仅在 mutex 锁内被调（read()/write() 只从 all()/putAll() 进入）：
+        // 此不变量靠调用约定维持，新增直接调 file() 的入口必须同样持锁。
+        val f = File(context.filesDir, FILE_NAME)
+        // 旧版缓存在 cacheDir（会被系统清理导致重复翻译）：首次读到时迁移到持久目录
+        if (!f.isFile) {
+            val legacy = File(context.cacheDir, FILE_NAME)
+            if (legacy.isFile) runCatching { legacy.copyTo(f, overwrite = true) }
+        }
+        return f
+    }
 
     private companion object {
         const val TAG = "StoreTranslationStore"

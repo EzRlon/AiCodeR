@@ -1,0 +1,110 @@
+{
+ "version": 1,
+ "rules": [
+  {
+   "id": "override-system-zh",
+   "level": "BLOCK",
+   "category": "诱导覆盖系统规则",
+   "name": "覆盖系统指令（中文措辞）",
+   "pattern": "(忽略|无视|不再遵守|推翻)(之前|先前|以上|上面|前面|所有|全部|任何)?的?(系统|安全|隐私|安全防护)?(指令|规则|提示词|提示|约束|限制|设定)"
+  },
+  {
+   "id": "override-system-en",
+   "level": "BLOCK",
+   "category": "诱导覆盖系统规则",
+   "name": "Override system rules (EN)",
+   "pattern": "\\b(ignore|disregard|override)[^.\\n]{0,30}\\b(previous|prior|above|earlier|all|any|your)\\b[^.\\n]{0,30}\\b(instruction|rule|prompt|guardrail|restriction|guideline|constraint)s?\\b"
+  },
+  {
+   "id": "conceal-from-user",
+   "level": "BLOCK",
+   "category": "诱导覆盖系统规则",
+   "name": "对用户隐瞒执行",
+   "pattern": "(不要|不得|请勿|别)(告诉|告知|提及|暴露|显示给)|不要让用户|别让用户|不让用户(知道|发现|看到)|不向用户(透露|提及)|瞒着用户|hide (this|it|that) from (the )?user|don.t tell (the )?user|without (the )?user.?s? (knowledge|awareness)"
+  },
+  {
+   "id": "fake-system-tag",
+   "level": "BLOCK",
+   "category": "伪造系统标签",
+   "name": "伪造成系统容器标签",
+   "pattern": "</?\\s*system-reminder\\s*>|</?\\s*system-notice\\s*>|<\\s*/?\\s*(system|claude|anthropic|assistant)\\s*>"
+  },
+  {
+   "id": "identity-hijack",
+   "level": "BLOCK",
+   "category": "伪造系统标签",
+   "name": "诱导角色重写",
+   "pattern": "(从现在(起|开始)|现在开始)[，,]?\\s*(你|你将)(是|扮演|成为|不再是)|you (are|will be) now (a|an|the)|act as (an? )?(unrestricted|uncensored|unfiltered)"
+  },
+  {
+   "id": "jailbreak",
+   "level": "BLOCK",
+   "category": "伪造系统标签",
+   "name": "越狱 / 解除限制诱导",
+   "pattern": "(越狱模式|jailbreak|dan mode|无限制模式|解除(所有|全部)?(安全|内容)限制|uncensored mode)"
+  },
+  {
+   "id": "malware-category",
+   "level": "BLOCK",
+   "category": "明显恶意类目",
+   "name": "恶意用途内容",
+   "pattern": "(钓鱼(网站|模板|页面|邮件|工具)|phishing (kit|template|page))|键盘记录|keylogger|勒索软件|ransomware|僵尸网络|botnet|肉鸡|盗号|窃取(密码|账号|凭据|验证码)|credential.?steal(er|ing)|挖矿木马|backdoor\\s+(trojan|payload)|后门程序"
+  },
+  {
+   "id": "privilege-zh",
+   "level": "WARN",
+   "category": "提权措辞",
+   "name": "要求自动批准 / 绕过确认",
+   "pattern": "(自动批准(所有|全部)?(操作|执行)?|绕过(权限|确认|审批|审核)|静默放行|跳过(确认|审批|权限检查)|无需(用户)?确认|免确认执行|不经(用户)?(确认|同意))"
+  },
+  {
+   "id": "privilege-en",
+   "level": "WARN",
+   "category": "提权措辞",
+   "name": "Auto-approve / bypass confirmation (EN)",
+   "pattern": "\\b(auto.?approv(e|al)|bypass (the )?(permission|security|confirmation|approval)|without (user |further )?(confirmation|approval|consent)|skip (the )?(confirmation|permission)|yolo mode|--dangerously-skip-permissions)"
+  },
+  {
+   "id": "download-execute",
+   "level": "WARN",
+   "category": "下载并执行外部脚本",
+   "name": "远程脚本下载执行",
+   "pattern": "(curl|wget)\\b[^|\\n]{0,150}\\|\\s*(sudo\\s+)?(ba|z|da|fi)?sh\\b|(curl|wget)\\b[^&\\n]{0,150}&&\\s*(chmod|\\./|\\bbash\\b|\\bsh\\b)|irm\\b[^|\\n]{0,150}\\|\\s*iex\\b|invoke-expression|下载(并|后)(执行|运行)(该)?(脚本|命令|程序)|chmod\\s+\\+x"
+  },
+  {
+   "id": "shell-config-write",
+   "level": "WARN",
+   "category": "写 shell 配置",
+   "name": "修改 shell 启动配置",
+   "pattern": "(~/\\.|/etc/)(bashrc|zshrc|bash_profile|zprofile|profile)\\b|(>>|tee\\s+-a)\\s*[^\\n]{0,40}\\.(bashrc|zshrc|bash_profile|zprofile|profile)\\b|(写入|追加|修改)(到)?[^\\n]{0,20}(bashrc|zshrc|bash_profile)"
+  },
+  {
+   "id": "sensitive-path",
+   "level": "WARN",
+   "category": "敏感路径访问",
+   "name": "引用密钥 / 凭据文件路径",
+   "pattern": "(\\.aicode/keys|keystore\\.(jks|keystore)|keystore\\.properties|\\.ssh/(id_|config)|id_rsa|id_ed25519|\\.env\\b|secrets?\\.(json|txt|ya?ml)|私钥|密钥文件)"
+  },
+  {
+   "id": "policy-adult",
+   "level": "WARN",
+   "category": "政策类目",
+   "name": "成人内容",
+   "pattern": "(成人内容|色情|(porn|nsfw)\\b)"
+  },
+  {
+   "id": "policy-gambling",
+   "level": "WARN",
+   "category": "政策类目",
+   "name": "赌博 / 博彩",
+   "pattern": "(赌博|博彩|casino|gambling)"
+  },
+  {
+   "id": "policy-fraud",
+   "level": "WARN",
+   "category": "政策类目",
+   "name": "诈骗 / 刷单模板",
+   "pattern": "(诈骗(话术|模板|教程|剧本)|电信诈骗|刷单|scam (template|page|script)|fraud (template|script))"
+  }
+ ]
+}

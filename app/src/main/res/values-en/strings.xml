@@ -2712,4 +2712,18 @@
     <string name="storage_health_active_scan">Active scans</string>
     <string name="storage_health_scanning_now">Storage scan in progress</string>
     <string name="storage_health_idle">Idle</string>
+
+    <!-- Store install security scan -->
+    <string name="store_scan_section_title">Security scan</string>
+    <string name="store_scan_passed">Passed: no risk patterns found</string>
+    <string name="store_scan_warn_found">%1$d suspicious pattern(s) found</string>
+    <string name="store_scan_block_found">%1$d high-risk pattern(s) found</string>
+    <string name="store_scan_warn_title">Pre-install scan: suspicious content found</string>
+    <string name="store_scan_block_title">Security scan: high-risk content found</string>
+    <string name="store_scan_warn_body">This item matches the following suspicious patterns. Review each one before installing:</string>
+    <string name="store_scan_block_body">This item matches the following high-risk patterns that may induce privilege escalation, data exfiltration or malicious execution. Decide carefully:</string>
+    <string name="store_scan_hit_line">Line %1$d</string>
+    <string name="store_scan_confirm_warn">I understand the risk, install anyway</string>
+    <string name="store_scan_confirm_block">I confirm, install anyway</string>
+    <string name="store_scan_cancel">Cancel</string>
 </resources>
