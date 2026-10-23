@@ -2337,6 +2337,8 @@
     <string name="perm_tool_send_file_desc">把文件以卡片形式展示到对话中</string>
     <string name="perm_tool_bash">运行命令</string>
     <string name="perm_tool_bash_desc">在容器内执行一次性 shell 命令</string>
+    <string name="perm_tool_run_script">运行脚本</string>
+    <string name="perm_tool_run_script_desc">把自动化固化为脚本，或运行 ~/.aicode/scripts/ 里的脚本（容器内执行）</string>
     <string name="perm_tool_terminal">终端会话</string>
     <string name="perm_tool_terminal_desc">管理后台常驻终端（启动、输入、读取输出）</string>
     <string name="perm_tool_shizuku">系统级操作（Shizuku）</string>
@@ -2358,6 +2360,8 @@
     <string name="perm_tool_plan_mode">模式切换</string>
     <string name="perm_tool_goal_status">目标状态</string>
     <string name="perm_tool_goal_status_desc">目标自主循环中由 AI 标记目标完成或受阻</string>
+    <string name="perm_tool_summon_team">召唤专家团</string>
+    <string name="perm_tool_summon_team_desc">把专家团绑到当前会话（AI 识别到项目级诉求时自动调用）</string>
     <string name="perm_tool_plan_mode_desc">申请进入或退出计划模式</string>
     <string name="perm_tool_todo">任务清单</string>
     <string name="perm_tool_todo_desc">维护任务清单，向用户展示真实进度</string>

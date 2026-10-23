@@ -1043,7 +1043,7 @@ class BackupManagerImpl @Inject constructor(
         const val MAX_AICODE_ENTRY_BYTES = 64L * 1024 * 1024
 
         /** AI 资产目录白名单（递归打包）；keys 为独立勾选段，不在此列。 */
-        val AI_ASSET_DIRS = listOf("skills", "agents", "teams", "prompts.custom", "memory", "notes")
+        val AI_ASSET_DIRS = listOf("skills", "scripts", "agents", "teams", "prompts.custom", "memory", "notes")
 
         /** AI 资产根级文件白名单。 */
         val AI_ASSET_FILES = listOf("agents.json", "skills.json", "git-credentials", "hooks.json")

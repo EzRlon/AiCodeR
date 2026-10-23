@@ -217,7 +217,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                 }
                 val commandText = ((args["command"] ?: args["input"]) as? JsonPrimitive)?.contentOrNull
                 when (val verdict = ScheduledAuthCategoryMapping.judge(
-                    capabilities, commandText, activeRun.authorizedCategories
+                    capabilities, commandText, activeRun.authorizedCategories, toolName
                 )) {
                     is AuthCategoryVerdict.Covered -> return EvalResult(
                         Verdict.ALLOW,

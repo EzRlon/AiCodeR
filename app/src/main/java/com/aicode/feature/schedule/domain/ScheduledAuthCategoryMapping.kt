@@ -28,10 +28,19 @@ sealed interface AuthCategoryVerdict {
  */
 object ScheduledAuthCategoryMapping {
 
+    /** 用户脚本执行工具：命令串是「解释器 + 脚本路径」，脚本体内容不进 args。 */
+    private const val RUN_SCRIPT_TOOL = "run_script"
+
+    /**
+     * @param toolName 调用方工具名；`run_script` 的执行动作在此额外要求
+     *   [ScheduledAuthCategory.DELETE]——它执行的是脚本体，内容不可静态判定，可能在内部
+     *   删除任何东西（引擎的 rm 判定只能看到命令行）。无人值守下必须由用户显式预授权该类别。
+     */
     fun judge(
         capabilities: Set<ToolCapability>,
         commandText: String?,
-        authorized: Set<ScheduledAuthCategory>
+        authorized: Set<ScheduledAuthCategory>,
+        toolName: String? = null
     ): AuthCategoryVerdict {
         if (ToolCapability.MODIFY_AGENT_CONFIG in capabilities) {
             return AuthCategoryVerdict.NotCovered("含 agent 配置修改能力，不在预授权覆盖范围")
@@ -66,6 +75,11 @@ object ScheduledAuthCategoryMapping {
                 ShellCommandParser.collectRmTargets(ShellCommandParser.analyze(commandText).segments)
             }.getOrDefault(emptyList())
             if (rmTargets.isNotEmpty()) required += ScheduledAuthCategory.DELETE
+        }
+
+        // 运行用户脚本：脚本体不可静态判定，一律按「可能含删除」要求 DELETE 类别。
+        if (ToolCapability.EXECUTE_COMMANDS in capabilities && toolName == RUN_SCRIPT_TOOL) {
+            required += ScheduledAuthCategory.DELETE
         }
 
         if (required.isEmpty()) return AuthCategoryVerdict.NotApplicable

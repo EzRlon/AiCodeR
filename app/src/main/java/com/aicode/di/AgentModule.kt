@@ -96,6 +96,7 @@ import com.aicode.feature.agent.domain.tool.memory.MemoryTool
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
 import com.aicode.feature.agent.domain.tool.goal.GoalStatusTool
+import com.aicode.feature.agent.domain.tool.script.RunScriptTool
 import com.aicode.feature.agent.domain.tool.team.SummonTeamTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
@@ -381,6 +382,7 @@ object AgentModule {
         editFileTool: EditFileTool,
         generateImageTool: GenerateImageTool,
         executeCommandTool: ExecuteCommandTool,
+        runScriptTool: RunScriptTool,
         shizukuTool: ShizukuTool,
         terminalSessionTool: TerminalSessionTool,
         listFilesTool: ListFilesTool,
@@ -408,6 +410,7 @@ object AgentModule {
             register("editFile", editFileTool)
             register("generateImage", generateImageTool)
             register("Bash", executeCommandTool)
+            register("run_script", runScriptTool)
             register("Shizuku", shizukuTool)
             register("terminal", terminalSessionTool)
             register("list", listFilesTool)

@@ -14,8 +14,9 @@ class ScheduledAuthCategoryMappingTest {
     private fun judge(
         caps: Set<ToolCapability>,
         command: String? = null,
-        authorized: Set<ScheduledAuthCategory>
-    ) = ScheduledAuthCategoryMapping.judge(caps, command, authorized)
+        authorized: Set<ScheduledAuthCategory>,
+        toolName: String? = null
+    ) = ScheduledAuthCategoryMapping.judge(caps, command, authorized, toolName)
 
     @Test
     fun readCapability_coveredByRead() {
@@ -80,6 +81,37 @@ class ScheduledAuthCategoryMappingTest {
             setOf(ToolCapability.EXECUTE_COMMANDS),
             "ls -la && git status",
             setOf(ScheduledAuthCategory.EXECUTE)
+        )
+        assertTrue(verdict is AuthCategoryVerdict.Covered)
+    }
+
+    @Test
+    fun runScript_alwaysRequiresDelete() {
+        // 脚本体不参与静态判定，未知内容一律按「可能含删除」处理，只看命令串会漏放。
+        val notCovered = judge(
+            setOf(ToolCapability.EXECUTE_COMMANDS),
+            "bash \"/root/.aicode/scripts/cleanup.sh\"",
+            setOf(ScheduledAuthCategory.EXECUTE),
+            toolName = "run_script"
+        )
+        assertTrue(notCovered is AuthCategoryVerdict.NotCovered)
+
+        val covered = judge(
+            setOf(ToolCapability.EXECUTE_COMMANDS),
+            "bash \"/root/.aicode/scripts/cleanup.sh\"",
+            setOf(ScheduledAuthCategory.EXECUTE, ScheduledAuthCategory.DELETE),
+            toolName = "run_script"
+        )
+        assertTrue(covered is AuthCategoryVerdict.Covered)
+    }
+
+    @Test
+    fun runScript_listAction_doesNotRequireExecuteOrDelete() {
+        val verdict = judge(
+            setOf(ToolCapability.READ_AGENT_CONFIG),
+            null,
+            setOf(ScheduledAuthCategory.READ),
+            toolName = "run_script"
         )
         assertTrue(verdict is AuthCategoryVerdict.Covered)
     }

@@ -2337,6 +2337,8 @@
     <string name="perm_tool_send_file_desc">Show a file as a card in the conversation</string>
     <string name="perm_tool_bash">Run commands</string>
     <string name="perm_tool_bash_desc">Execute one-off shell commands in the container</string>
+    <string name="perm_tool_run_script">Run scripts</string>
+    <string name="perm_tool_run_script_desc">Save automations as scripts, or run scripts in ~/.aicode/scripts/ (inside the container)</string>
     <string name="perm_tool_terminal">Terminal sessions</string>
     <string name="perm_tool_terminal_desc">Manage background terminals (start, type, read output)</string>
     <string name="perm_tool_shizuku">System operations (Shizuku)</string>
@@ -2359,6 +2361,8 @@
     <string name="perm_tool_plan_mode_desc">Request entering or exiting Plan mode</string>
     <string name="perm_tool_goal_status">Goal status</string>
     <string name="perm_tool_goal_status_desc">AI marks the goal as completed or blocked during autonomous loop</string>
+    <string name="perm_tool_summon_team">Summon expert team</string>
+    <string name="perm_tool_summon_team_desc">Bind an expert team to the current session (AI calls it for project-scale requests)</string>
     <string name="perm_tool_todo">Task list</string>
     <string name="perm_tool_todo_desc">Maintain the task list showing real progress</string>
     <string name="perm_tool_ask_question">Ask user</string>

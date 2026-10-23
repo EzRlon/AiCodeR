@@ -51,7 +51,7 @@ data class ToolPermissionProfile(
 )
 
 /**
- * 工具授权目录：全部内置工具（22 项）的中文名称、用途说明、分组与默认档位；
+ * 工具授权目录：全部内置工具的中文名称、用途说明、分组与默认档位；
  * 以及预置授权档案。UI（授权中心）与权限引擎（默认档位兜底）共用。
  *
  * 默认档位与各工具 `permissionPolicy` 现状精确对齐（只读/低危=自动允许、写/系统类=每次询问），
@@ -69,6 +69,7 @@ object ToolPermissionCatalog {
         ToolPermissionInfo("sendFile", R.string.perm_tool_send_file, R.string.perm_tool_send_file_desc, ToolPermissionGroup.FILES, ToolPermissionTier.AUTO),
         // 终端与系统
         ToolPermissionInfo("Bash", R.string.perm_tool_bash, R.string.perm_tool_bash_desc, ToolPermissionGroup.TERMINAL, ToolPermissionTier.ASK),
+        ToolPermissionInfo("run_script", R.string.perm_tool_run_script, R.string.perm_tool_run_script_desc, ToolPermissionGroup.TERMINAL, ToolPermissionTier.ASK),
         ToolPermissionInfo("terminal", R.string.perm_tool_terminal, R.string.perm_tool_terminal_desc, ToolPermissionGroup.TERMINAL, ToolPermissionTier.ASK),
         ToolPermissionInfo("Shizuku", R.string.perm_tool_shizuku, R.string.perm_tool_shizuku_desc, ToolPermissionGroup.TERMINAL, ToolPermissionTier.ASK),
         // 网络与浏览
@@ -83,6 +84,7 @@ object ToolPermissionCatalog {
         ToolPermissionInfo("messageParent", R.string.perm_tool_message_parent, R.string.perm_tool_message_parent_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("planMode", R.string.perm_tool_plan_mode, R.string.perm_tool_plan_mode_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.ASK),
         ToolPermissionInfo("goalStatus", R.string.perm_tool_goal_status, R.string.perm_tool_goal_status_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
+        ToolPermissionInfo("summon_team", R.string.perm_tool_summon_team, R.string.perm_tool_summon_team_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("todo", R.string.perm_tool_todo, R.string.perm_tool_todo_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("askUserQuestion", R.string.perm_tool_ask_question, R.string.perm_tool_ask_question_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         // 记忆与扩展
@@ -120,6 +122,7 @@ object ToolPermissionCatalog {
                 "writeFile" to ToolPermissionTier.AUTO,
                 "editFile" to ToolPermissionTier.AUTO,
                 "Bash" to ToolPermissionTier.AUTO,
+                "run_script" to ToolPermissionTier.AUTO,
                 "terminal" to ToolPermissionTier.AUTO,
                 "generateImage" to ToolPermissionTier.AUTO,
                 "task" to ToolPermissionTier.AUTO
@@ -133,10 +136,12 @@ object ToolPermissionCatalog {
                 "writeFile" to ToolPermissionTier.DENY,
                 "editFile" to ToolPermissionTier.DENY,
                 "Bash" to ToolPermissionTier.DENY,
+                "run_script" to ToolPermissionTier.DENY,
                 "terminal" to ToolPermissionTier.DENY,
                 "Shizuku" to ToolPermissionTier.DENY,
                 "generateImage" to ToolPermissionTier.DENY,
                 "manageMcp" to ToolPermissionTier.DENY,
+                "summon_team" to ToolPermissionTier.DENY,
                 "task" to ToolPermissionTier.DENY
             )
         )
