@@ -1546,8 +1546,8 @@
     <string name="store_empty">Nothing found — try another keyword</string>
     <string name="store_open_source">Source</string>
     <string name="store_mcp_stdio_hint">Local-only package; manual setup required</string>
-    <string name="schedule_page_hint_title">Run commands automatically</string>
-    <string name="schedule_page_hint">Runs the given command inside the container on schedule; each run\'s result can be reviewed. Trigger time may be slightly delayed by the system.</string>
+    <string name="schedule_page_hint_title">Run commands or scripts automatically</string>
+    <string name="schedule_page_hint">Runs the given command or a script inside the container on schedule; each run\'s result can be reviewed. Script tasks stay silent on success and notify on failure. Trigger time may be slightly delayed by the system.</string>
     <string name="schedule_group_tasks">Tasks</string>
     <string name="schedule_empty">No scheduled tasks yet. Tap "+" in the top right, or long-press a mode icon in chat.</string>
     <string name="schedule_daily_at">Daily at %1$s</string>

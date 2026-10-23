@@ -1547,8 +1547,8 @@
     <string name="store_empty">没有找到内容，试试更换关键词</string>
     <string name="store_open_source">来源</string>
     <string name="store_mcp_stdio_hint">仅提供本地包，暂不支持一键安装</string>
-    <string name="schedule_page_hint_title">自动执行命令</string>
-    <string name="schedule_page_hint">到点在容器里执行指定命令，结果可逐条查看。受系统调度，触发时间可能略有延迟。</string>
+    <string name="schedule_page_hint_title">自动执行命令或脚本</string>
+    <string name="schedule_page_hint">到点在容器里执行指定命令或运行一个脚本，结果可逐条查看（脚本任务成功静默、失败通知）。受系统调度，触发时间可能略有延迟。</string>
     <string name="schedule_group_tasks">任务</string>
     <string name="schedule_empty">还没有定时任务；点右上角「+」新建，或长按会话界面的模式图标创建</string>
     <string name="schedule_daily_at">每天 %1$s</string>

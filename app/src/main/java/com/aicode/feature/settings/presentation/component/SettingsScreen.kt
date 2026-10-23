@@ -81,6 +81,7 @@ import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.presentation.component.MarkdownContent
 import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
 import com.aicode.feature.backup.presentation.BackupScreen
+import com.aicode.feature.editor.presentation.CodeEditorScreen
 import com.aicode.feature.schedule.domain.ScheduledTask
 import com.aicode.feature.schedule.domain.TaskSchedule
 import com.aicode.feature.schedule.presentation.component.ScheduledTaskEditorScreen
@@ -104,6 +105,7 @@ import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
+import compose.icons.feathericons.Code
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.Download
@@ -163,6 +165,8 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     PromptEditor(R.string.prompts_title),
     Memory(R.string.settings_memory),
     MemoryEditor(R.string.settings_memory),
+    Scripts(R.string.settings_scripts),
+    ScriptEditor(R.string.settings_scripts),
     SkillDetail(R.string.settings_skills),
     SkillEditor(R.string.settings_skills),
     SubAgents(R.string.settings_subagents),
@@ -199,6 +203,7 @@ private fun SettingsSection.depth(): Int = when (this) {
     // 同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
     SettingsSection.SkillEditor,
     SettingsSection.SubAgentEditor,
+    SettingsSection.ScriptEditor,
     SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
     SettingsSection.MemoryEditor,
@@ -418,6 +423,10 @@ fun SettingsScreen(
     var skillEditorReturn by remember { mutableStateOf(SettingsSection.Skills) }
     // 保存后要在详情页展示的技能名：列表刷新是异步的，先记名字等刷新完再换快照。
     var pendingSkillName by remember { mutableStateOf<String?>(null) }
+    // 脚本页：新建弹窗可见性、待删除的脚本名、以及文件编辑器当前打开的脚本名。
+    var showScriptNewDialog by remember { mutableStateOf(false) }
+    var scriptToDeleteName by remember { mutableStateOf<String?>(null) }
+    var scriptEditName by remember { mutableStateOf<String?>(null) }
     // 「添加技能」底部弹层：选择作用域后走手动新建 / 文件导入 / 压缩包导入。
     var showSkillAddSheet by remember { mutableStateOf(false) }
     var skillImportScope by remember { mutableStateOf(SkillScope.GLOBAL) }
@@ -464,6 +473,7 @@ fun SettingsScreen(
         SettingsSection.MemoryEditor -> SettingsSection.Memory
         SettingsSection.ScheduledTaskEditor -> SettingsSection.ScheduledTasks
         SettingsSection.SkillEditor -> skillEditorReturn
+        SettingsSection.ScriptEditor -> SettingsSection.Scripts
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
         SettingsSection.ContainerDownloads -> SettingsSection.Container
@@ -692,6 +702,22 @@ fun SettingsScreen(
                             section = SettingsSection.Memory
                         },
                         onNavigateBack = { section = SettingsSection.Memory }
+                    )
+                }
+            }
+
+            // 脚本正文用全局文件编辑器：它自己写盘、自己管未保存提示与返回键。
+            current == SettingsSection.ScriptEditor -> {
+                val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                scriptEditName?.let { name ->
+                    CodeEditorScreen(
+                        path = scriptsViewModel.containerPath(name),
+                        onBack = {
+                            // 编辑器直接写盘，回来重读列表反映描述与「上次运行」。
+                            scriptsViewModel.refresh()
+                            section = SettingsSection.Scripts
+                        }
                     )
                 }
             }
@@ -977,6 +1003,14 @@ fun SettingsScreen(
                                 modifier = Modifier.size(22.dp)
                             )
                         }
+                        SettingsSection.Scripts -> IconButton(onClick = { showScriptNewDialog = true }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.scripts_new_title),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         SettingsSection.ScheduledTasks -> IconButton(onClick = {
                             scheduleEditTarget = null
                             scheduleEditorSession++
@@ -1200,6 +1234,78 @@ fun SettingsScreen(
                         onDelete = { memory -> memoryViewModel.delete(memory.name, memory.scope) }
                     )
                 }
+                SettingsSection.Scripts -> {
+                    val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val scriptsState by scriptsViewModel.state.collectAsStateWithLifecycle()
+                    val scriptsError by scriptsViewModel.error.collectAsStateWithLifecycle()
+                    val pendingScriptOpen by scriptsViewModel.pendingOpen.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { scriptsViewModel.refresh() }
+                    // 新建脚本要先把文件写下去再打开编辑器，否则编辑器会读到「文件不存在」。
+                    LaunchedEffect(pendingScriptOpen) {
+                        pendingScriptOpen?.let { created ->
+                            scriptsViewModel.consumePendingOpen()
+                            scriptEditName = created
+                            section = SettingsSection.ScriptEditor
+                        }
+                    }
+                    ScriptsSection(
+                        state = scriptsState,
+                        error = scriptsError,
+                        onErrorConsumed = scriptsViewModel::consumeError,
+                        onOpenScript = { script ->
+                            scriptEditName = script.name
+                            section = SettingsSection.ScriptEditor
+                        },
+                        onRun = { script -> scriptsViewModel.run(script.name) },
+                        onDelete = { script -> scriptToDeleteName = script.name }
+                    )
+                    if (showScriptNewDialog) {
+                        val unavailable = scriptsState.unavailableReason
+                        if (unavailable == null) {
+                            ScriptNewDialog(
+                                onDismiss = { showScriptNewDialog = false },
+                                onConfirm = { name ->
+                                    showScriptNewDialog = false
+                                    scriptsViewModel.create(name)
+                                }
+                            )
+                        } else {
+                            // 当前执行环境不支持脚本：点「+」要给出原因，不能默默无反应
+                            AlertDialog(
+                                onDismissRequest = { showScriptNewDialog = false },
+                                title = { Text(stringResource(R.string.scripts_new_title)) },
+                                text = { Text(unavailable) },
+                                confirmButton = {
+                                    TextButton(onClick = { showScriptNewDialog = false }) {
+                                        Text(stringResource(R.string.common_got_it))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    scriptToDeleteName?.let { deleteTarget ->
+                        AlertDialog(
+                            onDismissRequest = { scriptToDeleteName = null },
+                            title = { Text(stringResource(R.string.scripts_delete_confirm_title)) },
+                            text = {
+                                Text(stringResource(R.string.scripts_delete_confirm_message, deleteTarget))
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    scriptToDeleteName = null
+                                    scriptsViewModel.delete(deleteTarget)
+                                }) { Text(stringResource(R.string.common_delete)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { scriptToDeleteName = null }) {
+                                    Text(stringResource(R.string.common_cancel))
+                                }
+                            }
+                        )
+                    }
+                }
+                SettingsSection.ScriptEditor -> Unit // 已在上方 early return 处理
                 SettingsSection.MemoryEditor -> Unit // 已在上方 early return 处理
                 SettingsSection.ScheduledTasks -> {
                     val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
@@ -1960,6 +2066,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.BookOpen,
                 title = stringResource(SettingsSection.Memory.titleRes),
                 onClick = { onOpen(SettingsSection.Memory) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Code,
+                title = stringResource(SettingsSection.Scripts.titleRes),
+                onClick = { onOpen(SettingsSection.Scripts) }
             )
         }
 
