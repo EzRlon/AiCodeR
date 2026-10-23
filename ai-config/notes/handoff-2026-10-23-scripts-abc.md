@@ -9,7 +9,10 @@
 用户脚本**切片 A（`run_script` 工具 + `ScriptRepository`/`ScriptRunner`）与切片 B（设置 → 脚本页 UI）已过两轮 qa 并逐条处置**；
 **切片 C（定时任务「运行脚本」动作）已过 qa 审查（BATCH，无 P0/P1，6 项 P2）并逐条处置完毕**
 （台账：`qa-sliceC-disposition-2026-10-23.md`），处置后 `:app:compileArmsoloReleaseKotlin` + 相关单测 57 用例 0 失败。
-**已按切片分三条提交**（`3754b66` A、`32b2b80` B、C 见本批最后一条提交，本笔记随 C 一起入库），**未 push**。
+**终态（本批收口）**：已提交 6 条（`3754b66` A、`32b2b80` B、`9051d0b` C、`f3c03c0` 交付物页口径修正、`061eb2b` 备注、`0e0b162` 发版前双审处置）；
+发版前双审（qa 含 R8 维度 + 性能/功耗）均无 P0/P1、12 项 P2 全处置；
+**正式 R8 包 versionCode 113 已构建交付**（`~/workspace/许愿码-正式版-20261023-vCode113-用户脚本+交付物修正+双审处置.apk`，SHA-256 `4a2adb50…`，签名与 v95 同钥匙可覆盖升级），**待真机验收**；**未 push**；
+全量单测 1338 用例 0 失败（1 跳过）。台账：`qa-prerelease-review-2026-10-23.md`、`perf-prerelease-review-2026-10-23.md`。
 
 - 仓库：`~/workspace/AiCode`（注意不是 `~/workspace`），分支 `dev`，本地 HEAD `2ce313c`，`origin/dev` 停在 `7d18b01`。
 - 工作区状态：22 个已跟踪文件被改 + 若干新增（`git status --short` 全览）；无他人改动。
