@@ -1185,7 +1185,7 @@ class AIAgentViewModel @Inject constructor(
         text.trim().replace('\n', ' ').take(160)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    // ── 交付物（左栏「交付物」页数据源：会话附件 + 工作区安装包）──────────
+    // ── 交付物（左栏「交付物」页数据源：当前工作区的会话附件）──────────
 
     /** 一条交付物：附件元数据 + 产生时间（用于倒序排列与分组）。 */
     data class DeliverableItem(
@@ -1212,7 +1212,13 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
-    /** 聚合：最近消息附件（跨会话） + 工作区安装包（去重、时间倒序）。 */
+    /**
+     * 聚合当前工作区的会话附件（AI 交付出来的文件与安装包），去重后按时间倒序。
+     *
+     * 只认会话附件：交付事件就是「AI 把它发进了会话」。工作区里存在同后缀文件并不等于交付——
+     * 构建中间产物、历史归档、往批留下的包都在工作区里，按后缀递归盲扫会把它们全当成交付物，
+     * 混进与本次开发无关的安装包。工作区产物的去处是「设置 → 存储 → 工作区产物」。
+     */
     private suspend fun loadDeliverables(): List<DeliverableItem> {
         val workspacePath = _currentWorkspace.value
         val byPath = LinkedHashMap<String, DeliverableItem>()
@@ -1228,40 +1234,6 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
         }.onFailure { FileLogger.w(TAG, "读取消息附件失败", it) }
-        runCatching {
-            val root = com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT
-            // listFilesRecursive 返回相对 root 的路径；组装成容器路径以与会话附件去重。
-            fileAccess.listFilesRecursive(root, 8)
-                .filter { rel ->
-                    val lower = rel.lowercase()
-                    (lower.endsWith(".apk") || lower.endsWith(".apks") || lower.endsWith(".xapk")) &&
-                        !rel.startsWith(".git/") && !rel.contains("/.git/") &&
-                        !rel.startsWith("node_modules/") && !rel.contains("/node_modules/")
-                }
-                .forEach { rel ->
-                    val fileName = rel.substringAfterLast('/')
-                    val parent = rel.substringBeforeLast('/', "")
-                    val parentDir = if (parent.isEmpty()) root else "$root/$parent"
-                    val entry = runCatching {
-                        fileAccess.listFiles(parentDir).firstOrNull { it.name == fileName }
-                    }.getOrNull()
-                    val containerPath = "$root/$rel"
-                    byPath.putIfAbsent(
-                        containerPath,
-                        DeliverableItem(
-                            com.aicode.feature.agent.presentation.AgentAttachment(
-                                fileName = fileName,
-                                containerPath = containerPath,
-                                localPath = "",
-                                mimeType = "application/vnd.android.package-archive",
-                                sizeBytes = entry?.size ?: 0,
-                                isImage = false
-                            ),
-                            entry?.lastModified ?: 0L
-                        )
-                    )
-                }
-        }.onFailure { FileLogger.w(TAG, "扫描工作区安装包失败", it) }
         return byPath.values.sortedByDescending { it.timestamp }
     }
 

@@ -319,7 +319,7 @@ fun ChatDrawerContent(
     onNavigateToBrowser: (() -> Unit)? = null,
     /** 标注中心入口：活标注/截屏标注/账本统一界面；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
-    /** 交付物列表（左栏第三页）：会话附件 + 工作区安装包，时间倒序。 */
+    /** 交付物列表（左栏第三页）：当前工作区的会话附件（AI 交付的文件与安装包），时间倒序。 */
     deliverables: List<AIAgentViewModel.DeliverableItem> = emptyList(),
     deliverablesScanning: Boolean = false,
     onRefreshDeliverables: () -> Unit = {},
@@ -1897,7 +1897,7 @@ private fun sessionGroupLabel(groupKey: String, anchorSession: ChatSession): Str
     ).format(Date(anchorSession.updatedAt))
 }
 
-/** 交付物页：会话附件 + 工作区安装包，按后缀分组、组内时间倒序；行点击弹出操作菜单。 */
+/** 交付物页：AI 发进会话的附件，按后缀分组、组内时间倒序；行点击弹出操作菜单。 */
 @Composable
 private fun DeliverablesTab(
     deliverables: List<AIAgentViewModel.DeliverableItem>,

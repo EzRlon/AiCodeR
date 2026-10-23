@@ -817,8 +817,8 @@
     <string name="drawer_tab_files">Files</string>
     <string name="drawer_tab_files_desc">Workspace files</string>
     <string name="drawer_tab_deliverables">Deliverables</string>
-    <string name="drawer_tab_deliverables_desc">APKs and files produced by AI: across sessions, grouped by time and type</string>
-    <string name="deliverables_empty">No deliverables yet: files produced by AI will appear here</string>
+    <string name="drawer_tab_deliverables_desc">APKs and files delivered by AI: across sessions, grouped by time and type</string>
+    <string name="deliverables_empty">No deliverables yet: packages and files that AI sends into the chat will appear here</string>
     <string name="deliverables_group_apk">APKs</string>
     <string name="deliverables_group_archive">Archives</string>
     <string name="deliverables_group_image">Images</string>

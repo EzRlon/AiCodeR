@@ -814,7 +814,7 @@
     <string name="drawer_tab_files_desc">工作区文件管理</string>
     <string name="drawer_tab_deliverables">交付物</string>
     <string name="drawer_tab_deliverables_desc">AI 交付的安装包与文件：跨会话聚合、按时间与类型分组</string>
-    <string name="deliverables_empty">还没有交付物：AI 生成的安装包与文件会出现在这里</string>
+    <string name="deliverables_empty">还没有交付物：AI 在会话里发给你的安装包与档案会出现在这里</string>
     <string name="deliverables_group_apk">安装包</string>
     <string name="deliverables_group_archive">压缩包</string>
     <string name="deliverables_group_image">图片</string>
