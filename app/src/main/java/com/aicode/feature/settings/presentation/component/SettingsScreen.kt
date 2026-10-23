@@ -725,6 +725,11 @@ fun SettingsScreen(
             current == SettingsSection.ScheduledTaskEditor -> {
                 val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
                     androidx.hilt.navigation.compose.hiltViewModel()
+                // 脚本型任务的候选脚本与「设置 → 脚本」页同一份清单
+                val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val scriptsState by scriptsViewModel.state.collectAsStateWithLifecycle()
+                val availableScriptNames = scriptsState.scripts.map { it.name }
                 val target = scheduleEditTarget
                 key(scheduleEditorSession) {
                     ScheduledTaskEditorScreen(
@@ -733,11 +738,14 @@ fun SettingsScreen(
                         initialCommand = target?.command.orEmpty(),
                         initialSchedule = target?.schedule ?: TaskSchedule(),
                         initialType = target?.type ?: com.aicode.feature.schedule.domain.ScheduledTaskType.COMMAND,
+                        initialScriptName = target?.scriptName.orEmpty(),
+                        availableScripts = availableScriptNames,
+                        scriptsUnavailableReason = scriptsState.unavailableReason,
                         initialAiContent = target?.let { t ->
                             if (t.type == com.aicode.feature.schedule.domain.ScheduledTaskType.AI_PLAN) t.planText else t.prompt
                         },
-                        onSave = { name, command, schedule ->
-                            scheduleViewModel.saveFromEditor(target, name, command, schedule)
+                        onSave = { name, command, scriptName, type, schedule ->
+                            scheduleViewModel.saveFromEditor(target, name, command, scriptName, type, schedule)
                             section = SettingsSection.ScheduledTasks
                         },
                         onNavigateBack = { section = SettingsSection.ScheduledTasks }

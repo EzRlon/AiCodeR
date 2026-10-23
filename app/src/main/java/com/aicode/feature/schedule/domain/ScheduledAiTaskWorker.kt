@@ -1,10 +1,6 @@
 package com.aicode.feature.schedule.domain
 
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.hilt.work.HiltWorker
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -12,7 +8,6 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.aicode.MainActivity
 import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
@@ -48,7 +43,8 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
     private val repository: ScheduledTaskRepository,
     private val runState: ScheduledAiRunState,
     private val viewModelProvider: ScheduledAgentViewModelProvider,
-    private val agentMessageDao: AgentMessageDao
+    private val agentMessageDao: AgentMessageDao,
+    private val notifier: ScheduledTaskNotifier
 ) : CoroutineWorker(context, workerParameters) {
 
     private companion object {
@@ -57,7 +53,6 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
         /** 单次执行上限：长任务到点结束并生成报告（决策 4，可配置化留 v1.5）。 */
         const val TIME_BOX_MS = 12 * 60 * 60 * 1000L
         const val MAX_OUTPUT_CHARS = 4_000
-        const val NOTIFICATION_ID_BASE = 3000
     }
 
     override suspend fun doWork(): Result {
@@ -77,7 +72,7 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
         val workspacePath = task.workspacePath?.takeIf { it.isNotBlank() }
         if (workspacePath == null) {
             repository.updateLastRun(taskId, exitCode = 1, output = applicationContext.getString(R.string.schedule_ai_no_workspace))
-            notifyCompletion(task, success = false)
+            notifier.notifyCompletion(task, success = false)
             return Result.success()
         }
 
@@ -124,12 +119,12 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
                 // 时间盒到（L2.3 三级之「人类专属边界」）：结束并生成报告
                 job.cancelAndJoin()
                 repository.updateLastRun(taskId, exitCode = 1, output = applicationContext.getString(R.string.schedule_ai_timebox_stopped))
-                notifyCompletion(task, success = false)
+                notifier.notifyCompletion(task, success = false)
             } else {
                 val ok = hosted.scheduledRunSucceeded(sid)
                 val summary = lastAssistantSnippet(sid)
                 repository.updateLastRun(taskId, exitCode = if (ok) 0 else 1, output = summary)
-                notifyCompletion(task, success = ok)
+                notifier.notifyCompletion(task, success = ok)
             }
         } catch (e: CancellationException) {
             // Worker 被系统停止（如 Android 12+ 对非前台 Worker 的执行上限）或进程回收：
@@ -151,7 +146,7 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
                 exitCode = 1,
                 output = (e.message ?: e.javaClass.simpleName).take(MAX_OUTPUT_CHARS)
             )
-            notifyCompletion(task, success = false)
+            notifier.notifyCompletion(task, success = false)
         } finally {
             runState.end(task.id)
             store.clear()
@@ -191,32 +186,4 @@ class ScheduledAiTaskWorker @AssistedInject constructor(
             ?.take(MAX_OUTPUT_CHARS)
             ?: ""
 
-    /** 任务完成/失败通知（渠道复用 agent_complete，点击进 App 看运行会话）。 */
-    private fun notifyCompletion(task: ScheduledTask, success: Boolean) {
-        val manager = NotificationManagerCompat.from(applicationContext)
-        if (!manager.areNotificationsEnabled()) return
-        val contentIntent = PendingIntent.getActivity(
-            applicationContext,
-            task.id.hashCode(),
-            Intent(applicationContext, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val text = applicationContext.getString(
-            if (success) R.string.schedule_notify_done else R.string.schedule_notify_failed,
-            task.name
-        )
-        val notification = NotificationCompat.Builder(applicationContext, "agent_complete")
-            .setSmallIcon(android.R.drawable.ic_menu_edit)
-            .setContentTitle(applicationContext.getString(R.string.schedule_title))
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(contentIntent)
-            .build()
-        runCatching { manager.notify(NOTIFICATION_ID_BASE + task.id.hashCode(), notification) }
-            .onFailure { FileLogger.w(TAG, "发送任务完成通知失败", it) }
-    }
 }

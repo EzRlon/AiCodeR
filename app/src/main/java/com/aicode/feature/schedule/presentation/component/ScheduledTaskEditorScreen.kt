@@ -66,13 +66,22 @@ internal fun ScheduledTaskEditorScreen(
     initialCommand: String,
     initialSchedule: TaskSchedule,
     initialType: ScheduledTaskType = ScheduledTaskType.COMMAND,
+    /** 脚本型任务的脚本名（含后缀）；新建时为空。 */
+    initialScriptName: String = "",
+    /** 脚本型任务可选的脚本（来自 `~/.aicode/scripts/`，与「设置 → 脚本」页同一目录）。 */
+    availableScripts: List<String> = emptyList(),
+    /** 当前执行环境不支持脚本时的原因；非空表示「运行脚本」类型不可选。 */
+    scriptsUnavailableReason: String? = null,
     /** AI 型任务的只读内容（prompt 或计划正文）；命令型忽略。 */
     initialAiContent: String? = null,
-    onSave: (name: String, command: String, schedule: TaskSchedule) -> Unit,
+    onSave: (name: String, command: String, scriptName: String, type: ScheduledTaskType, schedule: TaskSchedule) -> Unit,
     onNavigateBack: () -> Unit
 ) {
     var name by rememberSaveable { mutableStateOf(initialName) }
     var command by rememberSaveable { mutableStateOf(initialCommand) }
+    var scriptName by rememberSaveable { mutableStateOf(initialScriptName) }
+    // 新建时可选容器命令 / 运行脚本；编辑既有任务时类型固定
+    var type by rememberSaveable { mutableStateOf(initialType) }
     var mode by rememberSaveable {
         // 待排期任务进入编辑页：默认预选「每天」，保存时即落定
         mutableStateOf(if (initialSchedule.mode == ScheduleMode.UNSET) ScheduleMode.DAILY else initialSchedule.mode)
@@ -97,7 +106,11 @@ internal fun ScheduledTaskEditorScreen(
         ScheduleMode.DAILY -> parsedTime != null
         ScheduleMode.INTERVAL -> interval != null && interval >= TaskSchedule.MIN_INTERVAL_MINUTES
         ScheduleMode.UNSET -> false
-    } && (initialType != ScheduledTaskType.COMMAND || command.isNotBlank())
+    } && when (type) {
+        ScheduledTaskType.COMMAND -> command.isNotBlank()
+        ScheduledTaskType.SCRIPT -> scriptName.isNotBlank()
+        else -> true
+    }
 
     BackHandler { onNavigateBack() }
 
@@ -141,7 +154,7 @@ internal fun ScheduledTaskEditorScreen(
                                 )
                                 ScheduleMode.UNSET -> initialSchedule
                             }
-                            onSave(name.trim(), command.trim(), schedule)
+                            onSave(name.trim(), command.trim(), scriptName.trim(), type, schedule)
                         }
                     ) {
                         Icon(
@@ -178,8 +191,34 @@ internal fun ScheduledTaskEditorScreen(
                         placeholder = stringResource(R.string.schedule_field_name_placeholder),
                         singleLine = true
                     )
-                    if (initialType == ScheduledTaskType.COMMAND) {
-                        AppTextField(
+                    // 只在新建「可在本页创建的类型」（容器命令 / 运行脚本）时给类型选择；
+                    // AI 型任务从会话入口创建，编辑既有任务时类型固定。
+                    val concreteType = type == ScheduledTaskType.COMMAND || type == ScheduledTaskType.SCRIPT
+                    if (isNew && concreteType) {
+                        Text(
+                            text = stringResource(R.string.schedule_field_type),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                        ) {
+                            FilterChip(
+                                selected = type == ScheduledTaskType.COMMAND,
+                                onClick = { type = ScheduledTaskType.COMMAND },
+                                label = { Text(stringResource(R.string.schedule_type_command)) }
+                            )
+                            FilterChip(
+                                selected = type == ScheduledTaskType.SCRIPT,
+                                onClick = { type = ScheduledTaskType.SCRIPT },
+                                enabled = scriptsUnavailableReason == null,
+                                label = { Text(stringResource(R.string.schedule_type_script)) }
+                            )
+                        }
+                    }
+                    when (type) {
+                        ScheduledTaskType.COMMAND -> AppTextField(
                             value = command,
                             onValueChange = { command = it },
                             label = stringResource(R.string.schedule_field_command),
@@ -187,27 +226,57 @@ internal fun ScheduledTaskEditorScreen(
                             singleLine = false,
                             minLines = 3
                         )
-                    } else {
-                        // AI 型任务：内容在会话入口创建，此处只读展示（改内容请新建任务）
-                        Text(
-                            text = stringResource(R.string.schedule_ai_content_readonly),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Surface(
-                            shape = RoundedCornerShape(Radius.sm),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                        ) {
+                        ScheduledTaskType.SCRIPT -> {
                             Text(
-                                text = initialAiContent.orEmpty(),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 6,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(Spacing.sm)
+                                text = stringResource(R.string.schedule_field_script),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            if (scriptsUnavailableReason != null) {
+                                // 环境不支持（如远程 SSH 模式）：直接说原因，别把人引到「去脚本页新建」
+                                Text(
+                                    text = scriptsUnavailableReason,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else if (availableScripts.isEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.schedule_no_scripts),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                availableScripts.forEach { candidate ->
+                                    FilterChip(
+                                        selected = candidate == scriptName,
+                                        onClick = { scriptName = candidate },
+                                        label = { Text(candidate) }
+                                    )
+                                }
+                            }
+                        }
+                        else -> {
+                            // AI 型任务：内容在会话入口创建，此处只读展示（改内容请新建任务）
+                            Text(
+                                text = stringResource(R.string.schedule_ai_content_readonly),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(Radius.sm),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ) {
+                                Text(
+                                    text = initialAiContent.orEmpty(),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 6,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(Spacing.sm)
+                                )
+                            }
                         }
                     }
                 }

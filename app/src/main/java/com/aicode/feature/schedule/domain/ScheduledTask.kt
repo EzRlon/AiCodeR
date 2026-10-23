@@ -30,9 +30,9 @@ data class TaskSchedule(
     }
 }
 
-/** 任务类型：容器命令（E5 存量）/ AI 定时任务 / 定时 Plan（长任务）。 */
+/** 任务类型：容器命令（E5 存量）/ AI 定时任务 / 定时 Plan（长任务）/ 运行用户脚本。 */
 @Serializable
-enum class ScheduledTaskType { COMMAND, AI_TASK, AI_PLAN }
+enum class ScheduledTaskType { COMMAND, AI_TASK, AI_PLAN, SCRIPT }
 
 /**
  * 无人值守运行的预授权类别（v1 类别级粒度）：
@@ -66,6 +66,8 @@ data class ScheduledTask(
     val authCategories: List<ScheduledAuthCategory> = emptyList(),
     /** 创建时的工作区（AI 型运行时在工作区内开新会话）。 */
     val workspacePath: String? = null,
+    /** 运行用户脚本型（SCRIPT）的脚本名（含后缀），存于 `~/.aicode/scripts/`。 */
+    val scriptName: String? = null,
     /** 上次执行时间（epoch millis）。 */
     val lastRunAt: Long? = null,
     /** 上次退出码（超时/异常为 null）；AI 型 0=完成 1=失败。 */
@@ -76,7 +78,8 @@ data class ScheduledTask(
     val schedule: TaskSchedule = TaskSchedule()
 ) {
     /** 是否为 AI 驱动型（AI_TASK / AI_PLAN）。 */
-    val isAiType: Boolean get() = type != ScheduledTaskType.COMMAND
+    val isAiType: Boolean
+        get() = type == ScheduledTaskType.AI_TASK || type == ScheduledTaskType.AI_PLAN
 
     /** 运行会话模式（解析失败回落 BUILD）。 */
     val effectiveRunMode: String

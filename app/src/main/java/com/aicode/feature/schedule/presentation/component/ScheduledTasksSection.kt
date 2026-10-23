@@ -138,7 +138,7 @@ private fun TaskCard(
                     )
                 }
                 Text(
-                    text = subtitle,
+                    text = task.scriptName?.let { "$subtitle · $it" } ?: subtitle,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -156,16 +156,18 @@ private fun TaskCard(
     }
 }
 
-/** 任务类型徽标：命令 / AI / AI·计划（共用列表内区分行内类型）。 */
+/** 任务类型徽标：命令 / 脚本 / AI / AI·计划（共用列表内区分行内类型）。 */
 @Composable
 private fun TaskTypeBadge(type: ScheduledTaskType) {
     val labelRes = when (type) {
         ScheduledTaskType.COMMAND -> R.string.schedule_badge_command
+        ScheduledTaskType.SCRIPT -> R.string.schedule_badge_script
         ScheduledTaskType.AI_TASK -> R.string.schedule_badge_ai
         ScheduledTaskType.AI_PLAN -> R.string.schedule_badge_plan
     }
     val color = when (type) {
         ScheduledTaskType.COMMAND -> MaterialTheme.colorScheme.onSurfaceVariant
+        ScheduledTaskType.SCRIPT -> MaterialTheme.colorScheme.secondary
         ScheduledTaskType.AI_TASK -> MaterialTheme.colorScheme.primary
         ScheduledTaskType.AI_PLAN -> MaterialTheme.colorScheme.tertiary
     }
@@ -199,4 +201,15 @@ private fun LastRunText(task: ScheduledTask) {
         maxLines = 1,
         overflow = TextOverflow.Ellipsis
     )
+    // AI 型任务能进运行会话回看失败原因，命令/脚本型没有这个入口，失败输出摆在这里才可诊断
+    val failedOutput = task.lastOutput?.trim().orEmpty()
+    if (!task.isAiType && task.lastExitCode != null && task.lastExitCode != 0 && failedOutput.isNotEmpty()) {
+        Text(
+            text = failedOutput,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }

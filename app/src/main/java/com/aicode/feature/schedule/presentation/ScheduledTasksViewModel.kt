@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.feature.schedule.data.ScheduledTaskRepository
 import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.schedule.domain.ScheduledTaskType
 import com.aicode.feature.schedule.domain.TaskScheduling
 import com.aicode.feature.schedule.domain.TaskSchedule
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -66,11 +67,18 @@ class ScheduledTasksViewModel @Inject constructor(
 
     fun setEnabled(task: ScheduledTask, enabled: Boolean) = save(task.copy(enabled = enabled))
 
-    /** 编辑器保存：[existing] 为 null 时新建（生成 id），否则在原任务上更新名称/命令/计划。 */
+    /**
+     * 编辑器保存：[existing] 为 null 时新建（生成 id），否则在原任务上更新名称/命令/计划。
+     *
+     * [type] 只在新建时生效：既有任务的类型不可改（编辑器在编辑既有任务时不显示类型选择），
+     * 未在编辑器暴露的字段一律保留原值。
+     */
     fun saveFromEditor(
         existing: ScheduledTask?,
         name: String,
         command: String,
+        scriptName: String,
+        type: ScheduledTaskType,
         schedule: TaskSchedule
     ) {
         val task = if (existing != null) {
@@ -78,6 +86,8 @@ class ScheduledTasksViewModel @Inject constructor(
             existing.copy(
                 name = name,
                 command = if (existing.isAiType) existing.command else command,
+                // 脚本名只在脚本型任务上可编辑，其它类型保持原值
+                scriptName = if (existing.type == ScheduledTaskType.SCRIPT) scriptName else existing.scriptName,
                 schedule = schedule
             )
         } else {
@@ -85,6 +95,8 @@ class ScheduledTasksViewModel @Inject constructor(
                 id = UUID.randomUUID().toString(),
                 name = name,
                 command = command,
+                scriptName = scriptName.takeIf { type == ScheduledTaskType.SCRIPT },
+                type = type,
                 schedule = schedule
             )
         }

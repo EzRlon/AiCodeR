@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 /**
  * 定时任务的统一调度入口：按任务类型与触发计划分派到对应 Worker。
  *
- * - [ScheduledTaskType.COMMAND] → [ScheduledTaskWorker]（容器命令）
+ * - 容器命令 / 运行用户脚本型（[ScheduledTaskType.COMMAND] / [ScheduledTaskType.SCRIPT]）→ [ScheduledTaskWorker]
  * - AI 型 → [ScheduledAiTaskWorker]（驱动一次 AI 会话）
  * - [ScheduleMode.UNSET]（待排期）与已过 [TaskSchedule.endAt] 的任务不入队；
  * - ONCE 用一次性请求（执行后由 Worker 自动禁用），其余用周期请求。
@@ -46,7 +46,7 @@ object TaskScheduling {
                 // 已过时刻不排队：避免保存历史时间后立即触发（编辑器侧已校验未来时刻）
                 if (startAt <= System.currentTimeMillis()) return
                 val delay = startAt - System.currentTimeMillis()
-                val request = if (task.type == ScheduledTaskType.COMMAND) {
+                val request = if (!task.isAiType) {
                     OneTimeWorkRequestBuilder<ScheduledTaskWorker>()
                         .setInitialDelay(delay, TimeUnit.MILLISECONDS)
                         .setInputData(input)
@@ -62,7 +62,7 @@ object TaskScheduling {
 
             ScheduleMode.DAILY -> {
                 val delay = delayToNextDaily(task.schedule.dailyHour, task.schedule.dailyMinute)
-                if (task.type == ScheduledTaskType.COMMAND) {
+                if (!task.isAiType) {
                     val request = PeriodicWorkRequestBuilder<ScheduledTaskWorker>(24, TimeUnit.HOURS)
                     enqueuePeriodic(wm, uniqueName(task.id), request, delay, input)
                 } else {
@@ -74,7 +74,7 @@ object TaskScheduling {
             ScheduleMode.INTERVAL -> {
                 val minutes = task.schedule.intervalMinutes
                     .coerceAtLeast(TaskSchedule.MIN_INTERVAL_MINUTES).toLong()
-                if (task.type == ScheduledTaskType.COMMAND) {
+                if (!task.isAiType) {
                     val request = PeriodicWorkRequestBuilder<ScheduledTaskWorker>(minutes, TimeUnit.MINUTES)
                     enqueuePeriodic(wm, uniqueName(task.id), request, null, input)
                 } else {

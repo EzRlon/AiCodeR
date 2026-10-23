@@ -59,7 +59,10 @@
 
 ## 会话交接
 
-- **最新交接（2026-10-20 发版终态）**：五批次（A 压缩/B Codex 自愈/C 存储清理/D 动画/E multi-llm）+ FTS 检索 + 悬浮球 mini 会话**全部已提交并推送**（`677966e` 等五批提交）；发版前三路审查（qa/屎山/性能）完成，P1×2 已修复入库（ad92f2c）；正式包 **versionCode 85** 已交付并真机验收通过（环境一键安装 ✓、Codex 启动 ✓）；README 重写为与上游功能区别导向（反代 MCP 介绍已按用户要求移除）；签名密钥备份与 AI 协作资产已入库（`backup/`、`ai-config/`）。
+- **最新交接（2026-10-23：用户脚本三切片 A/B/C）**：见 `ai-config/notes/handoff-2026-10-23-scripts-abc.md`。
+  一句话状态：A（`run_script` 工具 + 脚本仓库）、B（设置 → 脚本页）、C（定时任务「运行脚本」）均已过 qa 并逐条处置（A/B 各两轮、C 一轮 BATCH，均无 P0/P1），已按切片分三条提交（`3754b66` A、`32b2b80` B、最新一条 C），**尚未 push**；下一步＝真机验收（交接 §五 清单 + `qa-sliceC-disposition-2026-10-23.md` §四 新增 4 点）；出正式包前先跑 qa + optimizer 双审与 R8 维度并核对 versionCode。
+  本批笔记：`handoff-2026-10-23-scripts-abc.md`（权威）、`handoff-2026-10-23-scripts-sliceB.md`（B 细节 + C 计划原文）、`handoff-2026-10-23-scripts-sliceA.md`（A 设计决策）、`qa-sliceA-disposition-2026-10-23.md`、`qa-sliceB-disposition-2026-10-23.md`、`qa-sliceC-disposition-2026-10-23.md`、`deferred-queue-2026-10-23.md`。
+- **上一版交接（2026-10-20 发版终态）**：五批次（A 压缩/B Codex 自愈/C 存储清理/D 动画/E multi-llm）+ FTS 检索 + 悬浮球 mini 会话**全部已提交并推送**（`677966e` 等五批提交）；发版前三路审查（qa/屎山/性能）完成，P1×2 已修复入库（ad92f2c）；正式包 **versionCode 85** 已交付并真机验收通过（环境一键安装 ✓、Codex 启动 ✓）；README 重写为与上游功能区别导向（反代 MCP 介绍已按用户要求移除）；签名密钥备份与 AI 协作资产已入库（`backup/`、`ai-config/`）。
 - **发版后队列**：性能优化 8 项 + 架构重构 10 项 + P2 记录 5 项，全部带行号归档于 `ai-config/notes/pre-release-audit-2026-10-20.md`，按该笔记优先级执行。
 - 历史交接档案（2026-10-13 至 10-19）在 `ai-config/notes/`（原工作区 `.aicode/notes/`），按需读取。
 
