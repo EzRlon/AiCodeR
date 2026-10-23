@@ -25,7 +25,7 @@
 
 ## 三、新会话第一件事（按顺序）
 
-1. **处置会话回收站的 qa 报告**：qa 子代理 `c96242d0-df70-4fe3-9744-b79b707a4117` 的复审（本批 L3 按路由派发）在上一会话结束时**尚未回读**。
+1. **处置会话回收站的 qa 报告**：qa 子代理 `c96242d0-df70-4fe3-9744-b79b707a4117` 的复审（本批 L3 按路由派发）在上一会话结束时**仍在运行/未回读**（`task(action="list")` 可见其 state=running）。
    用 `task(action="read", id="c96242d0-df70-4fe3-9744-b79b707a4117")` 取报告；若该子会话已不可用，就**重新派一个 qa**（prompt 要点：只读、禁自跑 Gradle、
    范围 `git show --stat c77805a`、重点核「软删可见性是否封住所有查询」「迁移 67→68 双路径」「语义分流四处入口」「UI 空态与入口可达性」「备份 DTO 是否带 deletedAt」）。
    处置结果写台账 `ai-config/notes/qa-session-trash-disposition-2026-10-23.md`（纪律：报告不得无响应归档）。
@@ -75,7 +75,7 @@ JAVA_HOME=/usr/lib/jvm/java-17-openjdk ANDROID_HOME=/root/android/sdk LD_PRELOAD
 - 容器内**无 ripgrep**（`search` 工具不可用）：用 `grep -rn`；busybox 的 grep **不支持 `--include`**；**别对 `app/src/main/assets` 全库 grep**（min.js 会淹没输出）。
 - 单测里 mock `CommandEngine` 需同时桩 `notReadyHint()` 与 `defaultShell()`（严格 mock 未桩即抛）。
 - 构建中途被杀后重跑要带 `--no-build-cache`（避免 KSP 生成物被污染的坑）。
-- `versionCode = gitCommitCount() + 1`（当前提交数 111 → 下一个正式包会递增，不会与已交付的 113 撞号）。
+- `versionCode = gitCommitCount() + 1`：当前提交数 **115 → 下一个正式包 versionCode 116**，高于已交付的 113，不会撞号（每次提交后自动递增，无需手改）。
 
 ## 七、纪律（必须遵守）
 
