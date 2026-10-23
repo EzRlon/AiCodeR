@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.schedule.domain.ScheduledTask
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -23,23 +24,30 @@ private val Context.scheduleDataStore by preferencesDataStore(
  * 定时任务的持久化：整份任务列表以 JSON 存在 DataStore 里。
  *
  * 任务数量少、读写整份比拆 key 简单，故用单个字符串键。字段增删靠 [Json] 的
- * `ignoreUnknownKeys` 容忍旧数据，缺失字段回落到默认值。
+ * `ignoreUnknownKeys` 容忍旧数据，缺失字段回落到默认值，未知枚举值由 `coerceInputValues` 兜底。
+ *
+ * 三个开关都要在：整份列表是一个字符串，任一条目解码失败就会让全部任务消失，
+ * 并在下一次写回时被永久清掉。
  */
 @Singleton
 class ScheduledTaskRepository @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) {
     private companion object {
+        const val TAG = "ScheduledTaskRepository"
         val TASKS_KEY = stringPreferencesKey("scheduled_tasks_json")
         val json = Json {
             ignoreUnknownKeys = true
+            coerceInputValues = true
             encodeDefaults = true
         }
     }
 
     val tasksFlow: Flow<List<ScheduledTask>> = context.scheduleDataStore.data.map { prefs ->
         prefs[TASKS_KEY]?.let { raw ->
-            runCatching { json.decodeFromString<List<ScheduledTask>>(raw) }.getOrDefault(emptyList())
+            runCatching { json.decodeFromString<List<ScheduledTask>>(raw) }
+                .onFailure { FileLogger.w(TAG, "解析定时任务失败，按空列表继续", it) }
+                .getOrDefault(emptyList())
         } ?: emptyList()
     }
 
@@ -120,6 +128,9 @@ class ScheduledTaskRepository @Inject constructor(
     }
 
     private fun decode(raw: String?): List<ScheduledTask> =
-        raw?.let { runCatching { json.decodeFromString<List<ScheduledTask>>(it) }.getOrDefault(emptyList()) }
-            ?: emptyList()
+        raw?.let {
+            runCatching { json.decodeFromString<List<ScheduledTask>>(it) }
+                .onFailure { e -> FileLogger.w(TAG, "解析定时任务失败，按空列表继续", e) }
+                .getOrDefault(emptyList())
+        } ?: emptyList()
 }

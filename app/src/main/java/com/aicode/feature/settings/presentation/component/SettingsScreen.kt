@@ -729,7 +729,8 @@ fun SettingsScreen(
                 val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
                     androidx.hilt.navigation.compose.hiltViewModel()
                 val scriptsState by scriptsViewModel.state.collectAsStateWithLifecycle()
-                val availableScriptNames = scriptsState.scripts.map { it.name }
+                // 清单不变时保持同一实例，避免编辑器子树因参数变化多余重组
+                val availableScriptNames = remember(scriptsState.scripts) { scriptsState.scripts.map { it.name } }
                 val target = scheduleEditTarget
                 key(scheduleEditorSession) {
                     ScheduledTaskEditorScreen(

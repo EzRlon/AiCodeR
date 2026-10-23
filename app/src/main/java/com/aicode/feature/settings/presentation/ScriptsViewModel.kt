@@ -8,6 +8,7 @@ import com.aicode.feature.agent.domain.script.ScriptRunner
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +61,8 @@ class ScriptsViewModel @Inject constructor(
     private val _pendingOpen = MutableStateFlow<String?>(null)
     val pendingOpen: StateFlow<String?> = _pendingOpen.asStateFlow()
 
+    private var refreshJob: Job? = null
+
     init {
         refresh()
     }
@@ -81,7 +84,10 @@ class ScriptsViewModel @Inject constructor(
             _state.value = ScriptsUiState(unavailableReason = reason, loading = false)
             return
         }
-        viewModelScope.launch {
+        // 去重：进页与「从编辑器返回」各自会触发一次，重叠时后到的直接合并掉，
+        // 不然每次进页都白读一遍索引 + 逐文件读首行注释。
+        if (refreshJob?.isActive == true) return
+        refreshJob = viewModelScope.launch {
             val scripts = withContext(Dispatchers.IO) { repository.list() }
             _state.update { state ->
                 // 丢掉已不在清单里的运行结果：脚本可能被 AI 或定时任务删掉，
@@ -125,7 +131,8 @@ class ScriptsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _state.update { it.copy(runs = it.runs + (name to ScriptRunState(running = true))) }
-            val target = withContext(Dispatchers.IO) { runner.target(name) }
+            // 解析也包在兜底内：解析抛异常不能冒泡出 viewModelScope（会崩进程）
+            val target = withContext(Dispatchers.IO) { runCatching { runner.target(name) }.getOrNull() }
             val result = target?.let { runCatching { runner.run(it, RUN_TIMEOUT_MS) }.getOrNull() }
             if (target == null || result == null) {
                 _state.update { it.copy(runs = it.runs - name) }

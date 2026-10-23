@@ -202,14 +202,17 @@ private fun LastRunText(task: ScheduledTask) {
         overflow = TextOverflow.Ellipsis
     )
     // AI 型任务能进运行会话回看失败原因，命令/脚本型没有这个入口，失败输出摆在这里才可诊断
-    val failedOutput = task.lastOutput?.trim().orEmpty()
-    if (!task.isAiType && task.lastExitCode != null && task.lastExitCode != 0 && failedOutput.isNotEmpty()) {
-        Text(
-            text = failedOutput,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+    if (!task.isAiType && task.lastExitCode != null && task.lastExitCode != 0) {
+        // 落库输出可达 4000 字符：只在失败行算，且按内容缓存，避免每次重组重算与拷贝
+        val failedOutput = remember(task.lastOutput) { task.lastOutput?.trim().orEmpty() }
+        if (failedOutput.isNotEmpty()) {
+            Text(
+                text = failedOutput,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

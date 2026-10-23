@@ -114,6 +114,15 @@ class ScriptRepositoryTest {
     }
 
     @Test
+    fun list_skipsFilesWithInvalidNames() {
+        writeScript("cleanup.sh", "# 清理\necho ok\n")
+        // 容器终端里手工建的文件可能不合规（带空格）：列出来也按名解析不到，不该呈现
+        writeScript("my script.sh", "# 空格名\necho ok\n")
+
+        assertEquals(listOf("cleanup.sh"), repository.list().map { it.name })
+    }
+
+    @Test
     fun save_thenResolveAndRecordRun_roundTripsThroughIndex() {
         val saved = repository.save("cleanup.sh", "#!/bin/sh\n# 清理\necho done\n")
 

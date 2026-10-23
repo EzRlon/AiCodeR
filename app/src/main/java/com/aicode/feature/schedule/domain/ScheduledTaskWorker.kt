@@ -97,7 +97,12 @@ class ScheduledTaskWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "ScheduledTaskWorker"
         private const val COMMAND_TIMEOUT_MS = 5 * 60 * 1000L
-        private const val SCRIPT_TIMEOUT_MS = 10 * 60 * 1000L
+        /**
+         * 脚本单次执行上限：与命令型一致，且必须留在 WorkManager 对普通（非前台）Worker 的 10 分钟
+         * 上限内——否则挂死的脚本会先被系统停掉 Worker，这一次既不落「上次运行」也不发失败通知。
+         * 压到 5 分钟，让引擎 watchdog 收抬（落库 + 失败通知）。
+         */
+        private const val SCRIPT_TIMEOUT_MS = 5 * 60 * 1000L
         private const val MAX_OUTPUT_CHARS = 4_000
         private const val FAILED_EXIT = 1
         private const val ENDED_SKIPPED_TEXT = "[已过结束时间，跳过执行]"

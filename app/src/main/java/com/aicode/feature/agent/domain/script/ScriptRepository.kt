@@ -56,11 +56,14 @@ class ScriptRepository @Inject constructor(
         return "$CONTAINER_SCRIPTS_DIR/$name"
     }
 
-    /** 列出可运行脚本，按名排序；隐藏文件（如索引）与非脚本文件忽略。 */
+    /**
+     * 列出可运行脚本，按名排序；隐藏文件（如索引）、非脚本文件、名称不合规（如带空格）的文件忽略——
+     * 后者能列出来但按名解析必失败（[findScript] 过 [isValidName]），呈现出来只会变成「可见但跑不了」。
+     */
     fun list(): List<ScriptInfo> {
         val runs = readIndex().runs
         return dir().listFiles().orEmpty()
-            .filter { it.isFile && !it.name.startsWith(".") }
+            .filter { it.isFile && isValidName(it.name) }
             .mapNotNull { file ->
                 val interpreter = resolveInterpreter(file.name) ?: return@mapNotNull null
                 val run = runs[file.name]

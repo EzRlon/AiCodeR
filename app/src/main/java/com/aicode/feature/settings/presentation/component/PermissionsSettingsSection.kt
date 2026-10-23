@@ -94,7 +94,7 @@ internal fun PermissionsSection(
     onApplyProfile: (String) -> Unit,
     onJumpToSession: ((String) -> Unit)? = null
 ) {
-    // 工具规则默认折叠（22 项长列表）；其余区默认展开。
+    // 工具规则默认折叠（条目较多的长列表）；其余区默认展开。
     var toolsExpanded by rememberSaveable { mutableStateOf(false) }
     var profilesExpanded by rememberSaveable { mutableStateOf(true) }
     var projectExpanded by rememberSaveable { mutableStateOf(true) }

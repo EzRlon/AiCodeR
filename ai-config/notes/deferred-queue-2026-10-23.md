@@ -26,5 +26,5 @@
 ## 勘误与注意
 
 - 脚本系统切片 A 曾在交接笔记 §二/§四 被记为「已做」，实测未做（无 `tool/script/` 目录、全库无 `run_script`）；A/B/C 均从零开始。**2026-10-23 进展**：A/B/C 三切片的代码 + qa 审查 + 逐条处置全部完成，已按切片分三条提交（`3754b66` / `32b2b80` / `9051d0b`，未 push）；待发版前双审（qa + 性能/R8 维度）与真机验收。切片 A 的 I/O 层仍用宿主 `java.io.File`，远程 SSH 模式已改为显式拒绝（真正支持排期见 `qa-sliceA-disposition-2026-10-23.md` §三-1）。
-- 出正式包前先处理 versionCode（先 commit 或把 `gitCommitCount() + 1` 调为 +2），避免与 v95 撞号。→ **2026-10-23 已核实**：三条提交后 commit 数 109，`gitCommitCount() + 1` = **versionCode 110**，高于已交付的 85 与笔记提到的 v95，**无撞号**。
+- 出正式包前先处理 versionCode（先 commit 或把 `gitCommitCount() + 1` 调为 +2），避免与 v95 撞号。→ **2026-10-23 已核实**：五条提交后 commit 数 111，`gitCommitCount() + 1` = **versionCode 112**，高于已交付的 v95，**无撞号**。
 - 脚本系统规划原文见 `user-scripts-plan.md`（含二期商店脚本 tab、明确不做的边界：脚本一律容器内执行，不引入本体 JS 引擎）。
