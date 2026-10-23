@@ -279,7 +279,8 @@ class StorageViewModel @Inject constructor(
         sessionKeys.forEach { key ->
             val sessionId = key.removePrefix(StorageDetailKey.CHAT_SESSION_PREFIX)
             runCatching {
-                sessionUseCase.deleteSession(sessionId).forEach { child ->
+                // 存储页这条通道的目的是腾空间，走彻底删除：软删会保留消息，腾不出空间
+                sessionUseCase.purgeSession(sessionId).forEach { child ->
                     checkpointManager.clearSessionCheckpoints(child)
                 }
                 freed += _state.value.sessionSizes[key] ?: 0L

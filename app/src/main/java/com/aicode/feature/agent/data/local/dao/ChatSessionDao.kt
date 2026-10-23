@@ -12,29 +12,62 @@ interface ChatSessionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(session: ChatSessionEntity)
 
-    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath ORDER BY isPinned DESC, updatedAt DESC")
+    // 会话可见性一律排除回收站（deletedAt IS NULL）：软删只改标记行，查询不过滤就等于没删。
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NULL ORDER BY isPinned DESC, updatedAt DESC")
     fun getAllSessionsByWorkspace(workspacePath: String): Flow<List<ChatSessionEntity>>
 
-    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL ORDER BY isPinned DESC, updatedAt DESC")
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL AND deletedAt IS NULL ORDER BY isPinned DESC, updatedAt DESC")
     fun getRootSessionsByWorkspace(workspacePath: String): Flow<List<ChatSessionEntity>>
 
-    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath ORDER BY isPinned DESC, updatedAt DESC")
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NULL ORDER BY isPinned DESC, updatedAt DESC")
     suspend fun getAllSessionsByWorkspaceOnce(workspacePath: String): List<ChatSessionEntity>
 
-    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL ORDER BY isPinned DESC, updatedAt DESC")
+    /** 含回收站的工作区会话（整个工作区被删除时用，确保软删会话的消息也被清掉）。 */
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath ORDER BY isPinned DESC, updatedAt DESC")
+    suspend fun getAllSessionsByWorkspaceOnceIncludingTrashed(workspacePath: String): List<ChatSessionEntity>
+
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL AND deletedAt IS NULL ORDER BY isPinned DESC, updatedAt DESC")
     suspend fun getRootSessionsByWorkspaceOnce(workspacePath: String): List<ChatSessionEntity>
 
     /** 最近更新的根会话（忽略置顶，仅按 updatedAt 降序），供启动时「打开最近会话」。 */
-    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL ORDER BY updatedAt DESC LIMIT 1")
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT 1")
     suspend fun getLatestRootSessionByWorkspace(workspacePath: String): ChatSessionEntity?
 
     /** 指定父会话的全部子会话（子代理），按最近更新降序。 */
-    @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId AND deletedAt IS NULL ORDER BY updatedAt DESC")
     fun getSubSessionsByParent(parentId: String): Flow<List<ChatSessionEntity>>
 
     /** 指定父会话的全部子会话（子代理），一次性查询。 */
-    @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId AND deletedAt IS NULL ORDER BY updatedAt DESC")
     suspend fun getSubSessionsByParentOnce(parentId: String): List<ChatSessionEntity>
+
+    /** 含回收站的子会话：恢复/彻底删除/软删整组时要能看到已被软删的子会话。 */
+    @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId")
+    suspend fun getSubSessionsByParentOnceIncludingTrashed(parentId: String): List<ChatSessionEntity>
+
+    /** 回收站：该工作区已软删的会话，按删除时间倒序。 */
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    fun getTrashedSessionsByWorkspace(workspacePath: String): Flow<List<ChatSessionEntity>>
+
+    /** 回收站（一次性读，供清空与清理）。 */
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    suspend fun getTrashedSessionsByWorkspaceOnce(workspacePath: String): List<ChatSessionEntity>
+
+    /** 回收站是否存在条目（侧栏入口按需显示）。 */
+    @Query("SELECT COUNT(*) FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL")
+    fun countTrashedByWorkspace(workspacePath: String): Flow<Int>
+
+    /** 软删（入回收站）：调用方负责把同一组的会话 id（含子代理会话）一并传入。 */
+    @Query("UPDATE chat_sessions SET deletedAt = :deletedAt WHERE id IN (:ids)")
+    suspend fun markDeleted(ids: List<String>, deletedAt: Long)
+
+    /** 从回收站恢复。 */
+    @Query("UPDATE chat_sessions SET deletedAt = NULL WHERE id IN (:ids)")
+    suspend fun restoreFromTrash(ids: List<String>)
+
+    /** 已逾期（deletedAt <= threshold）的回收站会话，供彻底清除。 */
+    @Query("SELECT * FROM chat_sessions WHERE deletedAt IS NOT NULL AND deletedAt <= :threshold")
+    suspend fun getExpiredTrashed(threshold: Long): List<ChatSessionEntity>
 
     @Query("SELECT * FROM chat_sessions")
     suspend fun getAllOnce(): List<ChatSessionEntity>
@@ -64,6 +97,10 @@ interface ChatSessionDao {
 
     @Query("DELETE FROM chat_sessions WHERE id = :id")
     suspend fun delete(id: String)
+
+    /** 彻底删除（回收站清除 / 逾期清理），按 id 批量。 */
+    @Query("DELETE FROM chat_sessions WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 
     @Query("DELETE FROM chat_sessions WHERE workspacePath = :workspacePath")
     suspend fun deleteByWorkspace(workspacePath: String)

@@ -114,6 +114,7 @@ interface AgentMessageDao {
         JOIN chat_sessions s ON s.id = m.sessionId
         WHERE agent_messages_fts MATCH :match
           AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND s.deletedAt IS NULL
         ORDER BY m.timestamp DESC
         LIMIT :limit
         """
@@ -130,6 +131,7 @@ interface AgentMessageDao {
             JOIN chat_sessions s ON s.id = m.sessionId
             WHERE agent_messages_fts MATCH :match
               AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+              AND s.deletedAt IS NULL
         ) WHERE sessionId = :sessionId
         ORDER BY timestamp DESC
         LIMIT :limit
@@ -149,6 +151,7 @@ interface AgentMessageDao {
             JOIN chat_sessions s ON s.id = m.sessionId
             WHERE agent_messages_fts MATCH :match
               AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+              AND s.deletedAt IS NULL
         ) WHERE workspacePath = :workspacePath
         ORDER BY timestamp DESC
         LIMIT :limit
@@ -169,6 +172,7 @@ interface AgentMessageDao {
         FROM agent_messages m
         JOIN chat_sessions s ON s.id = m.sessionId
         WHERE m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND s.deletedAt IS NULL
           AND m.content LIKE '%' || :likeQuery || '%' ESCAPE '!' 
         ORDER BY m.timestamp DESC
         LIMIT :limit
@@ -184,6 +188,7 @@ interface AgentMessageDao {
         JOIN chat_sessions s ON s.id = m.sessionId
         WHERE m.sessionId = :sessionId
           AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND s.deletedAt IS NULL
           AND m.content LIKE '%' || :likeQuery || '%' ESCAPE '!' 
         ORDER BY m.timestamp DESC
         LIMIT :limit
@@ -199,6 +204,7 @@ interface AgentMessageDao {
         JOIN chat_sessions s ON s.id = m.sessionId
         WHERE s.workspacePath = :workspacePath
           AND m.isContextSummary = 0 AND m.isCompactionMarker = 0
+          AND s.deletedAt IS NULL
           AND m.content LIKE '%' || :likeQuery || '%' ESCAPE '!' 
         ORDER BY m.timestamp DESC
         LIMIT :limit
@@ -221,6 +227,7 @@ interface AgentMessageDao {
         FROM agent_messages m
         JOIN chat_sessions s ON s.id = m.sessionId
         WHERE s.workspacePath = :workspacePath
+          AND s.deletedAt IS NULL
           AND m.isCompacted = 0
           AND m.isContextSummary = 0
           AND m.isCompactionMarker = 0
@@ -240,7 +247,9 @@ interface AgentMessageDao {
     @Query(
         """
         SELECT m.sessionId AS sessionId, COUNT(*) AS messageCount, MAX(m.timestamp) AS lastActiveAt
-        FROM agent_messages m GROUP BY m.sessionId
+        FROM agent_messages m JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE s.deletedAt IS NULL
+        GROUP BY m.sessionId
         """
     )
     suspend fun sessionActivity(): List<SessionActivityRow>
@@ -285,6 +294,7 @@ interface AgentMessageDao {
                ) AS bytes
         FROM agent_messages m
         LEFT JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE s.deletedAt IS NULL
         GROUP BY m.sessionId
         ORDER BY bytes DESC
         LIMIT :limit
@@ -300,7 +310,7 @@ interface AgentMessageDao {
     @Query(
         "SELECT m.role AS role, m.timestamp AS timestamp, m.attachmentsJson AS attachmentsJson " +
             "FROM agent_messages m JOIN chat_sessions s ON s.id = m.sessionId " +
-            "WHERE s.workspacePath = :workspacePath AND m.role != 'USER' " +
+            "WHERE s.workspacePath = :workspacePath AND s.deletedAt IS NULL AND m.role != 'USER' " +
             "AND m.attachmentsJson IS NOT NULL AND m.attachmentsJson != '[]' " +
             "ORDER BY m.timestamp DESC LIMIT 300"
     )

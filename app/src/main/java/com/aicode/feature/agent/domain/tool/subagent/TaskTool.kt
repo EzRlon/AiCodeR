@@ -347,7 +347,8 @@ class TaskTool @Inject constructor(
                 )
             )
         }
-        sessionUseCase.deleteSession(subSessionId)
+        // 子代理会话是任务期产物，结束后应当彻底删除：进回收站只会堆一堆没人要的子会话
+        sessionUseCase.purgeSession(subSessionId)
         FileLogger.i(TAG, "子代理已删除: session=$subSessionId parent=${context.sessionId}")
         return ToolResult.Success(
             buildJsonObject {

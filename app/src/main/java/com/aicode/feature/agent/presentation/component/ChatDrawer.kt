@@ -325,6 +325,11 @@ fun ChatDrawerContent(
     onRefreshDeliverables: () -> Unit = {},
     /** 交付物操作菜单所需的文件访问（保存到手机/MT/分享等）；null 时行点击仅提示。 */
     deliverableFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider? = null,
+    /** 回收站：已软删的会话（当前工作区），非空时在会话列表顶部显示入口。 */
+    trashedSessions: List<ChatSession> = emptyList(),
+    onRestoreSession: (String) -> Unit = {},
+    onPurgeSession: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {},
     onNavigateToRea: (() -> Unit)? = null,
     /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
     onNavigateToPreview: (() -> Unit)? = null,
@@ -527,7 +532,11 @@ fun ChatDrawerContent(
                                 },
                                 onSelect = onSelect,
                                 onLongClick = { menuSession = it },
-                                onOpenSearchHit = onOpenSearchHit
+                                onOpenSearchHit = onOpenSearchHit,
+                                trashedSessions = trashedSessions,
+                                onRestoreSession = onRestoreSession,
+                                onPurgeSession = onPurgeSession,
+                                onEmptyTrash = onEmptyTrash
                             )
                             1 -> FileBrowserTab(
                                 state = browseState,
@@ -826,7 +835,11 @@ private fun SessionListTab(
     onToggleSelectSession: (ChatSession) -> Unit = {},
     onSelect: (ChatSession) -> Unit,
     onLongClick: (ChatSession) -> Unit,
-    onOpenSearchHit: (ChatSearchHit) -> Unit
+    onOpenSearchHit: (ChatSearchHit) -> Unit,
+    trashedSessions: List<ChatSession> = emptyList(),
+    onRestoreSession: (String) -> Unit = {},
+    onPurgeSession: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {}
 ) {
     if (searchQuery.isBlank()) {
         SessionListContent(
@@ -840,7 +853,11 @@ private fun SessionListTab(
             selectedSessionIds = selectedSessionIds,
             onToggleSelectSession = onToggleSelectSession,
             onSelect = onSelect,
-            onLongClick = onLongClick
+            onLongClick = onLongClick,
+            trashedSessions = trashedSessions,
+            onRestoreSession = onRestoreSession,
+            onPurgeSession = onPurgeSession,
+            onEmptyTrash = onEmptyTrash
         )
     } else {
         ChatSearchResults(state = searchState, onOpenHit = onOpenSearchHit)
@@ -860,9 +877,18 @@ private fun SessionListContent(
     selectedSessionIds: List<String> = emptyList(),
     onToggleSelectSession: (ChatSession) -> Unit = {},
     onSelect: (ChatSession) -> Unit,
-    onLongClick: (ChatSession) -> Unit
+    onLongClick: (ChatSession) -> Unit,
+    trashedSessions: List<ChatSession> = emptyList(),
+    onRestoreSession: (String) -> Unit = {},
+    onPurgeSession: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {}
 ) {
-    if (sessions.isEmpty()) {
+    var trashOpen by remember { mutableStateOf(false) }
+    var purgeTarget by remember { mutableStateOf<ChatSession?>(null) }
+    var emptyTrashConfirm by remember { mutableStateOf(false) }
+
+    // 会话全删光但回收站还有东西时不能走空态：否则入口也跟着消失，回收站就再也进不去了
+    if (sessions.isEmpty() && trashedSessions.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -895,6 +921,18 @@ private fun SessionListContent(
         state = listState,
         modifier = Modifier.fillMaxSize()
     ) {
+        // 回收站入口置顶：只在有内容时出现，不给「从不删会话」的用户添噪声
+        if (trashedSessions.isNotEmpty()) {
+            item(key = "trash-entry", contentType = "trash-entry") {
+                SettingsRow(
+                    icon = FeatherIcons.Trash2,
+                    title = stringResource(R.string.trash_entry, trashedSessions.size),
+                    onClick = { trashOpen = true },
+                    compact = true
+                )
+                SettingsDivider()
+            }
+        }
         // 每个分组占一个 item、组内 forEach 全量渲染会让 LazyColumn 失去惰性：
         // 「最近 30 天」这种分组有上百个会话时，一个 item 就要组合上百行。分组头与会话各自成 item。
         groups.forEach { group ->
@@ -997,6 +1035,149 @@ private fun SessionListContent(
             }
         }
     }
+
+    // ── 回收站弹层（列表顶部入口打开）──
+    if (trashOpen) {
+        TrashDialog(
+            sessions = trashedSessions,
+            onDismiss = { trashOpen = false },
+            onRestore = onRestoreSession,
+            onPurge = { session -> purgeTarget = session },
+            onEmpty = { emptyTrashConfirm = true }
+        )
+    }
+    purgeTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { purgeTarget = null },
+            title = { Text(stringResource(R.string.trash_purge_confirm_title)) },
+            text = { Text(stringResource(R.string.trash_purge_confirm_message, target.title)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onPurgeSession(target.id)
+                    purgeTarget = null
+                }) { Text(stringResource(R.string.trash_purge)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { purgeTarget = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+    if (emptyTrashConfirm) {
+        AlertDialog(
+            onDismissRequest = { emptyTrashConfirm = false },
+            title = { Text(stringResource(R.string.trash_empty_action)) },
+            text = {
+                Text(stringResource(R.string.trash_empty_confirm_message, trashedSessions.size))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onEmptyTrash()
+                    emptyTrashConfirm = false
+                    trashOpen = false
+                }) { Text(stringResource(R.string.trash_empty_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { emptyTrashConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+}
+
+/** 回收站保留期（与 AIAgentViewModel.TRASH_RETENTION_MS 一致），仅用于展示剩余天数。 */
+private const val TRASH_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+
+/** 回收站弹层：列出当前工作区已删会话，逐条恢复或彻底删除，可一键清空。 */
+@Composable
+private fun TrashDialog(
+    sessions: List<ChatSession>,
+    onDismiss: () -> Unit,
+    onRestore: (String) -> Unit,
+    onPurge: (ChatSession) -> Unit,
+    onEmpty: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.trash_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.trash_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(Spacing.sm))
+                if (sessions.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.trash_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.height(260.dp)) {
+                        items(sessions, key = { it.id }) { session ->
+                            TrashRow(
+                                session = session,
+                                onRestore = { onRestore(session.id) },
+                                onPurge = { onPurge(session) }
+                            )
+                            SettingsDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (sessions.isNotEmpty()) {
+                TextButton(onClick = onEmpty) { Text(stringResource(R.string.trash_empty_action)) }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
+        }
+    )
+}
+
+/** 回收站行：标题 + 删除时间与剩余天数 + 恢复 / 彻底删除。 */
+@Composable
+private fun TrashRow(session: ChatSession, onRestore: () -> Unit, onPurge: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = session.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = trashRemainingLabel(session.deletedAt),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+        TextButton(onClick = onRestore) { Text(stringResource(R.string.trash_restore)) }
+        TextButton(onClick = onPurge) { Text(stringResource(R.string.trash_purge)) }
+    }
+}
+
+/** 「删除于 X · 剩余 Y 天」；[deletedAt] 为空时返回空串。 */
+@Composable
+private fun trashRemainingLabel(deletedAt: Long?): String {
+    if (deletedAt == null) return ""
+    val deleted = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(deletedAt))
+    val remainingDays = ((TRASH_RETENTION_MS - (System.currentTimeMillis() - deletedAt)) / 86_400_000L)
+        .coerceAtLeast(0L)
+        .toInt()
+    return stringResource(R.string.trash_deleted_at, deleted) +
+        " · " + stringResource(R.string.trash_remaining_days, remainingDays)
 }
 
 /**

@@ -1447,6 +1447,8 @@ class AIAgentViewModel @Inject constructor(
     }
 
     private companion object {
+        /** 回收站保留期：逾期即在下次清理时机彻底删除。 */
+        const val TRASH_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
         const val TAG = "AIAgentViewModel"
 
         /** 50% 软提醒的会话级上限：两次提醒后不再打扰。 */
@@ -1525,6 +1527,14 @@ class AIAgentViewModel @Inject constructor(
         // 冷启动收尾：上次进程被杀时残留的「执行中」工具回填为「已中断」。在后台执行，不阻塞首屏与会话展示。
         viewModelScope.launch(Dispatchers.IO) {
             sessionUseCase.initColdStartCleanup()
+        }
+
+        // 回收站逾期清理（30 天）：只在冷启动对账一次，不新增周期任务与唤醒源（功耗纪律）。
+        // 失败不阻塞、可重复执行；回收站页进入时另有一次懒清理。
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                forgetSessions(sessionUseCase.purgeExpiredTrash(System.currentTimeMillis() - TRASH_RETENTION_MS))
+            }.onFailure { FileLogger.w("AIAgentViewModel", "清理逾期回收站失败", it) }
         }
 
         // 启动与工作区切换时重新扫描技能（项目级技能随工作区变化），刷新 `/` 命令菜单。
@@ -3472,6 +3482,58 @@ class AIAgentViewModel @Inject constructor(
         _currentSessionId.value = id
     }
 
+    // ── 回收站（软删会话的恢复 / 彻底删除 / 逾期清理）──────────────
+
+    /** 当前工作区回收站里的会话，按删除时间倒序。 */
+    val trashedSessions: StateFlow<List<ChatSession>> = _currentWorkspace
+        .flatMapLatest { path ->
+            if (path.isBlank()) flowOf(emptyList())
+            else chatSessionDao.getTrashedSessionsByWorkspace(path)
+                .map { list -> list.map { it.toDomain() } }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 从回收站恢复整组会话（父会话与子代理会话一起回列表）。 */
+    fun restoreSession(id: String) = viewModelScope.launch {
+        sessionUseCase.restoreSession(id)
+    }
+
+    /** 从回收站彻底删除整组会话：消息与待办随库删，检查点由这里连库带文件清掉。 */
+    fun purgeSession(id: String) = viewModelScope.launch {
+        forgetSessions(sessionUseCase.purgeSession(id))
+    }
+
+    /** 清空当前工作区的回收站。 */
+    fun emptyTrash() = viewModelScope.launch {
+        forgetSessions(sessionUseCase.purgeTrashOfWorkspace(_currentWorkspace.value))
+    }
+
+    /** 彻底删除后收尾：清检查点（库 + 快照文件）与各内存态，避免残留指向已删会话的状态。 */
+    private suspend fun forgetSessions(ids: List<String>) {
+        if (ids.isEmpty()) return
+        ids.forEach { checkpointManager.clearSessionCheckpoints(it) }
+        ids.forEach { sid ->
+            subAgentEventBus.release(sid)
+            sessionJobs[sid]?.cancel()
+            sessionJobs.remove(sid)
+            _agentStates.value = _agentStates.value - sid
+            _streamingTexts.value = _streamingTexts.value - sid
+            setStreamingReasoning(sid, null)
+            _runningTools.value = _runningTools.value - sid
+            _retryStates.value = _retryStates.value - sid
+            _queuedRequests.value = _queuedRequests.value - sid
+            _inputDrafts.value = _inputDrafts.value - sid
+            _intentDrafts.value = _intentDrafts.value - sid
+            draftPrefs.edit().remove(sid).apply()
+            agentNotificationCenter.clear(sid)
+        }
+        if (_currentSessionId.value in ids) {
+            val ws = _currentWorkspace.value
+            _currentSessionId.value = if (ws.isBlank()) null
+            else sessionUseCase.getFirstSessionOfWorkspace(ws)?.id ?: createAndUpsertSession(ws)
+        }
+    }
+
     fun deleteSessions(ids: Set<String>) = viewModelScope.launch {
         if (ids.isEmpty()) return@launch
         val allDeletedIds = mutableSetOf<String>()
@@ -3480,10 +3542,8 @@ class AIAgentViewModel @Inject constructor(
             if (deletedSession?.parentId != null) {
                 subAgentEventBus.release(id)
             }
-            val deleted = sessionUseCase.deleteSession(id)
-            // 级联删除的子会话的检查点也要清，只清目标 id 会残留子代理的快照目录
-            deleted.forEach { checkpointManager.clearSessionCheckpoints(it) }
-            allDeletedIds.addAll(deleted)
+            // 软删（入回收站）：只给会话行打标记，消息/检查点/日志保留，恢复期内可完整恢复
+            allDeletedIds.addAll(sessionUseCase.deleteSession(id))
         }
 
         allDeletedIds.forEach { sid ->
@@ -3523,9 +3583,8 @@ class AIAgentViewModel @Inject constructor(
         val deletedSession = sessionUseCase.getSessionById(id)
         val stoppedSubAgent = deletedSession?.takeIf { it.parentId != null && subAgentEventBus.release(id) }
 
+        // 软删（入回收站）：不动消息与检查点，恢复时才能整组回来
         val deletedIds = sessionUseCase.deleteSession(id)
-        // 级联删除的子会话的检查点也要清，只清目标 id 会残留子代理的快照目录
-        deletedIds.forEach { checkpointManager.clearSessionCheckpoints(it) }
 
         deletedIds.forEach { sid ->
             subAgentEventBus.release(sid)

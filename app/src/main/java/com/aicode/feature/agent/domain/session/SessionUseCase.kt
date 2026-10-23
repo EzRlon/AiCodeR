@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.session
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
@@ -15,7 +16,8 @@ import javax.inject.Singleton
 @Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
-    private val agentMessageDao: AgentMessageDao
+    private val agentMessageDao: AgentMessageDao,
+    private val todoItemDao: TodoItemDao
 ) {
     companion object {
         private const val TAG = "SessionUseCase"
@@ -68,28 +70,73 @@ class SessionUseCase @Inject constructor(
         else clean.take(TITLE_MAX) + "…"
     }
 
-    /** 删除会话及其全部子代理会话（消息 + 会话记录一并删除）。返回被删除的会话 id 列表。 */
-    suspend fun deleteSession(id: String): List<String> {
-        val deleted = mutableListOf(id)
-        // 逐层收集子会话直到没有子代：工具层已禁止子代理嵌套，正常只有一层，
-        // 这里防御性下钻，保证历史/异常数据里更深的层级也不会残留成孤儿。
+    /**
+     * 收集会话及其全部子代理会话 id（含自身）。
+     *
+     * 逐层下钻：工具层已禁止子代理嵌套，正常只有一层，这里防御性下钻，保证历史/异常数据里
+     * 更深的层级也不会残留成孤儿。用「含回收站」的子会话查询——整组一起软删/恢复/清除，
+     * 若按可见性过滤就会漏掉已软删的子会话。
+     */
+    private suspend fun collectSessionGroup(id: String): List<String> {
+        val ids = mutableListOf(id)
         val queue = ArrayDeque(listOf(id))
         while (queue.isNotEmpty()) {
-            chatSessionDao.getSubSessionsByParentOnce(queue.removeFirst()).forEach { child ->
-                agentMessageDao.deleteBySession(child.id)
-                chatSessionDao.delete(child.id)
-                deleted.add(child.id)
+            chatSessionDao.getSubSessionsByParentOnceIncludingTrashed(queue.removeFirst()).forEach { child ->
+                ids.add(child.id)
                 queue.addLast(child.id)
             }
         }
-        agentMessageDao.deleteBySession(id)
-        chatSessionDao.delete(id)
-        return deleted
+        return ids
+    }
+
+    /**
+     * 删除会话 = 入回收站（软删整组）：只给会话行打 `deletedAt`，消息、检查点、日志全部保留，
+     * 供恢复期内完整恢复。返回该组会话 id（调用方据此清内存态；**不要**清检查点，否则恢复不完整）。
+     */
+    suspend fun deleteSession(id: String): List<String> {
+        val ids = collectSessionGroup(id)
+        chatSessionDao.markDeleted(ids, System.currentTimeMillis())
+        return ids
+    }
+
+    /** 从回收站恢复整组会话（父会话与子代理会话一起回到列表）。 */
+    suspend fun restoreSession(id: String): List<String> {
+        val ids = collectSessionGroup(id)
+        chatSessionDao.restoreFromTrash(ids)
+        return ids
+    }
+
+    /**
+     * 彻底删除整组会话：会话行 + 消息 + 待办。检查点由调用方清理（`CheckpointManager` 同时删库与快照文件）。
+     * 不动 `llm_call_records` / `permission_audit`：二者是用量与授权审计记录，按会话删会破坏历史统计，且本身有界。
+     */
+    suspend fun purgeSession(id: String): List<String> {
+        val ids = collectSessionGroup(id)
+        ids.forEach { sessionId ->
+            agentMessageDao.deleteBySession(sessionId)
+            todoItemDao.deleteBySession(sessionId)
+        }
+        chatSessionDao.deleteByIds(ids)
+        return ids
+    }
+
+    /** 清理逾期的回收站会话（`deletedAt <= threshold`）；返回被彻底删除的会话 id 列表。 */
+    suspend fun purgeExpiredTrash(threshold: Long): List<String> {
+        val expired = chatSessionDao.getExpiredTrashed(threshold)
+        return expired.flatMap { purgeSession(it.id) }
+    }
+
+    /** 清空某工作区的回收站；返回被彻底删除的会话 id 列表。 */
+    suspend fun purgeTrashOfWorkspace(workspacePath: String): List<String> {
+        val trashed = chatSessionDao.getTrashedSessionsByWorkspaceOnce(workspacePath)
+        return trashed.flatMap { purgeSession(it.id) }
     }
 
     /** 删除某工作区下的全部会话（含子代理会话）及其消息，返回删除的会话数。 */
     suspend fun deleteSessionsByWorkspace(workspacePath: String): Int {
-        val sessions = chatSessionDao.getAllSessionsByWorkspaceOnce(workspacePath)
+        // 必须含回收站：deleteByWorkspace 是不带过滤的整表删，若只遍历可见会话，
+        // 软删会话的消息会变成永远无人清理的孤儿。
+        val sessions = chatSessionDao.getAllSessionsByWorkspaceOnceIncludingTrashed(workspacePath)
         if (sessions.isEmpty()) return 0
         sessions.forEach { session -> agentMessageDao.deleteBySession(session.id) }
         chatSessionDao.deleteByWorkspace(workspacePath)
@@ -116,7 +163,8 @@ class SessionUseCase @Inject constructor(
         var count = 0
         chatSessionDao.getRootSessionsByWorkspaceOnce(workspacePath).forEach { session ->
             if (session.id != keepId && !agentMessageDao.hasMessages(session.id)) {
-                deleteSession(session.id)
+                // 空会话直接彻底删除：进回收站只会堆一堆没有内容的条目
+                purgeSession(session.id)
                 count++
             }
         }

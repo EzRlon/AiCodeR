@@ -101,6 +101,21 @@ internal class Migration66To67 : Migration(66, 67) {
     }
 }
 
+/**
+ * 幂等版 67→68（替代 `68_add_session_trash.sql` 执行）：chat_sessions 加回收站标记列。
+ * 可空，null = 正常会话；非 null = 入回收站的时间戳（30 天后由彻底清除流程处理）。
+ */
+internal class Migration67To68 : Migration(67, 68) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(
+            db,
+            "chat_sessions",
+            "deletedAt",
+            "ALTER TABLE `chat_sessions` ADD COLUMN `deletedAt` INTEGER"
+        )
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {

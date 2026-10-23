@@ -512,6 +512,7 @@ fun AppNavigation(
     val browseState by agentViewModel.browseState.collectAsStateWithLifecycle()
     val deliverables by agentViewModel.deliverables.collectAsStateWithLifecycle()
     val deliverablesScanning by agentViewModel.deliverablesScanning.collectAsStateWithLifecycle()
+    val trashedSessions by agentViewModel.trashedSessions.collectAsStateWithLifecycle()
     val browseClipboard by agentViewModel.browseClipboard.collectAsStateWithLifecycle()
     val pasteConflict by agentViewModel.pasteConflict.collectAsStateWithLifecycle()
     val chatSearchQuery by agentViewModel.chatSearchQuery.collectAsStateWithLifecycle()
@@ -682,6 +683,10 @@ fun AppNavigation(
             deliverablesScanning = deliverablesScanning,
             onRefreshDeliverables = { agentViewModel.refreshDeliverables() },
             deliverableFileAccess = agentViewModel.fileAccess,
+            trashedSessions = trashedSessions,
+            onRestoreSession = { agentViewModel.restoreSession(it) },
+            onPurgeSession = { agentViewModel.purgeSession(it) },
+            onEmptyTrash = { agentViewModel.emptyTrash() },
             expandedPaths = expandedPaths,
             expandingPath = expandingPath,
             fileOpPaths = fileOpPaths,

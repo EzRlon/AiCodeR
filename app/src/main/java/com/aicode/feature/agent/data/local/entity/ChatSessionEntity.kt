@@ -40,7 +40,9 @@ data class ChatSessionEntity(
     /** 子代理会话：派生子代理的类型（如 coder / researcher）；null 表示普通根会话。 */
     val subagentType: String? = null,
     /** 会话级召唤的专家团名（对应 teams/<name>.md）；null 表示未使用专家团。 */
-    val teamName: String? = null
+    val teamName: String? = null,
+    /** 回收站：null = 正常会话；非 null = 入回收站的时间戳（超过 30 天后彻底清除）。 */
+    val deletedAt: Long? = null
 ) {
     fun toDomain(): ChatSession = ChatSession(
         id = id,
@@ -64,7 +66,8 @@ data class ChatSessionEntity(
         isPinned = isPinned,
         parentId = parentId,
         subagentType = subagentType,
-        teamName = teamName
+        teamName = teamName,
+        deletedAt = deletedAt
     )
 
     companion object {
@@ -90,7 +93,8 @@ data class ChatSessionEntity(
             isPinned = session.isPinned,
             parentId = session.parentId,
             subagentType = session.subagentType,
-            teamName = session.teamName
+            teamName = session.teamName,
+            deletedAt = session.deletedAt
         )
     }
 }

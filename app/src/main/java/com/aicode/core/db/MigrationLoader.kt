@@ -66,14 +66,16 @@ object MigrationLoader {
         }
 
         // 62 起改用幂等 Kotlin 版执行（SQL 文件保留作审计与编号校验）：兼容曾装过
+        // 68（会话回收站）同属这一轨：ALTER ADD COLUMN 要按列存在性幂等补，见 Migration67To68。
         // 旧编号 60/61（annotations/session_team）中间开发版的设备——那类设备缺官方
         // 60/61 两列，需要在 62/63 里按列存在性补齐；正常设备行为等价。见 IdempotentMigrations.kt。
-        migrations.removeAll { it is FileMigration && (it.version == 62 || it.version == 63 || it.version == 64 || it.version == 65 || it.version == 67) }
+        migrations.removeAll { it is FileMigration && (it.version == 62 || it.version == 63 || it.version == 64 || it.version == 65 || it.version == 67 || it.version == 68) }
         migrations.add(Migration61To62())
         migrations.add(Migration62To63())
         migrations.add(Migration63To64())
         migrations.add(Migration64To65())
         migrations.add(Migration66To67())
+        migrations.add(Migration67To68())
         
         return migrations.toTypedArray()
     }
