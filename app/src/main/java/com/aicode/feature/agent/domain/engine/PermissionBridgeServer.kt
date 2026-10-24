@@ -4,6 +4,9 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
+import com.aicode.feature.annotation.data.AnnotationRepository
+import com.aicode.feature.annotation.domain.model.AnnotationStatus
+import com.aicode.feature.fixledger.data.FixLedgerRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,9 +14,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -39,7 +44,9 @@ import javax.inject.Singleton
  */
 @Singleton
 class PermissionBridgeServer @Inject constructor(
-    private val toolPermissionManager: ToolPermissionManager
+    private val toolPermissionManager: ToolPermissionManager,
+    private val fixLedgerRepository: FixLedgerRepository,
+    private val annotationRepository: com.aicode.feature.annotation.data.AnnotationRepository
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -102,8 +109,21 @@ class PermissionBridgeServer @Inject constructor(
                 return
             }
             val sessionId = request["session"]?.jsonPrimitive?.content.orEmpty()
+            val kind = request["kind"]?.jsonPrimitive?.contentOrNull
             val toolName = request["tool_name"]?.jsonPrimitive?.content ?: return
             val toolInput = request["input"] as? JsonObject ?: JsonObject(emptyMap())
+
+            // 数据通道（aicode_bridge 的 ledger_* 工具）：只读查询与状态推进，不经权限弹窗
+            if (kind == "data") {
+                val dataResponse = handleDataRequest(toolName, toolInput)
+                conn.getOutputStream().bufferedWriter().use { w ->
+                    w.write(dataResponse.toString())
+                    w.write("\n")
+                    w.flush()
+                }
+                FileLogger.i(TAG, "CLI 数据请求: tool=$toolName")
+                return
+            }
 
             FileLogger.i(TAG, "CLI 权限请求: tool=$toolName session=$sessionId")
             val outcome = toolPermissionManager.awaitApproval(
@@ -145,5 +165,54 @@ class PermissionBridgeServer @Inject constructor(
     private fun compactPreview(input: JsonObject): String {
         val text = input.toString()
         return if (text.length <= 300) text else text.take(300) + "…"
+    }
+
+    // ── 数据通道（aicode_bridge 的 ledger_* 工具）─────────────────────
+
+    /** 账本类数据请求：只读合流列表与状态推进（与本体 fixledger 工具同语义，只能前进，关闭由用户手动）。 */
+    private suspend fun handleDataRequest(tool: String, input: JsonObject): JsonObject {
+        return when (tool) {
+            "ledger_list" -> {
+                val annotations = annotationRepository.items.first()
+                val fixes = fixLedgerRepository.items.first()
+                okData(renderLedgerText(annotations, fixes))
+            }
+            "ledger_advance" -> {
+                val annotationId = input["annotationId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val target = input["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (annotationId.isBlank()) return errData("缺少 annotationId")
+                val status = runCatching { AnnotationStatus.valueOf(target) }.getOrNull()
+                    ?: return errData("target 非法，可选 SENT / FIXING / REVIEW")
+                if (status == AnnotationStatus.PENDING || status == AnnotationStatus.CLOSED) {
+                    return errData("只能推进到 SENT / FIXING / REVIEW（待确认与关闭由用户手动）")
+                }
+                val message = runCatching { fixLedgerRepository.advanceLinked(annotationId, status) }.getOrNull()
+                okData(message ?: "已推进到 ${status.name}")
+            }
+            else -> errData("未知数据工具: $tool")
+        }
+    }
+
+    private fun renderLedgerText(annotations: List<com.aicode.feature.annotation.domain.model.AnnotationItem>, fixes: List<com.aicode.feature.fixledger.domain.model.FixLedgerItem>): String {
+        val sb = StringBuilder()
+        sb.appendLine("标注账本（" + annotations.size + " 条）：")
+        annotations.forEach { a ->
+            sb.appendLine("- id=" + a.id + " [" + a.status.name + "] " + a.type.name + " | " + a.note.ifBlank { "（未填说明）" } + " | 图：" + a.imagePath)
+        }
+        sb.appendLine("修复账本（" + fixes.size + " 条）：")
+        fixes.forEach { f ->
+            sb.appendLine("- id=" + f.id + " [" + f.status.name + "] " + f.title + " | " + f.note.ifBlank { "（无备注）" } + " | 源标注：" + (f.sourceAnnotationId ?: "-"))
+        }
+        return sb.toString()
+    }
+
+    private fun okData(result: String): JsonObject = buildJsonObject {
+        put("ok", true)
+        put("result", result)
+    }
+
+    private fun errData(message: String): JsonObject = buildJsonObject {
+        put("ok", false)
+        put("message", message)
     }
 }

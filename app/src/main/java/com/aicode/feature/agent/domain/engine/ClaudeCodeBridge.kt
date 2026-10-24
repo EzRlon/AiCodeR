@@ -83,6 +83,7 @@ class ClaudeCodeBridge @Inject constructor(
 
     private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
     private fun bridgeScript(): String = bridgeDir() + "/claude-permission-bridge.mjs"
+    private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun mcpConfigPath(): String = bridgeDir() + "/mcp-config.json"
 
     /** 引擎可用性缓存（5 分钟 TTL）：避免每次打开模型弹窗都拉起容器进程跑版本检测（optimizer #6）。 */
@@ -186,7 +187,7 @@ class ClaudeCodeBridge @Inject constructor(
         resume: Boolean
     ): Flow<AgentEvent> = flow {
         val port = permissionBridgeServer.ensureStarted(token = sessionId)
-        writeBridgeAssets(port, sessionId, token = sessionId)
+        writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
 
         val args = buildList {
             add("-p")
@@ -208,6 +209,9 @@ class ClaudeCodeBridge @Inject constructor(
             put("PERMISSION_BRIDGE_PORT", port.toString())
             put("PERMISSION_BRIDGE_SESSION", sessionId)
             put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            // 本体能力桥的数据工具需要知道容器内 .aicode 根与当前项目根（容器内路径）
+            put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
+            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
             // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代
             transmittableAnthropicProvider()?.let { p ->
                 put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
@@ -477,20 +481,31 @@ class ClaudeCodeBridge @Inject constructor(
     // ── 桥接资产（脚本 + MCP 配置）──────────────────────────────────
 
     /** 每回合确保脚本与 MCP 配置就位（幂等写入，端口/会话可能变化）。 */
-    private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String) = assetsMutex.withLock {
+    private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) = assetsMutex.withLock {
         runCatching {
             fileAccess.writeFile(bridgeScript(), BRIDGE_SCRIPT_SOURCE, overwrite = true)
+            fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
+            val bridgeEnv = buildJsonObject {
+                put("PERMISSION_BRIDGE_PORT", port.toString())
+                put("PERMISSION_BRIDGE_SESSION", sessionId)
+                put("PERMISSION_BRIDGE_TOKEN", token)
+                put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
+                put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+            }
             val config = buildJsonObject {
                 put("mcpServers", buildJsonObject {
                     put(MCP_SERVER_NAME, buildJsonObject {
                         put("type", "stdio")
                         put("command", "node")
                         put("args", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(bridgeScript()))))
-                        put("env", buildJsonObject {
-                            put("PERMISSION_BRIDGE_PORT", port.toString())
-                            put("PERMISSION_BRIDGE_SESSION", sessionId)
-                            put("PERMISSION_BRIDGE_TOKEN", token)
-                        })
+                        put("env", bridgeEnv)
+                    })
+                    // 本体能力桥：记忆/规则/技能（容器文件直读）+ 账本查询与状态推进（经 App 侧数据通道）
+                    put("aicode_bridge", buildJsonObject {
+                        put("type", "stdio")
+                        put("command", "node")
+                        put("args", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(dataBridgeScript()))))
+                        put("env", bridgeEnv)
                     })
                 })
             }
@@ -501,6 +516,172 @@ class ClaudeCodeBridge @Inject constructor(
         }
     }
 }
+
+/** 随包内置的本体能力桥 MCP 小服务：容器内文件直读 + 经 App 数据通道查账本（零依赖 Node 脚本）。 */
+internal const val AICODE_BRIDGE_SCRIPT_SOURCE = """/** AiCode 本体能力桥：记忆/规则/技能（容器内文件）+ 标注与修复账本（经 App 数据通道）。 */
+import fs from 'node:fs';
+import path from 'node:path';
+import net from 'node:net';
+
+const HOME = process.env.AICODE_HOME || '/root';
+const PROJECT = process.env.AICODE_PROJECT_ROOT || '';
+const PORT = parseInt(process.env.PERMISSION_BRIDGE_PORT || '0', 10);
+const SESSION = process.env.PERMISSION_BRIDGE_SESSION || '';
+const TOKEN = process.env.PERMISSION_BRIDGE_TOKEN || '';
+const TIMEOUT_MS = 5 * 60 * 1000;
+
+const MEMORY_DIRS = [path.join(HOME, 'memory')].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'memory')] : []);
+const SKILL_DIRS = [path.join(HOME, 'skills')].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'skills')] : []);
+const RULE_FILES = [path.join(HOME, 'AGENTS.md'), path.join(HOME, 'CLAUDE.md')]
+  .concat(PROJECT ? [path.join(PROJECT, '.aicode', 'AGENTS.md'), path.join(PROJECT, '.aicode', 'CLAUDE.md')] : []);
+
+function readIfExists(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
+function listMdFiles(dir) {
+  try { return fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => path.join(dir, f)); } catch { return []; }
+}
+
+function memoryList() {
+  const out = [];
+  for (const dir of MEMORY_DIRS) {
+    const scope = dir.startsWith(HOME) ? 'global' : 'project';
+    for (const f of listMdFiles(dir)) {
+      const st = fs.statSync(f);
+      out.push(scope + ':' + path.basename(f) + ' (' + st.size + 'B, ' + st.mtime.toISOString() + ')');
+    }
+  }
+  return out.length ? out.join('\n') : '（暂无记忆文件）';
+}
+
+function resolveMemory(p) {
+  const r = path.resolve(p);
+  if (!MEMORY_DIRS.some((dir) => r.startsWith(path.resolve(dir) + path.sep))) return null;
+  return r;
+}
+
+function skillDirsOf(name) {
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) return null;
+  return SKILL_DIRS.map((d) => path.join(d, name, 'SKILL.md')).find((p) => fs.existsSync(p)) || null;
+}
+
+function skillList() {
+  const out = [];
+  for (const dir of SKILL_DIRS) {
+    const scope = dir.startsWith(HOME) ? 'global' : 'project';
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      const meta = readIfExists(path.join(dir, n, 'SKILL.md'));
+      if (meta == null) continue;
+      const desc = (meta.match(/^description:\s*(.+)$/m) || [, ''])[1].trim();
+      out.push(scope + ':' + n + ' - ' + desc.slice(0, 120));
+    }
+  }
+  return out.length ? out.join('\n') : '（暂无技能）';
+}
+
+function askApp(tool, input) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; try { sock.destroy(); } catch {} resolve(v); } };
+    const sock = net.connect(PORT, '127.0.0.1', () => {
+      sock.write(JSON.stringify({ token: TOKEN, session: SESSION, kind: 'data', tool_name: tool, input }) + '\n');
+    });
+    let buf = '';
+    sock.on('data', (d) => {
+      buf += d.toString();
+      const i = buf.indexOf('\n');
+      if (i >= 0) { try { finish(JSON.parse(buf.slice(0, i))); } catch { finish({ ok: false, message: '数据通道响应解析失败' }); } }
+    });
+    sock.on('error', (e) => finish({ ok: false, message: '数据通道连接失败: ' + e.message }));
+    setTimeout(() => finish({ ok: false, message: '数据通道响应超时' }), TIMEOUT_MS);
+  });
+}
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  let i;
+  while ((i = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, i).trim();
+    buf = buf.slice(i + 1);
+    if (line) handleLine(line);
+  }
+});
+
+function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+
+const TOOLS = [
+  { name: 'memory_list', description: 'List memory files (global and current project) with sizes and mtime', inputSchema: { type: 'object', properties: {} } },
+  { name: 'memory_read', description: 'Read one memory file by absolute path (must be under a memory dir)', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+  { name: 'memory_write', description: 'Create or update a memory file under a memory dir', inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
+  { name: 'rules_read', description: 'Read global and project rule files (AGENTS.md / CLAUDE.md)', inputSchema: { type: 'object', properties: {} } },
+  { name: 'skills_list', description: 'List installed skills (name + description, global and project)', inputSchema: { type: 'object', properties: {} } },
+  { name: 'skill_read', description: 'Read one skill SKILL.md by skill name', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  { name: 'ledger_list', description: 'List annotation ledger and fix ledger entries with statuses (queried via the AiCode app)', inputSchema: { type: 'object', properties: {} } },
+  { name: 'ledger_advance', description: 'Advance an annotation and its linked fix-ledger entry to SENT/FIXING/REVIEW via the AiCode app (closing is user-only)', inputSchema: { type: 'object', properties: { annotationId: { type: 'string' }, target: { type: 'string', enum: ['SENT', 'FIXING', 'REVIEW'] } }, required: ['annotationId', 'target'] } }
+];
+
+function toolsCall(name, args) {
+  if (name === 'memory_list') return memoryList();
+  if (name === 'memory_read') {
+    const r = resolveMemory(args.path || '');
+    if (r == null) return '错误：路径必须在记忆目录内';
+    const c = readIfExists(r);
+    return c == null ? '错误：文件不存在：' + r : c;
+  }
+  if (name === 'memory_write') {
+    const r = resolveMemory(args.path || '');
+    if (r == null) return '错误：路径必须在记忆目录内';
+    fs.mkdirSync(path.dirname(r), { recursive: true });
+    fs.writeFileSync(r, String(args.content || ''), 'utf8');
+    return '已写入 ' + r + '（' + String(args.content || '').length + ' 字符）';
+  }
+  if (name === 'rules_read') {
+    const out = [];
+    for (const f of RULE_FILES) { const c = readIfExists(f); if (c != null) out.push('=== ' + f + ' ===\n' + c); }
+    return out.length ? out.join('\n\n') : '（未找到规则文件）';
+  }
+  if (name === 'skills_list') return skillList();
+  if (name === 'skill_read') {
+    const p = skillDirsOf(args.name || '');
+    if (p == null) return '错误：技能不存在或名称非法';
+    return readIfExists(p) || '';
+  }
+  return null; // 账本类工具走 App 数据通道
+}
+
+function handleLine(line) {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.id === undefined || msg.id === null) return;
+  const id = msg.id; const method = msg.method; const params = msg.params || {};
+  if (method === 'initialize') {
+    send({ jsonrpc: '2.0', id, result: {
+      protocolVersion: params.protocolVersion || '2024-11-05',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'aicode_bridge', version: '1.0.0' }
+    } });
+  } else if (method === 'tools/list') {
+    send({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
+  } else if (method === 'tools/call') {
+    const name = params.name || '';
+    const args = params.arguments || {};
+    const local = toolsCall(name, args);
+    if (local != null) {
+      send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: local }] } });
+      return;
+    }
+    if (name === 'ledger_list' || name === 'ledger_advance') {
+      askApp(name, args).then((res) => {
+        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.ok ? (res.result || '成功') : ('错误：' + (res.message || '未知错误')) }] } });
+      });
+    } else {
+      send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unknown tool: ' + name } });
+    }
+  } else {
+    send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found: ' + method } });
+  }
+}
+"""
 
 /** 随包内置的权限桥 MCP 小服务（零依赖 Node 脚本，容器内由 claude 经 --mcp-config 拉起）。 */
 internal const val BRIDGE_SCRIPT_SOURCE = """/** AiCode 权限桥：把 claude 的权限请求经本机 TCP 转给 App 授权中心。 */

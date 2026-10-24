@@ -463,7 +463,7 @@
     <string name="engine_detecting">Detecting…</string>
     <string name="engine_install">Install</string>
     <string name="engine_open_manager">Manage</string>
-    <string name="engine_limits_hint">CLI engine sessions do not support: teams, annotation, memory, recall</string>
+    <string name="engine_limits_hint">CLI engine sessions do not support teams and other native workflows; memory/rules/skills and the annotation plus fix ledgers are available via the built-in MCP bridge (aicode_bridge tools)</string>
     <string name="engine_resume_hint">History resumes automatically from the Claude Code side session.</string>
     <string name="settings_default_engine_group">Default engine for new sessions</string>
     <string name="settings_default_engine_claude_sub">New sessions use Claude Code by default (must be installed)</string>
