@@ -86,6 +86,7 @@ object ToolPermissionCatalog {
         ToolPermissionInfo("goalStatus", R.string.perm_tool_goal_status, R.string.perm_tool_goal_status_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("summon_team", R.string.perm_tool_summon_team, R.string.perm_tool_summon_team_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("todo", R.string.perm_tool_todo, R.string.perm_tool_todo_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
+        ToolPermissionInfo("fixledger", R.string.perm_tool_fixledger, R.string.perm_tool_fixledger_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         ToolPermissionInfo("askUserQuestion", R.string.perm_tool_ask_question, R.string.perm_tool_ask_question_desc, ToolPermissionGroup.AGENT, ToolPermissionTier.AUTO),
         // 记忆与扩展
         ToolPermissionInfo("memory", R.string.perm_tool_memory, R.string.perm_tool_memory_desc, ToolPermissionGroup.EXTEND, ToolPermissionTier.AUTO),

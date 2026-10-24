@@ -71,7 +71,8 @@ class AnnotationViewModel @Inject constructor(
                     index + 1,
                     context.getString(item.type.labelRes()),
                     item.note.ifBlank { context.getString(R.string.annotation_no_note) },
-                    item.imagePath
+                    item.imagePath,
+                    item.id
                 )
             )
             // 结构化位置描述：把每个标注图形的归一化坐标翻译成百分比区间，

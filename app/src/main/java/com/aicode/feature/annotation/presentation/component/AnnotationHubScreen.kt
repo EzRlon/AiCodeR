@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,12 +65,14 @@ import com.aicode.feature.annotation.domain.model.AnnotationItem
 import com.aicode.feature.annotation.domain.model.AnnotationMarksCodec
 import com.aicode.feature.annotation.domain.model.AnnotationStatus
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
+import com.aicode.feature.fixledger.presentation.FixLedgerViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import androidx.compose.ui.text.rememberTextMeasurer
 import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Crosshair
 import compose.icons.feathericons.Send
+import compose.icons.feathericons.Tool
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -88,12 +91,15 @@ internal fun AnnotationHubScreen(
     onBack: () -> Unit,
     onStartLiveAnnotation: () -> Unit,
     onStartScreenshotAnnotation: () -> Unit,
+    onOpenFixLedger: () -> Unit,
     onSummaryReady: (text: String, items: List<AnnotationItem>) -> Unit,
-    viewModel: AnnotationViewModel = hiltViewModel()
+    viewModel: AnnotationViewModel = hiltViewModel(),
+    fixLedgerViewModel: FixLedgerViewModel = hiltViewModel()
 ) {
     val items by viewModel.items.collectAsStateWithLifecycle()
     var detailItem by remember { mutableStateOf<AnnotationItem?>(null) }
     val activeItems = remember(items) { items.filter { it.status != AnnotationStatus.CLOSED } }
+    val context = LocalContext.current
 
     Scaffold(
         containerColor = settingsPageBackground(),
@@ -138,7 +144,8 @@ internal fun AnnotationHubScreen(
                 ) {
                     AnnotationCaptureCards(
                         onStartLiveAnnotation = onStartLiveAnnotation,
-                        onStartScreenshotAnnotation = onStartScreenshotAnnotation
+                        onStartScreenshotAnnotation = onStartScreenshotAnnotation,
+                        onOpenFixLedger = onOpenFixLedger
                     )
                     Text(
                         text = stringResource(R.string.annotation_ledger_empty),
@@ -156,7 +163,8 @@ internal fun AnnotationHubScreen(
                     item(key = "capture") {
                         AnnotationCaptureCards(
                             onStartLiveAnnotation = onStartLiveAnnotation,
-                            onStartScreenshotAnnotation = onStartScreenshotAnnotation
+                            onStartScreenshotAnnotation = onStartScreenshotAnnotation,
+                            onOpenFixLedger = onOpenFixLedger
                         )
                     }
                     items(items, key = { it.id }) { item ->
@@ -170,12 +178,26 @@ internal fun AnnotationHubScreen(
     }
 
     detailItem?.let { item ->
+        val convertFallbackTitle = item.note.ifBlank { stringResource(item.type.labelRes()) }
+        // 转入一次性：写入 check-then-act 非原子，连点会被这里拦住
+        var convertStarted by remember(item.id) { mutableStateOf(false) }
         AnnotationDetailDialog(
             item = item,
             viewModel = viewModel,
             onStatusChange = { status ->
                 viewModel.updateStatus(item.id, status)
                 detailItem = null
+            },
+            onConvertToFixLedger = lambda@{
+                if (convertStarted) return@lambda
+                convertStarted = true
+                fixLedgerViewModel.addFromAnnotation(item, convertFallbackTitle) { added ->
+                    android.widget.Toast.makeText(
+                        context.applicationContext,
+                        context.applicationContext.getString(if (added) R.string.fix_ledger_added else R.string.fix_ledger_already_exists),
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
             },
             onDelete = {
                 viewModel.delete(item)
@@ -186,11 +208,12 @@ internal fun AnnotationHubScreen(
     }
 }
 
-/** 顶部捕捉区：两张同风格卡片，覆盖活标注与截屏标注两种捕捉方式（反馈9 合并入口）。 */
+/** 顶部捕捉区：两张捕捉卡片 + 修复账本入口（反馈9 合并入口）。 */
 @Composable
 private fun AnnotationCaptureCards(
     onStartLiveAnnotation: () -> Unit,
-    onStartScreenshotAnnotation: () -> Unit
+    onStartScreenshotAnnotation: () -> Unit,
+    onOpenFixLedger: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -211,6 +234,14 @@ private fun AnnotationCaptureCards(
             modifier = Modifier.weight(1f)
         )
     }
+    Spacer(Modifier.height(Spacing.sm))
+    AnnotationCaptureCard(
+        icon = FeatherIcons.Tool,
+        title = stringResource(R.string.fix_ledger_entry),
+        subtitle = stringResource(R.string.fix_ledger_entry_sub),
+        onClick = onOpenFixLedger,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -324,6 +355,7 @@ private fun AnnotationDetailDialog(
     item: AnnotationItem,
     viewModel: AnnotationViewModel,
     onStatusChange: (AnnotationStatus) -> Unit,
+    onConvertToFixLedger: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -445,6 +477,15 @@ private fun AnnotationDetailDialog(
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
                     )
+                }
+
+                TextButton(
+                    onClick = onConvertToFixLedger,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                ) {
+                    Text(text = stringResource(R.string.fix_ledger_convert))
                 }
 
                 TextButton(

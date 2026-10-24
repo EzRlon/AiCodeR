@@ -74,6 +74,9 @@ class AnnotationRepository @Inject constructor(
         annotationDao.updateStatus(id, status.name, System.currentTimeMillis())
     }
 
+    /** 读取单个标注（fixledger 回写 guard 用）。 */
+    suspend fun getById(id: String): AnnotationItem? = annotationDao.getById(id)?.toDomain()
+
     suspend fun delete(item: AnnotationItem) {
         annotationDao.deleteById(item.id)
         runCatching { fileAccess.delete(item.imagePath) }
