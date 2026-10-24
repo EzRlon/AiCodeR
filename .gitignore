@@ -42,3 +42,6 @@ archive/
 
 # ctags 索引
 tags
+
+# detekt CLI fat-jar（84MB，由 tools/detekt/run-detekt.sh 使用，不入库）
+tools/detekt/detekt-cli.jar
