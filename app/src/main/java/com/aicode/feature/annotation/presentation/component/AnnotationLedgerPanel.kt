@@ -1,7 +1,6 @@
 package com.aicode.feature.annotation.presentation.component
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -152,10 +151,13 @@ internal fun AnnotationLedgerPanel(
                 }
                 items(annotationItems, key = { "a-${it.id}" }) { item ->
                     val convertFallbackTitle = item.note.ifBlank { stringResource(item.type.labelRes()) }
-                    SwipeToDeleteRow(onDelete = { annotationViewModel.delete(item) }) {
+                    SwipeToDeleteRow(
+                        onDelete = { annotationViewModel.delete(item) },
+                        // onClick 交给滑动行统一仲裁：滑开状态下点行先收回，不误触发载入
+                        onClick = { onOpenAnnotation(item) }
+                    ) {
                         AnnotationLedgerRow(
                             item = item,
-                            onClick = { onOpenAnnotation(item) },
                             onStatusChange = { status -> annotationViewModel.updateStatus(item.id, status) },
                             onConvertToFixLedger = {
                                 fixLedgerViewModel.addFromAnnotation(
@@ -228,7 +230,6 @@ private fun PanelEmptyText(text: String) {
 @Composable
 private fun AnnotationLedgerRow(
     item: AnnotationItem,
-    onClick: () -> Unit,
     onStatusChange: (AnnotationStatus) -> Unit,
     onConvertToFixLedger: () -> Unit,
     onDelete: () -> Unit
@@ -237,9 +238,7 @@ private fun AnnotationLedgerRow(
     Surface(
         shape = RoundedCornerShape(Radius.mdLarge),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier.padding(horizontal = Spacing.md, vertical = 10.dp),

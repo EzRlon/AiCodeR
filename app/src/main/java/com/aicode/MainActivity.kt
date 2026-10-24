@@ -1172,6 +1172,9 @@ fun AppNavigation(
                 Toast.makeText(context, context.getString(R.string.annotation_summary_queued), Toast.LENGTH_SHORT).show()
                 annotationViewModel.markSent(items)
                 annotationCanvasActive = false
+                navController.navigate("chat") {
+                    popUpTo("chat") { inclusive = false }
+                }
             },
             onExit = { annotationCanvasActive = false }
         )

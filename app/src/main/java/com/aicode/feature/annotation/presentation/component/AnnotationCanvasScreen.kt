@@ -241,6 +241,8 @@ internal fun AnnotationCanvasScreen(
             }
             pendingTextPos != null && text.isNotBlank() -> {
                 marks += createDraft(AnnotationTool.TEXT, type, pendingTextPos!!, hostFit).copy(text = text)
+                redoStack.clear()
+                clearedSnapshot = null
             }
         }
         pendingTextPos = null
@@ -281,7 +283,19 @@ internal fun AnnotationCanvasScreen(
         }
     }
 
-    BackHandler(enabled = !captureInFlight) { onExit() }
+    BackHandler(enabled = !captureInFlight) {
+        // 分层退出：先收子浮层，再退整个画布
+        when {
+            pendingTextPos != null || editingTextIndex >= 0 -> {
+                pendingTextPos = null
+                editingTextIndex = -1
+                textDraft = ""
+            }
+            saveSheetOpen -> saveSheetOpen = false
+            ledgerOpen -> ledgerOpen = false
+            else -> onExit()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -300,6 +314,11 @@ internal fun AnnotationCanvasScreen(
             arrowStartOverride = pendingArrowStart,
             onArrowOverrideConsumed = { pendingArrowStart = null },
             onSelectedIndexChange = { selectedIndex = it },
+            onMarkAdded = {
+                // 新增元素后重做栈失效，避免重做“复活”早已删除的元素
+                redoStack.clear()
+                clearedSnapshot = null
+            },
             onPlaceText = { pos ->
                 pendingTextPos = pos
                 editingTextIndex = -1

@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** 一次脚本运行在界面上的状态：运行中显示进度，结束后展示输出与退出码。 */
@@ -62,6 +64,8 @@ class ScriptsViewModel @Inject constructor(
     val pendingOpen: StateFlow<String?> = _pendingOpen.asStateFlow()
 
     private var refreshJob: Job? = null
+    private val refreshMutex = Mutex()
+    private var refreshGeneration = 0
 
     init {
         refresh()
@@ -84,21 +88,26 @@ class ScriptsViewModel @Inject constructor(
             _state.value = ScriptsUiState(unavailableReason = reason, loading = false)
             return
         }
-        // 去重：进页与「从编辑器返回」各自会触发一次，重叠时后到的直接合并掉，
-        // 不然每次进页都白读一遍索引 + 逐文件读首行注释。
-        if (refreshJob?.isActive == true) return
+        // 去重不丢弃：每次调用登记一个代次，只有最新代次执行扫描（Mutex 串行，
+        // 过期代次在锁内自行跳过）。若像旧版那样直接丢弃后到的调用，
+        // run() 收尾触发的刷新会吞掉用户手动刷新（如脚本刚被外部删除时的清理），
+        // 陈旧状态就永远清不掉。
+        val generation = ++refreshGeneration
         refreshJob = viewModelScope.launch {
-            val scripts = withContext(Dispatchers.IO) { repository.list() }
-            _state.update { state ->
-                // 丢掉已不在清单里的运行结果：脚本可能被 AI 或定时任务删掉，
-                // 而运行收尾的状态更新可能落在删除之后，不清会留下一份永远无法关闭的旧输出。
-                val names = scripts.mapTo(mutableSetOf()) { it.name }
-                state.copy(
-                    scripts = scripts,
-                    loading = false,
-                    unavailableReason = null,
-                    runs = state.runs.filterKeys { it in names }
-                )
+            refreshMutex.withLock {
+                if (generation != refreshGeneration) return@withLock
+                val scripts = withContext(Dispatchers.IO) { repository.list() }
+                _state.update { state ->
+                    // 丢掉已不在清单里的运行结果：脚本可能被 AI 或定时任务删掉，
+                    // 而运行收尾的状态更新可能落在删除之后，不清会留下一份永远无法关闭的旧输出。
+                    val names = scripts.mapTo(mutableSetOf()) { it.name }
+                    state.copy(
+                        scripts = scripts,
+                        loading = false,
+                        unavailableReason = null,
+                        runs = state.runs.filterKeys { it in names }
+                    )
+                }
             }
         }
     }

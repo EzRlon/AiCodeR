@@ -91,6 +91,7 @@ internal fun AnnotationCanvas(
     arrowStartOverride: Offset? = null,
     onArrowOverrideConsumed: () -> Unit = {},
     onSelectedIndexChange: (Int) -> Unit = {},
+    onMarkAdded: () -> Unit = {},
     onPlaceText: (Offset) -> Unit = {}
 ) {
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -116,7 +117,8 @@ internal fun AnnotationCanvas(
     val transformState = rememberTransformableState { zoom, pan, _ ->
         if (baseImage == null) return@rememberTransformableState
         scale = (scale * zoom).coerceIn(1f, CANVAS_MAX_SCALE)
-        panOffset += pan
+        // 缩回 1x 时底图应回到原位，不残留平移
+        panOffset = if (scale <= 1f) Offset.Zero else panOffset + pan
     }
     LaunchedEffect(baseImage) {
         scale = 1f
@@ -192,7 +194,7 @@ internal fun AnnotationCanvas(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(tool, type, fit, marks.size, baseImage) {
+                        .pointerInput(tool, type, fit, marks.size, baseImage, arrowStartOverride) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 if (!fit.contains(down.position)) return@awaitEachGesture
@@ -242,7 +244,10 @@ internal fun AnnotationCanvas(
                                 }
                                 val d = draft
                                 draft = null
-                                if (d != null && d.isMeaningful()) marks += d
+                                if (d != null && d.isMeaningful()) {
+                                    marks += d
+                                    onMarkAdded()
+                                }
                             }
                         }
                 )
