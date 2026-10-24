@@ -2331,6 +2331,12 @@
     <string name="annotation_edit_text">编辑文字</string>
     <string name="annotation_delete_selected">删除所选</string>
     <string name="annotation_text_hint">输入文字内容</string>
+    <string name="annotation_canvas_capture">定格截屏</string>
+    <string name="annotation_canvas_redo">重做</string>
+    <string name="annotation_canvas_clear">清空标注</string>
+    <string name="annotation_canvas_save">保存入账本</string>
+    <string name="annotation_canvas_guide">点「定格」抓当前屏为底图，\n或选工具直接在真实界面上圈画</string>
+    <string name="annotation_canvas_need_capture">请先「定格」截取底图，再保存入账本</string>
     <string name="agent_mode_build">构建</string>
     <string name="agent_mode_plan">计划</string>
     <string name="agent_mode_auto">自动</string>

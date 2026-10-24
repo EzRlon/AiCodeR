@@ -89,11 +89,9 @@ import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.core.util.ApkInstaller
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
-import com.aicode.feature.annotation.domain.model.AnnotationMark
-import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
+import com.aicode.feature.annotation.presentation.component.AnnotationCanvasScreen
 import com.aicode.feature.annotation.presentation.component.AnnotationHubScreen
 import com.aicode.feature.fixledger.presentation.component.FixLedgerScreen
-import com.aicode.feature.annotation.presentation.component.LiveAnnotationOverlay
 import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
@@ -679,15 +677,9 @@ fun AppNavigation(
         }
     }
 
-    // ── 截图标注：账本 VM（Activity 级）+ 待编辑截图 ──
+    // ── 标注中心统一画布：账本 VM（Activity 级）+ 全局画布宿主开关 ──
     val annotationViewModel: AnnotationViewModel = hiltViewModel()
-    var pendingAnnotationBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    // 活标注（v2）完成时携带的标注 marks（归一化，随 bitmap 一起进编辑器）
-    var pendingAnnotationMarks by remember { mutableStateOf<List<AnnotationMark>>(emptyList()) }
-    // 活标注层是否激活（v2 入口打开，覆盖全屏）
-    var liveAnnotationActive by remember { mutableStateOf(false) }
-    // 截屏标注（标注中心入口）：进入标注层后直接发起定格，不经过画笔阶段
-    var liveInstantCapture by remember { mutableStateOf(false) }
+    var annotationCanvasActive by remember { mutableStateOf(false) }
 
     // 侧栏内容：modal 抽屉与大屏常驻栏共用同一份，不在两处重复几十行参数。
     val drawerBody: @Composable () -> Unit = {
@@ -766,8 +758,9 @@ fun AppNavigation(
                 if (!permanentDrawer) scope.launch { drawerState.close() }
             },
             onNavigateToAnnotations = {
-                navController.navigate("annotations")
-                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+                // 标注中心 = 统一画布（全局宿主），不再跳路由；先收抽屉再铺画布
+                annotationCanvasActive = true
+                if (!permanentDrawer) scope.launch { drawerState.close() }
             },
             onNavigateToRea = {
                 navController.navigate("rea")
@@ -937,23 +930,8 @@ fun AppNavigation(
                 AnnotationHubScreen(
                     onBack = { navController.popBackStack() },
                     onOpenFixLedger = { navController.navigate("fixledger") },
-                    // 两个捕捉入口都先退出标注中心，再在原界面/聊天页上方激活标注层（否则定格的是本页）
-                    onStartLiveAnnotation = {
-                        scope.launch {
-                            navController.popBackStack()
-                            kotlinx.coroutines.delay(350)
-                            liveInstantCapture = false
-                            liveAnnotationActive = true
-                        }
-                    },
-                    onStartScreenshotAnnotation = {
-                        scope.launch {
-                            navController.popBackStack()
-                            kotlinx.coroutines.delay(350)
-                            liveInstantCapture = true
-                            liveAnnotationActive = true
-                        }
-                    },
+                    onStartLiveAnnotation = { annotationCanvasActive = true },
+                    onStartScreenshotAnnotation = { annotationCanvasActive = true },
                     onSummaryReady = { text, items ->
                         // 汇总注入：文本进草稿，图片作待发附件（聊天面板读文件转 base64）
                         agentViewModel.queueExternalText(text)
@@ -1208,41 +1186,12 @@ fun AppNavigation(
         }
     }
 
-    // 活标注层（v2）：真实界面之上叠透明标注层（操作态触摸穿透、弹窗照弹），
-    // 「完成」时隐藏本层→ MediaProjection 抓一帧整屏（含弹层）→ 携带 marks 进 v1 编辑器精修。
-    if (liveAnnotationActive) {
-        LiveAnnotationOverlay(
-            instantCapture = liveInstantCapture,
-            onExit = { liveAnnotationActive = false },
-            onComplete = { bitmap, marks ->
-                liveAnnotationActive = false
-                liveInstantCapture = false
-                pendingAnnotationMarks = marks
-                pendingAnnotationBitmap = bitmap
-            }
-        )
-    }
-
-    // 截图标注编辑弹层（全局宿主：入口在侧栏，截屏后覆盖全屏编辑）
-    pendingAnnotationBitmap?.let { bitmap ->
-        AnnotationEditorDialog(
-            bitmap = bitmap,
-            initialMarks = pendingAnnotationMarks,
-            onSave = { marks, type, note ->
-                annotationViewModel.saveCapture(bitmap, marks, type, note) { ok ->
-                    Toast.makeText(
-                        context,
-                        context.getString(if (ok) R.string.annotation_saved else R.string.annotation_save_failed),
-                        if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                    ).show()
-                }
-                pendingAnnotationBitmap = null
-                pendingAnnotationMarks = emptyList()
-            },
-            onDismiss = {
-                pendingAnnotationBitmap = null
-                pendingAnnotationMarks = emptyList()
-            }
+    // 标注中心统一画布（全局宿主）：一块画布 + 一条工具架，未定格时透明穿透可圈画真实界面，
+    // 定格后底图精画，保存入账本；不再有「跳旧界面」的第二套标注编辑器。
+    if (annotationCanvasActive) {
+        AnnotationCanvasScreen(
+            annotationViewModel = annotationViewModel,
+            onExit = { annotationCanvasActive = false }
         )
     }
 
@@ -1407,7 +1356,6 @@ private class FileAwareUriHandler(
     private val delegate: androidx.compose.ui.platform.UriHandler,
     private val onOpenFile: (path: String, line: Int) -> Unit
 ) : androidx.compose.ui.platform.UriHandler {
-    // build-timing-ab2b-20261024
     override fun openUri(uri: String) {
         val filePath = asChatFilePath(uri)
         if (filePath == null) {

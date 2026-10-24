@@ -2331,6 +2331,12 @@
     <string name="annotation_edit_text">Edit text</string>
     <string name="annotation_delete_selected">Delete selected</string>
     <string name="annotation_text_hint">Enter text</string>
+    <string name="annotation_canvas_capture">Freeze screen</string>
+    <string name="annotation_canvas_redo">Redo</string>
+    <string name="annotation_canvas_clear">Clear marks</string>
+    <string name="annotation_canvas_save">Save to ledger</string>
+    <string name="annotation_canvas_guide">Tap freeze to grab the current screen as canvas,\nor pick a tool to mark the live screen</string>
+    <string name="annotation_canvas_need_capture">Freeze the screen first, then save to ledger</string>
     <string name="agent_mode_build">Build</string>
     <string name="agent_mode_plan">Plan</string>
     <string name="agent_mode_auto">Auto</string>
