@@ -3,6 +3,8 @@ package com.aicode.feature.memorygraph.presentation
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,19 +19,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,15 +49,257 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.domain.model.GoalStatus
+import com.aicode.feature.memorygraph.domain.model.GraphEdge
+import com.aicode.feature.memorygraph.domain.model.GraphNode
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * 记忆图谱 v2 节点/边视图：三路混合检索（关键词直中 + 图谱游走 + 时序）+ 节点详情（关系与删除）。
+ * 数据由 GraphRepository 双源同步（会话 + memory 工具的记忆条目）。
+ */
+@Composable
+private fun GraphSection(
+    workspacePath: String,
+    viewModel: MemoryGraphViewModel
+) {
+    val graph by viewModel.graph.collectAsStateWithLifecycle()
+    val hits by viewModel.graphHits.collectAsStateWithLifecycle()
+    var query by rememberSaveable { mutableStateOf("") }
+    var detailNode by remember { mutableStateOf<GraphNode?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    val (nodes, edges) = graph ?: (emptyList<GraphNode>() to emptyList())
+    val shown: List<GraphNode> = hits?.map { it.node } ?: nodes
+    // 关系数一次性预计算（optimizer #3：避免每个 item 线性扫全边表）
+    val relCounts = remember(edges) { edges.groupingBy { it.fromNodeId }.eachCount() + edges.groupingBy { it.toNodeId }.eachCount() }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    viewModel.searchGraph(workspacePath, it)
+                },
+                placeholder = { Text(stringResource(R.string.graph_search_hint), style = MaterialTheme.typography.bodySmall) },
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            IconButton(onClick = { showAddDialog = true }, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    FeatherIcons.Plus,
+                    contentDescription = stringResource(R.string.graph_add_node),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        if (shown.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = stringResource(R.string.graph_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                items(shown, key = { it.id }) { node ->
+                    val relCount = relCounts[node.id] ?: 0
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        onClick = { detailNode = node },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = Spacing.md, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = node.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (node.summary.isNotBlank()) {
+                                    Text(
+                                        text = node.summary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(Spacing.sm))
+                            GraphTypeBadge(node.type, relCount)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    detailNode?.let { node ->
+        GraphNodeDetailDialog(
+            node = node,
+            edges = edges,
+            nodes = nodes,
+            onDelete = {
+                viewModel.deleteGraphNode(node.id)
+                detailNode = null
+            },
+            onDismiss = { detailNode = null }
+        )
+    }
+
+    if (showAddDialog) {
+        AddGraphNodeDialog(
+            onConfirm = { name, summary ->
+                viewModel.addGraphNode(workspacePath, name, summary)
+                showAddDialog = false
+            },
+            onDismiss = { showAddDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun GraphTypeBadge(type: String, relCount: Int) {
+    val label = when (type) {
+        "SESSION" -> stringResource(R.string.graph_type_session)
+        "MEMORY" -> stringResource(R.string.graph_type_memory)
+        else -> stringResource(R.string.graph_type_custom)
+    }
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+    ) {
+        Text(
+            text = "$label·$relCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+        )
+    }
+}
+
+/** 节点详情：全部关系（对端节点名 + 关系名）+ 删除。 */
+@Composable
+private fun GraphNodeDetailDialog(
+    node: GraphNode,
+    edges: List<GraphEdge>,
+    nodes: List<GraphNode>,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val touching = edges.filter { it.fromNodeId == node.id || it.toNodeId == node.id }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(node.name) },
+        text = {
+            Column {
+                if (node.summary.isNotBlank()) {
+                    Text(
+                        text = node.summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                }
+                if (touching.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.graph_no_relations),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    touching.forEach { edge ->
+                        val peerId = if (edge.fromNodeId == node.id) edge.toNodeId else edge.fromNodeId
+                        val peerName = nodes.firstOrNull { it.id == peerId }?.name ?: peerId.take(8)
+                        val arrow = if (edge.fromNodeId == node.id) "→" else "←"
+                        Text(
+                            text = "$arrow ${edge.relation} · $peerName",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDelete) {
+                Text(stringResource(R.string.graph_delete_node), color = MaterialTheme.colorScheme.error)
+            }
+        }
+    )
+}
+
+@Composable
+private fun AddGraphNodeDialog(
+    onConfirm: (name: String, summary: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var summary by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.graph_add_node)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.graph_node_name_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(Spacing.sm))
+                OutlinedTextField(
+                    value = summary,
+                    onValueChange = { summary = it },
+                    label = { Text(stringResource(R.string.graph_node_summary_hint)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name, summary) }, enabled = name.isNotBlank()) {
+                Text(stringResource(R.string.common_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        }
+    )
+}
 
 /**
  * 记忆图谱 v2：工作线索泳道。
@@ -77,7 +326,10 @@ fun MemoryGraphScreen(
     val activity by viewModel.activity.collectAsStateWithLifecycle()
     val detail by viewModel.detail.collectAsStateWithLifecycle()
 
-    androidx.compose.runtime.LaunchedEffect(workspacePath) { viewModel.refresh() }
+    androidx.compose.runtime.LaunchedEffect(workspacePath) {
+        viewModel.refresh()
+        viewModel.syncGraph(workspacePath)
+    }
 
     fun isRunning(id: String): Boolean =
         agentStates[id] is AgentUIState.Loading || agentStates[id] is AgentUIState.Streaming
@@ -171,9 +423,11 @@ fun MemoryGraphScreen(
         }
 
         // ── 筛选 ──
+        // 反馈 3：横向滚动避免窄屏把最后的 chip 挤成竖排文字；chip 文字一律单行
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
@@ -197,11 +451,21 @@ fun MemoryGraphScreen(
                 onClick = { filter = "today" },
                 label = { Text(stringResource(R.string.memory_graph_filter_today)) },
             )
+            FilterChip(
+                selected = filter == "graph",
+                onClick = { filter = "graph" },
+                label = { Text(stringResource(R.string.memory_graph_tab_graph)) },
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        // ── 线索泳道 ──
-        if (visibleRoots.isEmpty()) {
+        // ── 记忆图谱 v2：节点/边视图（v1 泳道保留为默认页）──
+        if (filter == "graph") {
+            GraphSection(
+                workspacePath = workspacePath,
+                viewModel = viewModel
+            )
+        } else if (visibleRoots.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = stringResource(R.string.memory_graph_empty),
