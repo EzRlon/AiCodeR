@@ -127,6 +127,7 @@ import compose.icons.feathericons.Server
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Terminal
+import compose.icons.feathericons.Tool
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Layers
@@ -178,6 +179,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     ScheduledTaskEditor(R.string.schedule_title),
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
+    DevEnvironments(R.string.settings_dev_env),
     Proxy(R.string.proxy_title),
     Log(R.string.settings_log),
     Permissions(R.string.settings_permissions),
@@ -229,7 +231,9 @@ fun SettingsScreen(
     /** 存储空间「在文件树中查看」：把目标容器路径交给宿主页导航（null 则隐藏该操作）。 */
     onRevealInTree: ((String) -> Unit)? = null,
     /** 授权记录「打开所在会话」：把会话 id 交给宿主页导航（null 则隐藏跳转）。 */
-    onOpenSession: ((String) -> Unit)? = null
+    onOpenSession: ((String) -> Unit)? = null,
+    /** 开发环境一键搭建：场景确认后把（标题、任务提示词）交给宿主页开新会话执行。 */
+    onLaunchDevEnv: (title: String, prompt: String) -> Unit = { _, _ -> }
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
@@ -1246,6 +1250,9 @@ fun SettingsScreen(
                         onDelete = { memory -> memoryViewModel.delete(memory.name, memory.scope) }
                     )
                 }
+                SettingsSection.DevEnvironments -> {
+                    DevEnvironmentsSection(onLaunch = onLaunchDevEnv)
+                }
                 SettingsSection.Scripts -> {
                     val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
@@ -2096,6 +2103,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.HardDrive,
                 title = stringResource(SettingsSection.Container.titleRes),
                 onClick = { onOpen(SettingsSection.Container) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Tool,
+                title = stringResource(SettingsSection.DevEnvironments.titleRes),
+                onClick = { onOpen(SettingsSection.DevEnvironments) }
             )
             SettingsDivider()
             SettingsRow(

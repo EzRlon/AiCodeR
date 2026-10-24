@@ -972,6 +972,19 @@ fun AppNavigation(
                             Toast.makeText(context, context.getString(R.string.perm_audit_session_gone), Toast.LENGTH_SHORT).show()
                         }
                     },
+                    onLaunchDevEnv = { title, prompt ->
+                        // 开发环境一键搭建：新建会话（标题用场景名）并直接发入搭建任务，回聊天页看 AI 干活
+                        agentViewModel.startSessionWithRequest(prompt, title) { accepted ->
+                            if (!accepted) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.dev_env_launch_rejected),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                        navController.popBackStack()
+                    },
                     onRerunOnboarding = {
                         // 从设置页「重新运行引导」：清状态回 in_progress、激活引导并回聊天页。
                         scope.launch {

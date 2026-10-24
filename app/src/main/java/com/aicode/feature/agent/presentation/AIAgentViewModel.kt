@@ -3183,22 +3183,48 @@ class AIAgentViewModel @Inject constructor(
     fun newSession() = viewModelScope.launch {
         val ws = _currentWorkspace.value
         if (ws.isBlank()) return@launch
+        ensureCurrentSession(ws)
+    }
+
+    /**
+     * 确保有一个当前会话（与 [newSession] 同一套空会话复用判定），返回会话 id。
+     * 供「新建会话并直接发入首条消息」的开箱即用入口复用。
+     */
+    private suspend fun ensureCurrentSession(ws: String, title: String? = null): String {
         val curId = _currentSessionId.value
         val reusableId = if (curId != null && sessionUseCase.isSessionEmpty(curId)) {
             curId
         } else {
             sessionUseCase.getEmptySessionOfWorkspace(ws)?.id
         }
-        if (reusableId != null) {
+        return if (reusableId != null) {
             setAgentState(reusableId, AgentUIState.Idle)
             _currentSessionId.value = reusableId
+            reusableId
+        } else {
+            // 新会话时异步重连未连接的 MCP server，让 manageMcp 新增的配置真正生效；
+            // 不阻塞会话创建——MCP 环境未就绪/超时时不能卡住「新建会话」。
+            mcpManager.reconnectUnconnectedAsync()
+            val created = createSession(ws)
+            val s = if (title.isNullOrBlank()) created else created.copy(title = title)
+            sessionUseCase.upsertSession(s)
+            s.id.also { _currentSessionId.value = it }
+        }
+    }
+
+    /**
+     * 开箱即用入口（开发环境一键搭建等）：确保会话就绪后直接把 [request] 发入该会话。
+     * 会话忙时走统一队列排队，不绕过发送纪律；被拒（如硬阈值暂停）时回调 false。
+     */
+    fun startSessionWithRequest(request: String, title: String? = null, onResult: (Boolean) -> Unit = {}) = viewModelScope.launch {
+        val ws = _currentWorkspace.value
+        if (ws.isBlank()) {
+            onResult(false)
             return@launch
         }
-        // 新会话时异步重连未连接的 MCP server，让 manageMcp 新增的配置真正生效；
-        // 不阻塞会话创建——MCP 环境未就绪/超时时不能卡住「新建会话」。
-        mcpManager.reconnectUnconnectedAsync()
-        val sid = createAndUpsertSession(ws)
-        _currentSessionId.value = sid
+        val sid = ensureCurrentSession(ws, title)
+        // projectRoot 必须显式传：空值会让系统提示词与 CLI 引擎失去工作区上下文
+        onResult(enqueueAgentRequest(request = request, projectRoot = ws, targetSessionId = sid))
     }
 
     fun setCurrentSessionId(id: String) {
