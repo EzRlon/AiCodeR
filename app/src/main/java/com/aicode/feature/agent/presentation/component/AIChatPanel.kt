@@ -679,6 +679,8 @@ fun AIChatPanel(
     onNavigateToBrowser: () -> Unit = {},
     onNavigateToMemoryGraph: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
+    /** 在内置编辑器打开工作区文件（文本类附件卡片用，反馈 9）。 */
+    onOpenFile: (String) -> Unit = {},
     settingsViewModel: SettingsViewModel? = null,
     workspaceViewModel: WorkspaceViewModel? = null,
     onOpenDrawer: () -> Unit,
@@ -735,6 +737,12 @@ fun AIChatPanel(
     val rewindConflicts by viewModel.rewindConflicts.collectAsStateWithLifecycle()
     val providers = (settingsViewModel?.providers?.collectAsStateWithLifecycle()?.value ?: emptyList()).filter { it.isEnabled }
     val modelMetadata = settingsViewModel?.modelMetadata?.collectAsStateWithLifecycle()?.value.orEmpty()
+    val sessionEngine by viewModel.currentSessionEngine.collectAsStateWithLifecycle()
+    val frameAwaitingApproval by viewModel.hasPendingApproval.collectAsStateWithLifecycle()
+    // CLI 引擎会话的模型名（胶囊/模型页勾选用，而非默认 provider 模型）
+    val sessionCliModel = if (sessionEngine == com.aicode.feature.agent.domain.engine.AgentEngines.CLAUDE_CODE) {
+        currentSessionState?.model
+    } else null
     val sessionProviderModel by viewModel.currentSessionProviderModel.collectAsStateWithLifecycle()
     val defaultProviderId = settingsViewModel?.defaultModelProviderId?.collectAsStateWithLifecycle()?.value ?: ""
     val defaultModelName = settingsViewModel?.defaultModel?.collectAsStateWithLifecycle()?.value ?: ""
@@ -1649,9 +1657,20 @@ fun AIChatPanel(
     }
 
     // 文件卡片点击用系统 app 打开：重取/拷贝需要在 IO 线程跑（远程模式要下载），故由这里注入协程。
+    // 文本类附件（.md/.txt/代码等）改用内置编辑器打开（用户反馈 9：系统无 markdown 处理应用，必失败）；
+    // 编辑器打开失败（路径不在工作区等）时回退系统 app。
     val attachmentOpener = remember(viewModel.fileAccess, context) {
         AttachmentOpener { attachment ->
-            scope.launch { openSentAttachment(context, attachment, viewModel.fileAccess) }
+            scope.launch {
+                if (isTextLikeAttachment(attachment) && attachment.containerPath.isNotBlank()) {
+                    val opened = runCatching {
+                        onOpenFile(attachment.containerPath)
+                        true
+                    }.getOrDefault(false)
+                    if (opened) return@launch
+                }
+                openSentAttachment(context, attachment, viewModel.fileAccess)
+            }
         }
     }
 
@@ -2168,6 +2187,14 @@ fun AIChatPanel(
                 onSelectModel = { p, m ->
                     viewModel.setSessionProviderModel(p, m)
                 },
+                sessionEngine = sessionEngine,
+                sessionCliModel = sessionCliModel,
+                awaitingApproval = frameAwaitingApproval,
+                onSelectEngine = { viewModel.setSessionEngine(it) },
+                checkClaudeCodeAvailable = { viewModel.isClaudeCodeAvailable() },
+                onInstallClaudeCode = { viewModel.installClaudeCode() },
+                onSelectCliModel = { viewModel.setSessionCliModel(it) },
+                onOpenAgentCli = onNavigateToAgents,
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
                 onModePillLongClick = {
@@ -2207,7 +2234,6 @@ fun AIChatPanel(
                 onInterjectQueued = { viewModel.interjectQueuedRequest(it) },
                 dashboardState = currentDashboardState,
                 todoItems = currentTodoItems,
-                activeToolLabel = thinkingLabel,
                 sessionId = currentSessionId.orEmpty(),
                 onTodoExpandedChange = { todoExpanded = it },
                 voiceSetupCard = if (showVoiceSetupCard) {

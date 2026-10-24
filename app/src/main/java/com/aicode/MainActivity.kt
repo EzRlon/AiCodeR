@@ -1,5 +1,6 @@
 package com.aicode
 
+import android.app.Activity
 import android.os.Build
 import android.content.Intent
 import android.os.Bundle
@@ -91,6 +92,7 @@ import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import com.aicode.feature.annotation.domain.model.AnnotationMark
 import com.aicode.feature.annotation.presentation.component.AnnotationEditorDialog
 import com.aicode.feature.annotation.presentation.component.AnnotationHubScreen
+import com.aicode.feature.fixledger.presentation.component.FixLedgerScreen
 import com.aicode.feature.annotation.presentation.component.LiveAnnotationOverlay
 import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
@@ -581,6 +583,23 @@ fun AppNavigation(
         paneKind = WorkbenchPaneKind.NONE
     }
 
+    // 聊天页返回键守护：有 agent/命令任务在跑时不结束 Activity——finish 会销毁 Activity 级
+    // ViewModel，运行中的代理协程（含子代理）全部被取消，前台保活服务只保进程不保协程。
+    // 此时代替为退到后台（与 Home 键等价），任务与运行态原样保留；无任务时行为不变。
+    BackHandler(
+        // paneKind 为窄屏残留（大屏开右栏后旋转/调窗到窄屏）时，pane 处理器需 expanded 才接、
+        // 这里不能再用 paneKind==NONE 限定，否则返回键会穿透 finish 杀掉运行中的任务。
+        enabled = currentRoute == "chat" && !drawerState.isOpen &&
+            (!expanded || paneKind == WorkbenchPaneKind.NONE)
+    ) {
+        val activity = context as? Activity
+        if (agentViewModel.hasActiveAgentWork()) {
+            activity?.moveTaskToBack(true)
+        } else {
+            activity?.finish()
+        }
+    }
+
     // 打开文件：大屏进右栏，窄窗跳全屏编辑器页。
     val openFile: (String, Int, Boolean) -> Unit = { filePath, line, fromDrawer ->
         if (expanded) {
@@ -829,6 +848,7 @@ fun AppNavigation(
                                     onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
                                     onNavigateToMemoryGraph = { navController.navigate("memorygraph") },
                                     onNavigateToAgents = { showAgentCliSheet = true },
+                                    onOpenFile = { path -> openFile(path, 0, false) },
                                     terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
                                     gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
                                     browserActive = paneOpen && paneKind == WorkbenchPaneKind.BROWSER,
@@ -894,6 +914,11 @@ fun AppNavigation(
                     }
                 }
             }
+            composable("fixledger") {
+                FixLedgerScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
             composable("memorygraph") {
                 MemoryGraphScreen(
                     workspacePath = currentWorkspace?.path.orEmpty(),
@@ -911,6 +936,7 @@ fun AppNavigation(
             composable("annotations") {
                 AnnotationHubScreen(
                     onBack = { navController.popBackStack() },
+                    onOpenFixLedger = { navController.navigate("fixledger") },
                     // 两个捕捉入口都先退出标注中心，再在原界面/聊天页上方激活标注层（否则定格的是本页）
                     onStartLiveAnnotation = {
                         scope.launch {
@@ -1381,6 +1407,7 @@ private class FileAwareUriHandler(
     private val delegate: androidx.compose.ui.platform.UriHandler,
     private val onOpenFile: (path: String, line: Int) -> Unit
 ) : androidx.compose.ui.platform.UriHandler {
+    // build-timing-ab2b-20261024
     override fun openUri(uri: String) {
         val filePath = asChatFilePath(uri)
         if (filePath == null) {

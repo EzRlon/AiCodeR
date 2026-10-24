@@ -175,6 +175,33 @@ object FileLogger {
         return freed.get()
     }
 
+    /**
+     * 删除单个日志文件，返回释放的字节数（反馈 8：逐条清除）。
+     * 若目标正是当天正被写入的文件，先关 writer 并清日期标记（与 clearLogs 同理，避免写进已删 inode）。
+     */
+    fun deleteLogFile(file: File): Long {
+        val dir = logDir ?: return 0L
+        if (file.parentFile?.canonicalPath != dir.canonicalPath) return 0L
+        if (!file.name.startsWith("log-")) return 0L
+        val freed = java.util.concurrent.atomic.AtomicLong(0)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        ioExecutor.execute {
+            runCatching {
+                if (file.name == "log-${fileNameFormat.format(java.time.Instant.now())}") {
+                    writer?.close()
+                    writer = null
+                    writerDate = null
+                    flushScheduled = false
+                }
+                val size = file.length()
+                if (file.delete()) freed.addAndGet(size)
+            }.onFailure { Log.e(TAG, "删除日志文件失败", it) }
+            latch.countDown()
+        }
+        runCatching { latch.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+        return freed.get()
+    }
+
     private fun write(level: String, tag: String, message: String, throwable: Throwable?) {
         val dir = logDir ?: return // 未初始化则只走 logcat，不落盘
         val now = java.time.Instant.now()

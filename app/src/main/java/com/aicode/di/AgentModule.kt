@@ -13,6 +13,8 @@ import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.annotation.data.local.dao.AnnotationDao
 import com.aicode.feature.backup.data.local.dao.BackupTargetDao
+import com.aicode.feature.fixledger.data.local.dao.FixLedgerDao
+import com.aicode.feature.memorygraph.data.local.dao.GraphDao
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.data.local.database.AgentDatabase
@@ -181,6 +183,18 @@ object AgentModule {
     @Singleton
     fun provideAnnotationDao(database: AgentDatabase): AnnotationDao {
         return database.annotationDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFixLedgerDao(database: AgentDatabase): FixLedgerDao {
+        return database.fixLedgerDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideGraphDao(database: AgentDatabase): GraphDao {
+        return database.graphDao()
     }
 
     @Provides
@@ -400,7 +414,8 @@ object AgentModule {
         recallTool: RecallTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
-        browserTool: BrowserTool
+        browserTool: BrowserTool,
+        fixLedgerTool: com.aicode.feature.fixledger.domain.tool.FixLedgerTool
     ): ToolRegistry {
         return ToolRegistry().apply {
             register("readFile", readFileTool)
@@ -429,6 +444,7 @@ object AgentModule {
             register("task", taskTool)
             register("messageParent", messageParentTool)
             register("browser", browserTool)
+            register("fixledger", fixLedgerTool)
         }
     }
 

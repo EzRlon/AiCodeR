@@ -70,7 +70,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -108,9 +107,8 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.rememberImeBottomInset
-import com.aicode.core.ui.ProgressNode
-import com.aicode.core.ui.ProgressNodeState
-import com.aicode.core.ui.TaskProgressBorder
+import com.aicode.core.ui.TaskDangerLevel
+import com.aicode.core.ui.TaskStateBorder
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
@@ -120,7 +118,6 @@ import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.presentation.SessionGoalUi
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.TodoItem
-import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalRequest
@@ -200,6 +197,17 @@ internal fun ChatInputBar(
     providers: List<AIProviderConfig>,
     modelMetadata: Map<String, ModelMetadata>,
     onSelectModel: (String, String) -> Unit,
+    /** 当前会话引擎（引擎切换）；null = 本体内置。 */
+    sessionEngine: String? = null,
+    /** CLI 引擎会话的模型名（取自会话 model，供胶囊与勾选显示）。 */
+    sessionCliModel: String? = null,
+    /** 是否有等待用户裁决的审批（授权/提问/计划）：外框红色快脉冲。 */
+    awaitingApproval: Boolean = false,
+    onSelectEngine: (String?) -> Unit = {},
+    checkClaudeCodeAvailable: suspend () -> Boolean = { false },
+    onInstallClaudeCode: () -> Unit = {},
+    onSelectCliModel: (String) -> Unit = {},
+    onOpenAgentCli: () -> Unit = {},
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     /** 长按模式图标：按当前模式弹「定时任务 / 定时 Plan」创建面板；null 时不响应。 */
@@ -237,8 +245,6 @@ internal fun ChatInputBar(
     onRefreshDashboardByButton: () -> Unit = {},
     onDashboardExpandedChange: (Boolean) -> Unit = {},
     todoItems: List<TodoItem> = emptyList(),
-    /** 此刻真实在做的事（正在执行的工具/阶段文案），拼在「进行中」节点提示里。 */
-    activeToolLabel: String? = null,
     sessionId: String = "",
     onTodoExpandedChange: (Boolean) -> Unit = {},
     forceCollapseDashboard: Boolean = false,
@@ -548,39 +554,9 @@ internal fun ChatInputBar(
                 )
             }
 
-            // AI 工作中：卡片外围的任务进度线框——完全由 todo 驱动（节点=条目、弧长=完成比例）；
-            // 无 todo 时不渲染（不摆假进度）；节点点击在卡片上方悬浮显示对应条目文字。
-            var progressTipIndex by remember { mutableStateOf<Int?>(null) }
-            // 每次点击自增：同节点重复点击也能重置 2.5s 计时（LaunchedEffect 以值为 key，同值不重启）
-            var progressTipTick by remember { mutableStateOf(0) }
-            // 进行中节点拼接「此刻真实在做的事」（正在执行的工具/阶段）——点击节点即可确认当前动作
-            val activeIndex = todoItems.indexOfFirst { it.status == TodoStatus.IN_PROGRESS }
-            val progressNodes = if (isBusy) {
-                todoItems.take(12).mapIndexed { index, item ->
-                    ProgressNode(
-                        state = when (item.status) {
-                            TodoStatus.COMPLETED -> ProgressNodeState.COMPLETED
-                            TodoStatus.IN_PROGRESS -> ProgressNodeState.ACTIVE
-                            TodoStatus.PENDING -> ProgressNodeState.PENDING
-                        },
-                        label = if (index == activeIndex && !activeToolLabel.isNullOrBlank()) {
-                            "${item.subject} · $activeToolLabel"
-                        } else {
-                            item.subject
-                        }
-                    )
-                }
-            } else emptyList()
-            LaunchedEffect(progressTipTick) {
-                if (progressTipIndex != null) {
-                    delay(2500)
-                    progressTipIndex = null
-                }
-            }
-            // 本轮结束（busy→idle）后清空残留提示：新一轮的节点列表长度可能不同，索引失效会渲染空气泡
-            LaunchedEffect(isBusy) {
-                if (!isBusy) progressTipIndex = null
-            }
+            // 任务危险程度动态外框（用户 2026-10-24 定稿）：不做任务进度（待办已有展示位），
+            // 外框只表达危险程度——等待审批=红快脉冲（最高危）；执行中=跟随发送按钮忙色慢流动。
+            // 颜色与发送按钮状态语义同步；描边极细（约 0.55px）；空闲不渲染。
             Box(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier
@@ -762,6 +738,13 @@ internal fun ChatInputBar(
                                 providers = providers,
                                 modelMetadata = modelMetadata,
                                 onSelectModel = onSelectModel,
+                                engine = sessionEngine,
+                                cliModel = sessionCliModel,
+                                onSelectEngine = onSelectEngine,
+                                checkClaudeCodeAvailable = checkClaudeCodeAvailable,
+                                onInstallClaudeCode = onInstallClaudeCode,
+                                onSelectCliModel = onSelectCliModel,
+                                onOpenAgentCli = onOpenAgentCli,
                                 forceOpenSheet = forceOpenModelSheet,
                                 onSelectSuccessInOnboarding = onSelectModelInOnboarding,
                                 onSheetDismiss = onModelSheetDismiss,
@@ -882,72 +865,16 @@ internal fun ChatInputBar(
                     }
                 }
 
-                if (isBusy) {
-                    // 任务一开始就拉起外框：todo 还没产生时画呼吸段（indeterminate），
-                    // 有了 todo 才切换为真实节点与完成弧。
-                    TaskProgressBorder(
+                if (isBusy || awaitingApproval) {
+                    TaskStateBorder(
                         modifier = Modifier.matchParentSize(),
-                        progress = if (todoItems.isEmpty()) 0f
-                        else todoItems.count { it.status == TodoStatus.COMPLETED }.toFloat() / todoItems.size,
-                        nodes = progressNodes,
+                        danger = if (awaitingApproval) TaskDangerLevel.AWAITING_APPROVAL else TaskDangerLevel.RUNNING,
                         cornerRadius = Radius.lg,
-                        activeColor = MaterialTheme.colorScheme.primary,
-                        // 完成弧与完成节点弱化：亮绿太抢眼（用户 2026-10-15 反馈），向表面色混合降饱和。
-                        completedColor = lerp(
-                            MaterialTheme.semanticColors.success,
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            0.4f
-                        ),
-                        pendingColor = MaterialTheme.colorScheme.outlineVariant,
-                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
-                        indeterminate = todoItems.isEmpty()
+                        // 颜色与发送按钮状态语义同步：执行中=忙色（Brand.Orange），等待审批=红（最高危）
+                        runningColor = com.aicode.core.theme.Brand.Orange,
+                        awaitingColor = MaterialTheme.colorScheme.error,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
                     )
-                    if (progressNodes.isNotEmpty()) {
-                        // 节点点击热点：独立小层只拦截节点附近触摸，避免整层覆盖独占卡片内交互
-                        BoxWithConstraints(modifier = Modifier.matchParentSize()) {
-                            val density = LocalDensity.current
-                            val w = with(density) { maxWidth.toPx() }
-                            val h = with(density) { maxHeight.toPx() }
-                            val hotPx = with(density) { 30.dp.toPx() }
-                            val perimeter = 2f * (w + h)
-                            progressNodes.forEachIndexed { index, _ ->
-                                val d = perimeter * (index + 1) / (progressNodes.size + 1)
-                                val p = pointOnRectPerimeter(d, w, h)
-                                Box(
-                                    modifier = Modifier
-                                        .offset { IntOffset((p.x - hotPx).toInt(), (p.y - hotPx).toInt()) }
-                                        .size(60.dp)
-                                        .pointerInput(index) {
-                                            detectTapGestures {
-                                                progressTipIndex = index
-                                                progressTipTick++
-                                            }
-                                        }
-                                )
-                            }
-                        }
-                    }
-                    progressTipIndex?.let { tip ->
-                        progressNodes.getOrNull(tip)?.takeIf { it.label.isNotBlank() }?.let { node ->
-                            Surface(
-                                shape = RoundedCornerShape(Radius.sm),
-                                color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.92f),
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .offset(y = (-40).dp)
-                                    .zIndex(1f)
-                            ) {
-                                Text(
-                                    text = node.label,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.inverseOnSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1187,19 +1114,6 @@ private fun modeIcon(mode: AgentMode): ImageVector = when (mode) {
     AgentMode.BUILD -> FeatherIcons.Tool
     AgentMode.PLAN -> FeatherIcons.Clipboard
     AgentMode.AUTO -> FeatherIcons.Zap
-}
-
-/** 矩形周界上距左上角 d 像素的点（顺时针，与进度环路径方向一致）。 */
-private fun pointOnRectPerimeter(d: Float, w: Float, h: Float): Offset {
-    val per = 2f * (w + h)
-    if (per <= 0f) return Offset.Zero
-    val dd = ((d % per) + per) % per
-    return when {
-        dd <= w -> Offset(dd, 0f)
-        dd <= w + h -> Offset(w, dd - w)
-        dd <= 2 * w + h -> Offset(2 * w + h - dd, h)
-        else -> Offset(0f, per - dd)
-    }
 }
 
 @Composable

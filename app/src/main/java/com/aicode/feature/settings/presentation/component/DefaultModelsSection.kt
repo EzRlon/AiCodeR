@@ -58,6 +58,7 @@ import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
+import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.User
 import compose.icons.feathericons.Users
@@ -68,6 +69,8 @@ import compose.icons.feathericons.Users
 @Composable
 internal fun DefaultModelsSection(
     providers: List<AIProviderConfig>,
+    defaultEngine: String = "",
+    onSelectDefaultEngine: (String) -> Unit = {},
     visionProviderId: String,
     visionModel: String,
     compactionProviderId: String,
@@ -154,6 +157,33 @@ internal fun DefaultModelsSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        // 新会话默认引擎（引擎切换）：在此设默认后新建会话直接用该引擎
+        SettingsGroupHeader(text = stringResource(R.string.settings_default_engine_group))
+        SettingsGroup {
+            SettingsRow(
+                icon = FeatherIcons.Cpu,
+                title = stringResource(R.string.engine_builtin),
+                subtitle = stringResource(R.string.engine_builtin_sub),
+                onClick = { onSelectDefaultEngine("") },
+                trailing = {
+                    if (defaultEngine.isBlank()) {
+                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Terminal,
+                title = "Claude Code",
+                subtitle = stringResource(R.string.settings_default_engine_claude_sub),
+                onClick = { onSelectDefaultEngine(com.aicode.feature.agent.domain.engine.AgentEngines.CLAUDE_CODE) },
+                trailing = {
+                    if (defaultEngine == com.aicode.feature.agent.domain.engine.AgentEngines.CLAUDE_CODE) {
+                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            )
+        }
         SettingsGroupHeader(text = stringResource(R.string.settings_agent_models_group))
         SettingsGroup {
             SettingsRow(
@@ -430,6 +460,40 @@ internal fun ModelSelectionSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        sheetGesturesEnabled = true,
+        containerColor = settingsPageBackground()
+    ) {
+        ModelSelectionContent(
+            title = title,
+            noModelsText = noModelsText,
+            providers = providers,
+            currentProviderId = currentProviderId,
+            currentModel = currentModel,
+            modelMetadata = modelMetadata,
+            onSelect = onSelect,
+            onClear = onClear
+        )
+    }
+}
+
+/**
+ * 模型选择弹窗的内容体（不含底部弹窗外壳）：引擎/模型两段式弹窗的「模型」页也复用这份。
+ * 搜索/折叠状态在本组合内持有。
+ */
+@Composable
+internal fun ModelSelectionContent(
+    title: String,
+    noModelsText: String,
+    providers: List<AIProviderConfig>,
+    currentProviderId: String,
+    currentModel: String,
+    modelMetadata: Map<String, ModelMetadata>,
+    onSelect: (providerId: String, model: String) -> Unit,
+    onClear: (() -> Unit)?
+) {
     val context = LocalContext.current
     val collapseStore = remember { ModelSheetCollapseStore(context.applicationContext) }
     var searchQuery by remember { mutableStateOf("") }
@@ -447,107 +511,100 @@ internal fun ModelSelectionSheet(
         )
     }
 
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        sheetGesturesEnabled = true,
-        containerColor = settingsPageBackground()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg)
+            .padding(bottom = Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = Spacing.lg)
-                .padding(bottom = Spacing.lg),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            onClear?.let { onClear ->
                 Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
+                    text = stringResource(R.string.common_reset),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { onClear() }
                 )
-                onClear?.let { onClear ->
+            }
+        }
+
+        ModelSearchField(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholder = stringResource(R.string.provider_filter_models_hint)
+        )
+
+        val activeProviders = providers.filter { it.isEnabled && it.models.isNotEmpty() }
+        if (activeProviders.isEmpty()) {
+            SettingsGroup {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 360.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        text = stringResource(R.string.common_reset),
+                        text = noModelsText,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { onClear() }
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(Spacing.lg)
                     )
                 }
             }
-
-            ModelSearchField(
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                placeholder = stringResource(R.string.provider_filter_models_hint)
-            )
-
-            val activeProviders = providers.filter { it.isEnabled && it.models.isNotEmpty() }
-            if (activeProviders.isEmpty()) {
-                SettingsGroup {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 360.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = noModelsText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(Spacing.lg)
-                        )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 360.dp, max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                activeProviders.forEach { provider ->
+                    val filteredModels = provider.models.filter {
+                        searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true)
                     }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 360.dp, max = 420.dp),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    activeProviders.forEach { provider ->
-                        val filteredModels = provider.models.filter {
-                            searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true)
-                        }
-                        if (filteredModels.isNotEmpty()) {
-                            // 搜索时强制展开，否则用折叠状态：用户搜到名字却看不到结果会很困惑。
-                            val expanded = searchQuery.isNotBlank() || provider.id !in collapsedProviderIds
-                            item(key = "header_${provider.id}") {
-                                CollapsibleGroupHeader(
-                                    text = "${provider.name} (${filteredModels.size})",
-                                    expanded = expanded,
-                                    onToggle = {
-                                        val updated = if (provider.id in collapsedProviderIds) {
-                                            collapsedProviderIds - provider.id
-                                        } else {
-                                            collapsedProviderIds + provider.id
-                                        }
-                                        collapsedProviderIds = updated
-                                        collapseStore.save(updated)
+                    if (filteredModels.isNotEmpty()) {
+                        // 搜索时强制展开，否则用折叠状态：用户搜到名字却看不到结果会很困惑。
+                        val expanded = searchQuery.isNotBlank() || provider.id !in collapsedProviderIds
+                        item(key = "header_${provider.id}") {
+                            CollapsibleGroupHeader(
+                                text = "${provider.name} (${filteredModels.size})",
+                                expanded = expanded,
+                                onToggle = {
+                                    val updated = if (provider.id in collapsedProviderIds) {
+                                        collapsedProviderIds - provider.id
+                                    } else {
+                                        collapsedProviderIds + provider.id
                                     }
-                                )
-                            }
-                            if (expanded) {
-                                item(key = "card_${provider.id}") {
-                                    SettingsGroup {
-                                        filteredModels.forEachIndexed { index, model ->
-                                            if (index > 0) {
-                                                SettingsDivider()
-                                            }
-                                            ModelSelectionRow(
-                                                model = model,
-                                                selected = provider.id == currentProviderId && model == currentModel,
-                                                metadata = modelMetadata[modelMetadataKey(provider.id, model)],
-                                                onClick = { onSelect(provider.id, model) }
-                                            )
+                                    collapsedProviderIds = updated
+                                    collapseStore.save(updated)
+                                }
+                            )
+                        }
+                        if (expanded) {
+                            item(key = "card_${provider.id}") {
+                                SettingsGroup {
+                                    filteredModels.forEachIndexed { index, model ->
+                                        if (index > 0) {
+                                            SettingsDivider()
                                         }
+                                        ModelSelectionRow(
+                                            model = model,
+                                            selected = provider.id == currentProviderId && model == currentModel,
+                                            metadata = modelMetadata[modelMetadataKey(provider.id, model)],
+                                            onClick = { onSelect(provider.id, model) }
+                                        )
                                     }
                                 }
                             }

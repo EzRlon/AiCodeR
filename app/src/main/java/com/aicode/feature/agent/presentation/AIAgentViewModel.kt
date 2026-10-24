@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
+import android.widget.Toast
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -95,6 +96,7 @@ import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
 import com.aicode.feature.agent.domain.team.TeamRepository
 import kotlinx.coroutines.flow.Flow
+import com.aicode.feature.agent.domain.engine.AgentEngines
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -220,6 +222,7 @@ class AIAgentViewModel @Inject constructor(
     private val approvalNotificationSettings: ApprovalNotificationSettingsRepository,
     private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
+    private val deliveryTracker: com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val teamRepository: TeamRepository,
@@ -231,6 +234,7 @@ class AIAgentViewModel @Inject constructor(
     private val voskModelManager: VoskModelManager,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
+    private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -1044,6 +1048,58 @@ class AIAgentViewModel @Inject constructor(
     val currentSessionMode: StateFlow<AgentMode> = currentSessionState.map { it?.mode ?: AgentMode.BUILD }
         .stateIn(viewModelScope, SharingStarted.Eagerly, AgentMode.BUILD)
 
+    /** 当前会话的执行引擎；null = 本体内置工作流。 */
+    val currentSessionEngine: StateFlow<String?> = currentSessionState.map { it?.engine }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** 是否有等待用户裁决的审批（授权/提问/计划审批）：底栏危险外框用。 */
+    val hasPendingApproval: StateFlow<Boolean> = combine(
+        toolPermissionManager.pendingRequest,
+        askUserQuestionManager.pendingQuestion,
+        planApprovalManager.pendingApproval
+    ) { p, q, a -> p != null || q != null || a != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 切换当前会话引擎（null 切回本体内置工作流）。运行中禁止切换（返回 false 不生效）。 */
+    fun setSessionEngine(engine: String?): Boolean {
+        val sid = _currentSessionId.value ?: return false
+        if (sessionJobs[sid]?.isActive == true || commandJobs[sid]?.isActive == true) return false
+        viewModelScope.launch { sessionUseCase.updateEngine(sid, engine) }
+        return true
+    }
+
+    /** Claude Code 引擎是否就绪（本地容器 + CLI 已安装）。 */
+    suspend fun isClaudeCodeAvailable(): Boolean = claudeCodeBridge.isAvailable()
+
+    /** 一键安装 Claude Code：开终端标签跑安装命令（跑完发通知）；装完失效可用性缓存，回引擎页立即可检测。 */
+    fun installClaudeCode() {
+        viewModelScope.launch {
+            runCatching { claudeCodeBridge.installCli() }
+                .onSuccess {
+                    claudeCodeBridge.invalidateAvailability()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.engine_install_started),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                .onFailure {
+                    claudeCodeBridge.invalidateAvailability()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.engine_install_failed, it.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
+
+    /** CLI 引擎会话选模型：仅写会话 model 字段（如 sonnet），providerId 置空。 */
+    fun setSessionCliModel(model: String) {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch { sessionUseCase.updateProviderModel(sid, null, model) }
+    }
+
     /** 当前会话的持续目标（goal）快照；null 表示未设定目标。 */
     val currentSessionGoal: StateFlow<SessionGoalUi?> = currentSessionState
         .map { s ->
@@ -1351,6 +1407,12 @@ class AIAgentViewModel @Inject constructor(
         val sid = _currentSessionId.value ?: return false
         return sessionJobs[sid]?.isActive == true
     }
+
+    /** 是否存在任何活跃的 agent/斜杠命令任务。返回键守护用：有任务时返回键改为退到后台，
+     *  否则 finish Activity 会连带清掉 ViewModel，运行中的协程全部被取消。 */
+    fun hasActiveAgentWork(): Boolean =
+        sessionJobs.values.any { it.isActive } || commandJobs.values.any { it.isActive } ||
+            _runningCommandSessions.value.isNotEmpty()
 
     fun hasRunningSessionsInCurrentWorkspace(): Boolean {
         if (sessions.value.any { sessionJobs[it.id]?.isActive == true }) return true
@@ -1677,11 +1739,79 @@ class AIAgentViewModel @Inject constructor(
                     SubAgentEventType.COMPLETED, SubAgentEventType.FAILED -> {
                         enqueueSubAgentNotification(event)
                     }
-                    SubAgentEventType.MESSAGE_FROM_PARENT -> deliverMessageToSubAgent(event)
-                    SubAgentEventType.MESSAGE_FROM_SUB -> deliverMessageToParent(event)
+                    SubAgentEventType.MESSAGE_FROM_PARENT -> {
+                        deliverMessageToSubAgent(event)
+                        if (event.messageId.isNotBlank()) deliveryTracker.markDelivered(event.messageId)
+                        // 父会话来话 = 对子代理未决外发消息的回复，结清
+                        deliveryTracker.markRepliedBySender(event.subSessionId)
+                    }
+                    SubAgentEventType.MESSAGE_FROM_SUB -> {
+                        deliverMessageToParent(event)
+                        if (event.messageId.isNotBlank()) deliveryTracker.markDelivered(event.messageId)
+                        // 收件方（父/子）来话即视为对未决消息的回复，结清追踪
+                        deliveryTracker.markRepliedFromTarget(event.subSessionId)
+                    }
                 }
             }
         }
+    }
+
+    // 编队投递超时处理（CCCC 语义）：未送达先重投一次（刷新时限）并回发完整正文；仍超时则提醒发起方，不静默丢消息
+    private val deliveryExpiredHandler: (com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker.Tracked) -> Unit = { tracked ->
+        viewModelScope.launch {
+            val targetTitle = sessionUseCase.getSessionById(tracked.toSessionId)?.title ?: "目标会话"
+            if (!tracked.delivered && tracked.retryCount <= 1) {
+                deliveryTracker.extendDeadline(tracked.messageId, com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker.DELIVERED_DEADLINE_MS)
+                // 重投：按原方向重发事件（detail 回发完整正文）
+                val isToSub = tracked.fromSessionId != tracked.toSessionId &&
+                    sessionUseCase.getSessionById(tracked.toSessionId)?.parentId == tracked.fromSessionId
+                if (isToSub) {
+                    subAgentEventBus.emit(
+                        SubAgentEvent(
+                            subSessionId = tracked.toSessionId,
+                            parentSessionId = tracked.fromSessionId,
+                            type = SubAgentEventType.MESSAGE_FROM_PARENT,
+                            detail = tracked.content,
+                            messageId = tracked.messageId
+                        )
+                    )
+                } else {
+                    subAgentEventBus.emit(
+                        SubAgentEvent(
+                            subSessionId = tracked.toSessionId,
+                            parentSessionId = tracked.fromSessionId,
+                            type = SubAgentEventType.MESSAGE_FROM_SUB,
+                            detail = tracked.content,
+                            messageId = tracked.messageId
+                        )
+                    )
+                }
+                FileLogger.w("DeliveryTracker", "投递超时重投: id=${tracked.messageId} to=${tracked.toSessionId}")
+            } else {
+                val stage = if (tracked.delivered) {
+                    context.getString(R.string.team_delivery_stage_replied)
+                } else {
+                    context.getString(R.string.team_delivery_stage_delivered)
+                }
+                runCatching {
+                    enqueueAgentRequest(
+                        request = context.getString(
+                            R.string.team_delivery_expired,
+                            targetTitle,
+                            stage
+                        ),
+                        targetSessionId = tracked.fromSessionId,
+                        isAutoTrigger = true
+                    )
+                }
+            }
+        }
+    }
+
+    // 注册时机：属性声明之后（Kotlin 按声明顺序初始化，不能在声明前赋值）
+    init {
+        // 照 FloatBall 桥惯例：注册本 VM 的投递超时回调（onCleared 按身份注销，不影响其它 VM）
+        deliveryTracker.addExpiredHandler(deliveryExpiredHandler)
     }
 
     /**
@@ -2215,11 +2345,30 @@ class AIAgentViewModel @Inject constructor(
                     _reasoningTimings.value = _reasoningTimings.value + (sessionId to (start to end))
                 }
             }
-            agentWorkflow.executeEvents(
-                userRequest = modelRequest,
-                context = agentContext,
-                tools = tools
-            ).collect { event ->
+            // 引擎分流：CLI 桥接会话（engine=claude_code）把 stream-json 翻译成 AgentEvent，
+            // 下游落库/UI/停止/队列全部复用本体链路；resume 恒为 true，首回合续接失败自动转全新。
+            val eventFlow: Flow<AgentEvent> = if (currentSession != null && currentSession.engine == AgentEngines.CLAUDE_CODE) {
+                if (!claudeCodeBridge.isAvailable()) {
+                    kotlinx.coroutines.flow.flow {
+                        emit(AgentEvent.Failed(error = context.getString(R.string.engine_bridge_unavailable)))
+                    }
+                } else {
+                    claudeCodeBridge.runTurn(
+                        sessionId = sessionId,
+                        userRequest = modelRequest,
+                        projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
+                        model = currentSession.model,
+                        resume = true
+                    )
+                }
+            } else {
+                agentWorkflow.executeEvents(
+                    userRequest = modelRequest,
+                    context = agentContext,
+                    tools = tools
+                )
+            }
+            eventFlow.collect { event ->
                 when (event) {
                     is AgentEvent.AssistantDelta -> {
                         if (event.accumulated.hasVisibleContent()) {
@@ -2823,6 +2972,8 @@ class AIAgentViewModel @Inject constructor(
     override fun onCleared() {
         // 兑现未落盘的输入草稿（防抖窗口内退出时补写，最多丢 500ms 的最后几次键入）
         runCatching { flushDraftWrites() }
+        // 投递追踪回调：按引用注销自己的处理器（qa FULL P1-3：多 VM 并存互不覆盖）
+        deliveryTracker.removeExpiredHandler(deliveryExpiredHandler)
         // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
         if (FloatBallCommandCenter.send === floatBallSendBridge) FloatBallCommandCenter.send = null
         if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
@@ -3491,7 +3642,7 @@ class AIAgentViewModel @Inject constructor(
             else chatSessionDao.getTrashedSessionsByWorkspace(path)
                 .map { list -> list.map { it.toDomain() } }
         }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 从回收站恢复整组会话（父会话与子代理会话一起回列表）。 */
     fun restoreSession(id: String) = viewModelScope.launch {
@@ -3862,11 +4013,14 @@ class AIAgentViewModel @Inject constructor(
         } else {
             ReasoningEffort.MEDIUM.name
         }
+        // 新会话默认引擎（引擎切换）：空串 = 本体内置工作流
+        val engine = defaultModelSettingsRepository.getDefaultEngine().takeIf { it.isNotBlank() }
         return sessionUseCase.newSessionEntity(
             workspacePath = workspacePath,
             providerId = providerId,
             model = model,
-            reasoningEffort = effort
+            reasoningEffort = effort,
+            engine = engine
         )
     }
 

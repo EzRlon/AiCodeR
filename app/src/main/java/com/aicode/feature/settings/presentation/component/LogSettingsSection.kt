@@ -71,6 +71,7 @@ import compose.icons.feathericons.Check
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.MessageSquare
+import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -86,6 +87,8 @@ internal fun LogSection(
     onSelect: (LogLevel) -> Unit,
     state: LogViewerUiState,
     onSelectFile: (String) -> Unit,
+    onDeleteFile: (String) -> Unit = {},
+    onClearAll: () -> Unit = {},
     onClearFilter: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -231,6 +234,13 @@ internal fun LogSection(
             selectedFileName = state.selectedFileName,
             onSelect = {
                 onSelectFile(it)
+                showFileSheet = false
+            },
+            onDeleteFile = {
+                onDeleteFile(it)
+            },
+            onClearAll = {
+                onClearAll()
                 showFileSheet = false
             },
             onDismiss = { showFileSheet = false }
@@ -591,6 +601,8 @@ private fun LogFileSheet(
     files: List<String>,
     selectedFileName: String?,
     onSelect: (String) -> Unit,
+    onDeleteFile: (String) -> Unit = {},
+    onClearAll: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     AdaptiveModalBottomSheet(
@@ -630,7 +642,17 @@ private fun LogFileSheet(
                         },
                         modifier = Modifier.weight(1f)
                     )
+                    // 反馈 8：逐条清除（单文件删除）
+                    IconButton(onClick = { onDeleteFile(fileName) }, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            FeatherIcons.Trash2,
+                            contentDescription = stringResource(R.string.log_delete_file),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                     if (selected) {
+                        Spacer(Modifier.width(4.dp))
                         Icon(
                             FeatherIcons.Check,
                             contentDescription = null,
@@ -639,6 +661,28 @@ private fun LogFileSheet(
                         )
                     }
                 }
+            }
+            Spacer(Modifier.height(Spacing.sm))
+            // 反馈 8：一键清空
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onClearAll() }
+                    .padding(vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    FeatherIcons.Trash2,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(Spacing.md))
+                Text(
+                    text = stringResource(R.string.log_clear_all),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
             Spacer(Modifier.height(Spacing.xl))
         }

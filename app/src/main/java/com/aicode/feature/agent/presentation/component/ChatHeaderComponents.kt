@@ -121,12 +121,7 @@ internal fun ChatHeader(
                 } else {
                     Spacer(modifier = Modifier.width(Spacing.sm))
                 }
-                // 会话标识行：只显示短 id（8 位），点击复制完整 id——去开发目录对照
-                // ai-logs/session-<id>.log 时一键带走完整值；模型信息在输入栏已可见，这里不再占用高度。
-                val clipboard = LocalClipboard.current
-                val context = LocalContext.current
-                val copyScope = rememberCoroutineScope()
-                val copiedText = stringResource(R.string.chat_session_id_copied)
+                // 会话短 id 展示（复制入口已移至长按会话菜单，用户 2026-10-24 反馈 1）
                 val sessionIdValue = sessionId.orEmpty()
                 Text(
                     text = sessionIdValue.take(8).ifEmpty { stringResource(R.string.chat_new_session) },
@@ -137,13 +132,6 @@ internal fun ChatHeader(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(Radius.sm))
-                        .clickable(enabled = sessionIdValue.isNotBlank()) {
-                            copyScope.launch {
-                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("session_id", sessionIdValue)))
-                                Toast.makeText(context, copiedText, Toast.LENGTH_SHORT).show()
-                            }
-                        }
                         .padding(horizontal = Spacing.xs, vertical = 2.dp)
                 )
                 VncHeaderIconButton()
@@ -161,7 +149,8 @@ internal fun ChatHeader(
                         contentDescription = stringResource(R.string.chat_new_session),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                // 顶栏按钮顺序（左→右）：专家团、智能体、记忆图谱、Git、终端
+                // 顶栏按钮顺序（左→右）：专家团、记忆图谱、Git、终端。
+                // 「智能体」按钮已随引擎切换一期移除（引擎入口收编进模型选择弹窗；管理页本体保留）。
                 onOpenTeams?.let { openTeams ->
                     WorkbenchIconButton(
                         icon = FeatherIcons.Users,
@@ -170,12 +159,6 @@ internal fun ChatHeader(
                         onClick = openTeams
                     )
                 }
-                WorkbenchIconButton(
-                    icon = FeatherIcons.Box,
-                    contentDescription = stringResource(R.string.agent_cli_sheet_title),
-                    active = false,
-                    onClick = onNavigateToAgents
-                )
                 WorkbenchIconButton(
                     icon = FeatherIcons.Share2,
                     contentDescription = stringResource(R.string.memory_graph_open),

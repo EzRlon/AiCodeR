@@ -12,7 +12,7 @@ import androidx.work.WorkManager
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.settings.domain.model.CleanupRecommendationCache
 import com.aicode.feature.settings.domain.service.StorageCleanupScanWorker
-import com.google.gson.Gson
+import kotlinx.serialization.json.Json
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -31,18 +31,20 @@ private val Context.storageCleanupDataStore by preferencesDataStore(name = "stor
 class StorageCleanupRepository @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) {
-    private val gson = Gson()
+    private val json = Json { ignoreUnknownKeys = true }
 
     val cacheFlow: Flow<CleanupRecommendationCache> = context.storageCleanupDataStore.data.map { prefs ->
         val json = prefs[KEY_RECOMMENDATIONS] ?: return@map CleanupRecommendationCache()
-        runCatching { gson.fromJson(json, CleanupRecommendationCache::class.java) }
+        // kotlinx.serialization（勿改回 Gson）：Gson+R8 丢字段泛型致 LinkedTreeMap 强转崩溃（vCode117 真机）。
+        // 键已换 V2：旧 Gson 格式缓存直接作废重扫。
+        runCatching { this@StorageCleanupRepository.json.decodeFromString(CleanupRecommendationCache.serializer(), json) }
             .onFailure { FileLogger.w(TAG, "推荐池缓存解析失败，按空处理", it) }
             .getOrDefault(CleanupRecommendationCache())
     }
 
     suspend fun save(cache: CleanupRecommendationCache) {
         context.storageCleanupDataStore.edit { prefs ->
-            prefs[KEY_RECOMMENDATIONS] = gson.toJson(cache)
+            prefs[KEY_RECOMMENDATIONS] = json.encodeToString(CleanupRecommendationCache.serializer(), cache)
             prefs[KEY_SCANNED_AT] = cache.scannedAt
         }
     }
@@ -76,7 +78,7 @@ class StorageCleanupRepository @Inject constructor(
 
         /** 唯一周期任务名；运行健康页用它查询 Worker 状态。 */
         const val UNIQUE_WORK_NAME = "storage-cleanup-weekly-scan"
-        val KEY_RECOMMENDATIONS = stringPreferencesKey("recommendations_json")
+        val KEY_RECOMMENDATIONS = stringPreferencesKey("recommendations_json_v2")
         val KEY_SCANNED_AT = longPreferencesKey("scanned_at")
     }
 }

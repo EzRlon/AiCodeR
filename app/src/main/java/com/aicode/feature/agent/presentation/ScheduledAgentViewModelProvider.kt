@@ -91,6 +91,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val approvalNotificationSettings: ApprovalNotificationSettingsRepository,
     private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
+    private val deliveryTracker: com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val teamRepository: TeamRepository,
@@ -102,6 +103,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val voskModelManager: com.aicode.feature.agent.domain.voice.VoskModelManager,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
+    private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -139,6 +141,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         approvalNotificationSettings,
         agentApprovalNotificationManager,
         subAgentEventBus,
+        deliveryTracker,
         agentNotificationCenter,
         agentDefinitionRepository,
         teamRepository,
@@ -150,6 +153,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         voskModelManager,
         floatBallStateStore,
         floatBallSessionHub,
+        claudeCodeBridge,
         context
     )
 }

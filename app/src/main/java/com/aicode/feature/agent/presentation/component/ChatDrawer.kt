@@ -921,8 +921,8 @@ private fun SessionListContent(
         state = listState,
         modifier = Modifier.fillMaxSize()
     ) {
-        // 回收站入口置顶：只在有内容时出现，不给「从不删会话」的用户添噪声
-        if (trashedSessions.isNotEmpty()) {
+        // 回收站入口置顶：只在有内容时出现，不给「从不删会话」的用户添噪声；批量选择进行中不显示（与批量操作语义冲突）
+        if (trashedSessions.isNotEmpty() && selectedSessionIds.isEmpty()) {
             item(key = "trash-entry", contentType = "trash-entry") {
                 SettingsRow(
                     icon = FeatherIcons.Trash2,
@@ -1168,14 +1168,15 @@ private fun TrashRow(session: ChatSession, onRestore: () -> Unit, onPurge: () ->
     }
 }
 
-/** 「删除于 X · 剩余 Y 天」；[deletedAt] 为空时返回空串。 */
+/** 「删除于 X · 剩余 Y 天」；[deletedAt] 为空时返回空串。剩余不足 1 天向上取整为 1，避免「还剩几小时」却显示 0。 */
 @Composable
 private fun trashRemainingLabel(deletedAt: Long?): String {
     if (deletedAt == null) return ""
-    val deleted = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(deletedAt))
-    val remainingDays = ((TRASH_RETENTION_MS - (System.currentTimeMillis() - deletedAt)) / 86_400_000L)
-        .coerceAtLeast(0L)
-        .toInt()
+    val deleted = remember(deletedAt) {
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(deletedAt))
+    }
+    val remainingMs = TRASH_RETENTION_MS - (System.currentTimeMillis() - deletedAt)
+    val remainingDays = ((remainingMs + 86_399_999L) / 86_400_000L).coerceAtLeast(0L).toInt()
     return stringResource(R.string.trash_deleted_at, deleted) +
         " · " + stringResource(R.string.trash_remaining_days, remainingDays)
 }
@@ -1948,6 +1949,7 @@ private fun SessionActionSheet(
                     .padding(horizontal = Spacing.lg)
                     .padding(bottom = Spacing.md)
             )
+            val ctx = androidx.compose.ui.platform.LocalContext.current
             SheetActionRow(
                 icon = Icons.Outlined.PushPin,
                 label = stringResource(if (session.isPinned) R.string.chat_unpin_session else R.string.chat_pin_session),
@@ -1964,6 +1966,21 @@ private fun SessionActionSheet(
                 onClick = {
                     onDismiss()
                     onRename()
+                }
+            )
+            SheetActionRow(
+                icon = FeatherIcons.Copy,
+                label = stringResource(R.string.chat_copy_session_id),
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = {
+                    onDismiss()
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("sessionId", session.id))
+                    android.widget.Toast.makeText(
+                        ctx,
+                        ctx.getString(R.string.chat_session_id_copied),
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
             )
             SheetActionRow(

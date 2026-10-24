@@ -1,11 +1,16 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -15,12 +20,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,14 +49,18 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.SegmentedTabs
+import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ModelMetadata
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
-import com.aicode.feature.settings.presentation.component.ModelSelectionSheet
+import com.aicode.feature.settings.presentation.component.ModelSelectionContent
+import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
+import kotlinx.coroutines.launch
 
 /**
  * 思考强度入口的灯泡图标：参照 RikkaHub「调整模型思考深度」面板的灯泡意象（验收反馈 F1，
@@ -92,23 +107,67 @@ internal fun ModelIconButton(
     modifier: Modifier = Modifier,
     forceOpenSheet: Boolean = false,
     onSelectSuccessInOnboarding: (() -> Unit)? = null,
-    onSheetDismiss: (() -> Unit)? = null
+    onSheetDismiss: (() -> Unit)? = null,
+    /** 当前会话引擎；null = 本体内置。非空时按钮显示「CC·模型」胶囊。 */
+    engine: String? = null,
+    /** CLI 引擎会话的模型名（胶囊与模型页勾选都用它，而非默认 provider 模型）。 */
+    cliModel: String? = null,
+    onSelectEngine: (String?) -> Unit = {},
+    checkClaudeCodeAvailable: suspend () -> Boolean = { false },
+    onInstallClaudeCode: () -> Unit = {},
+    onSelectCliModel: (String) -> Unit = {},
+    onOpenAgentCli: () -> Unit = {}
 ) {
     var showSheet by remember { mutableStateOf(false) }
     val effectiveShowSheet = showSheet || forceOpenSheet
 
-    IconButton(onClick = { showSheet = true }, modifier = modifier.size(36.dp)) {
-        ModelLogoIcon(modelName = provider?.effectiveModel.orEmpty(), size = 20.dp)
+    if (engine == AgentEngines.CLAUDE_CODE) {
+        // CLI 引擎会话：显示「CC·模型」文本胶囊（拍板定稿的底栏/输入栏文案形态）
+        Surface(
+            shape = RoundedCornerShape(Radius.pill),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            onClick = { showSheet = true },
+            modifier = modifier
+        ) {
+            Text(
+                text = "CC·" + (cliModel?.takeIf { it.isNotBlank() } ?: "claude"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+            )
+        }
+    } else {
+        IconButton(onClick = { showSheet = true }, modifier = modifier.size(36.dp)) {
+            ModelLogoIcon(modelName = provider?.effectiveModel.orEmpty(), size = 20.dp)
+        }
     }
 
     if (effectiveShowSheet) {
         ModelSheet(
+            engine = engine,
             providers = providers,
             currentProviderId = provider?.id ?: "",
-            currentModel = provider?.effectiveModel ?: "",
+            // CLI 引擎会话：模型页勾选/胶囊都对齐会话上的 CLI 模型名（qa P1-4）
+            currentModel = if (engine == AgentEngines.CLAUDE_CODE) cliModel.orEmpty() else provider?.effectiveModel ?: "",
             modelMetadata = modelMetadata,
-            onSelect = { pId, model ->
+            checkClaudeCodeAvailable = checkClaudeCodeAvailable,
+            onSelectEngine = { e ->
+                // 选引擎不关弹窗：切换后自动滑到模型页继续选（拍板交互；qa P1-5）
+                onSelectEngine(e)
+            },
+            onInstallClaudeCode = onInstallClaudeCode,
+            onOpenAgentCli = {
+                onOpenAgentCli()
+                showSheet = false
+            },
+            onSelectModel = { pId, model ->
                 onSelectModel(pId, model)
+                showSheet = false
+                onSelectSuccessInOnboarding?.invoke()
+            },
+            onSelectCliModel = { model ->
+                onSelectCliModel(model)
                 showSheet = false
                 onSelectSuccessInOnboarding?.invoke()
             },
@@ -222,26 +281,234 @@ private fun ReasoningEffort.labelRes(): Int = when (this) {
 }
 
 /**
- * 模型选择弹窗：复用设置页默认模型的 [ModelSelectionSheet]（iOS 胶囊搜索框、提供商分组卡片、能力 Tag）。
+ * 引擎/模型选择弹窗（用户拍板交互定稿）：顶部「引擎/模型」两段式分段按钮 + HorizontalPager 左右滑双通道
+ * （滑是快捷方式，分段按钮是显式入口）；选中 CLI 引擎后自动滑到「模型」页选模型。
+ * 悬浮球与主界面共用同一弹窗（经 ModelIconButton）。
  */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun ModelSheet(
+    engine: String?,
     providers: List<AIProviderConfig>,
     currentProviderId: String,
     currentModel: String,
     modelMetadata: Map<String, ModelMetadata>,
-    onSelect: (String, String) -> Unit,
+    checkClaudeCodeAvailable: suspend () -> Boolean,
+    onSelectEngine: (String?) -> Unit,
+    onInstallClaudeCode: () -> Unit,
+    onOpenAgentCli: () -> Unit = {},
+    onSelectModel: (String, String) -> Unit,
+    onSelectCliModel: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModelSelectionSheet(
-        title = stringResource(R.string.common_model),
-        noModelsText = stringResource(R.string.chat_no_models_hint),
-        providers = providers,
-        currentProviderId = currentProviderId,
-        currentModel = currentModel,
-        modelMetadata = modelMetadata,
-        onSelect = onSelect,
-        onClear = null,
-        onDismiss = onDismiss
-    )
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(initialPage = if (engine == AgentEngines.CLAUDE_CODE) 1 else 0) { 2 }
+
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = settingsPageBackground()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            SegmentedTabs(
+                selected = pagerState.currentPage,
+                // 反馈 10：默认打开模型选择列表，「引擎」放第二页
+                labels = listOf(stringResource(R.string.common_model), stringResource(R.string.engine_tab_label)),
+                onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } }
+            )
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
+                when (page) {
+                    0 -> {
+                        if (engine == AgentEngines.CLAUDE_CODE) {
+                            // CLI 会话：currentModel 已由调用方对齐为会话上的 CLI 模型名
+                            CliModelPage(currentModel = currentModel, onSelect = onSelectCliModel)
+                        } else {
+                            ModelSelectionContent(
+                                title = stringResource(R.string.common_model),
+                                noModelsText = stringResource(R.string.chat_no_models_hint),
+                                providers = providers,
+                                currentProviderId = currentProviderId,
+                                currentModel = currentModel,
+                                modelMetadata = modelMetadata,
+                                onSelect = onSelectModel,
+                                onClear = null
+                            )
+                        }
+                    }
+                    else -> EnginePage(
+                        engine = engine,
+                        checkClaudeCodeAvailable = checkClaudeCodeAvailable,
+                        onSelectEngine = { e ->
+                            onSelectEngine(e)
+                            if (e == AgentEngines.CLAUDE_CODE) scope.launch { pagerState.animateScrollToPage(0) }
+                        },
+                        onInstallClaudeCode = onInstallClaudeCode,
+                        onOpenAgentCli = onOpenAgentCli
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnginePage(
+    engine: String?,
+    checkClaudeCodeAvailable: suspend () -> Boolean,
+    onSelectEngine: (String?) -> Unit,
+    onInstallClaudeCode: () -> Unit,
+    onOpenAgentCli: () -> Unit = {}
+) {
+    var claudeAvailable by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) { claudeAvailable = checkClaudeCodeAvailable() }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        EngineCard(
+            title = stringResource(R.string.engine_builtin),
+            subtitle = stringResource(R.string.engine_builtin_sub),
+            selected = engine == null,
+            onClick = { onSelectEngine(null) }
+        )
+        EngineCard(
+            title = "Claude Code",
+            subtitle = when {
+                claudeAvailable == true -> stringResource(R.string.engine_claude_ready)
+                claudeAvailable == false -> stringResource(R.string.engine_claude_missing)
+                else -> stringResource(R.string.engine_detecting)
+            },
+            selected = engine == AgentEngines.CLAUDE_CODE,
+            onClick = { if (claudeAvailable != false) onSelectEngine(AgentEngines.CLAUDE_CODE) },
+            trailingAction = when {
+                claudeAvailable == false -> {
+                    { TextButton(onClick = onInstallClaudeCode) { Text(stringResource(R.string.engine_install)) } }
+                }
+                claudeAvailable == true -> {
+                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }
+                }
+                else -> null
+            }
+        )
+        Text(
+            text = stringResource(R.string.engine_limits_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EngineCard(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    trailingAction: (@Composable () -> Unit)? = null
+) {
+    Surface(
+        shape = RoundedCornerShape(Radius.mdLarge),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        },
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (selected) {
+                Icon(
+                    FeatherIcons.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            trailingAction?.invoke()
+        }
+    }
+}
+
+/** CLI 引擎的模型页：一行一个 CLI 侧模型名；历史由桥接自动续接（本体 sessionId 对齐 CLI session）。 */
+@Composable
+private fun CliModelPage(currentModel: String, onSelect: (String) -> Unit) {
+    val models = listOf("sonnet", "opus", "haiku")
+    Column(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        Text(
+            text = stringResource(R.string.engine_resume_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.sm)
+        )
+        Surface(
+            shape = RoundedCornerShape(Radius.mdLarge),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column {
+                models.forEachIndexed { index, model ->
+                    if (index > 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.lg)
+                                .height(1.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        )
+                    }
+                    Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(model) }
+                        .padding(vertical = Spacing.sm, horizontal = Spacing.lg),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = model,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (currentModel == model) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (currentModel == model) {
+                        Icon(
+                            FeatherIcons.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    }
+                }
+            }
+        }
+    }
 }

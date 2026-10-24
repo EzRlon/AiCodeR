@@ -49,7 +49,8 @@ class SessionUseCase @Inject constructor(
         workspacePath: String,
         providerId: String? = null,
         model: String? = null,
-        reasoningEffort: String = ReasoningEffort.MEDIUM.name
+        reasoningEffort: String = ReasoningEffort.MEDIUM.name,
+        engine: String? = null
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         return ChatSessionEntity(
@@ -60,7 +61,8 @@ class SessionUseCase @Inject constructor(
             updatedAt = now,
             providerId = providerId,
             model = model,
-            reasoningEffort = reasoningEffort
+            reasoningEffort = reasoningEffort,
+            engine = engine
         )
     }
 
@@ -138,7 +140,10 @@ class SessionUseCase @Inject constructor(
         // 软删会话的消息会变成永远无人清理的孤儿。
         val sessions = chatSessionDao.getAllSessionsByWorkspaceOnceIncludingTrashed(workspacePath)
         if (sessions.isEmpty()) return 0
-        sessions.forEach { session -> agentMessageDao.deleteBySession(session.id) }
+        sessions.forEach { session ->
+            agentMessageDao.deleteBySession(session.id)
+            todoItemDao.deleteBySession(session.id)
+        }
         chatSessionDao.deleteByWorkspace(workspacePath)
         return sessions.size
     }
@@ -245,6 +250,10 @@ class SessionUseCase @Inject constructor(
 
     suspend fun updateProviderModel(sessionId: String, providerId: String?, model: String?) {
         chatSessionDao.updateProviderModel(sessionId, providerId, model)
+    }
+
+    suspend fun updateEngine(sessionId: String, engine: String?) {
+        chatSessionDao.updateEngine(sessionId, engine)
     }
 
     suspend fun updateReasoningEffort(sessionId: String, effort: String) {

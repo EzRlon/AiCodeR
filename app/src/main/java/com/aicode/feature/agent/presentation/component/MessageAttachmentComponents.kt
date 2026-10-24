@@ -333,3 +333,11 @@ internal fun isApkName(fileName: String, mimeType: String): Boolean {
     val name = fileName.lowercase()
     return name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk")
 }
+
+/** 文本类附件：直接用内置编辑器打开（系统通常无 markdown/代码文件的处理应用）。 */
+internal fun isTextLikeAttachment(attachment: AgentAttachment): Boolean {
+    if (attachment.mimeType.lowercase().startsWith("text/")) return true
+    val name = attachment.fileName.lowercase()
+    return listOf(".md", ".txt", ".log", ".json", ".kt", ".java", ".py", ".js", ".ts", ".sh", ".xml", ".yml", ".yaml", ".toml", ".gradle", ".csv", ".html", ".css")
+        .any { name.endsWith(it) }
+}

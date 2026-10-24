@@ -525,6 +525,10 @@ class SettingsViewModel @Inject constructor(
     val defaultModel: StateFlow<String> = defaultModelSettingsRepository.modelFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /** 新会话默认引擎；空串 = 本体内置工作流。 */
+    val defaultEngine: StateFlow<String> = defaultModelSettingsRepository.defaultEngineFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     /** 子代理模型覆盖表：agent 名 → (providerId, model)；无条目 = 跟随主代理。 */
     val subAgentModelOverrides: StateFlow<Map<String, Pair<String, String>>> =
         defaultModelSettingsRepository.subAgentModelOverridesFlow
@@ -537,6 +541,11 @@ class SettingsViewModel @Inject constructor(
 
     fun clearMainAgentModel() {
         viewModelScope.launch { defaultModelSettingsRepository.clear() }
+    }
+
+    /** 新会话默认引擎（引擎切换）：写 DataStore，新建会话按此初始化。 */
+    fun setDefaultEngine(engine: String) {
+        viewModelScope.launch { defaultModelSettingsRepository.setDefaultEngine(engine) }
     }
 
     fun setSubAgentModel(agentName: String, providerId: String, model: String) {
@@ -2153,6 +2162,35 @@ class SettingsViewModel @Inject constructor(
             filterServerName = _logViewerState.value.filterServerName,
             preferredFileName = fileName
         )
+    }
+
+    /** 删除单个日志文件（反馈 8：逐条清除）；被删的是当前选中文件时回退到最近一个。 */
+    fun deleteLogFile(fileName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val target = FileLogger.listLogFiles().firstOrNull { it.name == fileName } ?: return@launch
+            FileLogger.deleteLogFile(target)
+            val nextPreferred = _logViewerState.value.selectedFileName
+                ?.takeIf { it != fileName }
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                loadLogs(
+                    filterServerName = _logViewerState.value.filterServerName,
+                    preferredFileName = nextPreferred
+                )
+            }
+        }
+    }
+
+    /** 一键清空全部日志（反馈 8）。 */
+    fun clearAllLogs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            FileLogger.clearLogs()
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                loadLogs(
+                    filterServerName = _logViewerState.value.filterServerName,
+                    preferredFileName = null
+                )
+            }
+        }
     }
 
     private fun loadLogs(filterServerName: String?, preferredFileName: String?, silent: Boolean = false) {

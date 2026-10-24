@@ -252,6 +252,7 @@ fun SettingsScreen(
     val subAgentDeleting by viewModel.subAgentDeleting.collectAsStateWithLifecycle()
     val defaultModelProviderId by viewModel.defaultModelProviderId.collectAsStateWithLifecycle()
     val defaultModel by viewModel.defaultModel.collectAsStateWithLifecycle()
+    val defaultEngine by viewModel.defaultEngine.collectAsStateWithLifecycle()
     val subAgentModelOverrides by viewModel.subAgentModelOverrides.collectAsStateWithLifecycle()
     val globalRules by viewModel.globalRules.collectAsStateWithLifecycle()
     val projectRules by viewModel.projectRules.collectAsStateWithLifecycle()
@@ -1125,6 +1126,8 @@ fun SettingsScreen(
                 )
                 SettingsSection.DefaultModels -> DefaultModelsSection(
                     providers = providers,
+                    defaultEngine = defaultEngine,
+                    onSelectDefaultEngine = { viewModel.setDefaultEngine(it) },
                     visionProviderId = visionProviderId,
                     visionModel = visionModel,
                     compactionProviderId = compactionProviderId,
@@ -1425,6 +1428,8 @@ fun SettingsScreen(
                     onSelect = { viewModel.setLogLevel(it) },
                     state = logViewerState,
                     onSelectFile = { viewModel.selectLogFile(it) },
+                    onDeleteFile = { viewModel.deleteLogFile(it) },
+                    onClearAll = { viewModel.clearAllLogs() },
                     onClearFilter = { viewModel.refreshLogs(filterServerName = null) },
                     onRefresh = { viewModel.refreshLogs(silent = true) }
                 )

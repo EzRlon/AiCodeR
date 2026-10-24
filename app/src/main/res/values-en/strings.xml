@@ -398,7 +398,7 @@
     <string name="annotation_delete">Delete this annotation</string>
     <string name="annotation_summary_send">Send summary to AI</string>
     <string name="annotation_summary_header">Screenshot annotations to fix (%1$d items; images attached, each with a type and note):</string>
-    <string name="annotation_summary_line">%1$d. [%2$s] %3$s — image: %4$s</string>
+    <string name="annotation_summary_line">%1$d. [%2$s] %3$s — image: %4$s — annotation id: %5$s (call the fixledger tool to write back status when fixed)</string>
     <string name="annotation_summary_footer">Handle by type: Bug=fix it; To change=adjust as described; Don\'t=avoid the pictured approach; Optimize=improve as suitable.</string>
     <string name="annotation_summary_queued">Injected into the input box; back to chat to send</string>
     <string name="annotation_status_pending">To confirm</string>
@@ -406,6 +406,57 @@
     <string name="annotation_status_fixing">Fixing</string>
     <string name="annotation_status_review">To verify</string>
     <string name="annotation_status_closed">Closed</string>
+
+    <!-- Fix ledger -->
+    <string name="fix_ledger_title">Fix Ledger</string>
+    <string name="fix_ledger_entry">Fix Ledger</string>
+    <string name="fix_ledger_entry_sub">Track feedback through fix and re-verify</string>
+    <string name="fix_ledger_empty">No fix records yet. Tap + to add one.</string>
+    <string name="fix_ledger_add">New fix record</string>
+    <string name="fix_ledger_title_hint">Summary (required)</string>
+    <string name="fix_ledger_note_hint">Note / verdict (optional)</string>
+    <string name="fix_ledger_delete">Delete this record</string>
+    <string name="fix_ledger_convert">Move to Fix Ledger</string>
+    <string name="fix_ledger_added">Added to Fix Ledger</string>
+    <string name="fix_ledger_already_exists">Already in Fix Ledger</string>
+
+    <!-- Engine switch -->
+    <string name="engine_bridge_unavailable">Claude Code engine is not ready. Install Claude Code in the container first, or switch this session back to the built-in engine.</string>
+    <string name="engine_tab_label">Engine</string>
+    <string name="engine_builtin">Built-in engine</string>
+    <string name="engine_builtin_sub">Native workflow: full tools, teams, annotation, memory, recall</string>
+    <string name="engine_claude_ready">Installed, runs in the local container</string>
+    <string name="engine_claude_missing">Not installed yet</string>
+    <string name="engine_detecting">Detecting…</string>
+    <string name="engine_install">Install</string>
+    <string name="engine_open_manager">Manage</string>
+    <string name="engine_limits_hint">CLI engine sessions do not support: teams, annotation, memory, recall</string>
+    <string name="engine_resume_hint">History resumes automatically from the Claude Code side session.</string>
+    <string name="settings_default_engine_group">Default engine for new sessions</string>
+    <string name="settings_default_engine_claude_sub">New sessions use Claude Code by default (must be installed)</string>
+
+    <!-- Memory graph v2 -->
+    <string name="memory_graph_tab_graph">Graph</string>
+    <string name="graph_search_hint">Search nodes (name/summary)</string>
+    <string name="graph_add_node">Add node</string>
+    <string name="graph_empty">No graph nodes yet; work threads and memories sync in automatically</string>
+    <string name="graph_type_session">Thread</string>
+    <string name="graph_type_memory">Memory</string>
+    <string name="graph_type_custom">Custom</string>
+    <string name="graph_no_relations">No relations yet</string>
+    <string name="graph_delete_node">Delete node</string>
+    <string name="graph_node_name_hint">Node name (required)</string>
+    <string name="graph_node_summary_hint">Summary (optional)</string>
+
+    <!-- Team message delivery -->
+    <string name="team_delivery_expired">Team delivery notice: the message to "%1$s" was not %2$s in time (auto-retried). Check the target session, or redispatch via the task tool.</string>
+    <string name="perm_tool_fixledger">Fix ledger write-back</string>
+    <string name="perm_tool_fixledger_desc">After fixing an annotated issue, advance the fix ledger and annotation ledger (forward-only to fixing/review)</string>
+    <string name="engine_install_started">A terminal has started installing Claude Code. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
+    <string name="engine_install_failed">Failed to start install: %1$s</string>
+    <string name="chat_copy_session_id">Copy session id</string>
+    <string name="team_delivery_stage_delivered">delivered</string>
+    <string name="team_delivery_stage_replied">replied to</string>
 
     <string name="chat_send_rejected_paused">Session paused — handle the handoff panel (or start a new session) first</string>
     <string name="chat_turn_artifacts">%1$d artifact(s) from this run</string>
@@ -2164,6 +2215,8 @@
     <string name="chat_explain_prefix">Please explain the following:</string>
     <string name="chat_search_workspace_prefix">Find implementations in the project workspace related to the following:</string>
     <string name="chat_session_id_copied">Session ID copied</string>
+    <string name="log_delete_file">Delete this log file</string>
+    <string name="log_clear_all">Clear all logs</string>
     <string name="chat_voice_release_send">Release to transcribe · slide up to cancel</string>
     <string name="chat_voice_processing">Recognizing…</string>
     <string name="chat_voice_listening_hint">Listening… tap again to stop</string>
