@@ -35,7 +35,9 @@ data class SubAgentEvent(
     val subSessionId: String,
     val parentSessionId: String,
     val type: SubAgentEventType,
-    val detail: String = ""
+    val detail: String = "",
+    /** 消息投递追踪 id（MESSAGE_FROM_PARENT/SUB 由发送方生成并登记到投递追踪器）；生命周期事件为空。 */
+    val messageId: String = ""
 )
 
 /**

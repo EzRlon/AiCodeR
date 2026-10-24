@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.SubAgentEvent
+import com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
@@ -54,6 +55,7 @@ class TaskTool @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val agentMessageDao: AgentMessageDao,
     private val eventBus: SubAgentEventBus,
+    private val deliveryTracker: SubAgentDeliveryTracker,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository
@@ -237,20 +239,31 @@ class TaskTool @Inject constructor(
             return ToolResult.Error("只能向当前会话派生的子代理发消息", "NOT_YOUR_SUBAGENT")
         }
 
+        // 编队投递语义：登记送达追踪（送达时限 2 分钟，超时由宿主重投/提醒发起方）
+        val messageId = java.util.UUID.randomUUID().toString()
+        deliveryTracker.track(
+            messageId = messageId,
+            fromSessionId = parentSessionId,
+            toSessionId = subSessionId,
+            requireReply = false,
+            content = message
+        )
         eventBus.emit(
             SubAgentEvent(
                 subSessionId = subSessionId,
                 parentSessionId = parentSessionId,
                 type = SubAgentEventType.MESSAGE_FROM_PARENT,
-                detail = message
+                detail = message,
+                messageId = messageId
             )
         )
         FileLogger.i(TAG, "向子代理发送消息: session=$subSessionId parent=$parentSessionId")
         return ToolResult.Success(
             buildJsonObject {
                 put("id", subSessionId)
-                put("state", "delivered")
-                put("message", "消息已投递给子代理，运行中的将在下一批工具结果里收到，已完成的将被重新唤醒，可继续用 send 追加。")
+                put("state", "sent")
+                put("messageId", messageId)
+                put("message", "消息已发出并进入送达追踪：运行中的子代理将在下一批工具结果里收到，已完成的将被重新唤醒；若超时未送达会自动重投并提醒你。")
             }
         )
     }
