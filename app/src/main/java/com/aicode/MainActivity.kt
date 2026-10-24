@@ -1191,6 +1191,25 @@ fun AppNavigation(
     if (annotationCanvasActive) {
         AnnotationCanvasScreen(
             annotationViewModel = annotationViewModel,
+            onSummaryReady = { text, items ->
+                // 汇总注入：文本进草稿，图片作待发附件（聊天面板读文件转 base64）；发出即推进状态机
+                agentViewModel.queueExternalText(text)
+                agentViewModel.queueExternalAttachments(
+                    items.map { item ->
+                        AgentAttachment(
+                            fileName = item.imagePath.substringAfterLast('/'),
+                            containerPath = item.imagePath,
+                            localPath = "",
+                            mimeType = "image/png",
+                            sizeBytes = 0L,
+                            isImage = true
+                        )
+                    }
+                )
+                Toast.makeText(context, context.getString(R.string.annotation_summary_queued), Toast.LENGTH_SHORT).show()
+                annotationViewModel.markSent(items)
+                annotationCanvasActive = false
+            },
             onExit = { annotationCanvasActive = false }
         )
     }

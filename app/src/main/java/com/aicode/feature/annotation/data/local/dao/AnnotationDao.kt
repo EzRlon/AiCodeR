@@ -24,4 +24,7 @@ interface AnnotationDao {
 
     @Query("UPDATE annotations SET status = :status, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateStatus(id: String, status: String, updatedAt: Long)
+
+    @Query("UPDATE annotations SET marksJson = :marksJson, note = :note, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateMarks(id: String, marksJson: String, note: String, updatedAt: Long)
 }

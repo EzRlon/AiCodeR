@@ -47,6 +47,10 @@ class AnnotationViewModel @Inject constructor(
         viewModelScope.launch { repository.updateStatus(id, status) }
     }
 
+    fun updateMarks(id: String, marks: List<AnnotationMark>, note: String, onDone: (Boolean) -> Unit = {}) {
+        viewModelScope.launch { onDone(repository.updateMarks(id, marks, note)) }
+    }
+
     /** 汇总注入成功后批量推进状态机（待确认 → 已发AI）。 */
     fun markSent(items: List<AnnotationItem>) {
         viewModelScope.launch {

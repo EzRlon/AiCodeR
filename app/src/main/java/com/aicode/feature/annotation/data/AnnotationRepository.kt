@@ -74,6 +74,22 @@ class AnnotationRepository @Inject constructor(
         annotationDao.updateStatus(id, status.name, System.currentTimeMillis())
     }
 
+    /**
+     * 更新已有标注的图形与说明（统一画布「账本条目载入补画后保存」路径），图片不重拍。
+     * 返回是否命中条目。
+     */
+    suspend fun updateMarks(id: String, marks: List<AnnotationMark>, note: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            val entity = annotationDao.getById(id) ?: return@withContext false
+            annotationDao.updateMarks(
+                id = id,
+                marksJson = AnnotationMarksCodec.encode(marks),
+                note = (note ?: entity.note).trim(),
+                updatedAt = System.currentTimeMillis()
+            )
+            true
+        }
+
     /** 读取单个标注（fixledger 回写 guard 用）。 */
     suspend fun getById(id: String): AnnotationItem? = annotationDao.getById(id)?.toDomain()
 

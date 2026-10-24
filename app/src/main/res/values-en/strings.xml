@@ -2337,6 +2337,10 @@
     <string name="annotation_canvas_save">Save to ledger</string>
     <string name="annotation_canvas_guide">Tap freeze to grab the current screen as canvas,\nor pick a tool to mark the live screen</string>
     <string name="annotation_canvas_need_capture">Freeze the screen first, then save to ledger</string>
+    <string name="annotation_canvas_ledger_title">Ledger</string>
+    <string name="annotation_canvas_section_annotations">Annotations</string>
+    <string name="annotation_canvas_updated">Annotation updated</string>
+    <string name="annotation_canvas_load_failed">Failed to load annotation image</string>
     <string name="agent_mode_build">Build</string>
     <string name="agent_mode_plan">Plan</string>
     <string name="agent_mode_auto">Auto</string>

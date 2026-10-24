@@ -40,12 +40,14 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -60,6 +62,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.aicode.R
 import com.aicode.core.capture.FullScreenCapture
 import com.aicode.core.theme.Radius
@@ -68,11 +71,17 @@ import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.ComponentHit
 import com.aicode.core.ui.ComposeSemanticsHitTester
 import com.aicode.core.ui.appTextFieldColors
+import com.aicode.core.ui.decodeSampledBitmap
+import com.aicode.core.ui.rememberViewerDecodeSpec
+import com.aicode.feature.annotation.domain.model.AnnotationItem
 import com.aicode.feature.annotation.domain.model.AnnotationMark
+import com.aicode.feature.annotation.domain.model.AnnotationMarksCodec
 import com.aicode.feature.annotation.domain.model.AnnotationType
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
+import com.aicode.feature.fixledger.presentation.FixLedgerViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowUpRight
+import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Edit3
@@ -84,6 +93,9 @@ import compose.icons.feathericons.Square
 import compose.icons.feathericons.Trash
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.X
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /** 浮动工具架位置记忆（SharedPreferences）。 */
@@ -103,10 +115,13 @@ private const val BAR_PREF_Y = "y"
 @Composable
 internal fun AnnotationCanvasScreen(
     annotationViewModel: AnnotationViewModel,
+    onSummaryReady: (String, List<AnnotationItem>) -> Unit,
     onExit: () -> Unit
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val fixLedgerViewModel: FixLedgerViewModel = hiltViewModel()
 
     val marks = remember { mutableStateListOf<AnnotationMark>() }
     val redoStack = remember { mutableStateListOf<AnnotationMark>() }
@@ -125,10 +140,16 @@ internal fun AnnotationCanvasScreen(
     var saveSheetOpen by remember { mutableStateOf(false) }
     var saveType by remember { mutableStateOf(AnnotationType.BUG) }
     var saveNote by remember { mutableStateOf("") }
+    // 账本图层与「点条目载入补画」的更新路径：非空时保存走 updateMarks（不重拍图）
+    var ledgerOpen by remember { mutableStateOf(false) }
+    var editingAnnotationId by remember { mutableStateOf<String?>(null) }
+    var editingNote by remember { mutableStateOf("") }
+    var loadingAnnotation by remember { mutableStateOf(false) }
     var barOffset by remember { mutableStateOf<Offset?>(null) }
     var barSize by remember { mutableStateOf(IntSize.Zero) }
     var hostCanvasSize by remember { mutableStateOf(IntSize.Zero) }
     val barPrefs = remember { context.getSharedPreferences(BAR_PREF_NAME, Context.MODE_PRIVATE) }
+    val decodeSpec = rememberViewerDecodeSpec()
 
     // 宿主侧 fit：与画布同尺寸同算法，供选中迷你条 / 组件命中 / 文字落点归一化使用
     val hostFit = remember(hostCanvasSize, baseImage) {
@@ -185,6 +206,10 @@ internal fun AnnotationCanvasScreen(
                     baseImage = bitmap
                     selectMode = false
                     componentHit = null
+                    // 新抓帧是全新底图，正在编辑的账本条目上下文失效
+                    editingAnnotationId = null
+                    editingNote = ""
+                    saveSheetOpen = false
                 } else {
                     Toast.makeText(context, context.getString(R.string.annotation_live_capture_failed), Toast.LENGTH_SHORT).show()
                 }
@@ -221,6 +246,39 @@ internal fun AnnotationCanvasScreen(
         pendingTextPos = null
         editingTextIndex = -1
         textDraft = ""
+    }
+
+    /** 点账本条目：图片降采样解码为底图，marks 重绘进画布，保存改走更新路径。 */
+    fun openAnnotationInCanvas(item: AnnotationItem) {
+        if (loadingAnnotation) return
+        loadingAnnotation = true
+        ledgerOpen = false
+        scope.launch {
+            val bytes = annotationViewModel.readImageBytes(item)
+            val decoded = bytes?.let { data ->
+                withContext(Dispatchers.Default) {
+                    decodeSampledBitmap(data, decodeSpec.maxEdge, decodeSpec.maxPixels)?.asAndroidBitmap()
+                }
+            }
+            if (decoded == null) {
+                Toast.makeText(context, context.getString(R.string.annotation_canvas_load_failed), Toast.LENGTH_SHORT).show()
+            } else {
+                baseImage = decoded
+                marks.clear()
+                redoStack.clear()
+                clearedSnapshot = null
+                marks.addAll(AnnotationMarksCodec.decode(item.marksJson))
+                editingAnnotationId = item.id
+                editingNote = item.note
+                saveType = item.type
+                tool = null
+                selectMode = false
+                selectedIndex = -1
+                componentHit = null
+                saveSheetOpen = false
+            }
+            loadingAnnotation = false
+        }
     }
 
     BackHandler(enabled = !captureInFlight) { onExit() }
@@ -412,6 +470,9 @@ internal fun AnnotationCanvasScreen(
                     ToolToggle(false, FeatherIcons.RotateCcw, stringResource(R.string.annotation_undo)) { undo() }
                     ToolToggle(false, FeatherIcons.RotateCw, stringResource(R.string.annotation_canvas_redo)) { redo() }
                     ToolToggle(false, FeatherIcons.Trash, stringResource(R.string.annotation_canvas_clear)) { clearAll() }
+                    ToolToggle(ledgerOpen, FeatherIcons.BookOpen, stringResource(R.string.annotation_canvas_ledger_title)) {
+                        ledgerOpen = !ledgerOpen
+                    }
                     ToolToggle(false, FeatherIcons.Check, stringResource(R.string.annotation_canvas_save)) {
                         when {
                             baseImage == null -> Toast.makeText(
@@ -426,7 +487,7 @@ internal fun AnnotationCanvasScreen(
                             ).show()
                             else -> {
                                 saveType = type
-                                saveNote = ""
+                                saveNote = editingNote
                                 saveSheetOpen = true
                             }
                         }
@@ -577,19 +638,42 @@ internal fun AnnotationCanvasScreen(
                         Spacer(Modifier.width(Spacing.sm))
                         TextButton(
                             onClick = {
-                                val bitmap = baseImage ?: return@TextButton
-                                annotationViewModel.saveCapture(bitmap, marks.toList(), saveType, saveNote) { ok ->
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(if (ok) R.string.annotation_saved else R.string.annotation_save_failed),
-                                        if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                                    ).show()
-                                    if (ok) {
-                                        saveSheetOpen = false
-                                        marks.clear()
-                                        redoStack.clear()
-                                        clearedSnapshot = null
-                                        selectedIndex = -1
+                                val editId = editingAnnotationId
+                                if (editId != null) {
+                                    // 更新路径：账本条目载入补画后保存，不重拍图
+                                    annotationViewModel.updateMarks(editId, marks.toList(), saveNote) { ok ->
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(
+                                                if (ok) R.string.annotation_canvas_updated else R.string.annotation_save_failed
+                                            ),
+                                            if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                        ).show()
+                                        if (ok) {
+                                            saveSheetOpen = false
+                                            marks.clear()
+                                            redoStack.clear()
+                                            clearedSnapshot = null
+                                            selectedIndex = -1
+                                            editingAnnotationId = null
+                                            editingNote = ""
+                                        }
+                                    }
+                                } else {
+                                    val bitmap = baseImage ?: return@TextButton
+                                    annotationViewModel.saveCapture(bitmap, marks.toList(), saveType, saveNote) { ok ->
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(if (ok) R.string.annotation_saved else R.string.annotation_save_failed),
+                                            if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                        ).show()
+                                        if (ok) {
+                                            saveSheetOpen = false
+                                            marks.clear()
+                                            redoStack.clear()
+                                            clearedSnapshot = null
+                                            selectedIndex = -1
+                                        }
                                     }
                                 }
                             },
@@ -600,6 +684,31 @@ internal fun AnnotationCanvasScreen(
                     }
                 }
             }
+        }
+        // ── 9) 账本图层（同界面滑出）与条目载入中提示 ──
+        if (loadingAnnotation) {
+            Surface(
+                shape = RoundedCornerShape(Radius.pill),
+                color = Color.Black.copy(alpha = 0.55f),
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Text(
+                    text = stringResource(R.string.annotation_loading),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                )
+            }
+        }
+        if (ledgerOpen && !captureInFlight && !loadingAnnotation) {
+            AnnotationLedgerPanel(
+                annotationViewModel = annotationViewModel,
+                fixLedgerViewModel = fixLedgerViewModel,
+                onOpenAnnotation = { openAnnotationInCanvas(it) },
+                onSummaryReady = onSummaryReady,
+                onDismiss = { ledgerOpen = false },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
         }
     }
 }
