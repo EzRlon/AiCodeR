@@ -6,6 +6,8 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
+import com.aicode.feature.settings.domain.model.ProviderType
+import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.workspace.domain.FileAccessProvider
@@ -59,7 +61,8 @@ class ClaudeCodeBridge @Inject constructor(
     private val cliAgentManager: CliAgentManager,
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver,
-    private val containerSettingsRepository: ContainerSettingsRepository
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val aiProviderRepository: AIProviderRepository
 ) {
     private companion object {
         const val TAG = "ClaudeCodeBridge"
@@ -108,6 +111,34 @@ class ClaudeCodeBridge @Inject constructor(
     /** 一键安装：开终端标签跑安装命令（复用 CLI 智能体管理器的安装链路）。 */
     suspend fun installCli(): String =
         cliAgentManager.install(CliAgentCatalog.ALL.first { it.command == "claude" })
+
+    /**
+     * 认证状态：null = 已可用（oauth 凭据在，或将透传 App 内 Anthropic key）；
+     * 非 null = 未认证引导文案（供发送前拦截与引擎卡片展示）。
+     * 探测为一条轻量 test 命令（不拉起 claude、不耗 token）。
+     */
+    suspend fun authHint(): String? {
+        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (transmittableAnthropicProvider() != null) return null
+        val probe = runCatching {
+            containerEngine.runCommandSyncIfReady(
+                command = "test -f /root/.claude/.credentials.json && echo present || echo absent",
+                projectPath = null,
+                timeoutMs = 8_000L
+            )
+        }.getOrNull() ?: return null // 容器未就绪等场景不拦截，交给可用性/流中错误链路
+        if (probe.output.contains("present")) return null
+        return "Claude Code 尚未登录：请二选一——① 在终端执行 aicode（或直接运行 claude）完成一次交互式登录；" +
+            "② 在 设置 → 模型 添加 Anthropic 类型的提供商并填入 API Key，切引擎时会自动透传给 claude。"
+    }
+
+    /** App 内已配置可用 Key 的 Anthropic 提供商（用于透传；无则 null，claude 走自身 oauth）。 */
+    private suspend fun transmittableAnthropicProvider(): com.aicode.feature.settings.domain.model.AIProviderConfig? =
+        runCatching {
+            aiProviderRepository.getAllProviders().first().firstOrNull {
+                it.type == ProviderType.ANTHROPIC && it.isEnabled && it.hasUsableApiKey
+            }
+        }.getOrNull()
 
     /** 当前激活 profile（本地模式；与 McpManager 同一解析规则）。 */
     private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
@@ -173,13 +204,21 @@ class ClaudeCodeBridge @Inject constructor(
             add("--mcp-config"); add(mcpConfigPath())
             if (!model.isNullOrBlank()) { add("--model"); add(model) }
         }
-        val extraEnv = mapOf(
-            "PERMISSION_BRIDGE_PORT" to port.toString(),
-            "PERMISSION_BRIDGE_SESSION" to sessionId,
-            "PERMISSION_BRIDGE_TOKEN" to sessionId
-        )
+        val extraEnv = buildMap {
+            put("PERMISSION_BRIDGE_PORT", port.toString())
+            put("PERMISSION_BRIDGE_SESSION", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代
+            transmittableAnthropicProvider()?.let { p ->
+                put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
+                val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
+                if (base.isNotEmpty() && !base.contains("api.anthropic.com")) {
+                    put("ANTHROPIC_BASE_URL", base)
+                }
+            }
+        }
 
-        FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath")
+        FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath authViaKey=${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
         val process = containerEngine.startStdioProcess("claude", args, projectPath, extraEnv, resolveRuntimeProfile())
 
         // 取消即杀进程：本体停止按钮取消 collect 时，进程必须立刻死，否则僵尸 claude 继续烧 token

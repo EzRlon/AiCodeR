@@ -1071,6 +1071,9 @@ class AIAgentViewModel @Inject constructor(
     /** Claude Code 引擎是否就绪（本地容器 + CLI 已安装）。 */
     suspend fun isClaudeCodeAvailable(): Boolean = claudeCodeBridge.isAvailable()
 
+    /** 引擎卡片认证态：null = 已就绪（oauth 或将透传 App 内 key）；非 null = 引导文案。 */
+    suspend fun claudeCodeAuthHint(): String? = claudeCodeBridge.authHint()
+
     /** 一键安装 Claude Code：开终端标签跑安装命令（跑完发通知）；装完失效可用性缓存，回引擎页立即可检测。 */
     fun installClaudeCode() {
         viewModelScope.launch {
@@ -2353,13 +2356,21 @@ class AIAgentViewModel @Inject constructor(
                         emit(AgentEvent.Failed(error = context.getString(R.string.engine_bridge_unavailable)))
                     }
                 } else {
-                    claudeCodeBridge.runTurn(
-                        sessionId = sessionId,
-                        userRequest = modelRequest,
-                        projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
-                        model = currentSession.model,
-                        resume = true
-                    )
+                    // 发送前认证预检：未登录/无可透传 key 时直接给引导，不空跑一回合才发现
+                    val authHint = claudeCodeBridge.authHint()
+                    if (authHint != null) {
+                        kotlinx.coroutines.flow.flow {
+                            emit(AgentEvent.Failed(error = authHint))
+                        }
+                    } else {
+                        claudeCodeBridge.runTurn(
+                            sessionId = sessionId,
+                            userRequest = modelRequest,
+                            projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
+                            model = currentSession.model,
+                            resume = true
+                        )
+                    }
                 }
             } else {
                 agentWorkflow.executeEvents(

@@ -459,6 +459,8 @@
     <string name="engine_builtin_sub">本体工作流：全套工具、专家团、标注、记忆、recall</string>
     <string name="engine_claude_ready">已安装，本机容器内运行</string>
     <string name="engine_claude_missing">未安装：先在容器中安装后可用</string>
+    <string name="engine_claude_not_authenticated">已安装 · 未登录（或未配置可透传的 Anthropic Key）</string>
+    <string name="engine_go_login">去登录</string>
     <string name="engine_detecting">检测中…</string>
     <string name="engine_install">安装</string>
     <string name="engine_open_manager">管理页</string>

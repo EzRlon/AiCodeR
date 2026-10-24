@@ -2192,6 +2192,7 @@ fun AIChatPanel(
                 awaitingApproval = frameAwaitingApproval,
                 onSelectEngine = { viewModel.setSessionEngine(it) },
                 checkClaudeCodeAvailable = { viewModel.isClaudeCodeAvailable() },
+                checkClaudeCodeAuth = { viewModel.claudeCodeAuthHint() },
                 onInstallClaudeCode = { viewModel.installClaudeCode() },
                 onSelectCliModel = { viewModel.setSessionCliModel(it) },
                 onOpenAgentCli = onNavigateToAgents,

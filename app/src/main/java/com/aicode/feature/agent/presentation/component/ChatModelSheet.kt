@@ -114,6 +114,7 @@ internal fun ModelIconButton(
     cliModel: String? = null,
     onSelectEngine: (String?) -> Unit = {},
     checkClaudeCodeAvailable: suspend () -> Boolean = { false },
+    checkClaudeCodeAuth: suspend () -> String? = { null },
     onInstallClaudeCode: () -> Unit = {},
     onSelectCliModel: (String) -> Unit = {},
     onOpenAgentCli: () -> Unit = {}
@@ -152,6 +153,7 @@ internal fun ModelIconButton(
             currentModel = if (engine == AgentEngines.CLAUDE_CODE) cliModel.orEmpty() else provider?.effectiveModel ?: "",
             modelMetadata = modelMetadata,
             checkClaudeCodeAvailable = checkClaudeCodeAvailable,
+            checkClaudeCodeAuth = checkClaudeCodeAuth,
             onSelectEngine = { e ->
                 // 选引擎不关弹窗：切换后自动滑到模型页继续选（拍板交互；qa P1-5）
                 onSelectEngine(e)
@@ -294,6 +296,7 @@ internal fun ModelSheet(
     currentModel: String,
     modelMetadata: Map<String, ModelMetadata>,
     checkClaudeCodeAvailable: suspend () -> Boolean,
+    checkClaudeCodeAuth: suspend () -> String? = { null },
     onSelectEngine: (String?) -> Unit,
     onInstallClaudeCode: () -> Unit,
     onOpenAgentCli: () -> Unit = {},
@@ -345,6 +348,7 @@ internal fun ModelSheet(
                     else -> EnginePage(
                         engine = engine,
                         checkClaudeCodeAvailable = checkClaudeCodeAvailable,
+                        checkClaudeCodeAuth = checkClaudeCodeAuth,
                         onSelectEngine = { e ->
                             onSelectEngine(e)
                             if (e == AgentEngines.CLAUDE_CODE) scope.launch { pagerState.animateScrollToPage(0) }
@@ -362,12 +366,18 @@ internal fun ModelSheet(
 private fun EnginePage(
     engine: String?,
     checkClaudeCodeAvailable: suspend () -> Boolean,
+    checkClaudeCodeAuth: suspend () -> String?,
     onSelectEngine: (String?) -> Unit,
     onInstallClaudeCode: () -> Unit,
     onOpenAgentCli: () -> Unit = {}
 ) {
     var claudeAvailable by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(Unit) { claudeAvailable = checkClaudeCodeAvailable() }
+    var claudeAuthHint by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        claudeAvailable = checkClaudeCodeAvailable()
+        // 已安装才查登录态：未装时探测无意义
+        if (claudeAvailable == true) claudeAuthHint = checkClaudeCodeAuth()
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),
@@ -382,15 +392,20 @@ private fun EnginePage(
         EngineCard(
             title = "Claude Code",
             subtitle = when {
-                claudeAvailable == true -> stringResource(R.string.engine_claude_ready)
                 claudeAvailable == false -> stringResource(R.string.engine_claude_missing)
+                claudeAvailable == true && claudeAuthHint != null -> stringResource(R.string.engine_claude_not_authenticated)
+                claudeAvailable == true -> stringResource(R.string.engine_claude_ready)
                 else -> stringResource(R.string.engine_detecting)
             },
             selected = engine == AgentEngines.CLAUDE_CODE,
-            onClick = { if (claudeAvailable != false) onSelectEngine(AgentEngines.CLAUDE_CODE) },
+            onClick = { if (claudeAvailable != false && claudeAuthHint == null) onSelectEngine(AgentEngines.CLAUDE_CODE) },
             trailingAction = when {
                 claudeAvailable == false -> {
                     { TextButton(onClick = onInstallClaudeCode) { Text(stringResource(R.string.engine_install)) } }
+                }
+                // 已装未登录：选中无意义（发送会被预检拦下），引导先去终端登录
+                claudeAvailable == true && claudeAuthHint != null -> {
+                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_go_login)) } }
                 }
                 claudeAvailable == true -> {
                     { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }

@@ -458,6 +458,8 @@
     <string name="engine_builtin_sub">Native workflow: full tools, teams, annotation, memory, recall</string>
     <string name="engine_claude_ready">Installed, runs in the local container</string>
     <string name="engine_claude_missing">Not installed yet</string>
+    <string name="engine_claude_not_authenticated">Installed · not signed in (or no Anthropic key to pass through)</string>
+    <string name="engine_go_login">Sign in</string>
     <string name="engine_detecting">Detecting…</string>
     <string name="engine_install">Install</string>
     <string name="engine_open_manager">Manage</string>
