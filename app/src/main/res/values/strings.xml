@@ -379,11 +379,6 @@
 
     <!-- 截图标注账本 -->
     <string name="annotation_hub_entry">标注中心</string>
-    <string name="annotation_hub_title">标注中心</string>
-    <string name="annotation_capture_live">活标注</string>
-    <string name="annotation_capture_live_sub">回原界面直接圈画</string>
-    <string name="annotation_capture_shot">截屏标注</string>
-    <string name="annotation_capture_shot_sub">定格当前屏进编辑器</string>
     <string name="annotation_type_bug">bug</string>
     <string name="annotation_type_to_change">要改</string>
     <string name="annotation_type_dont">不要</string>
@@ -410,8 +405,6 @@
 
     <!-- 修复账本 -->
     <string name="fix_ledger_title">修复账本</string>
-    <string name="fix_ledger_entry">修复账本</string>
-    <string name="fix_ledger_entry_sub">反馈→修复→复验全程追踪</string>
     <string name="fix_ledger_empty">暂无修复记录，点右上角 + 新建一条</string>
     <string name="fix_ledger_add">新建修复记录</string>
     <string name="fix_ledger_title_hint">问题摘要（必填）</string>

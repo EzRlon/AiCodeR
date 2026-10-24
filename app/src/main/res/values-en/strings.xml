@@ -378,11 +378,6 @@
 
     <!-- Screenshot annotation ledger -->
     <string name="annotation_hub_entry">Annotation Hub</string>
-    <string name="annotation_hub_title">Annotation Hub</string>
-    <string name="annotation_capture_live">Live mark</string>
-    <string name="annotation_capture_live_sub">Mark on the live screen</string>
-    <string name="annotation_capture_shot">Screenshot mark</string>
-    <string name="annotation_capture_shot_sub">Freeze screen into editor</string>
     <string name="annotation_type_bug">Bug</string>
     <string name="annotation_type_to_change">To change</string>
     <string name="annotation_type_dont">Don\'t</string>
@@ -409,8 +404,6 @@
 
     <!-- Fix ledger -->
     <string name="fix_ledger_title">Fix Ledger</string>
-    <string name="fix_ledger_entry">Fix Ledger</string>
-    <string name="fix_ledger_entry_sub">Track feedback through fix and re-verify</string>
     <string name="fix_ledger_empty">No fix records yet. Tap + to add one.</string>
     <string name="fix_ledger_add">New fix record</string>
     <string name="fix_ledger_title_hint">Summary (required)</string>

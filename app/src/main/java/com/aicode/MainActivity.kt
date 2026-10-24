@@ -90,8 +90,6 @@ import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.core.util.ApkInstaller
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import com.aicode.feature.annotation.presentation.component.AnnotationCanvasScreen
-import com.aicode.feature.annotation.presentation.component.AnnotationHubScreen
-import com.aicode.feature.fixledger.presentation.component.FixLedgerScreen
 import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
@@ -907,11 +905,6 @@ fun AppNavigation(
                     }
                 }
             }
-            composable("fixledger") {
-                FixLedgerScreen(
-                    onBack = { navController.popBackStack() }
-                )
-            }
             composable("memorygraph") {
                 MemoryGraphScreen(
                     workspacePath = currentWorkspace?.path.orEmpty(),
@@ -924,36 +917,6 @@ fun AppNavigation(
                         navController.popBackStack()
                     },
                     onBack = { navController.popBackStack() }
-                )
-            }
-            composable("annotations") {
-                AnnotationHubScreen(
-                    onBack = { navController.popBackStack() },
-                    onOpenFixLedger = { navController.navigate("fixledger") },
-                    onStartLiveAnnotation = { annotationCanvasActive = true },
-                    onStartScreenshotAnnotation = { annotationCanvasActive = true },
-                    onSummaryReady = { text, items ->
-                        // 汇总注入：文本进草稿，图片作待发附件（聊天面板读文件转 base64）
-                        agentViewModel.queueExternalText(text)
-                        agentViewModel.queueExternalAttachments(
-                            items.map { item ->
-                                AgentAttachment(
-                                    fileName = item.imagePath.substringAfterLast('/'),
-                                    containerPath = item.imagePath,
-                                    localPath = "",
-                                    mimeType = "image/png",
-                                    sizeBytes = 0L,
-                                    isImage = true
-                                )
-                            }
-                        )
-                        Toast.makeText(context, context.getString(R.string.annotation_summary_queued), Toast.LENGTH_SHORT).show()
-                        // 汇总即视为已发（状态机：待确认 → 已发AI）
-                        annotationViewModel.markSent(items)
-                        navController.navigate("chat") {
-                            popUpTo("chat") { inclusive = false }
-                        }
-                    }
                 )
             }
             composable("rea") {
