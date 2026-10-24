@@ -31,6 +31,7 @@ class DefaultModelSettingsRepository @Inject constructor(
     private companion object {
         val PROVIDER_ID_KEY = stringPreferencesKey("default_provider_id")
         val MODEL_KEY = stringPreferencesKey("default_model")
+        val ENGINE_KEY = stringPreferencesKey("default_engine")
 
         /** 子代理模型覆盖：key = 前缀 + agent 名（默认通用子代理用空名），value = "providerId|model"。 */
         const val SUBAGENT_MODEL_PREFIX = "subagent_model_"
@@ -57,6 +58,17 @@ class DefaultModelSettingsRepository @Inject constructor(
             it.remove(MODEL_KEY)
         }
     }
+
+    /** 新会话默认引擎流；空串 = 本体内置工作流。 */
+    val defaultEngineFlow: Flow<String> = context.defaultModelDataStore.data.map { it[ENGINE_KEY] ?: "" }
+
+    /** 写入新会话默认引擎（设空串即回退本体内置）。 */
+    suspend fun setDefaultEngine(engine: String) {
+        context.defaultModelDataStore.edit { it[ENGINE_KEY] = engine }
+    }
+
+    /** 冷读一次新会话默认引擎。 */
+    suspend fun getDefaultEngine(): String = defaultEngineFlow.first()
 
     /** 读取一次当前新会话默认 providerId（冷读用）。 */
     suspend fun getDefaultProviderId(): String = providerIdFlow.first()

@@ -34,7 +34,11 @@ data class CliAgent(
             "if [ \"\$REG\" != 'https://registry.npmjs.org' ]; then " +
             "echo '镜像源安装失败，改用官方源重试…'; " +
             "npm install -g --registry=https://registry.npmjs.org \$NPM_ARGS $npmPackage@$version; " +
-            "else echo '安装失败：请检查网络/代理后重试'; exit 1; fi; fi"
+            "else echo '安装失败：请检查网络/代理后重试'; exit 1; fi; fi; " +
+            "echo '───'; " +
+            "if command -v $command >/dev/null 2>&1; then " +
+            "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
+            "else echo '安装流程结束但未检测到命令，请重启容器后重试'; fi"
 
     /** 检测命令：已安装则输出首行版本号，未安装静默失败。 */
     val detectCommand: String =

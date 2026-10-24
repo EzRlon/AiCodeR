@@ -233,7 +233,11 @@ data class ChatSessionDto(
     val isPinned: Boolean = false,
     /** 子代理会话的父会话 id；丢了它恢复后子会话会变成一堆根会话。 */
     val parentId: String? = null,
-    val subagentType: String? = null
+    val subagentType: String? = null,
+    /** 回收站软删时间；null=正常会话。旧备份无此字段时回退 null（导入后视为正常会话）。 */
+    val deletedAt: Long? = null,
+    /** 会话级引擎：null=本体工作流；"claude_code"=CLI 桥接。旧备份缺省 null。 */
+    val engine: String? = null
 )
 
 @Serializable
