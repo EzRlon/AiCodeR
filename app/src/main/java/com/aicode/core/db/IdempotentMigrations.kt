@@ -116,6 +116,63 @@ internal class Migration67To68 : Migration(67, 68) {
     }
 }
 
+/**
+ * 幂等版 68→69（替代 `69_add_fix_ledger.sql` 执行）：新建修复账本表。
+ * CREATE TABLE IF NOT EXISTS 本身幂等；列集与 Room 导出的 69.json 一致。
+ */
+internal class Migration68To69 : Migration(68, 69) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `fix_ledger` (" +
+                "`id` TEXT NOT NULL, `title` TEXT NOT NULL, `status` TEXT NOT NULL, " +
+                "`note` TEXT NOT NULL, `sourceAnnotationId` TEXT, " +
+                "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+    }
+}
+
+/**
+ * 幂等版 69→70（替代 `70_add_session_engine.sql` 执行）：chat_sessions 加会话级引擎列。
+ * 可空，null = 本体内置工作流；"claude_code" = CLI 桥接（引擎切换一期）。
+ */
+internal class Migration69To70 : Migration(69, 70) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(
+            db,
+            "chat_sessions",
+            "engine",
+            "ALTER TABLE `chat_sessions` ADD COLUMN `engine` TEXT"
+        )
+    }
+}
+
+/**
+ * 幂等版 70→71（替代 `71_add_memory_graph.sql` 执行）：记忆图谱 v2 节点/边两张新表。
+ * CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS 本身幂等；列集与 Room 导出的 71.json 一致。
+ */
+internal class Migration70To71 : Migration(70, 71) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `graph_nodes` (" +
+                "`id` TEXT NOT NULL, `workspacePath` TEXT NOT NULL, `name` TEXT NOT NULL, `type` TEXT NOT NULL, " +
+                "`summary` TEXT NOT NULL, `sourceRefId` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`) )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_graph_nodes_workspacePath` ON `graph_nodes` (`workspacePath`)" )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_graph_nodes_workspacePath_type_sourceRefId` ON `graph_nodes` (`workspacePath`, `type`, `sourceRefId`)" )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `graph_edges` (" +
+                "`id` TEXT NOT NULL, `workspacePath` TEXT NOT NULL, `fromNodeId` TEXT NOT NULL, `toNodeId` TEXT NOT NULL, " +
+                "`relation` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`) )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_graph_edges_workspacePath` ON `graph_edges` (`workspacePath`)" )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_graph_edges_fromNodeId` ON `graph_edges` (`fromNodeId`)" )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_graph_edges_toNodeId` ON `graph_edges` (`toNodeId`)" )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_graph_edges_workspacePath_fromNodeId_toNodeId_relation` ON `graph_edges` (`workspacePath`, `fromNodeId`, `toNodeId`, `relation`)" )
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {

@@ -57,5 +57,7 @@ data class ChatSession(
     /** 会话级召唤的专家团名（对应 teams/<name>.md）；null 表示未使用专家团。 */
     val teamName: String? = null,
     /** 回收站：null = 正常会话；非 null = 入回收站的时间戳（回收站页据此显示剩余天数）。 */
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    /** 本会话的执行引擎：null = 本体内置工作流；"claude_code" = CLI 桥接（引擎切换）。 */
+    val engine: String? = null
 )

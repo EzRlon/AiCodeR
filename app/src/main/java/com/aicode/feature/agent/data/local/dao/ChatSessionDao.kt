@@ -45,16 +45,16 @@ interface ChatSessionDao {
     @Query("SELECT * FROM chat_sessions WHERE parentId = :parentId")
     suspend fun getSubSessionsByParentOnceIncludingTrashed(parentId: String): List<ChatSessionEntity>
 
-    /** 回收站：该工作区已软删的会话，按删除时间倒序。 */
-    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    /** 回收站：该工作区已软删的根会话（不含子代理会话——软删/恢复/彻底删都按整组生效，逐条列出会误导）。 */
+    @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL AND parentId IS NULL ORDER BY deletedAt DESC")
     fun getTrashedSessionsByWorkspace(workspacePath: String): Flow<List<ChatSessionEntity>>
 
     /** 回收站（一次性读，供清空与清理）。 */
     @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL ORDER BY deletedAt DESC")
     suspend fun getTrashedSessionsByWorkspaceOnce(workspacePath: String): List<ChatSessionEntity>
 
-    /** 回收站是否存在条目（侧栏入口按需显示）。 */
-    @Query("SELECT COUNT(*) FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL")
+    /** 回收站是否存在条目（侧栏入口按需显示，只数根会话，与列表口径一致）。 */
+    @Query("SELECT COUNT(*) FROM chat_sessions WHERE workspacePath = :workspacePath AND deletedAt IS NOT NULL AND parentId IS NULL")
     fun countTrashedByWorkspace(workspacePath: String): Flow<Int>
 
     /** 软删（入回收站）：调用方负责把同一组的会话 id（含子代理会话）一并传入。 */
@@ -113,6 +113,9 @@ interface ChatSessionDao {
 
     @Query("UPDATE chat_sessions SET teamName = :teamName WHERE id = :id")
     suspend fun updateTeamName(id: String, teamName: String?)
+
+    @Query("UPDATE chat_sessions SET engine = :engine WHERE id = :id")
+    suspend fun updateEngine(id: String, engine: String?)
     /** 设定/覆盖 goal：同时重置轮次计数与 token 快照。goal 为 null 表示清除。 */
     @Query("UPDATE chat_sessions SET goal = :goal, goalStatus = :status, goalTurnCount = 0, goalStartInputTokens = :startInput, goalStartOutputTokens = :startOutput WHERE id = :id")
     suspend fun updateGoal(id: String, goal: String?, status: String?, startInput: Int, startOutput: Int)
