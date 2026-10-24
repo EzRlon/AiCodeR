@@ -38,7 +38,13 @@ data class CliAgent(
             "echo '───'; " +
             "if command -v $command >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
-            "else echo '安装流程结束但未检测到命令，请重启容器后重试'; fi"
+            "else P=\$(npm prefix -g 2>/dev/null)/bin; " +
+            // npm 已报安装成功但 PATH 探测不到：大概率是全局 bin 目录不在当前会话 PATH。
+            // 探测真实 bin 目录后直接给出可复制的 export 命令，省去用户盲猜与重启。
+            "if [ -x \"\$P/$command\" ]; then " +
+            "echo '已安装但当前会话未检测到（PATH 未含全局 bin），执行下面这行立即可用，重启容器永久生效：'; " +
+            "echo \"export PATH=\$P:\$PATH\"; " +
+            "else echo '安装流程结束但未检测到命令，请重启容器后重试'; fi; fi"
 
     /** 检测命令：已安装则输出首行版本号，未安装静默失败。 */
     val detectCommand: String =
