@@ -2429,7 +2429,9 @@ class AIAgentViewModel @Inject constructor(
                                 userRequest = modelRequest,
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
                                 model = currentSession.model,
-                                resume = true
+                                resume = true,
+                                images = agentContext.inputImages,
+                                attachments = inputAttachments
                             )
                         }
                     }
@@ -2451,7 +2453,9 @@ class AIAgentViewModel @Inject constructor(
                                 userRequest = modelRequest,
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
                                 model = currentSession.model,
-                                resume = true
+                                resume = true,
+                                images = agentContext.inputImages,
+                                attachments = inputAttachments
                             )
                         }
                     }
@@ -2473,7 +2477,9 @@ class AIAgentViewModel @Inject constructor(
                                 userRequest = modelRequest,
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
                                 model = currentSession.model,
-                                resume = true
+                                resume = true,
+                                images = agentContext.inputImages,
+                                attachments = inputAttachments
                             )
                         }
                     }

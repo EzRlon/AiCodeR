@@ -4,6 +4,8 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.mcp.McpConfigRepository
+import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
@@ -29,6 +31,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -62,7 +65,8 @@ class ClaudeCodeBridge @Inject constructor(
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver,
     private val containerSettingsRepository: ContainerSettingsRepository,
-    private val aiProviderRepository: AIProviderRepository
+    private val aiProviderRepository: AIProviderRepository,
+    private val mcpConfigRepository: McpConfigRepository
 ) {
     private companion object {
         const val TAG = "ClaudeCodeBridge"
@@ -166,6 +170,7 @@ class ClaudeCodeBridge @Inject constructor(
 
     /**
      * 跑一个用户回合。命令文本即 [userRequest]；[model] 透传 `--model`（CLI 侧模型名，如 sonnet）；
+     * [images] 随消息以 base64 图片块传入；[attachments] 以容器路径告知（引擎用自身工具读取）；
      * [resume] 为 true 时先尝试 `--resume` 续接，失败自动转全新回合。
      */
     fun runTurn(
@@ -173,12 +178,14 @@ class ClaudeCodeBridge @Inject constructor(
         userRequest: String,
         projectPath: String?,
         model: String?,
-        resume: Boolean
+        resume: Boolean,
+        images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
+        attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -186,10 +193,10 @@ class ClaudeCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（qa P2-3）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -200,7 +207,9 @@ class ClaudeCodeBridge @Inject constructor(
         userRequest: String,
         projectPath: String?,
         model: String?,
-        resume: Boolean
+        resume: Boolean,
+        images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
+        attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         val port = permissionBridgeServer.ensureStarted(token = sessionId)
         writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
@@ -277,15 +286,42 @@ class ClaudeCodeBridge @Inject constructor(
         }
 
         try {
-            // 回合只有一个用户输入：写完即关 stdin，claude 处理完输出 result 后自行退出
+            // 回合只有一个用户输入：写完即关 stdin，claude 处理完输出 result 后自行退出。
+            // 有图片时 content 用块数组（text + image base64 块），附件以容器路径告知（引擎用自身工具读取）
             withContext(Dispatchers.IO) {
                 val w = process.outputStream.bufferedWriter()
+                val message = buildJsonObject {
+                    put("role", "user")
+                    if (images.isEmpty()) {
+                        put("content", userRequest + attachmentSuffix(attachments))
+                    } else {
+                        put("content", buildJsonArray {
+                            add(buildJsonObject {
+                                put("type", "text")
+                                put("text", userRequest + attachmentSuffix(attachments))
+                            })
+                            // Anthropic 单图约 5MiB 上限：超限跳过并记日志，避免回合以不直观的 API 错误收场（qa P2-4）
+                            val maxBase64 = 6 * 1024 * 1024 // base64 长度折算解压后约 4.5MiB
+                            for (img in images) {
+                                if (img.base64Data.length > maxBase64) {
+                                    FileLogger.w(TAG, "图片超过 Anthropic 大小限制（base64 ${img.base64Data.length} 字符），跳过")
+                                    continue
+                                }
+                                add(buildJsonObject {
+                                    put("type", "image")
+                                    put("source", buildJsonObject {
+                                        put("type", "base64")
+                                        put("media_type", img.mimeType)
+                                        put("data", img.base64Data)
+                                    })
+                                })
+                            }
+                        })
+                    }
+                }
                 val payload = buildJsonObject {
                     put("type", "user")
-                    put("message", buildJsonObject {
-                        put("role", "user")
-                        put("content", userRequest)
-                    })
+                    put("message", message)
                 }
                 w.write(payload.toString())
                 w.write("\n")
@@ -526,6 +562,34 @@ class ClaudeCodeBridge @Inject constructor(
                         put("args", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(dataBridgeScript()))))
                         put("env", bridgeEnv)
                     })
+                    // 用户在 App 配置的 MCP 服务器随回合自动映射（能力全域打通批一）：
+                    // 本文件每回合由 App 重新生成，天然是 App 管理区，无覆盖冲突；OAuth 型服务器无法委托凭据，跳过
+                    for (server in mcpConfigRepository.getEffectiveServers()) {
+                        if (!server.enabled || !McpServerConfig.isValidName(server.name)) continue
+                        if (server.name == MCP_SERVER_NAME || server.name == "aicode_bridge") continue
+                        if (server.auth != null) {
+                            FileLogger.w(TAG, "MCP 服务器 ${server.name} 使用 OAuth，暂不映射到 CLI 引擎")
+                            continue
+                        }
+                        if (server.isStdio) {
+                            put(server.name, buildJsonObject {
+                                put("type", "stdio")
+                                put("command", server.command!!)
+                                put("args", kotlinx.serialization.json.JsonArray(server.args.map { JsonPrimitive(it) }))
+                                if (server.env.isNotEmpty()) {
+                                    put("env", buildJsonObject { for ((k, v) in server.env) put(k, v) })
+                                }
+                            })
+                        } else if (!server.url.isNullOrBlank()) {
+                            put(server.name, buildJsonObject {
+                                put("type", "http")
+                                put("url", server.url)
+                                if (server.headers.isNotEmpty()) {
+                                    put("headers", buildJsonObject { for ((k, v) in server.headers) put(k, v) })
+                                }
+                            })
+                        }
+                    }
                 })
             }
             fileAccess.writeFile(mcpConfigPath(), config.toString(), overwrite = true)
@@ -533,6 +597,14 @@ class ClaudeCodeBridge @Inject constructor(
             FileLogger.e(TAG, "写桥接资产失败", e)
             throw RuntimeException("初始化权限桥资产失败: ${e.message}", e)
         }
+    }
+}
+
+/** 附件以容器路径告知 CLI 引擎（引擎用自身文件工具读取），拼在正文末尾；三个桥共用。 */
+internal fun attachmentSuffix(attachments: List<com.aicode.feature.agent.presentation.AgentAttachment>): String {
+    if (attachments.isEmpty()) return ""
+    return "\n\n" + attachments.joinToString("\n") { a ->
+        "[附件：${a.fileName}（${a.mimeType}，${a.sizeBytes} 字节），容器路径：${a.containerPath}]"
     }
 }
 

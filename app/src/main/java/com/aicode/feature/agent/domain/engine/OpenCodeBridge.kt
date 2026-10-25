@@ -4,6 +4,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
@@ -65,7 +66,8 @@ class OpenCodeBridge @Inject constructor(
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver,
     private val containerSettingsRepository: ContainerSettingsRepository,
-    private val aiProviderRepository: AIProviderRepository
+    private val aiProviderRepository: AIProviderRepository,
+    private val mcpConfigRepository: McpConfigRepository
 ) {
     private companion object {
         const val TAG = "OpenCodeBridge"
@@ -161,18 +163,23 @@ class OpenCodeBridge @Inject constructor(
         return profiles.firstOrNull { it.id == id } ?: com.aicode.feature.agent.domain.container.ContainerProfile.BUILTIN_ALPINE
     }
 
-    /** 跑一个用户回合。[resume] 为 true 时先尝试 `-s` 续接（映射缺失或续接失败自动转全新回合）。 */
+    /**
+     * 跑一个用户回合。[resume] 为 true 时先尝试 `-s` 续接（映射缺失或续接失败自动转全新回合）。
+     * [images] 解码落盘到容器桥目录后经 `-f` 传入；[attachments] 以容器路径告知。
+     */
     fun runTurn(
         sessionId: String,
         userRequest: String,
         projectPath: String?,
         model: String?,
-        resume: Boolean
+        resume: Boolean,
+        images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
+        attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -180,10 +187,10 @@ class OpenCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "opencode 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -194,7 +201,9 @@ class OpenCodeBridge @Inject constructor(
         userRequest: String,
         projectPath: String?,
         model: String?,
-        resume: Boolean
+        resume: Boolean,
+        images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
+        attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         val port = permissionBridgeServer.ensureStarted(token = sessionId)
         writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
@@ -216,6 +225,8 @@ class OpenCodeBridge @Inject constructor(
             if (effectiveResume) { add("-s"); add(resumeSessionId!!) }
             // 会话模型格式为 provider/model（如 openai/gpt-5.3-codex）；default/空 不传，跟随 CLI 配置
             if (!model.isNullOrBlank() && model != "default") { add("-m"); add(model) }
+            // 图片：base64 解码落盘到桥目录后经 -f 传入（opencode 非 text mime 按附件处理）
+            writeImageAssets(sessionId, images).forEach { path -> add("-f"); add(path) }
         }
         val extraEnv = buildMap {
             put("PERMISSION_BRIDGE_PORT", port.toString())
@@ -224,7 +235,7 @@ class OpenCodeBridge @Inject constructor(
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
             // MCP 挂载：官方优先级链合并（不整体替换用户配置；mcp 同键会被覆盖）
-            put("OPENCODE_CONFIG_CONTENT", mcpConfigContent())
+            put("OPENCODE_CONFIG_CONTENT", mcpConfigContent(sessionId))
             // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）
             transmittableProvider(ProviderType.OPENAI)?.let { p ->
                 put("OPENAI_API_KEY", p.firstUsableApiKey)
@@ -272,11 +283,14 @@ class OpenCodeBridge @Inject constructor(
             }
         }
 
+        // 附件以容器路径告知（正文末尾，引擎用自身工具读取）
+        val prompt = userRequest + attachmentSuffix(attachments)
+
         val acc = TurnAccumulator()
         try {
             withContext(Dispatchers.IO) {
                 val w = process.outputStream.bufferedWriter()
-                w.write(userRequest)
+                w.write(prompt)
                 w.write("\n")
                 w.flush()
                 w.close()
@@ -444,14 +458,77 @@ class OpenCodeBridge @Inject constructor(
             }
         }
 
-    /** aicode_bridge 的 OPENCODE_CONFIG_CONTENT 内联值（local stdio MCP；env 由进程环境继承）。 */
-    private fun mcpConfigContent(): String = buildJsonObject {
+    /** aicode_bridge + 用户自装 MCP 的 OPENCODE_CONFIG_CONTENT 内联值（不写用户配置文件，mcp 键按官方优先级覆盖）。 */
+    private suspend fun mcpConfigContent(sessionId: String): String = buildJsonObject {
         put("mcp", buildJsonObject {
             put(MCP_SERVER_NAME, buildJsonObject {
                 put("type", "local")
                 put("command", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("node"), JsonPrimitive(dataBridgeScript()))))
                 put("enabled", true)
             })
+            // 用户在 App 配置的 MCP 服务器随回合自动映射（能力全域打通批一）；OAuth 型服务器无法委托凭据，跳过。
+            // 不包 runCatching：与 Claude/Codex 桥对齐，仓库异常让回合失败而非静默丢 MCP（qa P2-3）
+            for (server in mcpConfigRepository.getEffectiveServers()) {
+                if (!server.enabled || !com.aicode.feature.agent.domain.mcp.McpServerConfig.isValidName(server.name)) continue
+                if (server.name == MCP_SERVER_NAME) continue
+                if (server.auth != null) {
+                    FileLogger.w(TAG, "MCP 服务器 ${server.name} 使用 OAuth，暂不映射到 CLI 引擎")
+                    continue
+                }
+                if (server.isStdio) {
+                    put(server.name, buildJsonObject {
+                        put("type", "local")
+                        put("command", kotlinx.serialization.json.JsonArray(
+                            listOf(JsonPrimitive(server.command!!)) + server.args.map { JsonPrimitive(it) }
+                        ))
+                        if (server.env.isNotEmpty()) {
+                            put("environment", buildJsonObject { for ((k, v) in server.env) put(k, v) })
+                        }
+                        put("enabled", true)
+                    })
+                } else if (!server.url.isNullOrBlank()) {
+                    put(server.name, buildJsonObject {
+                        put("type", "remote")
+                        put("url", server.url)
+                        if (server.headers.isNotEmpty()) {
+                            put("headers", buildJsonObject { for ((k, v) in server.headers) put(k, v) })
+                        }
+                        put("enabled", true)
+                    })
+                }
+            }
         })
     }.toString()
+
+    /**
+     * 图片落盘到容器桥目录（opencode -f 需要容器内文件路径，≤10MiB/个），返回容器内路径列表。
+     * 目录内旧图片先清理。
+     */
+    private suspend fun writeImageAssets(sessionId: String, images: List<com.aicode.feature.agent.domain.model.AgentImage>): List<String> {
+        if (images.isEmpty()) return emptyList()
+        // 解码+写盘可能数 MB：移出主线程（qa P1-2）
+        return withContext(Dispatchers.IO) {
+            val dir = bridgeDir() + "/images"
+            runCatching {
+                if (fileAccess.exists(dir)) {
+                    // 只清本会话的旧图：并发会话的图片可能尚未被 CLI 读取（qa P1-1）
+                    fileAccess.listFiles(dir).filter { it.name.startsWith("img-$sessionId-") }.forEach { fileAccess.delete(dir + "/" + it.name) }
+                }
+            }
+            val maxBytes = 8 * 1024 * 1024L // opencode 限制 10MiB，留余量
+            images.mapIndexedNotNull { index, img ->
+                runCatching {
+                    val bytes = java.util.Base64.getDecoder().decode(img.base64Data)
+                    if (bytes.size > maxBytes) {
+                        FileLogger.w(TAG, "图片 ${index + 1} 超过 opencode 附件限制（${bytes.size} 字节），跳过")
+                        return@mapIndexedNotNull null
+                    }
+                    val ext = img.mimeType.substringAfter('/', "bin").takeWhile { it.isLetterOrDigit() }
+                    val path = "$dir/img-$sessionId-$index.$ext"
+                    fileAccess.writeBytes(path, bytes)
+                    path
+                }.onFailure { e -> FileLogger.w(TAG, "图片落盘失败（跳过）: ${e.message}") }.getOrNull()
+            }
+        }
+    }
 }

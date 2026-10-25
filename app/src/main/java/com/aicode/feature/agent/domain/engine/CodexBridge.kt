@@ -4,6 +4,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
@@ -63,7 +64,8 @@ class CodexBridge @Inject constructor(
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver,
     private val containerSettingsRepository: ContainerSettingsRepository,
-    private val aiProviderRepository: AIProviderRepository
+    private val aiProviderRepository: AIProviderRepository,
+    private val mcpConfigRepository: McpConfigRepository
 ) {
     private companion object {
         const val TAG = "CodexBridge"
@@ -166,18 +168,21 @@ class CodexBridge @Inject constructor(
 
     /**
      * 跑一个用户回合。[resume] 为 true 时先尝试 `exec resume` 续接（映射缺失或续接失败自动转全新回合）。
+     * [images] 解码落盘到容器桥目录后经 `-i` 传入；[attachments] 以容器路径告知。
      */
     fun runTurn(
         sessionId: String,
         userRequest: String,
         projectPath: String?,
         model: String?,
-        resume: Boolean
+        resume: Boolean,
+        images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
+        attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -185,10 +190,10 @@ class CodexBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "codex 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -199,7 +204,9 @@ class CodexBridge @Inject constructor(
         userRequest: String,
         projectPath: String?,
         model: String?,
-        resume: Boolean
+        resume: Boolean,
+        images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
+        attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         val port = permissionBridgeServer.ensureStarted(token = sessionId)
         writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
@@ -221,6 +228,30 @@ class CodexBridge @Inject constructor(
             add("-c"); add("mcp_servers.aicode_bridge.command=\"node\"")
             add("-c"); add("mcp_servers.aicode_bridge.args=[\"${dataBridgeScript()}\"]")
             add("-c"); add(mcpEnvOverride(port, sessionId, token = sessionId, projectPath))
+            // 用户自装 MCP 自动映射（能力全域打通批一）：与 aicode_bridge 同样用 -c 内联，不写用户配置文件
+            for (server in mcpConfigRepository.getEffectiveServers()) {
+                if (!server.enabled || !com.aicode.feature.agent.domain.mcp.McpServerConfig.isValidName(server.name)) continue
+                if (server.name == "aicode_bridge") continue
+                if (server.auth != null) {
+                    FileLogger.w(TAG, "MCP 服务器 ${server.name} 使用 OAuth，暂不映射到 CLI 引擎")
+                    continue
+                }
+                if (server.isStdio) {
+                    add("-c"); add("mcp_servers.${server.name}.command=${tomlString(server.command!!)}")
+                    if (server.args.isNotEmpty()) {
+                        val tomlArgs = server.args.joinToString(",") { tomlString(it) }
+                        add("-c"); add("mcp_servers.${server.name}.args=[$tomlArgs]")
+                    }
+                    if (server.env.isNotEmpty()) {
+                        val tomlEnv = server.env.entries.joinToString(",") { "\"${it.key}\"=${tomlString(it.value)}" }
+                        add("-c"); add("mcp_servers.${server.name}.env={$tomlEnv}")
+                    }
+                } else if (!server.url.isNullOrBlank()) {
+                    add("-c"); add("mcp_servers.${server.name}.url=${tomlString(server.url)}")
+                }
+            }
+            // 图片：base64 解码落盘到桥目录后经 -i 传入（codex 只接受文件路径）
+            writeImageAssets(sessionId, images).forEach { path -> add("-i"); add(path) }
             if (!model.isNullOrBlank() && model != "default") { add("-m"); add(model) }
             if (effectiveResume) { add("resume"); add(resumeThreadId!!) }
             add("-") // 提示词走 stdin
@@ -242,6 +273,8 @@ class CodexBridge @Inject constructor(
                 }
             }
         }
+        // 附件以容器路径告知（正文末尾，引擎用自身工具读取）
+        val prompt = userRequest + attachmentSuffix(attachments)
 
         FileLogger.i(TAG, "启动 codex 桥接进程: resume=$effectiveResume model=$model project=$projectPath authViaKey=${extraEnv.containsKey("OPENAI_API_KEY")}")
         // spawn 失败（codex 未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（qa P2-1）
@@ -285,7 +318,7 @@ class CodexBridge @Inject constructor(
         try {
             withContext(Dispatchers.IO) {
                 val w = process.outputStream.bufferedWriter()
-                w.write(userRequest)
+                w.write(prompt)
                 w.write("\n")
                 w.flush()
                 w.close()
@@ -521,5 +554,35 @@ class CodexBridge @Inject constructor(
         }
         val inner = env.entries.joinToString(",") { "\"${it.key}\"=\"${it.value.jsonPrimitive.content}\"" }
         return "mcp_servers.aicode_bridge.env={$inner}"
+    }
+
+    /** TOML 基本串转义（qa P2-1）：配置值含引号/反斜杠/换行时正常透传而非解析失败。 */
+    private fun tomlString(value: String): String =
+        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\""
+
+    /**
+     * 图片落盘到容器桥目录（codex -i 只接受文件路径），返回容器内路径列表。
+     * 目录内旧图片先清理（不依赖回合结束，进程可能早退）。
+     */
+    private suspend fun writeImageAssets(sessionId: String, images: List<com.aicode.feature.agent.domain.model.AgentImage>): List<String> {
+        if (images.isEmpty()) return emptyList()
+        // 解码+写盘可能数 MB：移出主线程（qa P1-2）
+        return withContext(Dispatchers.IO) {
+            val dir = bridgeDir() + "/images"
+            runCatching {
+                if (fileAccess.exists(dir)) {
+                    // 只清本会话的旧图：并发会话的图片可能尚未被 CLI 读取（qa P1-1）
+                    fileAccess.listFiles(dir).filter { it.name.startsWith("img-$sessionId-") }.forEach { fileAccess.delete(dir + "/" + it.name) }
+                }
+            }
+            images.mapIndexedNotNull { index, img ->
+                runCatching {
+                    val ext = img.mimeType.substringAfter('/', "bin").takeWhile { it.isLetterOrDigit() }
+                    val path = "$dir/img-$sessionId-$index.$ext"
+                    fileAccess.writeBytes(path, java.util.Base64.getDecoder().decode(img.base64Data))
+                    path
+                }.onFailure { e -> FileLogger.w(TAG, "图片落盘失败（跳过）: ${e.message}") }.getOrNull()
+            }
+        }
     }
 }
