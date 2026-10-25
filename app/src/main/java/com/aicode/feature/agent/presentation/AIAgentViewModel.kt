@@ -39,6 +39,7 @@ import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
+import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
@@ -197,6 +198,7 @@ class AIAgentViewModel @Inject constructor(
     private val modelCostCalculator: ModelCostCalculator,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
+    private val engineOptionsRepository: EngineOptionsRepository,
     private val modelReasoningEffortRepository: ModelReasoningEffortRepository,
     private val toolPermissionManager: ToolPermissionManager,
     private val askUserQuestionManager: AskUserQuestionManager,
@@ -1061,6 +1063,22 @@ class AIAgentViewModel @Inject constructor(
         planApprovalManager.pendingApproval
     ) { p, q, a -> p != null || q != null || a != null }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Codex 沙箱是否完全放开（引擎卡开关）：false = workspace-write（默认），true = danger-full-access。 */
+    val codexSandboxFullAccess: StateFlow<Boolean> = engineOptionsRepository.codexSandboxFullAccessFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setCodexSandboxFullAccess(enabled: Boolean) {
+        viewModelScope.launch { engineOptionsRepository.setCodexSandboxFullAccess(enabled) }
+    }
+
+    /** OpenCode 是否自动批准权限请求（引擎卡开关）：默认 true。 */
+    val openCodeAutoApprove: StateFlow<Boolean> = engineOptionsRepository.openCodeAutoApproveFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setOpenCodeAutoApprove(enabled: Boolean) {
+        viewModelScope.launch { engineOptionsRepository.setOpenCodeAutoApprove(enabled) }
+    }
 
     /** 切换当前会话引擎（null 切回本体内置工作流）。运行中禁止切换（返回 false 不生效）。 */
     fun setSessionEngine(engine: String?): Boolean {

@@ -183,6 +183,30 @@ internal fun DefaultModelsSection(
                     }
                 }
             )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Terminal,
+                title = "Codex",
+                subtitle = stringResource(R.string.settings_default_engine_codex_sub),
+                onClick = { onSelectDefaultEngine(com.aicode.feature.agent.domain.engine.AgentEngines.CODEX) },
+                trailing = {
+                    if (defaultEngine == com.aicode.feature.agent.domain.engine.AgentEngines.CODEX) {
+                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Terminal,
+                title = "OpenCode",
+                subtitle = stringResource(R.string.settings_default_engine_opencode_sub),
+                onClick = { onSelectDefaultEngine(com.aicode.feature.agent.domain.engine.AgentEngines.OPENCODE) },
+                trailing = {
+                    if (defaultEngine == com.aicode.feature.agent.domain.engine.AgentEngines.OPENCODE) {
+                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            )
         }
         SettingsGroupHeader(text = stringResource(R.string.settings_agent_models_group))
         SettingsGroup {

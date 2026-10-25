@@ -738,6 +738,8 @@ fun AIChatPanel(
     val providers = (settingsViewModel?.providers?.collectAsStateWithLifecycle()?.value ?: emptyList()).filter { it.isEnabled }
     val modelMetadata = settingsViewModel?.modelMetadata?.collectAsStateWithLifecycle()?.value.orEmpty()
     val sessionEngine by viewModel.currentSessionEngine.collectAsStateWithLifecycle()
+    val codexSandboxFullAccess by viewModel.codexSandboxFullAccess.collectAsStateWithLifecycle()
+    val openCodeAutoApprove by viewModel.openCodeAutoApprove.collectAsStateWithLifecycle()
     val frameAwaitingApproval by viewModel.hasPendingApproval.collectAsStateWithLifecycle()
     // CLI 引擎会话的模型名（胶囊/模型页勾选用，而非默认 provider 模型）
     val sessionCliModel = if (sessionEngine != null) {
@@ -2201,6 +2203,10 @@ fun AIChatPanel(
                 onInstallOpenCode = { viewModel.installOpenCode() },
                 onSelectCliModel = { viewModel.setSessionCliModel(it) },
                 onOpenAgentCli = onNavigateToAgents,
+                codexSandboxFullAccess = codexSandboxFullAccess,
+                onCodexSandboxFullAccessChange = { viewModel.setCodexSandboxFullAccess(it) },
+                openCodeAutoApprove = openCodeAutoApprove,
+                onOpenCodeAutoApproveChange = { viewModel.setOpenCodeAutoApprove(it) },
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
                 onModePillLongClick = {

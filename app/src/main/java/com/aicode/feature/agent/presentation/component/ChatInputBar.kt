@@ -216,6 +216,12 @@ internal fun ChatInputBar(
     onInstallOpenCode: () -> Unit = {},
     onSelectCliModel: (String) -> Unit = {},
     onOpenAgentCli: () -> Unit = {},
+    /** Codex 沙箱是否完全放开（引擎卡开关）。 */
+    codexSandboxFullAccess: Boolean = false,
+    onCodexSandboxFullAccessChange: (Boolean) -> Unit = {},
+    /** OpenCode 是否自动批准权限请求（引擎卡开关）。 */
+    openCodeAutoApprove: Boolean = true,
+    onOpenCodeAutoApproveChange: (Boolean) -> Unit = {},
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     /** 长按模式图标：按当前模式弹「定时任务 / 定时 Plan」创建面板；null 时不响应。 */
@@ -760,6 +766,10 @@ internal fun ChatInputBar(
                                 onInstallOpenCode = onInstallOpenCode,
                                 onSelectCliModel = onSelectCliModel,
                                 onOpenAgentCli = onOpenAgentCli,
+                                codexSandboxFullAccess = codexSandboxFullAccess,
+                                onCodexSandboxFullAccessChange = onCodexSandboxFullAccessChange,
+                                openCodeAutoApprove = openCodeAutoApprove,
+                                onOpenCodeAutoApproveChange = onOpenCodeAutoApproveChange,
                                 forceOpenSheet = forceOpenModelSheet,
                                 onSelectSuccessInOnboarding = onSelectModelInOnboarding,
                                 onSheetDismiss = onModelSheetDismiss,

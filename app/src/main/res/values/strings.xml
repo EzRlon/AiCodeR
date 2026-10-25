@@ -468,14 +468,18 @@
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
     <string name="engine_codex_not_authenticated">已安装 · 未登录（或未配置可透传的 OpenAI Key）</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_codex_hint">Codex 说明：无交互审批，命令在 workspace-write 沙箱内自动执行；文本与工具结果为整段返回，无逐字流式</string>
+    <string name="engine_codex_hint">Codex 说明：无交互审批，命令在沙箱内自动执行（档位见卡片开关，全局生效、含定时任务）；文本与工具结果为整段返回，无逐字流式</string>
+    <string name="engine_codex_sandbox_toggle">放开沙箱（可读写工作区外）</string>
     <string name="engine_codex_install_started">已在新终端开始安装 Codex，跑完会发通知；装完重新打开引擎页即可检测到</string>
     <string name="engine_opencode_not_authenticated">已安装 · 未配置凭据（或未配置可透传的 OpenAI/Anthropic Key）</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_opencode_hint">OpenCode 说明：权限请求自动批准（未被显式 deny 时）；文本与工具结果为整段返回，无逐字流式</string>
+    <string name="engine_opencode_hint">OpenCode 说明：权限请求自动批准（可在卡片开关关闭，关闭后未授权的工具调用会被拒绝、回合可能不完整）；文本与工具结果为整段返回，无逐字流式</string>
+    <string name="engine_opencode_auto_toggle">自动批准权限请求</string>
     <string name="engine_opencode_install_started">已在新终端开始安装 OpenCode，跑完会发通知；装完重新打开引擎页即可检测到</string>
     <string name="settings_default_engine_group">新会话默认引擎</string>
     <string name="settings_default_engine_claude_sub">新建会话默认用 Claude Code（需已安装）</string>
+    <string name="settings_default_engine_codex_sub">新建会话默认用 Codex（需已安装）</string>
+    <string name="settings_default_engine_opencode_sub">新建会话默认用 OpenCode（需已安装）</string>
 
     <!-- 记忆图谱 v2 -->
     <string name="memory_graph_tab_graph">图谱</string>

@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
+import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -43,14 +44,14 @@ import javax.inject.Singleton
  * OpenAI Codex CLI 桥接（引擎切换三期）。
  *
  * 每个用户回合在 PRoot 容器内起一个 headless 进程：
- * `codex exec --json --skip-git-repo-check --sandbox workspace-write [-C 项目根] [resume <threadId>] -`
+ * `codex exec --json --skip-git-repo-check --sandbox <workspace-write|danger-full-access> [-C 项目根] [resume <threadId>] -`
  * 提示词经 stdin 传入（`-`），把 stdout 的 JSONL（ThreadEvent 协议，已在 codex-cli 0.162.1 实测：
  * thread.started / item.started|completed / turn.completed|failed）翻译成 [AgentEvent]，
  * 落库 / 停止 / 队列 / UI 状态机全部复用本体链路。
  *
  * 与 Claude Code 的差异（协议决定，非缺漏）：
  * - 无逐 token 文本增量：助手文本在 item.completed(type=agent_message) 整段到达，直接发 AssistantText。
- * - 无交互审批钩子（exec 模式不弹审批）：命令在 workspace-write 沙箱内自动执行，不走本体授权中心；
+ * - 无交互审批钩子（exec 模式不弹审批）：命令在沙箱内自动执行（档位由引擎卡开关控制），不走本体授权中心；
  *   仅 aicode_bridge 数据工具经 [PermissionBridgeServer] 的 kind:data 通道回调 App。
  * - MCP 无 --mcp-config flag：用 `-c mcp_servers.<name>.*` 内联覆盖挂载（实测会拉起 server）。
  * - 续会话用 `exec resume <thread_id>`；App sessionId 与 codex thread_id 的映射持久化在桥接目录
@@ -65,7 +66,8 @@ class CodexBridge @Inject constructor(
     private val pathHomeResolver: PathHomeResolver,
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
-    private val mcpConfigRepository: McpConfigRepository
+    private val mcpConfigRepository: McpConfigRepository,
+    private val engineOptionsRepository: EngineOptionsRepository
 ) {
     private companion object {
         const val TAG = "CodexBridge"
@@ -217,12 +219,14 @@ class CodexBridge @Inject constructor(
             FileLogger.i(TAG, "无 codex thread 映射，按全新回合执行: sid=$sessionId")
         }
 
+        // exec 非交互模式无审批弹窗：沙箱档位由引擎卡开关决定（默认 workspace-write，让工作区内命令自动执行、
+        // 工作区外被挡；开关放开为 danger-full-access 时整个容器可读写）
+        val sandboxMode = if (engineOptionsRepository.isCodexSandboxFullAccess()) "danger-full-access" else "workspace-write"
         val args = buildList {
             add("exec")
             add("--json")
             add("--skip-git-repo-check")
-            // exec 非交互模式无审批弹窗：workspace-write 让工作区内命令可自动执行（沙箱仍挡工作区外写入）
-            add("--sandbox"); add("workspace-write")
+            add("--sandbox"); add(sandboxMode)
             if (!projectPath.isNullOrBlank()) { add("-C"); add(projectPath) }
             // MCP 无 --mcp-config flag，-c 内联覆盖挂载 aicode_bridge（0.162.1 实测会拉起 server）
             add("-c"); add("mcp_servers.aicode_bridge.command=\"node\"")

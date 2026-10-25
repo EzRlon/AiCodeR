@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
+import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -44,7 +45,7 @@ import javax.inject.Singleton
  * OpenCode CLI 桥接（引擎切换三期）。
  *
  * 每个用户回合在 PRoot 容器内起一个 headless 进程：
- * `opencode run --format json --auto --thinking [--dir 项目根] [-s <sessionID>] [-m provider/model]`
+ * `opencode run --format json [--auto] --thinking [--dir 项目根] [-s <sessionID>] [-m provider/model]`
  * 提示词经 stdin 传入（位置参数留空），把 stdout 的 NDJSON 事件翻译成 [AgentEvent]，
  * 落库 / 停止 / 队列 / UI 状态机全部复用本体链路。事件形态经 opencode 1.19.0 实测与
  * 仓库 noninteractive.ts 源码核对：step_start / text / reasoning / tool_use / step_finish / error，
@@ -53,7 +54,7 @@ import javax.inject.Singleton
  * 与 Claude Code 的差异（协议决定，非缺漏）：
  * - 文本按块整发（session.text.ended 触发），无逐 token 增量；工具调用也只在成败后一次性到达，
  *   翻译层立即补发 Started+Finished 配对。
- * - 权限无交互审批：`--auto` 自动批准未被显式 deny 的请求；工具成败以 tool_use 事件外显。
+ * - 权限无交互审批：`--auto`（引擎卡开关控制，默认开）自动批准未被显式 deny 的请求；工具成败以 tool_use 事件外显。
  * - MCP 无命令行 flag：经 `OPENCODE_CONFIG_CONTENT` 内联 JSON 挂 aicode_bridge（实测会拉起 server；
  *   该变量按官方优先级链合并、不整体替换用户配置，但同键 mcp 会被本桥覆盖）。
  * - 续会话：opencode 不接受外部指定 session id，App sessionId → `ses_...` 映射持久化在桥接目录。
@@ -67,7 +68,8 @@ class OpenCodeBridge @Inject constructor(
     private val pathHomeResolver: PathHomeResolver,
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
-    private val mcpConfigRepository: McpConfigRepository
+    private val mcpConfigRepository: McpConfigRepository,
+    private val engineOptionsRepository: EngineOptionsRepository
 ) {
     private companion object {
         const val TAG = "OpenCodeBridge"
@@ -214,11 +216,12 @@ class OpenCodeBridge @Inject constructor(
             FileLogger.i(TAG, "无 opencode session 映射，按全新回合执行: sid=$sessionId")
         }
 
+        // headless 权限请求无人应答：--auto 自动批准未被显式 deny 的请求；由引擎卡开关控制（默认开）
+        val autoApprove = engineOptionsRepository.isOpenCodeAutoApprove()
         val args = buildList {
             add("run")
             add("--format"); add("json")
-            // headless 权限请求无人应答：--auto 自动批准未被显式 deny 的请求（引擎卡 hint 已写明）
-            add("--auto")
+            if (autoApprove) add("--auto")
             // 思考过程事件（session.reasoning.ended）需要该开关才外发
             add("--thinking")
             if (!projectPath.isNullOrBlank()) { add("--dir"); add(projectPath) }

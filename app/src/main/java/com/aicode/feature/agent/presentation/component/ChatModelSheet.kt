@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,12 +44,15 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.agent.domain.model.ReasoningEffort
@@ -124,7 +128,13 @@ internal fun ModelIconButton(
     checkOpenCodeAuth: suspend () -> String? = { null },
     onInstallOpenCode: () -> Unit = {},
     onSelectCliModel: (String) -> Unit = {},
-    onOpenAgentCli: () -> Unit = {}
+    onOpenAgentCli: () -> Unit = {},
+    /** Codex 沙箱是否完全放开（引擎卡开关）。 */
+    codexSandboxFullAccess: Boolean = false,
+    onCodexSandboxFullAccessChange: (Boolean) -> Unit = {},
+    /** OpenCode 是否自动批准权限请求（引擎卡开关）。 */
+    openCodeAutoApprove: Boolean = true,
+    onOpenCodeAutoApproveChange: (Boolean) -> Unit = {}
 ) {
     var showSheet by remember { mutableStateOf(false) }
     val effectiveShowSheet = showSheet || forceOpenSheet
@@ -179,6 +189,10 @@ internal fun ModelIconButton(
             onInstallClaudeCode = onInstallClaudeCode,
             onInstallCodex = onInstallCodex,
             onInstallOpenCode = onInstallOpenCode,
+            codexSandboxFullAccess = codexSandboxFullAccess,
+            onCodexSandboxFullAccessChange = onCodexSandboxFullAccessChange,
+            openCodeAutoApprove = openCodeAutoApprove,
+            onOpenCodeAutoApproveChange = onOpenCodeAutoApproveChange,
             onOpenAgentCli = {
                 onOpenAgentCli()
                 showSheet = false
@@ -329,6 +343,10 @@ internal fun ModelSheet(
     onOpenAgentCli: () -> Unit = {},
     onSelectModel: (String, String) -> Unit,
     onSelectCliModel: (String) -> Unit,
+    codexSandboxFullAccess: Boolean = false,
+    onCodexSandboxFullAccessChange: (Boolean) -> Unit = {},
+    openCodeAutoApprove: Boolean = true,
+    onOpenCodeAutoApproveChange: (Boolean) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -388,6 +406,10 @@ internal fun ModelSheet(
                         onInstallClaudeCode = onInstallClaudeCode,
                         onInstallCodex = onInstallCodex,
                         onInstallOpenCode = onInstallOpenCode,
+                        codexSandboxFullAccess = codexSandboxFullAccess,
+                        onCodexSandboxFullAccessChange = onCodexSandboxFullAccessChange,
+                        openCodeAutoApprove = openCodeAutoApprove,
+                        onOpenCodeAutoApproveChange = onOpenCodeAutoApproveChange,
                         onOpenAgentCli = onOpenAgentCli
                     )
                 }
@@ -409,6 +431,10 @@ private fun EnginePage(
     onInstallClaudeCode: () -> Unit,
     onInstallCodex: () -> Unit = {},
     onInstallOpenCode: () -> Unit = {},
+    codexSandboxFullAccess: Boolean = false,
+    onCodexSandboxFullAccessChange: (Boolean) -> Unit = {},
+    openCodeAutoApprove: Boolean = true,
+    onOpenCodeAutoApproveChange: (Boolean) -> Unit = {},
     onOpenAgentCli: () -> Unit = {}
 ) {
     // 三张 CLI 引擎卡同构（探测/认证态/安装/去登录），用描述符循环避免三段复制
@@ -475,6 +501,28 @@ private fun EnginePage(
                         { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }
                     }
                     else -> null
+                },
+                // 引擎行为选项：Codex 沙箱档位 / OpenCode 自动批准（全局生效，下一次发送起作用）
+                optionRow = when (d.id) {
+                    AgentEngines.CODEX -> {
+                        {
+                            EngineOptionToggle(
+                                title = stringResource(R.string.engine_codex_sandbox_toggle),
+                                checked = codexSandboxFullAccess,
+                                onCheckedChange = onCodexSandboxFullAccessChange
+                            )
+                        }
+                    }
+                    AgentEngines.OPENCODE -> {
+                        {
+                            EngineOptionToggle(
+                                title = stringResource(R.string.engine_opencode_auto_toggle),
+                                checked = openCodeAutoApprove,
+                                onCheckedChange = onOpenCodeAutoApproveChange
+                            )
+                        }
+                    }
+                    else -> null
                 }
             )
         }
@@ -502,7 +550,9 @@ private fun EngineCard(
     subtitle: String,
     selected: Boolean,
     onClick: () -> Unit,
-    trailingAction: (@Composable () -> Unit)? = null
+    trailingAction: (@Composable () -> Unit)? = null,
+    /** 卡内附加的引擎行为选项行（如沙箱/自动批准开关）；null 不显示。 */
+    optionRow: (@Composable () -> Unit)? = null
 ) {
     Surface(
         shape = RoundedCornerShape(Radius.mdLarge),
@@ -514,32 +564,58 @@ private fun EngineCard(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.md),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.md)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (selected) {
+                    Icon(
+                        FeatherIcons.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                trailingAction?.invoke()
             }
-            if (selected) {
-                Icon(
-                    FeatherIcons.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            trailingAction?.invoke()
+            optionRow?.invoke()
         }
+    }
+}
+
+/** 引擎卡内的行为选项开关行：标题（弱化色）+ 右侧开关。 */
+@Composable
+private fun EngineOptionToggle(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.sm)
+            // 整行可切：点标题文字也能切换，开关本体退为纯视觉（避免双层 toggleable 双触发）
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        AppSwitch(checked = checked, onCheckedChange = null)
     }
 }
 
