@@ -71,8 +71,6 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatHeader(
-    /** 当前会话 id（完整值）：顶栏显示其短形式，点击复制完整值，便于对照开发目录里的会话文件。 */
-    sessionId: String?,
     inputTokens: Int,
     outputTokens: Int,
     onOpenDrawer: () -> Unit,
@@ -121,19 +119,8 @@ internal fun ChatHeader(
                 } else {
                     Spacer(modifier = Modifier.width(Spacing.sm))
                 }
-                // 会话短 id 展示（复制入口已移至长按会话菜单，用户 2026-10-24 反馈 1）
-                val sessionIdValue = sessionId.orEmpty()
-                Text(
-                    text = sessionIdValue.take(8).ifEmpty { stringResource(R.string.chat_new_session) },
-                    style = MaterialTheme.typography.labelLarge,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = Spacing.xs, vertical = 2.dp)
-                )
+                // 会话 id 不再上顶栏（用户反馈：占空间无信息量）；复制入口在会话列表长按菜单
+                Spacer(modifier = Modifier.weight(1f))
                 VncHeaderIconButton()
                 Box(
                     modifier = Modifier
