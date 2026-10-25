@@ -105,12 +105,6 @@ class ClaudeCodeBridge @Inject constructor(
     @Volatile private var cachedAuthHint: String? = null
     @Volatile private var cachedAuthAtMs: Long = 0
 
-    /** 安装后失效可用性缓存：下次进引擎页立即重新检测（用户反馈：装完仍显示未安装）。 */
-    fun invalidateAvailability() {
-        cachedAvailable = null
-        cachedAtMs = 0
-    }
-
     /** 引擎是否可用：本地 PRoot 容器 + claude 已安装。远程 SSH 一期不支持。 */
     suspend fun isAvailable(): Boolean {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
@@ -124,18 +118,14 @@ class ClaudeCodeBridge @Inject constructor(
         return available
     }
 
-    /** 一键安装：开终端标签跑安装命令（复用 CLI 智能体管理器的安装链路）。 */
-    suspend fun installCli(): String =
-        cliAgentManager.install(CliAgentCatalog.ALL.first { it.command == "claude" })
-
     /**
      * 认证状态：null = 已可用（oauth 凭据在，或将透传 App 内 Anthropic key）；
      * 非 null = 未认证引导文案（供发送前拦截与引擎卡片展示）。
      * 探测为一条轻量 test 命令（不拉起 claude、不耗 token）。
      */
-    suspend fun authHint(): String? {
+    suspend fun authHint(providerId: String? = null): String? {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
-        if (transmittableAnthropicProvider() != null) return null
+        if (transmittableAnthropicProvider(providerId) != null) return null
         cachedAuthHint?.let { cached ->
             if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
         }
@@ -160,10 +150,14 @@ class ClaudeCodeBridge @Inject constructor(
             "若你已在容器内自行配置 ANTHROPIC_API_KEY，可忽略本提示。"
     }
 
-    /** App 内已配置可用 Key 的 Anthropic 提供商（用于透传；无则 null，claude 走自身 oauth）。 */
-    private suspend fun transmittableAnthropicProvider(): com.aicode.feature.settings.domain.model.AIProviderConfig? =
+    /** App 内已配置可用 Key 的 Anthropic 提供商（用于透传；无则 null，claude 走自身 oauth）。
+     *  [providerId] 非空时优先解析该供应商（会话选定的 App 供应商模型），不可用再回退首个可用。 */
+    private suspend fun transmittableAnthropicProvider(providerId: String? = null): com.aicode.feature.settings.domain.model.AIProviderConfig? =
         runCatching {
-            aiProviderRepository.getAllProviders().first().firstOrNull {
+            val all = aiProviderRepository.getAllProviders().first()
+            providerId?.let { id ->
+                all.firstOrNull { it.id == id && it.type == ProviderType.ANTHROPIC && it.isEnabled && it.hasUsableApiKey }
+            } ?: all.firstOrNull {
                 it.type == ProviderType.ANTHROPIC && it.isEnabled && it.hasUsableApiKey
             }
         }.getOrNull()
@@ -176,7 +170,8 @@ class ClaudeCodeBridge @Inject constructor(
     }
 
     /**
-     * 跑一个用户回合。命令文本即 [userRequest]；[model] 透传 `--model`（CLI 侧模型名，如 sonnet）；
+     * 跑一个用户回合。命令文本即 [userRequest]；[model] 透传 `--model`（CLI 侧模型名或 App 供应商模型名）；
+     * [providerId] 为会话选定的 App 供应商（对齐透传的 Key/baseURL，null = 引擎自带模型）；
      * [images] 随消息以 base64 图片块传入；[attachments] 以容器路径告知（引擎用自身工具读取）；
      * [resume] 为 true 时先尝试 `--resume` 续接，失败自动转全新回合。
      */
@@ -186,13 +181,14 @@ class ClaudeCodeBridge @Inject constructor(
         projectPath: String?,
         model: String?,
         resume: Boolean,
+        providerId: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -200,10 +196,10 @@ class ClaudeCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（qa P2-3）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -215,6 +211,7 @@ class ClaudeCodeBridge @Inject constructor(
         projectPath: String?,
         model: String?,
         resume: Boolean,
+        providerId: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -247,8 +244,9 @@ class ClaudeCodeBridge @Inject constructor(
             // 本体能力桥的数据工具需要知道容器内 .aicode 根与当前项目根（容器内路径）
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
-            // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代
-            transmittableAnthropicProvider()?.let { p ->
+            // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代；
+            // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
+            transmittableAnthropicProvider(providerId)?.let { p ->
                 put("ANTHROPIC_API_KEY", p.firstUsableApiKey) // 多 Key 模式恒取首把可用 Key，与 App 内轮换调度不同步（见 P2-6）
                 // useFullUrl 的 baseUrl 是完整 endpoint（含路径），无法安全还原 base，只透 key 不透 URL
                 if (!p.useFullUrl) {

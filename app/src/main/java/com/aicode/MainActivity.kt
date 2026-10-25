@@ -96,7 +96,6 @@ import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
 import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.AIChatPanel
-import com.aicode.feature.agent.presentation.component.AgentCliSheet
 import com.aicode.feature.agent.presentation.component.ChatDrawerContent
 import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
@@ -567,7 +566,6 @@ fun AppNavigation(
     // 分割线拖动中右栏宽度直接 snap 跟手，只在开/关门沿切换时补间（顶层声明供两处作用域共用）
     var paneDragging by remember { mutableStateOf(false) }
     // AI 智能体（终端 CLI）管理弹层：顶栏入口打开，启动后自动切到终端看会话。
-    var showAgentCliSheet by rememberSaveable { mutableStateOf(false) }
     // 右栏编辑器有未保存修改时，换文件前先弹保存提示（窄窗全屏编辑器由返回键拦截，不经过这里）。
     val editorLeaveGuard = remember { EditorLeaveGuard() }
 
@@ -838,7 +836,6 @@ fun AppNavigation(
                                     onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
                                     onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
                                     onNavigateToMemoryGraph = { navController.navigate("memorygraph") },
-                                    onNavigateToAgents = { showAgentCliSheet = true },
                                     onOpenFile = { path -> openFile(path, 0, false) },
                                     terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
                                     gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
@@ -880,16 +877,6 @@ fun AppNavigation(
                         }
                     }
                     VncOverlayWindow(viewModel = vncOverlayViewModel)
-
-                    if (showAgentCliSheet) {
-                        AgentCliSheet(
-                            onDismiss = { showAgentCliSheet = false },
-                            onLaunched = {
-                                showAgentCliSheet = false
-                                openWorkbench(WorkbenchPaneKind.TERMINAL)
-                            }
-                        )
-                    }
 
                     if (paneOpen && leftPaneWidthPx > 0) {
                         VerticalSplitHandle(
@@ -946,6 +933,11 @@ fun AppNavigation(
                         if (!expanded) scope.launch { drawerState.open() }
                     },
                     onStopAllAndCloseTerminal = { agentViewModel.stopAllAndCloseTerminal() },
+                    onOpenTerminal = {
+                        navController.popBackStack()
+                        openWorkbench(WorkbenchPaneKind.TERMINAL)
+                    },
+                    agentViewModel = agentViewModel,
                     onRevealInTree = { relPath ->
                         // relPath = 「<项目名>/<相对路径>」；仅当前工作区的项目可转容器路径后定位。
                         val currentProjectName = currentWorkspace?.path

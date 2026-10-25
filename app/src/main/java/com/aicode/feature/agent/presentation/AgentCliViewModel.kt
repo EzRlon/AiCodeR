@@ -7,12 +7,18 @@ import com.aicode.R
 import com.aicode.feature.agent.domain.cliagent.CliAgent
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
+import com.aicode.feature.agent.domain.engine.ClaudeCodeBridge
+import com.aicode.feature.agent.domain.engine.CodexBridge
+import com.aicode.feature.agent.domain.engine.OpenCodeBridge
+import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.terminal.domain.TerminalSessionProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -26,6 +32,10 @@ import javax.inject.Inject
 class AgentCliViewModel @Inject constructor(
     private val cliAgentManager: CliAgentManager,
     private val terminalSessionProvider: TerminalSessionProvider,
+    private val claudeCodeBridge: ClaudeCodeBridge,
+    private val codexBridge: CodexBridge,
+    private val openCodeBridge: OpenCodeBridge,
+    private val engineOptionsRepository: EngineOptionsRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -34,7 +44,9 @@ class AgentCliViewModel @Inject constructor(
         /** 已安装时的首行版本输出；null 表示未安装或未检出。 */
         val version: String?,
         val checking: Boolean = false,
-        val installing: Boolean = false
+        val installing: Boolean = false,
+        /** 认证态：null = 已登录（或可透传 App 内 Key）；非 null = 未登录引导文案。 */
+        val authHint: String? = null
     )
 
     private val _states = MutableStateFlow(CliAgentCatalog.ALL.map { AgentCliState(it, version = null, checking = true) })
@@ -43,9 +55,25 @@ class AgentCliViewModel @Inject constructor(
     /** 安装标签 tabId → agentId：安装结束事件按此回查要复检的智能体。 */
     private val installingTabs = MutableStateFlow<Map<String, String>>(emptyMap())
 
-    /** 最近一次安装/启动失败的提示（消费后置空），供 sheet 展示。 */
+    /** 最近一次安装/启动失败的提示（消费后置空），供设置页展示。 */
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    /** Codex 沙箱是否完全放开（引擎卡开关）：false = workspace-write（默认），true = danger-full-access。 */
+    val codexSandboxFullAccess: StateFlow<Boolean> = engineOptionsRepository.codexSandboxFullAccessFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setCodexSandboxFullAccess(enabled: Boolean) {
+        viewModelScope.launch { engineOptionsRepository.setCodexSandboxFullAccess(enabled) }
+    }
+
+    /** OpenCode 是否自动批准权限请求（引擎卡开关）：默认 true。 */
+    val openCodeAutoApprove: StateFlow<Boolean> = engineOptionsRepository.openCodeAutoApproveFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setOpenCodeAutoApprove(enabled: Boolean) {
+        viewModelScope.launch { engineOptionsRepository.setOpenCodeAutoApprove(enabled) }
+    }
 
     init {
         refresh()
@@ -122,7 +150,15 @@ class AgentCliViewModel @Inject constructor(
     private suspend fun checkOne(agentId: String) {
         val agent = CliAgentCatalog.ALL.first { it.id == agentId }
         val version = runCatching { cliAgentManager.detectVersion(agent) }.getOrNull()
-        setOne(agentId) { it.copy(version = version, checking = false) }
+        // 已安装才查登录态：未装时探测无意义
+        val authHint = if (version != null) runCatching { authHintOf(agentId) }.getOrNull() else null
+        setOne(agentId) { it.copy(version = version, checking = false, authHint = authHint) }
+    }
+
+    private suspend fun authHintOf(agentId: String): String? = when (agentId) {
+        "claude" -> claudeCodeBridge.authHint()
+        "codex" -> codexBridge.authHint()
+        else -> openCodeBridge.authHint()
     }
 
     private fun setOne(agentId: String, transform: (AgentCliState) -> AgentCliState) {

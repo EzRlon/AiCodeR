@@ -20,12 +20,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,8 +44,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.widget.Toast
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppSwitch
+import com.aicode.feature.agent.domain.engine.AgentEngines
+import com.aicode.feature.agent.presentation.AgentCliViewModel
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.settings.data.local.ModelSheetCollapseStore
@@ -71,6 +79,10 @@ internal fun DefaultModelsSection(
     providers: List<AIProviderConfig>,
     defaultEngine: String = "",
     onSelectDefaultEngine: (String) -> Unit = {},
+    /** 切换当前会话引擎（"" = 切回内置）；会话运行中被拒时仅默认生效。 */
+    onSwitchEngine: (String?) -> Unit = {},
+    /** 去/回终端页（登录与安装进度都在终端标签里）。 */
+    onOpenTerminal: () -> Unit = {},
     visionProviderId: String,
     visionModel: String,
     compactionProviderId: String,
@@ -157,55 +169,30 @@ internal fun DefaultModelsSection(
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // 新会话默认引擎（引擎切换）：在此设默认后新建会话直接用该引擎
-        SettingsGroupHeader(text = stringResource(R.string.settings_default_engine_group))
+        // 引擎：点卡片即选中（设为新会话默认引擎并切换当前会话）；安装/登录用 CLI 智能体老接口
+        SettingsGroupHeader(text = stringResource(R.string.settings_engine_group))
         SettingsGroup {
             SettingsRow(
                 icon = FeatherIcons.Cpu,
                 title = stringResource(R.string.engine_builtin),
                 subtitle = stringResource(R.string.engine_builtin_sub),
-                onClick = { onSelectDefaultEngine("") },
+                onClick = {
+                    onSelectDefaultEngine("")
+                    onSwitchEngine(null)
+                },
                 trailing = {
                     if (defaultEngine.isBlank()) {
                         Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             )
-            SettingsDivider()
-            SettingsRow(
-                icon = FeatherIcons.Terminal,
-                title = "Claude Code",
-                subtitle = stringResource(R.string.settings_default_engine_claude_sub),
-                onClick = { onSelectDefaultEngine(com.aicode.feature.agent.domain.engine.AgentEngines.CLAUDE_CODE) },
-                trailing = {
-                    if (defaultEngine == com.aicode.feature.agent.domain.engine.AgentEngines.CLAUDE_CODE) {
-                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = FeatherIcons.Terminal,
-                title = "Codex",
-                subtitle = stringResource(R.string.settings_default_engine_codex_sub),
-                onClick = { onSelectDefaultEngine(com.aicode.feature.agent.domain.engine.AgentEngines.CODEX) },
-                trailing = {
-                    if (defaultEngine == com.aicode.feature.agent.domain.engine.AgentEngines.CODEX) {
-                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = FeatherIcons.Terminal,
-                title = "OpenCode",
-                subtitle = stringResource(R.string.settings_default_engine_opencode_sub),
-                onClick = { onSelectDefaultEngine(com.aicode.feature.agent.domain.engine.AgentEngines.OPENCODE) },
-                trailing = {
-                    if (defaultEngine == com.aicode.feature.agent.domain.engine.AgentEngines.OPENCODE) {
-                        Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
+            CliEngineRows(
+                defaultEngine = defaultEngine,
+                onSelect = { id ->
+                    onSelectDefaultEngine(id)
+                    onSwitchEngine(id)
+                },
+                onOpenTerminal = onOpenTerminal
             )
         }
         SettingsGroupHeader(text = stringResource(R.string.settings_agent_models_group))
@@ -760,3 +747,111 @@ private fun formatTokenLimit(tokens: Int): String =
 
 private fun String.trimDecimal(): String =
     replace(Regex("(\\.\\d)\\d+"), "$1").removeSuffix(".0")
+
+/**
+ * 三个 CLI 引擎卡（Claude Code / Codex / OpenCode）：状态 + 安装/重装/登录动作，
+ * 复用老「AI 智能体」接口（后台终端标签跑 npm、装完自动复检；启动拉起 CLI 交互会话完成登录）。
+ */
+@Composable
+private fun CliEngineRows(
+    defaultEngine: String,
+    onSelect: (String) -> Unit,
+    onOpenTerminal: () -> Unit
+) {
+    val viewModel: AgentCliViewModel = hiltViewModel()
+    val states by viewModel.states.collectAsStateWithLifecycle()
+    val codexSandboxFullAccess by viewModel.codexSandboxFullAccess.collectAsStateWithLifecycle()
+    val openCodeAutoApprove by viewModel.openCodeAutoApprove.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    error?.let { message ->
+        LaunchedEffect(message) {
+            Toast.makeText(context, context.getString(R.string.agent_cli_action_failed, message), Toast.LENGTH_SHORT).show()
+            viewModel.consumeError()
+        }
+    }
+
+    states.forEach { state ->
+        SettingsDivider()
+        SettingsRow(
+            icon = FeatherIcons.Terminal,
+            title = state.agent.displayName,
+            subtitle = when {
+                state.installing -> stringResource(R.string.agent_cli_installing)
+                state.checking -> stringResource(R.string.agent_cli_checking)
+                state.version == null -> stringResource(R.string.agent_cli_not_installed)
+                state.authHint != null ->
+                    stringResource(R.string.agent_cli_installed, state.version) + " · " +
+                        stringResource(R.string.engine_not_logged_in)
+                else -> stringResource(R.string.agent_cli_installed, state.version)
+            },
+            onClick = {
+                onSelect(
+                    when (state.agent.id) {
+                        "claude" -> AgentEngines.CLAUDE_CODE
+                        "codex" -> AgentEngines.CODEX
+                        else -> AgentEngines.OPENCODE
+                    }
+                )
+            },
+            trailing = {
+                when {
+                    state.installing || state.checking ->
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    state.version == null ->
+                        TextButton(onClick = { viewModel.install(state.agent) }) {
+                            Text(stringResource(R.string.agent_cli_install))
+                        }
+                    else -> {
+                        TextButton(onClick = { viewModel.install(state.agent) }) {
+                            Text(stringResource(R.string.agent_cli_reinstall))
+                        }
+                        TextButton(onClick = { viewModel.launch(state.agent) { onOpenTerminal() } }) {
+                            Text(
+                                stringResource(
+                                    if (state.authHint != null) R.string.engine_go_login else R.string.agent_cli_launch
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        )
+        // 引擎行为选项：Codex 沙箱档位 / OpenCode 自动批准（全局生效，下一次发送起作用）
+        when (state.agent.id) {
+            "codex" -> {
+                SettingsDivider()
+                EngineOptionToggleRow(
+                    title = stringResource(R.string.engine_codex_sandbox_toggle),
+                    checked = codexSandboxFullAccess,
+                    onCheckedChange = viewModel::setCodexSandboxFullAccess
+                )
+            }
+            "opencode" -> {
+                SettingsDivider()
+                EngineOptionToggleRow(
+                    title = stringResource(R.string.engine_opencode_auto_toggle),
+                    checked = openCodeAutoApprove,
+                    onCheckedChange = viewModel::setOpenCodeAutoApprove
+                )
+            }
+        }
+    }
+}
+
+/** 引擎行为选项开关行：标题（弱化色）+ 右侧开关；整行可点切换。 */
+@Composable
+private fun EngineOptionToggleRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    SettingsRow(
+        title = title,
+        onClick = { onCheckedChange(!checked) },
+        trailing = {
+            AppSwitch(checked = checked, onCheckedChange = null)
+        }
+    )
+}

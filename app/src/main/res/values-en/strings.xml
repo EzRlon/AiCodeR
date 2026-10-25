@@ -9,7 +9,9 @@
     <string name="settings_select_section_hint">Pick a setting from the list</string>
     <string name="settings_providers">AI Vendors</string>
     <string name="settings_provider_editor">Vendor</string>
-    <string name="settings_default_models">Default Models</string>
+    <string name="settings_default_models">Models &amp; Engines</string>
+    <string name="settings_engine_group">Engines</string>
+    <string name="engine_not_logged_in">Not signed in</string>
     <string name="settings_general">Preferences</string>
     <string name="settings_general_models">Models</string>
     <string name="settings_auto_remove_stale_models">Remove stale models after fetching</string>
@@ -453,32 +455,15 @@
 
     <!-- Engine switch -->
     <string name="engine_bridge_unavailable">Claude Code engine is not ready. Install Claude Code in the container first, or switch this session back to the built-in engine.</string>
-    <string name="engine_tab_label">Engine</string>
     <string name="engine_builtin">Built-in engine</string>
     <string name="engine_builtin_sub">Native workflow: full tools, teams, annotation, memory, recall</string>
-    <string name="engine_claude_ready">Installed, runs in the local container</string>
-    <string name="engine_claude_missing">Not installed yet</string>
-    <string name="engine_claude_not_authenticated">Installed · not signed in (or no Anthropic key to pass through)</string>
     <string name="engine_go_login">Sign in</string>
-    <string name="engine_detecting">Detecting…</string>
-    <string name="engine_install">Install</string>
-    <string name="engine_open_manager">Manage</string>
-    <string name="engine_limits_hint">CLI engine sessions do not support teams and other native workflows; memory/rules/skills, the annotation plus fix ledgers, and cross-session archive search (recall_search) are available via the built-in MCP bridge (aicode_bridge tools)</string>
     <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
-    <string name="engine_codex_not_authenticated">Installed · not signed in (or no OpenAI key to pass through)</string>
+    <string name="cli_model_builtin_group">Engine models</string>
     <string name="engine_codex_unavailable">Codex engine is not ready. Install Codex in the container first, or switch this session back to the built-in engine.</string>
-    <string name="engine_codex_hint">Codex specifics: no interactive approvals — commands run automatically inside the sandbox (level is set by the card switch, which applies globally, including scheduled tasks); text and tool results arrive in whole blocks, without token-by-token streaming.</string>
     <string name="engine_codex_sandbox_toggle">Open up the sandbox (read/write outside the workspace)</string>
-    <string name="engine_codex_install_started">A terminal has started installing Codex. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
-    <string name="engine_opencode_not_authenticated">Installed · no credentials (or no OpenAI/Anthropic key to pass through)</string>
     <string name="engine_opencode_unavailable">OpenCode engine is not ready. Install OpenCode in the container first, or switch this session back to the built-in engine.</string>
-    <string name="engine_opencode_hint">OpenCode specifics: permission requests are auto-approved unless explicitly denied (can be turned off with the card switch — when off, unauthorized tool calls are denied and the turn may be incomplete); text and tool results arrive in whole blocks, without token-by-token streaming.</string>
     <string name="engine_opencode_auto_toggle">Auto-approve permission requests</string>
-    <string name="engine_opencode_install_started">A terminal has started installing OpenCode. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
-    <string name="settings_default_engine_group">Default engine for new sessions</string>
-    <string name="settings_default_engine_claude_sub">New sessions use Claude Code by default (must be installed)</string>
-    <string name="settings_default_engine_codex_sub">New sessions use Codex by default (must be installed)</string>
-    <string name="settings_default_engine_opencode_sub">New sessions use OpenCode by default (must be installed)</string>
 
     <!-- Memory graph v2 -->
     <string name="memory_graph_tab_graph">Graph</string>
@@ -497,8 +482,6 @@
     <string name="team_delivery_expired">Team delivery notice: the message to "%1$s" was not %2$s in time (auto-retried). Check the target session, or redispatch via the task tool.</string>
     <string name="perm_tool_fixledger">Fix ledger write-back</string>
     <string name="perm_tool_fixledger_desc">After fixing an annotated issue, advance the fix ledger and annotation ledger (forward-only to fixing/review)</string>
-    <string name="engine_install_started">A terminal has started installing Claude Code. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
-    <string name="engine_install_failed">Failed to start install: %1$s</string>
     <string name="chat_copy_session_id">Copy session id</string>
     <string name="team_delivery_stage_delivered">delivered</string>
     <string name="team_delivery_stage_replied">replied to</string>
@@ -650,8 +633,6 @@
     <string name="chat_voice_unavailable">No speech recognition service available</string>
 
     <!-- AI agents (terminal CLI) -->
-    <string name="agent_cli_sheet_title">AI Agents</string>
-    <string name="agent_cli_sheet_subtitle">Run AI coding CLIs in the container terminal; installation and login all happen in the terminal</string>
     <string name="agent_cli_checking">Checking…</string>
     <string name="agent_cli_installing">Installing…</string>
     <string name="agent_cli_installed">Installed %1$s</string>
@@ -661,7 +642,6 @@
     <string name="agent_cli_launch">Launch</string>
     <string name="agent_cli_action_failed">Action failed: %1$s</string>
     <string name="agent_cli_install_failed">Install failed (exit code %1$d). The installer prefers the CN npm mirror and falls back to the official registry; if it still fails, check network/proxy, see the terminal output and retry</string>
-    <string name="agent_cli_install_hint">Installation runs npm in a new terminal tab (CN mirror first, official registry fallback) — switch to the terminal anytime to see progress. If npm is missing you will be asked to install Node.js first (run aicode in the terminal).</string>
     <string name="agent_cli_login_claude">First run: copy the login URL into your mobile browser, sign in, then paste the auth code back into the terminal.</string>
     <string name="agent_cli_login_codex">First run: follow the prompt to sign in via browser, or use codex login.</string>
     <string name="agent_cli_login_opencode">First run: type /auth to pick a provider and paste your API key.</string>

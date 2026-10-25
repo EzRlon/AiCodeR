@@ -678,7 +678,6 @@ fun AIChatPanel(
     onNavigateToGit: () -> Unit = {},
     onNavigateToBrowser: () -> Unit = {},
     onNavigateToMemoryGraph: () -> Unit = {},
-    onNavigateToAgents: () -> Unit = {},
     /** 在内置编辑器打开工作区文件（文本类附件卡片用，反馈 9）。 */
     onOpenFile: (String) -> Unit = {},
     settingsViewModel: SettingsViewModel? = null,
@@ -738,13 +737,12 @@ fun AIChatPanel(
     val providers = (settingsViewModel?.providers?.collectAsStateWithLifecycle()?.value ?: emptyList()).filter { it.isEnabled }
     val modelMetadata = settingsViewModel?.modelMetadata?.collectAsStateWithLifecycle()?.value.orEmpty()
     val sessionEngine by viewModel.currentSessionEngine.collectAsStateWithLifecycle()
-    val codexSandboxFullAccess by viewModel.codexSandboxFullAccess.collectAsStateWithLifecycle()
-    val openCodeAutoApprove by viewModel.openCodeAutoApprove.collectAsStateWithLifecycle()
     val frameAwaitingApproval by viewModel.hasPendingApproval.collectAsStateWithLifecycle()
     // CLI 引擎会话的模型名（胶囊/模型页勾选用，而非默认 provider 模型）
     val sessionCliModel = if (sessionEngine != null) {
         currentSessionState?.model
     } else null
+    val sessionCliProviderId = if (sessionEngine != null) currentSessionState?.providerId else null
     val sessionProviderModel by viewModel.currentSessionProviderModel.collectAsStateWithLifecycle()
     val defaultProviderId = settingsViewModel?.defaultModelProviderId?.collectAsStateWithLifecycle()?.value ?: ""
     val defaultModelName = settingsViewModel?.defaultModel?.collectAsStateWithLifecycle()?.value ?: ""
@@ -1814,7 +1812,6 @@ fun AIChatPanel(
                 onNavigateToGit = onNavigateToGit,
                 onNavigateToBrowser = onNavigateToBrowser,
                 onNavigateToMemoryGraph = onNavigateToMemoryGraph,
-                onNavigateToAgents = onNavigateToAgents,
                 onOpenTeams = { showTeamPicker = true },
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
@@ -2190,23 +2187,9 @@ fun AIChatPanel(
                 },
                 sessionEngine = sessionEngine,
                 sessionCliModel = sessionCliModel,
+                sessionCliProviderId = sessionCliProviderId,
                 awaitingApproval = frameAwaitingApproval,
-                onSelectEngine = { viewModel.setSessionEngine(it) },
-                checkClaudeCodeAvailable = { viewModel.isClaudeCodeAvailable() },
-                checkClaudeCodeAuth = { viewModel.claudeCodeAuthHint() },
-                onInstallClaudeCode = { viewModel.installClaudeCode() },
-                checkCodexAvailable = { viewModel.isCodexAvailable() },
-                checkCodexAuth = { viewModel.codexAuthHint() },
-                onInstallCodex = { viewModel.installCodex() },
-                checkOpenCodeAvailable = { viewModel.isOpenCodeAvailable() },
-                checkOpenCodeAuth = { viewModel.openCodeAuthHint() },
-                onInstallOpenCode = { viewModel.installOpenCode() },
-                onSelectCliModel = { viewModel.setSessionCliModel(it) },
-                onOpenAgentCli = onNavigateToAgents,
-                codexSandboxFullAccess = codexSandboxFullAccess,
-                onCodexSandboxFullAccessChange = { viewModel.setCodexSandboxFullAccess(it) },
-                openCodeAutoApprove = openCodeAutoApprove,
-                onOpenCodeAutoApproveChange = { viewModel.setOpenCodeAutoApprove(it) },
+                onSelectCliModel = { p, m -> viewModel.setSessionCliModel(p, m) },
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
                 onModePillLongClick = {

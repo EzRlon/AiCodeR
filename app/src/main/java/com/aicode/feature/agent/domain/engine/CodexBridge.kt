@@ -102,11 +102,6 @@ class CodexBridge @Inject constructor(
     @Volatile private var cachedAuthHint: String? = null
     @Volatile private var cachedAuthAtMs: Long = 0
 
-    fun invalidateAvailability() {
-        cachedAvailable = null
-        cachedAtMs = 0
-    }
-
     /** 引擎是否可用：本地 PRoot 容器 + codex 已安装。远程 SSH 不支持。 */
     suspend fun isAvailable(): Boolean {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
@@ -120,17 +115,13 @@ class CodexBridge @Inject constructor(
         return available
     }
 
-    /** 一键安装：复用 CLI 智能体管理器（目录里已锁定实测版本 0.162.1）。 */
-    suspend fun installCli(): String =
-        cliAgentManager.install(CliAgentCatalog.ALL.first { it.command == "codex" })
-
     /**
      * 认证状态：null = 已可用（ChatGPT 登录凭据在，或将透传 App 内 OpenAI key）；
      * 非 null = 未认证引导文案。探测为轻量 test 命令，不拉起 codex。
      */
-    suspend fun authHint(): String? {
+    suspend fun authHint(providerId: String? = null): String? {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
-        if (transmittableOpenAIProvider() != null) return null
+        if (transmittableOpenAIProvider(providerId) != null) return null
         cachedAuthHint?.let { cached ->
             if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
         }
@@ -154,10 +145,14 @@ class CodexBridge @Inject constructor(
             "若你已在容器内自行配置 OPENAI_API_KEY 或 config.toml 自定义 provider，可忽略本提示。"
     }
 
-    /** App 内已配置可用 Key 的 OpenAI 提供商（用于透传；无则 null，codex 走自身登录态）。 */
-    private suspend fun transmittableOpenAIProvider(): com.aicode.feature.settings.domain.model.AIProviderConfig? =
+    /** App 内已配置可用 Key 的 OpenAI 提供商（用于透传；无则 null，codex 走自身登录态）。
+     *  [providerId] 非空时优先解析该供应商（会话选定的 App 供应商模型），不可用再回退首个可用。 */
+    private suspend fun transmittableOpenAIProvider(providerId: String? = null): com.aicode.feature.settings.domain.model.AIProviderConfig? =
         runCatching {
-            aiProviderRepository.getAllProviders().first().firstOrNull {
+            val all = aiProviderRepository.getAllProviders().first()
+            providerId?.let { id ->
+                all.firstOrNull { it.id == id && it.type == ProviderType.OPENAI && it.isEnabled && it.hasUsableApiKey }
+            } ?: all.firstOrNull {
                 it.type == ProviderType.OPENAI && it.isEnabled && it.hasUsableApiKey
             }
         }.getOrNull()
@@ -170,6 +165,7 @@ class CodexBridge @Inject constructor(
 
     /**
      * 跑一个用户回合。[resume] 为 true 时先尝试 `exec resume` 续接（映射缺失或续接失败自动转全新回合）。
+     * [model] 透传 `-m`（CLI 侧模型名或 App 供应商模型名）；[providerId] 对齐透传的 Key/baseURL。
      * [images] 解码落盘到容器桥目录后经 `-i` 传入；[attachments] 以容器路径告知。
      */
     fun runTurn(
@@ -178,13 +174,14 @@ class CodexBridge @Inject constructor(
         projectPath: String?,
         model: String?,
         resume: Boolean,
+        providerId: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -192,10 +189,10 @@ class CodexBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "codex 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -207,6 +204,7 @@ class CodexBridge @Inject constructor(
         projectPath: String?,
         model: String?,
         resume: Boolean,
+        providerId: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -271,8 +269,9 @@ class CodexBridge @Inject constructor(
             put("PERMISSION_BRIDGE_TOKEN", sessionId)
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
-            // App 内已配 OpenAI key 时透传给 codex（免 ChatGPT 登录）；自定义 baseUrl 一并透传支持反代
-            transmittableOpenAIProvider()?.let { p ->
+            // App 内已配 OpenAI key 时透传给 codex（免 ChatGPT 登录）；自定义 baseUrl 一并透传支持反代；
+            // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
+            transmittableOpenAIProvider(providerId)?.let { p ->
                 put("OPENAI_API_KEY", p.firstUsableApiKey)
                 if (!p.useFullUrl) {
                     val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")

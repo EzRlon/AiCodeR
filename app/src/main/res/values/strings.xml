@@ -9,7 +9,9 @@
     <string name="settings_select_section_hint">从左侧选择一个设置项</string>
     <string name="settings_providers">AI 供应商</string>
     <string name="settings_provider_editor">供应商</string>
-    <string name="settings_default_models">默认模型</string>
+    <string name="settings_default_models">模型与引擎</string>
+    <string name="settings_engine_group">引擎</string>
+    <string name="engine_not_logged_in">未登录</string>
     <string name="settings_general">偏好设置</string>
     <string name="settings_general_models">模型</string>
     <string name="settings_auto_remove_stale_models">拉取模型后自动移除无效模型</string>
@@ -454,32 +456,15 @@
 
     <!-- 引擎切换 -->
     <string name="engine_bridge_unavailable">Claude Code 引擎未就绪：请先在容器中安装 Claude Code（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_tab_label">引擎</string>
     <string name="engine_builtin">内置引擎</string>
     <string name="engine_builtin_sub">本体工作流：全套工具、专家团、标注、记忆、recall</string>
-    <string name="engine_claude_ready">已安装，本机容器内运行</string>
-    <string name="engine_claude_missing">未安装：先在容器中安装后可用</string>
-    <string name="engine_claude_not_authenticated">已安装 · 未登录（或未配置可透传的 Anthropic Key）</string>
     <string name="engine_go_login">去登录</string>
-    <string name="engine_detecting">检测中…</string>
-    <string name="engine_install">安装</string>
-    <string name="engine_open_manager">管理页</string>
-    <string name="engine_limits_hint">CLI 引擎会话不支持：专家团等本体工作流；记忆/规则/技能、标注·修复账本与跨会话档案检索（recall_search）已通过内置 MCP 桥接入（aicode_bridge 工具）</string>
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
-    <string name="engine_codex_not_authenticated">已安装 · 未登录（或未配置可透传的 OpenAI Key）</string>
+    <string name="cli_model_builtin_group">引擎模型</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_codex_hint">Codex 说明：无交互审批，命令在沙箱内自动执行（档位见卡片开关，全局生效、含定时任务）；文本与工具结果为整段返回，无逐字流式</string>
     <string name="engine_codex_sandbox_toggle">放开沙箱（可读写工作区外）</string>
-    <string name="engine_codex_install_started">已在新终端开始安装 Codex，跑完会发通知；装完重新打开引擎页即可检测到</string>
-    <string name="engine_opencode_not_authenticated">已安装 · 未配置凭据（或未配置可透传的 OpenAI/Anthropic Key）</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_opencode_hint">OpenCode 说明：权限请求自动批准（可在卡片开关关闭，关闭后未授权的工具调用会被拒绝、回合可能不完整）；文本与工具结果为整段返回，无逐字流式</string>
     <string name="engine_opencode_auto_toggle">自动批准权限请求</string>
-    <string name="engine_opencode_install_started">已在新终端开始安装 OpenCode，跑完会发通知；装完重新打开引擎页即可检测到</string>
-    <string name="settings_default_engine_group">新会话默认引擎</string>
-    <string name="settings_default_engine_claude_sub">新建会话默认用 Claude Code（需已安装）</string>
-    <string name="settings_default_engine_codex_sub">新建会话默认用 Codex（需已安装）</string>
-    <string name="settings_default_engine_opencode_sub">新建会话默认用 OpenCode（需已安装）</string>
 
     <!-- 记忆图谱 v2 -->
     <string name="memory_graph_tab_graph">图谱</string>
@@ -497,9 +482,7 @@
     <!-- 编队消息投递 -->
     <string name="team_delivery_expired">编队投递提醒：发给「%1$s」的消息超时未%2$s（已自动重投过）。请检查目标会话状态，或改用 task 工具重新派发/追问。</string>
     <string name="perm_tool_fixledger">修复账本回写</string>
-    <string name="engine_install_started">已在新终端开始安装 Claude Code，跑完会发通知；装完重新打开引擎页即可检测到</string>
     <string name="perm_tool_fixledger_desc">AI 修完标注对应的问题后，推进修复账本与标注账本状态（仅可前进到修复中/待复验）</string>
-    <string name="engine_install_failed">安装启动失败：%1$s</string>
     <string name="chat_copy_session_id">复制会话 id</string>
     <string name="team_delivery_stage_delivered">送达</string>
     <string name="team_delivery_stage_replied">获得回复</string>
@@ -651,8 +634,6 @@
     <string name="chat_voice_unavailable">未找到可用的语音识别服务</string>
 
     <!-- AI 智能体（终端 CLI） -->
-    <string name="agent_cli_sheet_title">AI 智能体</string>
-    <string name="agent_cli_sheet_subtitle">在容器终端里运行 AI CLI 编程助手，安装与登录都在终端里完成</string>
     <string name="agent_cli_checking">检测中…</string>
     <string name="agent_cli_installing">安装中…</string>
     <string name="agent_cli_installed">已装 %1$s</string>
@@ -662,7 +643,6 @@
     <string name="agent_cli_launch">启动</string>
     <string name="agent_cli_action_failed">操作失败：%1$s</string>
     <string name="agent_cli_install_failed">安装失败（退出码 %1$d）。安装会自动优先用国内镜像、失败回退官方源；若仍失败，多为网络/代理问题，可切到终端查看输出后重试</string>
-    <string name="agent_cli_install_hint">安装在新终端标签里执行 npm（自动优先国内镜像源，失败回退官方源），可随时切到终端查看进度；npm 未就绪时会提示先安装 Node.js 环境（终端内执行 aicode）。</string>
     <string name="agent_cli_login_claude">首次使用：启动后按提示复制登录网址到手机浏览器完成登录，再把授权码粘贴回终端。</string>
     <string name="agent_cli_login_codex">首次使用：启动后按提示完成浏览器登录，或用 codex login 登录账号。</string>
     <string name="agent_cli_login_opencode">首次使用：启动后输入 /auth 选择供应商并粘贴 API Key。</string>

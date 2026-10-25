@@ -108,11 +108,6 @@ class OpenCodeBridge @Inject constructor(
     @Volatile private var cachedAuthHint: String? = null
     @Volatile private var cachedAuthAtMs: Long = 0
 
-    fun invalidateAvailability() {
-        cachedAvailable = null
-        cachedAtMs = 0
-    }
-
     /** 引擎是否可用：本地 PRoot 容器 + opencode 已安装。远程 SSH 不支持。 */
     suspend fun isAvailable(): Boolean {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
@@ -126,16 +121,13 @@ class OpenCodeBridge @Inject constructor(
         return available
     }
 
-    /** 一键安装：复用 CLI 智能体管理器（目录里已锁定实测版本 1.19.0）。 */
-    suspend fun installCli(): String =
-        cliAgentManager.install(CliAgentCatalog.ALL.first { it.command == "opencode" })
-
     /**
      * 认证状态：null = 已可用（auth.json 凭据在，或将透传 App 内 OpenAI/Anthropic key）；
      * 非 null = 未认证引导文案。探测为轻量 test 命令，不拉起 opencode。
      */
-    suspend fun authHint(): String? {
+    suspend fun authHint(providerId: String? = null): String? {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (providerId != null && resolveProvider(providerId) != null) return null
         if (transmittableProvider(ProviderType.OPENAI) != null || transmittableProvider(ProviderType.ANTHROPIC) != null) return null
         cachedAuthHint?.let { cached ->
             if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
@@ -168,6 +160,18 @@ class OpenCodeBridge @Inject constructor(
             }
         }.getOrNull()
 
+    /** 按 id 解析 App 供应商（仅 OpenAI/Anthropic 型且启用可用；其余返回 null）。 */
+    private suspend fun resolveProvider(providerId: String?): com.aicode.feature.settings.domain.model.AIProviderConfig? {
+        if (providerId.isNullOrBlank()) return null
+        return runCatching {
+            aiProviderRepository.getAllProviders().first().firstOrNull {
+                it.id == providerId &&
+                    (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC) &&
+                    it.isEnabled && it.hasUsableApiKey
+            }
+        }.getOrNull()
+    }
+
     private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
         val id = containerSettingsRepository.activeProfileIdFlow.first()
         val profiles = containerSettingsRepository.customProfilesFlow.first()
@@ -176,7 +180,8 @@ class OpenCodeBridge @Inject constructor(
 
     /**
      * 跑一个用户回合。[resume] 为 true 时先尝试 `-s` 续接（映射缺失或续接失败自动转全新回合）。
-     * [images] 解码落盘到容器桥目录后经 `-f` 传入；[attachments] 以容器路径告知。
+     * [model] 透传 `-m`（provider/model 形态或引擎内置名）；[providerId] 为会话选定的 App 供应商
+     * （自定义端点时注入 provider 段并对齐 Key）；[images] 落盘后经 `-f` 传入；[attachments] 以容器路径告知。
      */
     fun runTurn(
         sessionId: String,
@@ -184,13 +189,14 @@ class OpenCodeBridge @Inject constructor(
         projectPath: String?,
         model: String?,
         resume: Boolean,
+        providerId: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -198,10 +204,10 @@ class OpenCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "opencode 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -213,11 +219,16 @@ class OpenCodeBridge @Inject constructor(
         projectPath: String?,
         model: String?,
         resume: Boolean,
+        providerId: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         val port = permissionBridgeServer.ensureStarted(token = sessionId)
         writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+
+        // 会话选定 App 供应商：自定义端点时需注入 provider 段（模型引用串指向注入键），官方端点只透 Key
+        val selectedProvider = resolveProvider(providerId)
+        val customProviderJson = customProviderSection(selectedProvider, model)
 
         val resumeSessionId = if (resume) readMappedSessionId(sessionId) else null
         val effectiveResume = resume && resumeSessionId != null
@@ -248,13 +259,22 @@ class OpenCodeBridge @Inject constructor(
             put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
             // MCP 挂载：官方优先级链合并（不整体替换用户配置；mcp 同键会被覆盖）
             // 配置内容要枚举 App 智能体定义（读容器文件），移出主线程
-            put("OPENCODE_CONFIG_CONTENT", withContext(Dispatchers.IO) { configContent(sessionId) })
-            // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）
-            transmittableProvider(ProviderType.OPENAI)?.let { p ->
-                put("OPENAI_API_KEY", p.firstUsableApiKey)
-            }
-            transmittableProvider(ProviderType.ANTHROPIC)?.let { p ->
-                put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
+            put("OPENCODE_CONFIG_CONTENT", withContext(Dispatchers.IO) { configContent(sessionId, customProviderJson) })
+            // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）；
+            // 会话选定供应商时只透传该供应商的 Key，避免误用其它供应商的凭据
+            if (selectedProvider != null) {
+                if (selectedProvider.type == ProviderType.OPENAI) {
+                    put("OPENAI_API_KEY", selectedProvider.firstUsableApiKey)
+                } else {
+                    put("ANTHROPIC_API_KEY", selectedProvider.firstUsableApiKey)
+                }
+            } else {
+                transmittableProvider(ProviderType.OPENAI)?.let { p ->
+                    put("OPENAI_API_KEY", p.firstUsableApiKey)
+                }
+                transmittableProvider(ProviderType.ANTHROPIC)?.let { p ->
+                    put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
+                }
             }
         }
 
@@ -480,7 +500,7 @@ class OpenCodeBridge @Inject constructor(
      * aicode_bridge + 用户自装 MCP + App 智能体定义的 OPENCODE_CONFIG_CONTENT 内联值
      * （不写用户配置文件；mcp/agent 键按官方优先级覆盖，同名项以本内容为准）。
      */
-    private suspend fun configContent(sessionId: String): String {
+    private suspend fun configContent(sessionId: String, customProviderJson: JsonObject? = null): String {
         // App 智能体定义随回合映射（能力全域打通批二）：App 定义为子代理语义，mode=subagent；
         // 跳过与 opencode 自带 agent（build/plan/explore/general/...）同名的定义，不覆盖引擎原生体系
         // agent 枚举失败不致命（与 Claude 桥同口径）：MCP 枚举异常仍让回合失败，agent 异常只丢本回合映射
@@ -493,14 +513,14 @@ class OpenCodeBridge @Inject constructor(
         mapping.skipped.forEach { FileLogger.w(TAG, "子代理 ${it.agent.name} 不映射到 opencode：${it.reason}") }
         val agentsJson = if (mapping.mapped.isEmpty()) null else CliAgentMapping.openCodeAgentsJson(mapping.mapped)
 
-        val content = renderConfig(sessionId, agentsJson)
+        val content = renderConfig(sessionId, agentsJson, customProviderJson)
         if (content.length <= MAX_CONFIG_CHARS) return content
         FileLogger.w(TAG, "智能体配置过大（>${MAX_CONFIG_CHARS / 1024}KB），本回合不映射 agent")
-        return renderConfig(sessionId, null)
+        return renderConfig(sessionId, null, customProviderJson)
     }
 
-    /** OPENCODE_CONFIG_CONTENT 内容（mcp 段 + 可选 agent 段）。 */
-    private suspend fun renderConfig(sessionId: String, agentsJson: JsonObject?): String = buildJsonObject {
+    /** OPENCODE_CONFIG_CONTENT 内容（mcp 段 + 可选 agent 段 + 可选 App 供应商 provider 段）。 */
+    private suspend fun renderConfig(sessionId: String, agentsJson: JsonObject?, customProviderJson: JsonObject? = null): String = buildJsonObject {
         put("mcp", buildJsonObject {
             put(MCP_SERVER_NAME, buildJsonObject {
                 put("type", "local")
@@ -540,7 +560,37 @@ class OpenCodeBridge @Inject constructor(
             }
         })
         if (agentsJson != null) put("agent", agentsJson)
+        if (customProviderJson != null) put("provider", customProviderJson)
     }.toString()
+
+    /**
+     * 会话选定 App 供应商且模型引用指向注入键（自定义端点）时，构造 provider 段：
+     * 官方端点/内置名引用返回 null（走内置 provider + 环境变量 Key，无需注入）；
+     * useFullUrl 的 base 是完整 endpoint 无法安全还原，同样不注入。
+     */
+    private fun customProviderSection(
+        provider: com.aicode.feature.settings.domain.model.AIProviderConfig?,
+        model: String?
+    ): JsonObject? {
+        if (provider == null || model.isNullOrBlank()) return null
+        if (provider.useFullUrl) return null
+        val key = CliModelRef.providerKey(provider.name, provider.id)
+        if (model.substringBefore('/') != key) return null
+        val modelId = model.substringAfter('/', "")
+        if (modelId.isBlank()) return null
+        val npm = if (provider.type == ProviderType.ANTHROPIC) "@ai-sdk/anthropic" else "@ai-sdk/openai-compatible"
+        return buildJsonObject {
+            put(key, buildJsonObject {
+                put("npm", npm)
+                put("name", provider.name)
+                put("options", buildJsonObject {
+                    put("baseURL", provider.baseUrl.trim().trimEnd('/').removeSuffix("/v1"))
+                    put("apiKey", provider.firstUsableApiKey)
+                })
+                put("models", buildJsonObject { put(modelId, buildJsonObject { put("name", modelId) }) })
+            })
+        }
+    }
 
     /**
      * 图片落盘到容器桥目录（opencode -f 需要容器内文件路径，≤10MiB/个），返回容器内路径列表。

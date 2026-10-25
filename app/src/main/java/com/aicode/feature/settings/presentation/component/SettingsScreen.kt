@@ -79,6 +79,7 @@ import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.presentation.component.MarkdownContent
+import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
 import com.aicode.feature.backup.presentation.BackupScreen
 import com.aicode.feature.editor.presentation.CodeEditorScreen
@@ -224,6 +225,10 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     onNavigateBack: () -> Unit,
     onStopAllAndCloseTerminal: () -> Unit = {},
+    /** 引擎卡「去登录/启动」后切到终端页（CLI 登录与安装进度在终端标签里）。 */
+    onOpenTerminal: () -> Unit = {},
+    /** 会话引擎切换入口（设置 → 模型与引擎的点卡选中）。 */
+    agentViewModel: AIAgentViewModel? = null,
     onRerunOnboarding: () -> Unit = {},
     onboardingStep: OnboardingStep? = null,
     onOnboardingModelAdded: (() -> Unit)? = null,
@@ -1132,6 +1137,8 @@ fun SettingsScreen(
                     providers = providers,
                     defaultEngine = defaultEngine,
                     onSelectDefaultEngine = { viewModel.setDefaultEngine(it) },
+                    onSwitchEngine = { agentViewModel?.setSessionEngine(it?.ifBlank { null }) },
+                    onOpenTerminal = onOpenTerminal,
                     visionProviderId = visionProviderId,
                     visionModel = visionModel,
                     compactionProviderId = compactionProviderId,

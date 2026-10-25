@@ -198,7 +198,6 @@ class AIAgentViewModel @Inject constructor(
     private val modelCostCalculator: ModelCostCalculator,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
-    private val engineOptionsRepository: EngineOptionsRepository,
     private val modelReasoningEffortRepository: ModelReasoningEffortRepository,
     private val toolPermissionManager: ToolPermissionManager,
     private val askUserQuestionManager: AskUserQuestionManager,
@@ -1064,22 +1063,6 @@ class AIAgentViewModel @Inject constructor(
     ) { p, q, a -> p != null || q != null || a != null }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    /** Codex 沙箱是否完全放开（引擎卡开关）：false = workspace-write（默认），true = danger-full-access。 */
-    val codexSandboxFullAccess: StateFlow<Boolean> = engineOptionsRepository.codexSandboxFullAccessFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    fun setCodexSandboxFullAccess(enabled: Boolean) {
-        viewModelScope.launch { engineOptionsRepository.setCodexSandboxFullAccess(enabled) }
-    }
-
-    /** OpenCode 是否自动批准权限请求（引擎卡开关）：默认 true。 */
-    val openCodeAutoApprove: StateFlow<Boolean> = engineOptionsRepository.openCodeAutoApproveFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
-
-    fun setOpenCodeAutoApprove(enabled: Boolean) {
-        viewModelScope.launch { engineOptionsRepository.setOpenCodeAutoApprove(enabled) }
-    }
-
     /** 切换当前会话引擎（null 切回本体内置工作流）。运行中禁止切换（返回 false 不生效）。 */
     fun setSessionEngine(engine: String?): Boolean {
         val sid = _currentSessionId.value ?: return false
@@ -1088,97 +1071,11 @@ class AIAgentViewModel @Inject constructor(
         return true
     }
 
-    /** Claude Code 引擎是否就绪（本地容器 + CLI 已安装）。 */
-    suspend fun isClaudeCodeAvailable(): Boolean = claudeCodeBridge.isAvailable()
-
-    /** Codex 引擎是否就绪（本地容器 + CLI 已安装）。 */
-    suspend fun isCodexAvailable(): Boolean = codexBridge.isAvailable()
-
-    /** OpenCode 引擎是否就绪（本地容器 + CLI 已安装）。 */
-    suspend fun isOpenCodeAvailable(): Boolean = openCodeBridge.isAvailable()
-
-    /** 引擎卡片认证态：null = 已就绪（oauth 或将透传 App 内 key）；非 null = 引导文案。 */
-    suspend fun claudeCodeAuthHint(): String? = claudeCodeBridge.authHint()
-
-    /** Codex 引擎卡片认证态：null = 已就绪；非 null = 引导文案。 */
-    suspend fun codexAuthHint(): String? = codexBridge.authHint()
-
-    /** OpenCode 引擎卡片认证态：null = 已就绪；非 null = 引导文案。 */
-    suspend fun openCodeAuthHint(): String? = openCodeBridge.authHint()
-
-    /** 一键安装 OpenCode：开终端标签跑安装命令；装完失效可用性缓存，回引擎页立即可检测。 */
-    fun installOpenCode() {
-        viewModelScope.launch {
-            runCatching { openCodeBridge.installCli() }
-                .onSuccess {
-                    openCodeBridge.invalidateAvailability()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.engine_opencode_install_started),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                .onFailure {
-                    openCodeBridge.invalidateAvailability()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.engine_install_failed, it.message ?: ""),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-        }
-    }
-
-    /** 一键安装 Codex：开终端标签跑安装命令；装完失效可用性缓存，回引擎页立即可检测。 */
-    fun installCodex() {
-        viewModelScope.launch {
-            runCatching { codexBridge.installCli() }
-                .onSuccess {
-                    codexBridge.invalidateAvailability()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.engine_codex_install_started),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                .onFailure {
-                    codexBridge.invalidateAvailability()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.engine_install_failed, it.message ?: ""),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-        }
-    }
-
-    /** 一键安装 Claude Code：开终端标签跑安装命令（跑完发通知）；装完失效可用性缓存，回引擎页立即可检测。 */
-    fun installClaudeCode() {
-        viewModelScope.launch {
-            runCatching { claudeCodeBridge.installCli() }
-                .onSuccess {
-                    claudeCodeBridge.invalidateAvailability()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.engine_install_started),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                .onFailure {
-                    claudeCodeBridge.invalidateAvailability()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.engine_install_failed, it.message ?: ""),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-        }
-    }
-
-    /** CLI 引擎会话选模型：仅写会话 model 字段（如 sonnet），providerId 置空。 */
-    fun setSessionCliModel(model: String) {
+    /** CLI 引擎会话选模型：[providerId] 非空 = App 供应商模型（model 为裸模型名或 opencode 的 provider/model 串）；
+     *  null = 引擎自带模型（如 sonnet、default）。不写新会话默认模型（那仅属内置引擎语义）。 */
+    fun setSessionCliModel(providerId: String?, model: String) {
         val sid = _currentSessionId.value ?: return
-        viewModelScope.launch { sessionUseCase.updateProviderModel(sid, null, model) }
+        viewModelScope.launch { sessionUseCase.updateProviderModel(sid, providerId, model) }
     }
 
     /** 当前会话的持续目标（goal）快照；null 表示未设定目标。 */
@@ -2437,7 +2334,7 @@ class AIAgentViewModel @Inject constructor(
                         }
                     } else {
                         // 发送前认证预检：未登录/无可透传 key 时直接给引导，不空跑一回合才发现
-                        val authHint = claudeCodeBridge.authHint()
+                        val authHint = claudeCodeBridge.authHint(currentSession.providerId)
                         if (authHint != null) {
                             kotlinx.coroutines.flow.flow {
                                 emit(AgentEvent.Failed(error = authHint))
@@ -2449,6 +2346,7 @@ class AIAgentViewModel @Inject constructor(
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
                                 model = currentSession.model,
                                 resume = true,
+                                providerId = currentSession.providerId,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -2461,7 +2359,7 @@ class AIAgentViewModel @Inject constructor(
                             emit(AgentEvent.Failed(error = context.getString(R.string.engine_codex_unavailable)))
                         }
                     } else {
-                        val authHint = codexBridge.authHint()
+                        val authHint = codexBridge.authHint(currentSession.providerId)
                         if (authHint != null) {
                             kotlinx.coroutines.flow.flow {
                                 emit(AgentEvent.Failed(error = authHint))
@@ -2473,6 +2371,7 @@ class AIAgentViewModel @Inject constructor(
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
                                 model = currentSession.model,
                                 resume = true,
+                                providerId = currentSession.providerId,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -2485,7 +2384,7 @@ class AIAgentViewModel @Inject constructor(
                             emit(AgentEvent.Failed(error = context.getString(R.string.engine_opencode_unavailable)))
                         }
                     } else {
-                        val authHint = openCodeBridge.authHint()
+                        val authHint = openCodeBridge.authHint(currentSession.providerId)
                         if (authHint != null) {
                             kotlinx.coroutines.flow.flow {
                                 emit(AgentEvent.Failed(error = authHint))
@@ -2497,6 +2396,7 @@ class AIAgentViewModel @Inject constructor(
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
                                 model = currentSession.model,
                                 resume = true,
+                                providerId = currentSession.providerId,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )

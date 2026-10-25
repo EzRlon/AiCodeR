@@ -30,7 +30,6 @@ import com.aicode.feature.agent.domain.workflow.BudgetApprovalManager
 import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
-import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepository
@@ -67,7 +66,6 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val modelCostCalculator: ModelCostCalculator,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
-    private val engineOptionsRepository: EngineOptionsRepository,
     private val modelReasoningEffortRepository: ModelReasoningEffortRepository,
     private val toolPermissionManager: ToolPermissionManager,
     private val askUserQuestionManager: AskUserQuestionManager,
@@ -120,7 +118,6 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         modelCostCalculator,
         aiProviderRepository,
         defaultModelSettingsRepository,
-        engineOptionsRepository,
         modelReasoningEffortRepository,
         toolPermissionManager,
         askUserQuestionManager,

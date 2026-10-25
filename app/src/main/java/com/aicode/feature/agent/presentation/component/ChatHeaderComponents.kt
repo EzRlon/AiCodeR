@@ -81,7 +81,6 @@ internal fun ChatHeader(
     onNavigateToGit: () -> Unit,
     onNavigateToBrowser: () -> Unit = {},
     onNavigateToMemoryGraph: () -> Unit = {},
-    onNavigateToAgents: () -> Unit = {},
     onOpenTeams: (() -> Unit)? = null,
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
@@ -119,8 +118,6 @@ internal fun ChatHeader(
                 } else {
                     Spacer(modifier = Modifier.width(Spacing.sm))
                 }
-                // 会话 id 不再上顶栏（用户反馈：占空间无信息量）；复制入口在会话列表长按菜单
-                Spacer(modifier = Modifier.weight(1f))
                 VncHeaderIconButton()
                 Box(
                     modifier = Modifier

@@ -199,29 +199,13 @@ internal fun ChatInputBar(
     onSelectModel: (String, String) -> Unit,
     /** 当前会话引擎（引擎切换）；null = 本体内置。 */
     sessionEngine: String? = null,
-    /** CLI 引擎会话的模型名（取自会话 model，供胶囊与勾选显示）。 */
+    /** CLI 引擎会话的模型名（取自会话 model，供图标与勾选显示）。 */
     sessionCliModel: String? = null,
+    /** CLI 引擎会话选定的 App 供应商（供应商模型用）。 */
+    sessionCliProviderId: String? = null,
     /** 是否有等待用户裁决的审批（授权/提问/计划）：外框红色快脉冲。 */
     awaitingApproval: Boolean = false,
-    /** 返回是否实际切换成功（运行中被拒 false，弹窗不滑页）。 */
-    onSelectEngine: (String?) -> Boolean = { true },
-    checkClaudeCodeAvailable: suspend () -> Boolean = { false },
-    checkClaudeCodeAuth: suspend () -> String? = { null },
-    onInstallClaudeCode: () -> Unit = {},
-    checkCodexAvailable: suspend () -> Boolean = { false },
-    checkCodexAuth: suspend () -> String? = { null },
-    onInstallCodex: () -> Unit = {},
-    checkOpenCodeAvailable: suspend () -> Boolean = { false },
-    checkOpenCodeAuth: suspend () -> String? = { null },
-    onInstallOpenCode: () -> Unit = {},
-    onSelectCliModel: (String) -> Unit = {},
-    onOpenAgentCli: () -> Unit = {},
-    /** Codex 沙箱是否完全放开（引擎卡开关）。 */
-    codexSandboxFullAccess: Boolean = false,
-    onCodexSandboxFullAccessChange: (Boolean) -> Unit = {},
-    /** OpenCode 是否自动批准权限请求（引擎卡开关）。 */
-    openCodeAutoApprove: Boolean = true,
-    onOpenCodeAutoApproveChange: (Boolean) -> Unit = {},
+    onSelectCliModel: (providerId: String?, model: String) -> Unit = { _, _ -> },
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     /** 长按模式图标：按当前模式弹「定时任务 / 定时 Plan」创建面板；null 时不响应。 */
@@ -754,22 +738,8 @@ internal fun ChatInputBar(
                                 onSelectModel = onSelectModel,
                                 engine = sessionEngine,
                                 cliModel = sessionCliModel,
-                                onSelectEngine = onSelectEngine,
-                                checkClaudeCodeAvailable = checkClaudeCodeAvailable,
-                                checkClaudeCodeAuth = checkClaudeCodeAuth,
-                                onInstallClaudeCode = onInstallClaudeCode,
-                                checkCodexAvailable = checkCodexAvailable,
-                                checkCodexAuth = checkCodexAuth,
-                                onInstallCodex = onInstallCodex,
-                                checkOpenCodeAvailable = checkOpenCodeAvailable,
-                                checkOpenCodeAuth = checkOpenCodeAuth,
-                                onInstallOpenCode = onInstallOpenCode,
+                                cliProviderId = sessionCliProviderId,
                                 onSelectCliModel = onSelectCliModel,
-                                onOpenAgentCli = onOpenAgentCli,
-                                codexSandboxFullAccess = codexSandboxFullAccess,
-                                onCodexSandboxFullAccessChange = onCodexSandboxFullAccessChange,
-                                openCodeAutoApprove = openCodeAutoApprove,
-                                onOpenCodeAutoApproveChange = onOpenCodeAutoApproveChange,
                                 forceOpenSheet = forceOpenModelSheet,
                                 onSelectSuccessInOnboarding = onSelectModelInOnboarding,
                                 onSheetDismiss = onModelSheetDismiss,
