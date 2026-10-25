@@ -1,0 +1,525 @@
+package com.aicode.feature.agent.domain.engine
+
+import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
+import com.aicode.feature.agent.domain.cliagent.CliAgentManager
+import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
+import com.aicode.feature.settings.data.repository.ExecutionMode
+import com.aicode.feature.settings.domain.model.ProviderType
+import com.aicode.feature.settings.domain.repository.AIProviderRepository
+import com.aicode.feature.agent.domain.workflow.AgentEvent
+import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.PathHomeResolver
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * OpenAI Codex CLI 桥接（引擎切换三期）。
+ *
+ * 每个用户回合在 PRoot 容器内起一个 headless 进程：
+ * `codex exec --json --skip-git-repo-check --sandbox workspace-write [-C 项目根] [resume <threadId>] -`
+ * 提示词经 stdin 传入（`-`），把 stdout 的 JSONL（ThreadEvent 协议，已在 codex-cli 0.162.1 实测：
+ * thread.started / item.started|completed / turn.completed|failed）翻译成 [AgentEvent]，
+ * 落库 / 停止 / 队列 / UI 状态机全部复用本体链路。
+ *
+ * 与 Claude Code 的差异（协议决定，非缺漏）：
+ * - 无逐 token 文本增量：助手文本在 item.completed(type=agent_message) 整段到达，直接发 AssistantText。
+ * - 无交互审批钩子（exec 模式不弹审批）：命令在 workspace-write 沙箱内自动执行，不走本体授权中心；
+ *   仅 aicode_bridge 数据工具经 [PermissionBridgeServer] 的 kind:data 通道回调 App。
+ * - MCP 无 --mcp-config flag：用 `-c mcp_servers.<name>.*` 内联覆盖挂载（实测会拉起 server）。
+ * - 续会话用 `exec resume <thread_id>`；App sessionId 与 codex thread_id 的映射持久化在桥接目录
+ *   codex-threads.json（codex 不接受外部指定 session id，与 claude 的 --session-id 不同）。
+ */
+@Singleton
+class CodexBridge @Inject constructor(
+    private val containerEngine: LinuxContainerEngine,
+    private val permissionBridgeServer: PermissionBridgeServer,
+    private val cliAgentManager: CliAgentManager,
+    private val fileAccess: FileAccessProvider,
+    private val pathHomeResolver: PathHomeResolver,
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val aiProviderRepository: AIProviderRepository
+) {
+    private companion object {
+        const val TAG = "CodexBridge"
+
+        /** 发 ToolCallStarted 的 item 类型白名单（与 parseItemCompleted 的 Finished 配对）。 */
+        val TOOL_ITEM_TYPES = setOf(
+            "command_execution", "file_change", "mcp_tool_call", "web_search", "todo_list", "collab_tool_call"
+        )
+
+        const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
+
+        /** App sessionId → codex thread_id 映射文件（容器内路径）。 */
+        const val THREADS_FILE = "/codex-threads.json"
+
+        /** 与 ClaudeCodeBridge 一致的空闲上限。 */
+        const val IDLE_TIMEOUT_MS = 30 * 60_000L
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
+    private val assetsMutex = Mutex()
+
+    private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
+    private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
+    private fun threadsPath(): String = bridgeDir() + THREADS_FILE
+
+    /** 内存映射缓存；进程被杀/应用重启后回退读 threads 文件。并发回合（悬浮球/定时任务）下也有读写。 */
+    private val threadIds = ConcurrentHashMap<String, String>()
+
+    @Volatile private var cachedAvailable: Boolean? = null
+    @Volatile private var cachedAtMs: Long = 0
+
+    @Volatile private var cachedAuthHint: String? = null
+    @Volatile private var cachedAuthAtMs: Long = 0
+
+    fun invalidateAvailability() {
+        cachedAvailable = null
+        cachedAtMs = 0
+    }
+
+    /** 引擎是否可用：本地 PRoot 容器 + codex 已安装。远程 SSH 不支持。 */
+    suspend fun isAvailable(): Boolean {
+        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
+        cachedAvailable?.let { cached ->
+            if (System.currentTimeMillis() - cachedAtMs < 5 * 60_000L) return cached
+        }
+        val codex = CliAgentCatalog.ALL.firstOrNull { it.command == "codex" } ?: return false
+        val available = cliAgentManager.detectVersion(codex) != null
+        cachedAvailable = available
+        cachedAtMs = System.currentTimeMillis()
+        return available
+    }
+
+    /** 一键安装：复用 CLI 智能体管理器（目录里已锁定实测版本 0.162.1）。 */
+    suspend fun installCli(): String =
+        cliAgentManager.install(CliAgentCatalog.ALL.first { it.command == "codex" })
+
+    /**
+     * 认证状态：null = 已可用（ChatGPT 登录凭据在，或将透传 App 内 OpenAI key）；
+     * 非 null = 未认证引导文案。探测为轻量 test 命令，不拉起 codex。
+     */
+    suspend fun authHint(): String? {
+        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (transmittableOpenAIProvider() != null) return null
+        cachedAuthHint?.let { cached ->
+            if (System.currentTimeMillis() - cachedAuthAtMs < 60_000L) return cached
+        }
+        val hint = probeAuthHint()
+        cachedAuthHint = hint
+        cachedAuthAtMs = System.currentTimeMillis()
+        return hint
+    }
+
+    private suspend fun probeAuthHint(): String? {
+        val probe = runCatching {
+            containerEngine.runCommandSyncIfReady(
+                command = "test -f \"\$HOME/.codex/auth.json\" && echo present || echo absent",
+                projectPath = null,
+                timeoutMs = 8_000L
+            )
+        }.getOrNull() ?: return null // 容器未就绪等场景不拦截，交给可用性/流中错误链路
+        if (probe.output.contains("present")) return null
+        return "Codex 尚未登录：请二选一——① 在终端执行 codex 完成一次 ChatGPT 登录；" +
+            "② 在 设置 → 模型 添加 OpenAI 类型的提供商并填入 API Key，切引擎时会自动透传给 codex。" +
+            "若你已在容器内自行配置 OPENAI_API_KEY 或 config.toml 自定义 provider，可忽略本提示。"
+    }
+
+    /** App 内已配置可用 Key 的 OpenAI 提供商（用于透传；无则 null，codex 走自身登录态）。 */
+    private suspend fun transmittableOpenAIProvider(): com.aicode.feature.settings.domain.model.AIProviderConfig? =
+        runCatching {
+            aiProviderRepository.getAllProviders().first().firstOrNull {
+                it.type == ProviderType.OPENAI && it.isEnabled && it.hasUsableApiKey
+            }
+        }.getOrNull()
+
+    private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
+        val id = containerSettingsRepository.activeProfileIdFlow.first()
+        val profiles = containerSettingsRepository.customProfilesFlow.first()
+        return profiles.firstOrNull { it.id == id } ?: com.aicode.feature.agent.domain.container.ContainerProfile.BUILTIN_ALPINE
+    }
+
+    /**
+     * 跑一个用户回合。[resume] 为 true 时先尝试 `exec resume` 续接（映射缺失或续接失败自动转全新回合）。
+     */
+    fun runTurn(
+        sessionId: String,
+        userRequest: String,
+        projectPath: String?,
+        model: String?,
+        resume: Boolean
+    ): Flow<AgentEvent> = flow {
+        if (resume) {
+            var emittedAny = false
+            try {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true).collect {
+                    emittedAny = true
+                    emit(it)
+                }
+            } catch (e: ResumeSessionMissingException) {
+                // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
+                if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
+                FileLogger.w(TAG, "codex 续接会话缺失，转全新回合重试: ${e.message}")
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+            }
+        } else {
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+        }
+    }.catch { e ->
+        emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
+    }
+
+    private fun runTurnOnce(
+        sessionId: String,
+        userRequest: String,
+        projectPath: String?,
+        model: String?,
+        resume: Boolean
+    ): Flow<AgentEvent> = flow {
+        val port = permissionBridgeServer.ensureStarted(token = sessionId)
+        writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+
+        val resumeThreadId = if (resume) readThreadId(sessionId) else null
+        val effectiveResume = resume && resumeThreadId != null
+        if (resume && resumeThreadId == null) {
+            FileLogger.i(TAG, "无 codex thread 映射，按全新回合执行: sid=$sessionId")
+        }
+
+        val args = buildList {
+            add("exec")
+            add("--json")
+            add("--skip-git-repo-check")
+            // exec 非交互模式无审批弹窗：workspace-write 让工作区内命令可自动执行（沙箱仍挡工作区外写入）
+            add("--sandbox"); add("workspace-write")
+            if (!projectPath.isNullOrBlank()) { add("-C"); add(projectPath) }
+            // MCP 无 --mcp-config flag，-c 内联覆盖挂载 aicode_bridge（0.162.1 实测会拉起 server）
+            add("-c"); add("mcp_servers.aicode_bridge.command=\"node\"")
+            add("-c"); add("mcp_servers.aicode_bridge.args=[\"${dataBridgeScript()}\"]")
+            add("-c"); add(mcpEnvOverride(port, sessionId, token = sessionId, projectPath))
+            if (!model.isNullOrBlank() && model != "default") { add("-m"); add(model) }
+            if (effectiveResume) { add("resume"); add(resumeThreadId!!) }
+            add("-") // 提示词走 stdin
+        }
+        val extraEnv = buildMap {
+            put("PERMISSION_BRIDGE_PORT", port.toString())
+            put("PERMISSION_BRIDGE_SESSION", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
+            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+            // App 内已配 OpenAI key 时透传给 codex（免 ChatGPT 登录）；自定义 baseUrl 一并透传支持反代
+            transmittableOpenAIProvider()?.let { p ->
+                put("OPENAI_API_KEY", p.firstUsableApiKey)
+                if (!p.useFullUrl) {
+                    val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
+                    if (base.isNotEmpty() && !base.contains("api.openai.com")) {
+                        put("OPENAI_BASE_URL", base)
+                    }
+                }
+            }
+        }
+
+        FileLogger.i(TAG, "启动 codex 桥接进程: resume=$effectiveResume model=$model project=$projectPath authViaKey=${extraEnv.containsKey("OPENAI_API_KEY")}")
+        // spawn 失败（codex 未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（qa P2-1）
+        val process = try {
+            containerEngine.startStdioProcess("codex", args, projectPath, extraEnv, resolveRuntimeProfile())
+        } catch (e: Exception) {
+            permissionBridgeServer.removeToken(sessionId)
+            throw e
+        }
+
+        val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
+            runCatching { process.destroy() }
+        }
+
+        val stderrTail = StringBuilder()
+        val lastActivity = AtomicLong(System.currentTimeMillis())
+        val stderrDrain = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                process.errorStream.bufferedReader().forEachLine { line ->
+                    lastActivity.set(System.currentTimeMillis())
+                    synchronized(stderrTail) {
+                        stderrTail.appendLine(line)
+                        if (stderrTail.length > 8000) stderrTail.delete(0, stderrTail.length - 4000)
+                    }
+                }
+            }
+        }
+
+        val watchdog = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            while (true) {
+                delay(60_000)
+                if (System.currentTimeMillis() - lastActivity.get() > IDLE_TIMEOUT_MS) {
+                    FileLogger.w(TAG, "空闲超时（${IDLE_TIMEOUT_MS / 60_000} 分钟无输出），中止 codex 进程")
+                    runCatching { process.destroy() }
+                    break
+                }
+            }
+        }
+
+        val acc = TurnAccumulator()
+        try {
+            withContext(Dispatchers.IO) {
+                val w = process.outputStream.bufferedWriter()
+                w.write(userRequest)
+                w.write("\n")
+                w.flush()
+                w.close()
+            }
+
+            var gotResult = false
+            val reader = process.inputStream.bufferedReader()
+            while (!gotResult) {
+                val line = withContext(Dispatchers.IO) {
+                    lastActivity.set(System.currentTimeMillis())
+                    reader.readLine()
+                } ?: break
+                if (line.isBlank()) continue
+                for (event in parseLine(line, acc)) {
+                    acc.emittedAny = true
+                    emit(event)
+                    if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
+                }
+            }
+
+            if (!gotResult) {
+                val tail = synchronized(stderrTail) { stderrTail.toString() }
+                throw classifyEarlyExit(tail)
+            }
+        } finally {
+            killOnCancel?.dispose()
+            stderrDrain.cancel()
+            watchdog.cancel()
+            permissionBridgeServer.removeToken(sessionId)
+            runCatching { process.destroy() }
+            // thread.started 在认证前就发出：即便回合失败，映射也已建立，下回合可续接
+            acc.threadId?.let { persistThreadId(sessionId, it) }
+        }
+    }
+
+    /** 无 result 行即退出：区分「续接会话不存在」（可重试）与认证/其它失败。 */
+    private fun classifyEarlyExit(stderrTail: String): Exception {
+        val lower = stderrTail.lowercase()
+        if ("api key" in lower || "login" in lower || "unauthorized" in lower || "not logged in" in lower || "401" in lower) {
+            return RuntimeException(
+                "Codex 尚未认证：请在终端打开一次交互式 codex 并完成 ChatGPT 登录（或配置 OPENAI_API_KEY），" +
+                    "然后回到会话重发消息。原始错误：" + stderrTail.takeLast(300).trim()
+            )
+        }
+        return if ("no session found" in lower || "session not found" in lower || "no thread found" in lower) {
+            ResumeSessionMissingException(stderrTail.takeLast(400).trim())
+        } else {
+            RuntimeException("Codex 提前退出: " + stderrTail.takeLast(400).trim().ifEmpty { "（无 stderr 输出）" })
+        }
+    }
+
+    // ── ThreadEvent JSONL → AgentEvent 翻译 ────────────────────────
+
+    /** 单回合累积状态：codex 无文本增量，文本/工具按 item 整段交付。 */
+    private class TurnAccumulator {
+        val reasoning = StringBuilder()
+        /** item id → 展示工具名：item.completed 回来时补齐 Finished 的 toolName。 */
+        val toolNames = mutableMapOf<String, String>()
+        var threadId: String? = null
+        var emittedAny = false
+    }
+
+    private fun parseLine(line: String, acc: TurnAccumulator): List<AgentEvent> {
+        val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
+        if (obj == null) {
+            FileLogger.i(TAG, "跳过非 JSON 行: ${line.take(200)}")
+            return emptyList()
+        }
+        return when (obj["type"]?.jsonPrimitive?.contentOrNull) {
+            "thread.started" -> {
+                acc.threadId = obj["thread_id"]?.jsonPrimitive?.contentOrNull
+                emptyList()
+            }
+            "turn.started" -> emptyList()
+            // 顶层 error 多为重连等瞬态（实测 403 重连流），只有 turn.failed 才是回合失败
+            "error" -> emptyList()
+            "item.started" -> parseItemStarted(obj, acc)
+            "item.completed" -> parseItemCompleted(obj, acc)
+            "turn.completed" -> listOf(AgentEvent.Completed)
+            "turn.failed" -> listOfNotNull(parseTurnFailed(obj))
+            else -> emptyList()
+        }
+    }
+
+    private fun parseItemStarted(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
+        val item = obj["item"] as? JsonObject ?: return emptyList()
+        val type = item["type"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
+        // 只有工具型 item 发 Started：agent_message/reasoning/error 也带 id 但无工具语义，
+        // 否则每条助手消息都会落一条永不配对 Finished 的「执行中」工具行（qa P1-1）
+        if (type !in TOOL_ITEM_TYPES) return emptyList()
+        val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
+        val display = displayToolName(type, item)
+        acc.toolNames[id] = display
+        return listOf(AgentEvent.ToolCallStarted(id = id, toolName = display, argsPreview = argsPreview(item)))
+    }
+
+    private fun parseItemCompleted(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
+        val item = obj["item"] as? JsonObject ?: return emptyList()
+        when (item["type"]?.jsonPrimitive?.contentOrNull) {
+            "agent_message" -> {
+                val text = item["text"]?.jsonPrimitive?.contentOrNull ?: ""
+                val reasoning = acc.reasoning.toString()
+                acc.reasoning.clear()
+                return listOf(
+                    AgentEvent.AssistantText(content = text, reasoning = reasoning)
+                )
+            }
+            "reasoning" -> {
+                acc.reasoning.append(item["text"]?.jsonPrimitive?.contentOrNull ?: "")
+                return listOf(AgentEvent.ReasoningDelta(accumulated = acc.reasoning.toString()))
+            }
+            "error" -> return emptyList() // item 级非致命错误（如传输降级提示），回合照常推进
+            else -> {
+                val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
+                val status = item["status"]?.jsonPrimitive?.contentOrNull
+                return listOf(
+                    AgentEvent.ToolCallFinished(
+                        id = id,
+                        toolName = acc.toolNames[id] ?: displayToolName(item["type"]?.jsonPrimitive?.contentOrNull, item),
+                        result = itemResult(item, status),
+                        isError = status == "failed"
+                    )
+                )
+            }
+        }
+    }
+
+    private fun parseTurnFailed(obj: JsonObject): AgentEvent {
+        val error = obj["error"] as? JsonObject
+        val message = error?.get("message")?.jsonPrimitive?.contentOrNull
+            ?: "Codex 运行失败"
+        return AgentEvent.Failed(error = message)
+    }
+
+    /** 命令执行→bash、文件改动→file_edit、MCP 工具→server.tool，其余用协议类型名。 */
+    private fun displayToolName(type: String?, item: JsonObject): String = when (type) {
+        "command_execution" -> "bash"
+        "file_change" -> "file_edit"
+        "mcp_tool_call" -> {
+            val server = item["server"]?.jsonPrimitive?.contentOrNull ?: ""
+            val tool = item["tool"]?.jsonPrimitive?.contentOrNull ?: ""
+            if (server.isEmpty()) "mcp_tool" else "$server.$tool"
+        }
+        else -> type ?: "tool"
+    }
+
+    private fun argsPreview(item: JsonObject): String = when (item["type"]?.jsonPrimitive?.contentOrNull) {
+        "command_execution" -> item["command"]?.jsonPrimitive?.contentOrNull ?: ""
+        "mcp_tool_call" -> item["arguments"]?.toString() ?: ""
+        "file_change" -> (item["changes"] as? kotlinx.serialization.json.JsonArray)
+            ?.joinToString(", ") { (it as? JsonObject)?.get("path")?.jsonPrimitive?.contentOrNull ?: "" }
+            ?: ""
+        else -> ""
+    }.take(400)
+
+    private fun itemResult(item: JsonObject, status: String?): String = when (item["type"]?.jsonPrimitive?.contentOrNull) {
+        "command_execution" -> {
+            val output = item["aggregated_output"]?.jsonPrimitive?.contentOrNull ?: ""
+            val exit = item["exit_code"]
+            val exitText = (exit as? JsonPrimitive)?.content?.let { "（exit=$it）" } ?: ""
+            if (status == "declined") "命令未执行（declined）" else (output.ifBlank { "（无输出）" } + exitText)
+        }
+        "mcp_tool_call" -> {
+            val err = (item["error"] as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
+            if (err != null) err
+            else {
+                val result = item["result"] as? JsonObject
+                val content = result?.get("content") as? kotlinx.serialization.json.JsonArray
+                content?.joinToString("\n") { c ->
+                    (c as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull ?: ""
+                }?.ifBlank { null } ?: result?.get("structured_content")?.toString() ?: "（无结果）"
+            }
+        }
+        "file_change" -> (item["changes"] as? kotlinx.serialization.json.JsonArray)
+            ?.joinToString("\n") { c ->
+                val o = c as? JsonObject
+                "${o?.get("kind")?.jsonPrimitive?.contentOrNull ?: "update"}: ${o?.get("path")?.jsonPrimitive?.contentOrNull ?: ""}"
+            }
+            ?.ifBlank { null } ?: "（无变更）"
+        else -> item["text"]?.jsonPrimitive?.contentOrNull
+            ?: item.toString().take(400)
+    }
+
+    // ── thread 映射持久化 ──────────────────────────────────────────
+
+    private fun readThreadId(appSessionId: String): String? {
+        threadIds[appSessionId]?.let { return it }
+        return runCatching {
+            if (!fileAccess.exists(threadsPath())) return null
+            val map = json.parseToJsonElement(fileAccess.readFile(threadsPath()))
+                .let { it as? JsonObject } ?: return null
+            map[appSessionId]?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+    }
+
+    private fun persistThreadId(appSessionId: String, threadId: String) {
+        threadIds[appSessionId] = threadId
+        runCatching {
+            fileAccess.writeFile(
+                threadsPath(),
+                buildJsonObject {
+                    for ((k, v) in threadIds) put(k, JsonPrimitive(v))
+                }.toString(),
+                overwrite = true
+            )
+        }.onFailure { e -> FileLogger.w(TAG, "持久化 thread 映射失败: ${e.message}") }
+    }
+
+    // ── 桥接资产 ──────────────────────────────────────────────────
+
+    /**
+     * 每回合确保 aicode_bridge 脚本就位。与 ClaudeCodeBridge 共用同一 mjs 源（internal const），
+     * 无需写 mcp-config.json：codex 经 -c 内联挂载。
+     */
+    private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) =
+        assetsMutex.withLock {
+            runCatching {
+                fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
+            }.onFailure { e ->
+                FileLogger.e(TAG, "写桥接资产失败", e)
+                throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
+            }
+        }
+
+    /** aicode_bridge 的 env 内联 TOML 覆盖值：{K="V",...}（键均为固定大写标识，值不含引号字符）。 */
+    private fun mcpEnvOverride(port: Int, sessionId: String, token: String, projectPath: String?): String {
+        val env = buildJsonObject {
+            put("PERMISSION_BRIDGE_PORT", port.toString())
+            put("PERMISSION_BRIDGE_SESSION", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", token)
+            put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
+            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+        }
+        val inner = env.entries.joinToString(",") { "\"${it.key}\"=\"${it.value.jsonPrimitive.content}\"" }
+        return "mcp_servers.aicode_bridge.env={$inner}"
+    }
+}

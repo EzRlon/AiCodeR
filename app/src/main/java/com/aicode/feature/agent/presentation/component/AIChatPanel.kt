@@ -740,7 +740,7 @@ fun AIChatPanel(
     val sessionEngine by viewModel.currentSessionEngine.collectAsStateWithLifecycle()
     val frameAwaitingApproval by viewModel.hasPendingApproval.collectAsStateWithLifecycle()
     // CLI 引擎会话的模型名（胶囊/模型页勾选用，而非默认 provider 模型）
-    val sessionCliModel = if (sessionEngine == com.aicode.feature.agent.domain.engine.AgentEngines.CLAUDE_CODE) {
+    val sessionCliModel = if (sessionEngine != null) {
         currentSessionState?.model
     } else null
     val sessionProviderModel by viewModel.currentSessionProviderModel.collectAsStateWithLifecycle()
@@ -2193,6 +2193,9 @@ fun AIChatPanel(
                 checkClaudeCodeAvailable = { viewModel.isClaudeCodeAvailable() },
                 checkClaudeCodeAuth = { viewModel.claudeCodeAuthHint() },
                 onInstallClaudeCode = { viewModel.installClaudeCode() },
+                checkCodexAvailable = { viewModel.isCodexAvailable() },
+                checkCodexAuth = { viewModel.codexAuthHint() },
+                onInstallCodex = { viewModel.installCodex() },
                 onSelectCliModel = { viewModel.setSessionCliModel(it) },
                 onOpenAgentCli = onNavigateToAgents,
                 currentMode = currentMode,

@@ -4,4 +4,7 @@ package com.aicode.feature.agent.domain.engine
 object AgentEngines {
     /** Claude Code CLI 桥接（引擎切换一期）。 */
     const val CLAUDE_CODE = "claude_code"
+
+    /** OpenAI Codex CLI 桥接（引擎切换三期）。 */
+    const val CODEX = "codex"
 }

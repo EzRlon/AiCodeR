@@ -464,7 +464,11 @@
     <string name="engine_install">Install</string>
     <string name="engine_open_manager">Manage</string>
     <string name="engine_limits_hint">CLI engine sessions do not support teams and other native workflows; memory/rules/skills and the annotation plus fix ledgers are available via the built-in MCP bridge (aicode_bridge tools)</string>
-    <string name="engine_resume_hint">History resumes automatically from the Claude Code side session.</string>
+    <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
+    <string name="engine_codex_not_authenticated">Installed · not signed in (or no OpenAI key to pass through)</string>
+    <string name="engine_codex_unavailable">Codex engine is not ready. Install Codex in the container first, or switch this session back to the built-in engine.</string>
+    <string name="engine_codex_hint">Codex specifics: no interactive approvals — commands run automatically inside the workspace-write sandbox; text and tool results arrive in whole blocks, without token-by-token streaming.</string>
+    <string name="engine_codex_install_started">A terminal has started installing Codex. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
     <string name="settings_default_engine_group">Default engine for new sessions</string>
     <string name="settings_default_engine_claude_sub">New sessions use Claude Code by default (must be installed)</string>
 

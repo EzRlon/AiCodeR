@@ -235,6 +235,7 @@ class AIAgentViewModel @Inject constructor(
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
+    private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -1071,8 +1072,37 @@ class AIAgentViewModel @Inject constructor(
     /** Claude Code 引擎是否就绪（本地容器 + CLI 已安装）。 */
     suspend fun isClaudeCodeAvailable(): Boolean = claudeCodeBridge.isAvailable()
 
+    /** Codex 引擎是否就绪（本地容器 + CLI 已安装）。 */
+    suspend fun isCodexAvailable(): Boolean = codexBridge.isAvailable()
+
     /** 引擎卡片认证态：null = 已就绪（oauth 或将透传 App 内 key）；非 null = 引导文案。 */
     suspend fun claudeCodeAuthHint(): String? = claudeCodeBridge.authHint()
+
+    /** Codex 引擎卡片认证态：null = 已就绪；非 null = 引导文案。 */
+    suspend fun codexAuthHint(): String? = codexBridge.authHint()
+
+    /** 一键安装 Codex：开终端标签跑安装命令；装完失效可用性缓存，回引擎页立即可检测。 */
+    fun installCodex() {
+        viewModelScope.launch {
+            runCatching { codexBridge.installCli() }
+                .onSuccess {
+                    codexBridge.invalidateAvailability()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.engine_codex_install_started),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                .onFailure {
+                    codexBridge.invalidateAvailability()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.engine_install_failed, it.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
 
     /** 一键安装 Claude Code：开终端标签跑安装命令（跑完发通知）；装完失效可用性缓存，回引擎页立即可检测。 */
     fun installClaudeCode() {
@@ -2348,32 +2378,55 @@ class AIAgentViewModel @Inject constructor(
                     _reasoningTimings.value = _reasoningTimings.value + (sessionId to (start to end))
                 }
             }
-            // 引擎分流：CLI 桥接会话（engine=claude_code）把 stream-json 翻译成 AgentEvent，
+            // 引擎分流：CLI 桥接会话把各自 CLI 的 JSON 输出翻译成 AgentEvent，
             // 下游落库/UI/停止/队列全部复用本体链路；resume 恒为 true，首回合续接失败自动转全新。
-            val eventFlow: Flow<AgentEvent> = if (currentSession != null && currentSession.engine == AgentEngines.CLAUDE_CODE) {
-                if (!claudeCodeBridge.isAvailable()) {
-                    kotlinx.coroutines.flow.flow {
-                        emit(AgentEvent.Failed(error = context.getString(R.string.engine_bridge_unavailable)))
-                    }
-                } else {
-                    // 发送前认证预检：未登录/无可透传 key 时直接给引导，不空跑一回合才发现
-                    val authHint = claudeCodeBridge.authHint()
-                    if (authHint != null) {
+            val eventFlow: Flow<AgentEvent> = when (currentSession?.engine) {
+                AgentEngines.CLAUDE_CODE -> {
+                    if (!claudeCodeBridge.isAvailable()) {
                         kotlinx.coroutines.flow.flow {
-                            emit(AgentEvent.Failed(error = authHint))
+                            emit(AgentEvent.Failed(error = context.getString(R.string.engine_bridge_unavailable)))
                         }
                     } else {
-                        claudeCodeBridge.runTurn(
-                            sessionId = sessionId,
-                            userRequest = modelRequest,
-                            projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
-                            model = currentSession.model,
-                            resume = true
-                        )
+                        // 发送前认证预检：未登录/无可透传 key 时直接给引导，不空跑一回合才发现
+                        val authHint = claudeCodeBridge.authHint()
+                        if (authHint != null) {
+                            kotlinx.coroutines.flow.flow {
+                                emit(AgentEvent.Failed(error = authHint))
+                            }
+                        } else {
+                            claudeCodeBridge.runTurn(
+                                sessionId = sessionId,
+                                userRequest = modelRequest,
+                                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
+                                model = currentSession.model,
+                                resume = true
+                            )
+                        }
                     }
                 }
-            } else {
-                agentWorkflow.executeEvents(
+                AgentEngines.CODEX -> {
+                    if (!codexBridge.isAvailable()) {
+                        kotlinx.coroutines.flow.flow {
+                            emit(AgentEvent.Failed(error = context.getString(R.string.engine_codex_unavailable)))
+                        }
+                    } else {
+                        val authHint = codexBridge.authHint()
+                        if (authHint != null) {
+                            kotlinx.coroutines.flow.flow {
+                                emit(AgentEvent.Failed(error = authHint))
+                            }
+                        } else {
+                            codexBridge.runTurn(
+                                sessionId = sessionId,
+                                userRequest = modelRequest,
+                                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
+                                model = currentSession.model,
+                                resume = true
+                            )
+                        }
+                    }
+                }
+                else -> agentWorkflow.executeEvents(
                     userRequest = modelRequest,
                     context = agentContext,
                     tools = tools

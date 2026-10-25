@@ -104,6 +104,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
+    private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -154,6 +155,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         floatBallStateStore,
         floatBallSessionHub,
         claudeCodeBridge,
+        codexBridge,
         context
     )
 }

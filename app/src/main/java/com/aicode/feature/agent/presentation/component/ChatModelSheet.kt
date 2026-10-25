@@ -108,7 +108,7 @@ internal fun ModelIconButton(
     forceOpenSheet: Boolean = false,
     onSelectSuccessInOnboarding: (() -> Unit)? = null,
     onSheetDismiss: (() -> Unit)? = null,
-    /** 当前会话引擎；null = 本体内置。非空时按钮显示「CC·模型」胶囊。 */
+    /** 当前会话引擎；null = 本体内置。非空时按钮显示「CC·/Codex·模型」胶囊。 */
     engine: String? = null,
     /** CLI 引擎会话的模型名（胶囊与模型页勾选都用它，而非默认 provider 模型）。 */
     cliModel: String? = null,
@@ -116,14 +116,19 @@ internal fun ModelIconButton(
     checkClaudeCodeAvailable: suspend () -> Boolean = { false },
     checkClaudeCodeAuth: suspend () -> String? = { null },
     onInstallClaudeCode: () -> Unit = {},
+    checkCodexAvailable: suspend () -> Boolean = { false },
+    checkCodexAuth: suspend () -> String? = { null },
+    onInstallCodex: () -> Unit = {},
     onSelectCliModel: (String) -> Unit = {},
     onOpenAgentCli: () -> Unit = {}
 ) {
     var showSheet by remember { mutableStateOf(false) }
     val effectiveShowSheet = showSheet || forceOpenSheet
 
-    if (engine == AgentEngines.CLAUDE_CODE) {
-        // CLI 引擎会话：显示「CC·模型」文本胶囊（拍板定稿的底栏/输入栏文案形态）
+    if (engine != null) {
+        // CLI 引擎会话：显示「CC·/Codex·模型」文本胶囊（拍板定稿的底栏/输入栏文案形态）
+        val capsulePrefix = if (engine == AgentEngines.CODEX) "Codex·" else "CC·"
+        val capsuleModel = cliModel?.takeIf { it.isNotBlank() }?.takeIf { it != "default" } ?: if (engine == AgentEngines.CODEX) "default" else "claude"
         Surface(
             shape = RoundedCornerShape(Radius.pill),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -131,7 +136,7 @@ internal fun ModelIconButton(
             modifier = modifier
         ) {
             Text(
-                text = "CC·" + (cliModel?.takeIf { it.isNotBlank() } ?: "claude"),
+                text = capsulePrefix + capsuleModel,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -150,15 +155,18 @@ internal fun ModelIconButton(
             providers = providers,
             currentProviderId = provider?.id ?: "",
             // CLI 引擎会话：模型页勾选/胶囊都对齐会话上的 CLI 模型名（qa P1-4）
-            currentModel = if (engine == AgentEngines.CLAUDE_CODE) cliModel.orEmpty() else provider?.effectiveModel ?: "",
+            currentModel = if (engine != null) cliModel.orEmpty() else provider?.effectiveModel ?: "",
             modelMetadata = modelMetadata,
             checkClaudeCodeAvailable = checkClaudeCodeAvailable,
             checkClaudeCodeAuth = checkClaudeCodeAuth,
+            checkCodexAvailable = checkCodexAvailable,
+            checkCodexAuth = checkCodexAuth,
             onSelectEngine = { e ->
                 // 选引擎不关弹窗：切换后自动滑到模型页继续选（拍板交互；qa P1-5）
                 onSelectEngine(e)
             },
             onInstallClaudeCode = onInstallClaudeCode,
+            onInstallCodex = onInstallCodex,
             onOpenAgentCli = {
                 onOpenAgentCli()
                 showSheet = false
@@ -297,8 +305,11 @@ internal fun ModelSheet(
     modelMetadata: Map<String, ModelMetadata>,
     checkClaudeCodeAvailable: suspend () -> Boolean,
     checkClaudeCodeAuth: suspend () -> String? = { null },
+    checkCodexAvailable: suspend () -> Boolean = { false },
+    checkCodexAuth: suspend () -> String? = { null },
     onSelectEngine: (String?) -> Unit,
     onInstallClaudeCode: () -> Unit,
+    onInstallCodex: () -> Unit = {},
     onOpenAgentCli: () -> Unit = {},
     onSelectModel: (String, String) -> Unit,
     onSelectCliModel: (String) -> Unit,
@@ -306,7 +317,7 @@ internal fun ModelSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState(initialPage = if (engine == AgentEngines.CLAUDE_CODE) 1 else 0) { 2 }
+    val pagerState = rememberPagerState(initialPage = if (engine != null) 1 else 0) { 2 }
 
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -329,9 +340,9 @@ internal fun ModelSheet(
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
                 when (page) {
                     0 -> {
-                        if (engine == AgentEngines.CLAUDE_CODE) {
+                        if (engine != null) {
                             // CLI 会话：currentModel 已由调用方对齐为会话上的 CLI 模型名
-                            CliModelPage(currentModel = currentModel, onSelect = onSelectCliModel)
+                            CliModelPage(engine = engine, currentModel = currentModel, onSelect = onSelectCliModel)
                         } else {
                             ModelSelectionContent(
                                 title = stringResource(R.string.common_model),
@@ -349,11 +360,14 @@ internal fun ModelSheet(
                         engine = engine,
                         checkClaudeCodeAvailable = checkClaudeCodeAvailable,
                         checkClaudeCodeAuth = checkClaudeCodeAuth,
+                        checkCodexAvailable = checkCodexAvailable,
+                        checkCodexAuth = checkCodexAuth,
                         onSelectEngine = { e ->
                             onSelectEngine(e)
-                            if (e == AgentEngines.CLAUDE_CODE) scope.launch { pagerState.animateScrollToPage(0) }
+                            if (e != null) scope.launch { pagerState.animateScrollToPage(0) }
                         },
                         onInstallClaudeCode = onInstallClaudeCode,
+                        onInstallCodex = onInstallCodex,
                         onOpenAgentCli = onOpenAgentCli
                     )
                 }
@@ -367,16 +381,23 @@ private fun EnginePage(
     engine: String?,
     checkClaudeCodeAvailable: suspend () -> Boolean,
     checkClaudeCodeAuth: suspend () -> String?,
+    checkCodexAvailable: suspend () -> Boolean,
+    checkCodexAuth: suspend () -> String?,
     onSelectEngine: (String?) -> Unit,
     onInstallClaudeCode: () -> Unit,
+    onInstallCodex: () -> Unit = {},
     onOpenAgentCli: () -> Unit = {}
 ) {
     var claudeAvailable by remember { mutableStateOf<Boolean?>(null) }
     var claudeAuthHint by remember { mutableStateOf<String?>(null) }
+    var codexAvailable by remember { mutableStateOf<Boolean?>(null) }
+    var codexAuthHint by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         claudeAvailable = checkClaudeCodeAvailable()
         // 已安装才查登录态：未装时探测无意义
         if (claudeAvailable == true) claudeAuthHint = checkClaudeCodeAuth()
+        codexAvailable = checkCodexAvailable()
+        if (codexAvailable == true) codexAuthHint = checkCodexAuth()
     }
 
     Column(
@@ -413,12 +434,43 @@ private fun EnginePage(
                 else -> null
             }
         )
+        EngineCard(
+            title = "Codex",
+            subtitle = when {
+                codexAvailable == false -> stringResource(R.string.engine_claude_missing)
+                codexAvailable == true && codexAuthHint != null -> stringResource(R.string.engine_codex_not_authenticated)
+                codexAvailable == true -> stringResource(R.string.engine_claude_ready)
+                else -> stringResource(R.string.engine_detecting)
+            },
+            selected = engine == AgentEngines.CODEX,
+            onClick = { if (codexAvailable != false && codexAuthHint == null) onSelectEngine(AgentEngines.CODEX) },
+            trailingAction = when {
+                codexAvailable == false -> {
+                    { TextButton(onClick = onInstallCodex) { Text(stringResource(R.string.engine_install)) } }
+                }
+                codexAvailable == true && codexAuthHint != null -> {
+                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_go_login)) } }
+                }
+                codexAvailable == true -> {
+                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }
+                }
+                else -> null
+            }
+        )
         Text(
             text = stringResource(R.string.engine_limits_hint),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs)
         )
+        if (engine == AgentEngines.CODEX) {
+            Text(
+                text = stringResource(R.string.engine_codex_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            )
+        }
     }
 }
 
@@ -470,10 +522,15 @@ private fun EngineCard(
     }
 }
 
-/** CLI 引擎的模型页：一行一个 CLI 侧模型名；历史由桥接自动续接（本体 sessionId 对齐 CLI session）。 */
+/** CLI 引擎的模型页：一行一个 CLI 侧模型名；历史由桥接自动续接（App 会话与 CLI 侧会话自动对齐）。 */
 @Composable
-private fun CliModelPage(currentModel: String, onSelect: (String) -> Unit) {
-    val models = listOf("sonnet", "opus", "haiku")
+private fun CliModelPage(engine: String, currentModel: String, onSelect: (String) -> Unit) {
+    val models = if (engine == AgentEngines.CODEX) {
+        // default = 不透传 -m，跟随 CLI 侧配置的默认模型（Codex 模型名变动频繁，不硬编码更多）
+        listOf("default", "gpt-5.3-codex", "gpt-5.1-codex-max", "gpt-5-codex-mini")
+    } else {
+        listOf("sonnet", "opus", "haiku")
+    }
     Column(
         modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
