@@ -55,6 +55,8 @@ import javax.inject.Singleton
  * - 文本按块整发（session.text.ended 触发），无逐 token 增量；工具调用也只在成败后一次性到达，
  *   翻译层立即补发 Started+Finished 配对。
  * - 权限无交互审批：`--auto`（引擎卡开关控制，默认开）自动批准未被显式 deny 的请求；工具成败以 tool_use 事件外显。
+ * - 智能体：App 已启用子代理写进 `OPENCODE_CONFIG_CONTENT` 的 `agent` 段（mode=subagent，实测 1.19.0
+ *   的 `opencode agent list` 能列出）；与 opencode 自带 agent（build/plan/explore/...）同名的定义跳过。
  * - MCP 无命令行 flag：经 `OPENCODE_CONFIG_CONTENT` 内联 JSON 挂 aicode_bridge（实测会拉起 server；
  *   该变量按官方优先级链合并、不整体替换用户配置，但同键 mcp 会被本桥覆盖）。
  * - 续会话：opencode 不接受外部指定 session id，App sessionId → `ses_...` 映射持久化在桥接目录。
@@ -69,7 +71,8 @@ class OpenCodeBridge @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
-    private val engineOptionsRepository: EngineOptionsRepository
+    private val engineOptionsRepository: EngineOptionsRepository,
+    private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 ) {
     private companion object {
         const val TAG = "OpenCodeBridge"
@@ -80,6 +83,12 @@ class OpenCodeBridge @Inject constructor(
         const val SESSIONS_FILE = "/opencode-sessions.json"
 
         const val MCP_SERVER_NAME = "aicode_bridge"
+
+        /**
+         * OPENCODE_CONFIG_CONTENT 长度上限：内容是单个环境变量值，实测单条 env 超过 ~128KB（131072 字节）
+         * 时进程孵化直接失败（E2BIG）。留一半余量，超限则本回合不映射 agent。
+         */
+        const val MAX_CONFIG_CHARS = 64 * 1024
 
         const val IDLE_TIMEOUT_MS = 30 * 60_000L
     }
@@ -238,7 +247,8 @@ class OpenCodeBridge @Inject constructor(
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
             // MCP 挂载：官方优先级链合并（不整体替换用户配置；mcp 同键会被覆盖）
-            put("OPENCODE_CONFIG_CONTENT", mcpConfigContent(sessionId))
+            // 配置内容要枚举 App 智能体定义（读容器文件），移出主线程
+            put("OPENCODE_CONFIG_CONTENT", withContext(Dispatchers.IO) { configContent(sessionId) })
             // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）
             transmittableProvider(ProviderType.OPENAI)?.let { p ->
                 put("OPENAI_API_KEY", p.firstUsableApiKey)
@@ -466,8 +476,31 @@ class OpenCodeBridge @Inject constructor(
             }
         }
 
-    /** aicode_bridge + 用户自装 MCP 的 OPENCODE_CONFIG_CONTENT 内联值（不写用户配置文件，mcp 键按官方优先级覆盖）。 */
-    private suspend fun mcpConfigContent(sessionId: String): String = buildJsonObject {
+    /**
+     * aicode_bridge + 用户自装 MCP + App 智能体定义的 OPENCODE_CONFIG_CONTENT 内联值
+     * （不写用户配置文件；mcp/agent 键按官方优先级覆盖，同名项以本内容为准）。
+     */
+    private suspend fun configContent(sessionId: String): String {
+        // App 智能体定义随回合映射（能力全域打通批二）：App 定义为子代理语义，mode=subagent；
+        // 跳过与 opencode 自带 agent（build/plan/explore/general/...）同名的定义，不覆盖引擎原生体系
+        // agent 枚举失败不致命（与 Claude 桥同口径）：MCP 枚举异常仍让回合失败，agent 异常只丢本回合映射
+        val mapping = runCatching {
+            CliAgentMapping.partitionForOpenCode(agentDefinitionRepository.listEnabled().map { it.definition })
+        }.getOrElse { e ->
+            FileLogger.w(TAG, "枚举 App 子代理失败，本回合不映射 agent", e)
+            CliAgentMapping.Result(emptyList(), emptyList())
+        }
+        mapping.skipped.forEach { FileLogger.w(TAG, "子代理 ${it.agent.name} 不映射到 opencode：${it.reason}") }
+        val agentsJson = if (mapping.mapped.isEmpty()) null else CliAgentMapping.openCodeAgentsJson(mapping.mapped)
+
+        val content = renderConfig(sessionId, agentsJson)
+        if (content.length <= MAX_CONFIG_CHARS) return content
+        FileLogger.w(TAG, "智能体配置过大（>${MAX_CONFIG_CHARS / 1024}KB），本回合不映射 agent")
+        return renderConfig(sessionId, null)
+    }
+
+    /** OPENCODE_CONFIG_CONTENT 内容（mcp 段 + 可选 agent 段）。 */
+    private suspend fun renderConfig(sessionId: String, agentsJson: JsonObject?): String = buildJsonObject {
         put("mcp", buildJsonObject {
             put(MCP_SERVER_NAME, buildJsonObject {
                 put("type", "local")
@@ -506,6 +539,7 @@ class OpenCodeBridge @Inject constructor(
                 }
             }
         })
+        if (agentsJson != null) put("agent", agentsJson)
     }.toString()
 
     /**

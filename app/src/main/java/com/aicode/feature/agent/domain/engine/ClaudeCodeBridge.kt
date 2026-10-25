@@ -51,11 +51,14 @@ internal class ResumeSessionMissingException(message: String) : RuntimeException
  * 每个用户回合在 PRoot 容器内起一个 headless 进程：
  * `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`
  * `--session-id <本体sessionId> --permission-prompt-tool mcp__permission_bridge__request_permission --mcp-config <生成的配置>`
+ * `[--agents <生成的智能体配置>]`
  * 把 stdout 的 NDJSON 逐行翻译成 [AgentEvent]——落库 / 停止 / 队列 / UI 状态机全部复用本体链路。
  *
  * 续接：用本体 sessionId 强制为 CLI 的 session id（`--session-id`），后续回合 `--resume` 直接续上
  * `~/.claude` 里的会话历史（不迁库）；rootfs 重装后 CLI 侧历史丢失，检测到续接失败自动转全新回合重试一次。
  * 权限：`--permission-prompt-tool` 经 [PermissionBridgeServer] 桥到本体授权中心。
+ * 智能体：App 已启用子代理（设置 → 子代理）随回合生成到桥目录 agents.json 并经 `--agents` 传入
+ * （能力全域打通批二），不写用户的 `.claude/agents/`；两侧工具/模型命名体系不同，只映射描述与提示词。
  */
 @Singleton
 class ClaudeCodeBridge @Inject constructor(
@@ -66,7 +69,8 @@ class ClaudeCodeBridge @Inject constructor(
     private val pathHomeResolver: PathHomeResolver,
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
-    private val mcpConfigRepository: McpConfigRepository
+    private val mcpConfigRepository: McpConfigRepository,
+    private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 ) {
     private companion object {
         const val TAG = "ClaudeCodeBridge"
@@ -89,6 +93,9 @@ class ClaudeCodeBridge @Inject constructor(
     private fun bridgeScript(): String = bridgeDir() + "/claude-permission-bridge.mjs"
     private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun mcpConfigPath(): String = bridgeDir() + "/mcp-config.json"
+
+    /** App 智能体定义生成给 claude `--agents` 的文件（App 管理区，不写用户 .claude/agents）。 */
+    private fun agentsConfigPath(): String = bridgeDir() + "/agents.json"
 
     /** 引擎可用性缓存（5 分钟 TTL）：避免每次打开模型弹窗都拉起容器进程跑版本检测（optimizer #6）。 */
     @Volatile private var cachedAvailable: Boolean? = null
@@ -213,6 +220,7 @@ class ClaudeCodeBridge @Inject constructor(
     ): Flow<AgentEvent> = flow {
         val port = permissionBridgeServer.ensureStarted(token = sessionId)
         writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+        val hasCliAgents = writeCliAgentsConfig()
 
         val args = buildList {
             add("-p")
@@ -228,6 +236,8 @@ class ClaudeCodeBridge @Inject constructor(
             }
             add("--permission-prompt-tool"); add("mcp__${MCP_SERVER_NAME}__${MCP_TOOL_NAME}")
             add("--mcp-config"); add(mcpConfigPath())
+            // App 智能体定义随回合生成（能力全域打通批二）；无可用定义时不传该 flag
+            if (hasCliAgents) { add("--agents"); add(agentsConfigPath()) }
             if (!model.isNullOrBlank()) { add("--model"); add(model) }
         }
         val extraEnv = buildMap {
@@ -537,6 +547,28 @@ class ClaudeCodeBridge @Inject constructor(
     private fun JsonObject.intOf(key: String): Int = (this[key] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
 
     // ── 桥接资产（脚本 + MCP 配置）──────────────────────────────────
+
+    /**
+     * 把 App 已启用子代理写成本回合的 `--agents` 文件；返回是否有可映射定义。
+     * 定义枚举要读容器内文件，故建在 IO 线程；失败不阻断回合（只是本回合不带 App 智能体）。
+     */
+    private suspend fun writeCliAgentsConfig(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val mapping = CliAgentMapping.partition(agentDefinitionRepository.listEnabled().map { it.definition })
+            mapping.skipped.forEach { FileLogger.w(TAG, "子代理 ${it.agent.name} 不映射到 claude：${it.reason}") }
+            if (mapping.mapped.isNotEmpty()) {
+                fileAccess.writeFile(
+                    agentsConfigPath(),
+                    CliAgentMapping.claudeAgentsJson(mapping.mapped).toString(),
+                    overwrite = true
+                )
+            }
+            mapping.mapped.isNotEmpty()
+        }.getOrElse { e ->
+            FileLogger.w(TAG, "生成 claude 智能体配置失败，本回合不带 App 智能体", e)
+            false
+        }
+    }
 
     /** 每回合确保脚本与 MCP 配置就位（幂等写入，端口/会话可能变化）。 */
     private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) = assetsMutex.withLock {
