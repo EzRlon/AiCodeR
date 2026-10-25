@@ -464,7 +464,7 @@
     <string name="engine_detecting">检测中…</string>
     <string name="engine_install">安装</string>
     <string name="engine_open_manager">管理页</string>
-    <string name="engine_limits_hint">CLI 引擎会话不支持：专家团等本体工作流；记忆/规则/技能与标注·修复账本已通过内置 MCP 桥接入（aicode_bridge 工具）</string>
+    <string name="engine_limits_hint">CLI 引擎会话不支持：专家团等本体工作流；记忆/规则/技能、标注·修复账本与跨会话档案检索（recall_search）已通过内置 MCP 桥接入（aicode_bridge 工具）</string>
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
     <string name="engine_codex_not_authenticated">已安装 · 未登录（或未配置可透传的 OpenAI Key）</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>

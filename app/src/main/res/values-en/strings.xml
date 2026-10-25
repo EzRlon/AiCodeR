@@ -463,7 +463,7 @@
     <string name="engine_detecting">Detecting…</string>
     <string name="engine_install">Install</string>
     <string name="engine_open_manager">Manage</string>
-    <string name="engine_limits_hint">CLI engine sessions do not support teams and other native workflows; memory/rules/skills and the annotation plus fix ledgers are available via the built-in MCP bridge (aicode_bridge tools)</string>
+    <string name="engine_limits_hint">CLI engine sessions do not support teams and other native workflows; memory/rules/skills, the annotation plus fix ledgers, and cross-session archive search (recall_search) are available via the built-in MCP bridge (aicode_bridge tools)</string>
     <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
     <string name="engine_codex_not_authenticated">Installed · not signed in (or no OpenAI key to pass through)</string>
     <string name="engine_codex_unavailable">Codex engine is not ready. Install Codex in the container first, or switch this session back to the built-in engine.</string>

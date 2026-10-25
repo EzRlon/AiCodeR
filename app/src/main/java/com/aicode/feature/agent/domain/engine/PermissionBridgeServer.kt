@@ -46,7 +46,8 @@ import javax.inject.Singleton
 class PermissionBridgeServer @Inject constructor(
     private val toolPermissionManager: ToolPermissionManager,
     private val fixLedgerRepository: FixLedgerRepository,
-    private val annotationRepository: com.aicode.feature.annotation.data.AnnotationRepository
+    private val annotationRepository: com.aicode.feature.annotation.data.AnnotationRepository,
+    private val recallTool: com.aicode.feature.agent.domain.tool.recall.RecallTool
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -113,9 +114,9 @@ class PermissionBridgeServer @Inject constructor(
             val toolName = request["tool_name"]?.jsonPrimitive?.content ?: return
             val toolInput = request["input"] as? JsonObject ?: JsonObject(emptyMap())
 
-            // 数据通道（aicode_bridge 的 ledger_* 工具）：只读查询与状态推进，不经权限弹窗
+            // 数据通道（aicode_bridge 的 ledger_* / recall_search 工具）：只读查询与状态推进，不经权限弹窗
             if (kind == "data") {
-                val dataResponse = handleDataRequest(toolName, toolInput)
+                val dataResponse = handleDataRequest(toolName, toolInput, sessionId)
                 conn.getOutputStream().bufferedWriter().use { w ->
                     w.write(dataResponse.toString())
                     w.write("\n")
@@ -170,7 +171,7 @@ class PermissionBridgeServer @Inject constructor(
     // ── 数据通道（aicode_bridge 的 ledger_* 工具）─────────────────────
 
     /** 账本类数据请求：只读合流列表与状态推进（与本体 fixledger 工具同语义，只能前进，关闭由用户手动）。 */
-    private suspend fun handleDataRequest(tool: String, input: JsonObject): JsonObject {
+    private suspend fun handleDataRequest(tool: String, input: JsonObject, sessionId: String): JsonObject {
         return when (tool) {
             "ledger_list" -> {
                 val annotations = annotationRepository.items.first()
@@ -196,6 +197,29 @@ class PermissionBridgeServer @Inject constructor(
                     return errData("无法推进：标注不存在，或状态不能后退/重复推进（当前可能已在目标状态之后）")
                 }
                 okData(message)
+            }
+            "recall_search" -> {
+                // 跨会话档案检索：复用本体 RecallTool（FTS4 + CJK LIKE 降级），scope=session 用当前桥接会话 id
+                val context = com.aicode.feature.agent.domain.model.AgentContext(
+                    currentFile = null,
+                    selectedCode = null,
+                    // as? JsonPrimitive 而非 jsonPrimitive：模型可能传非字符串，抛异常会吞掉响应导致 mjs 侧等满超时（qa P2-2）
+                    projectRoot = (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty(),
+                    language = null,
+                    sessionId = sessionId.ifBlank { null }
+                )
+                when (val result = recallTool.executeWithContext(input, context)) {
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Success -> {
+                        // recall 的成功结果是纯文本 JsonPrimitive；非原始值兑底 JSON 字符串
+                        val text = (result.data as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.takeIf { it.isString }
+                            ?.content
+                            ?: result.data.toString()
+                        okData(text)
+                    }
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Error -> errData(result.message)
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Partial -> okData(result.message)
+                }
             }
             else -> errData("未知数据工具: $tool")
         }
