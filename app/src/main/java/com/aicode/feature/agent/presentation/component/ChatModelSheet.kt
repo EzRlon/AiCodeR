@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -332,14 +334,18 @@ private fun CliModelPage(
         else -> listOf("sonnet", "opus", "haiku")
     }
     // 供应商类型口径与桥的透传一致：Claude=Anthropic 型，Codex=OpenAI 型，OpenCode=两者；
-    // OpenCode 的 useFullUrl（完整 endpoint）无法安全还原 base，排除（选了也无法正确路由）
+    // useFullUrl（完整 endpoint）三桥都无法安全还原 base，只透 Key 会打到官方端点，全部排除
     val matchingProviders = when (engine) {
-        AgentEngines.CLAUDE_CODE -> providers.filter { it.type == ProviderType.ANTHROPIC }
-        AgentEngines.CODEX -> providers.filter { it.type == ProviderType.OPENAI }
+        AgentEngines.CLAUDE_CODE -> providers.filter { it.type == ProviderType.ANTHROPIC && !it.useFullUrl }
+        AgentEngines.CODEX -> providers.filter { it.type == ProviderType.OPENAI && !it.useFullUrl }
         else -> providers.filter { (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC) && !it.useFullUrl }
     }
     Column(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            // 与内置模型页同口径：有最大高度且可滚动，供应商模型多时底部条目可达
+            .heightIn(min = 360.dp, max = 420.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         Text(
@@ -353,10 +359,13 @@ private fun CliModelPage(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
             modifier = Modifier.fillMaxWidth()
         ) {
-            // 行模型：Label=分组标题（引擎模型/供应商名），Model=可选模型行
-            data class Row(val label: String?, val model: String? = null, val providerId: String? = null, val ref: String? = null)
-            val rows = buildList {
-                add(Row(label = stringResource(R.string.cli_model_builtin_group)))
+            // 行模型：Label=分组标题（引擎模型/供应商名），Model=可选模型行；
+            // 记忆化避免弹窗内任何状态变化都重建整表（optimizer P2）
+            val builtinLabel = stringResource(R.string.cli_model_builtin_group)
+            val rows = remember(engine, providers, builtinLabel) {
+                data class Row(val label: String?, val model: String? = null, val providerId: String? = null, val ref: String? = null)
+                buildList {
+                    add(Row(label = builtinLabel))
                 // 引擎自带模型：providerId=null
                 builtinModels.forEach { model ->
                     add(Row(label = null, model = model, providerId = null, ref = model))
@@ -377,6 +386,7 @@ private fun CliModelPage(
                         }
                         add(Row(label = null, model = model, providerId = provider.id, ref = ref))
                     }
+                }
                 }
             }
             Column {

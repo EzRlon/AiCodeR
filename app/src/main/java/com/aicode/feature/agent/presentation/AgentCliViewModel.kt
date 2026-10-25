@@ -90,7 +90,7 @@ class AgentCliViewModel @Inject constructor(
                     _error.value = context.getString(R.string.agent_cli_install_failed, event.exitCode)
                 }
                 setOne(agentId) { it.copy(installing = false, checking = true) }
-                checkOne(agentId)
+                checkOne(agentId, forceRefresh = true)
             }
         }
         // 兼底：用户手动关闭安装标签时不会发 finished 事件（closeTab 先移除标签），
@@ -103,7 +103,7 @@ class AgentCliViewModel @Inject constructor(
                 installingTabs.value = installingTabs.value - vanished
                 vanished.forEach { agentId ->
                     setOne(agentId) { it.copy(installing = false, checking = true) }
-                    checkOne(agentId)
+                    checkOne(agentId, forceRefresh = true)
                 }
             }
         }
@@ -147,9 +147,9 @@ class AgentCliViewModel @Inject constructor(
         _error.value = null
     }
 
-    private suspend fun checkOne(agentId: String) {
+    private suspend fun checkOne(agentId: String, forceRefresh: Boolean = false) {
         val agent = CliAgentCatalog.ALL.first { it.id == agentId }
-        val version = runCatching { cliAgentManager.detectVersion(agent) }.getOrNull()
+        val version = runCatching { cliAgentManager.detectVersion(agent, forceRefresh) }.getOrNull()
         // 已安装才查登录态：未装时探测无意义
         val authHint = if (version != null) runCatching { authHintOf(agentId) }.getOrNull() else null
         setOne(agentId) { it.copy(version = version, checking = false, authHint = authHint) }

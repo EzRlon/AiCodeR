@@ -1063,10 +1063,13 @@ class AIAgentViewModel @Inject constructor(
     ) { p, q, a -> p != null || q != null || a != null }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    /** 切换当前会话引擎（null 切回本体内置工作流）。运行中禁止切换（返回 false 不生效）。 */
+    /** 切换当前会话引擎（null 切回本体内置工作流）。运行中禁止切换（返回 false 不生效）；
+     *  同值不写库（避免设置页重复点卡清掉已选模型）。 */
     fun setSessionEngine(engine: String?): Boolean {
         val sid = _currentSessionId.value ?: return false
         if (sessionJobs[sid]?.isActive == true || commandJobs[sid]?.isActive == true) return false
+        // 状态流尚未加载（首帧）时不短路：currentSessionState 为 null 只说明还没加载，不代表引擎就是内置
+        if (currentSessionState.value != null && currentSessionState.value?.engine == engine) return true
         viewModelScope.launch { sessionUseCase.updateEngine(sid, engine) }
         return true
     }

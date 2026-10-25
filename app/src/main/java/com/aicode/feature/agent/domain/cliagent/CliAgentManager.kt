@@ -20,15 +20,28 @@ class CliAgentManager @Inject constructor(
     private val terminalSessionProvider: TerminalSessionProvider
 ) {
 
-    /** 已安装时返回首行版本号；未安装 / 容器未就绪 / 执行失败返回 null。 */
-    suspend fun detectVersion(agent: CliAgent): String? {
+    /** 版本探测缓存（agentId → 时间戳+首行版本）：设置页反复进出/三桥 isAvailable 高频探测时避免反复拉起容器进程。 */
+    private val versionCache = mutableMapOf<String, Pair<Long, String?>>()
+
+    /** 安装结束后的复检需要绕过缓存；initial 探测走 5 分钟 TTL（对齐桥层 isAvailable 口径）。 */
+    suspend fun detectVersion(agent: CliAgent, forceRefresh: Boolean = false): String? {
+        if (!forceRefresh) {
+            versionCache[agent.id]?.let { (at, v) ->
+                if (System.currentTimeMillis() - at < VERSION_TTL_MS) return v
+            }
+        }
         val result = commandEngine.runCommandSyncIfReady(
             command = agent.detectCommand,
             projectPath = null,
             timeoutMs = DETECT_TIMEOUT_MS
-        ) ?: return null
-        if (result.exitCode != 0) return null
-        return result.output.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it.isNotEmpty() }
+        )
+        val version = if (result?.exitCode != 0) {
+            null
+        } else {
+            result.output.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        versionCache[agent.id] = System.currentTimeMillis() to version
+        return version
     }
 
     /** 在新终端标签里安装（notify=true：结束后通知）。返回标签 id。须在主线程调用。 */
@@ -50,5 +63,8 @@ class CliAgentManager @Inject constructor(
     private companion object {
         /** CLI 冷启动打印版本可能要几秒（node 启动），给足余量。 */
         const val DETECT_TIMEOUT_MS = 20_000L
+
+        /** 版本探测缓存 TTL：与桥层 isAvailable 的 5 分钟口径一致。 */
+        const val VERSION_TTL_MS = 5 * 60_000L
     }
 }

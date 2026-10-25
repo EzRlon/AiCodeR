@@ -58,6 +58,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -1137,7 +1138,13 @@ fun SettingsScreen(
                     providers = providers,
                     defaultEngine = defaultEngine,
                     onSelectDefaultEngine = { viewModel.setDefaultEngine(it) },
-                    onSwitchEngine = { agentViewModel?.setSessionEngine(it?.ifBlank { null }) },
+                    onSwitchEngine = { id ->
+                        val ok = agentViewModel?.setSessionEngine(id?.ifBlank { null }) ?: true
+                        if (!ok) {
+                            // 会话运行中被拒：明确告知只改了默认引擎，当前会话未动
+                            Toast.makeText(context, context.getString(R.string.engine_switch_busy), Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onOpenTerminal = onOpenTerminal,
                     visionProviderId = visionProviderId,
                     visionModel = visionModel,

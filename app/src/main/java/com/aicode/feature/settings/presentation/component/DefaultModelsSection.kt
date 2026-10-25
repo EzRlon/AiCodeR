@@ -787,15 +787,13 @@ private fun CliEngineRows(
                 else -> stringResource(R.string.agent_cli_installed, state.version)
             },
             onClick = {
-                onSelect(
-                    when (state.agent.id) {
-                        "claude" -> AgentEngines.CLAUDE_CODE
-                        "codex" -> AgentEngines.CODEX
-                        else -> AgentEngines.OPENCODE
-                    }
-                )
+                // 未安装禁选（对齐旧引擎页门禁）：选中后发送才报错的死路体验不如就地安装
+                if (state.version != null) onSelect(engineIdOf(state.agent.id))
             },
             trailing = {
+                if (defaultEngine == engineIdOf(state.agent.id)) {
+                    Icon(FeatherIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                }
                 when {
                     state.installing || state.checking ->
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -838,6 +836,13 @@ private fun CliEngineRows(
             }
         }
     }
+}
+
+/** CliAgentCatalog 的 agent id → 会话引擎标识。 */
+private fun engineIdOf(agentId: String): String = when (agentId) {
+    "claude" -> AgentEngines.CLAUDE_CODE
+    "codex" -> AgentEngines.CODEX
+    else -> AgentEngines.OPENCODE
 }
 
 /** 引擎行为选项开关行：标题（弱化色）+ 右侧开关；整行可点切换。 */
