@@ -112,7 +112,8 @@ internal fun ModelIconButton(
     engine: String? = null,
     /** CLI 引擎会话的模型名（胶囊与模型页勾选都用它，而非默认 provider 模型）。 */
     cliModel: String? = null,
-    onSelectEngine: (String?) -> Unit = {},
+    /** 返回是否实际切换成功（运行中被拒返回 false，弹窗不滑页）。 */
+    onSelectEngine: (String?) -> Boolean = { true },
     checkClaudeCodeAvailable: suspend () -> Boolean = { false },
     checkClaudeCodeAuth: suspend () -> String? = { null },
     onInstallClaudeCode: () -> Unit = {},
@@ -174,10 +175,7 @@ internal fun ModelIconButton(
             checkCodexAuth = checkCodexAuth,
             checkOpenCodeAvailable = checkOpenCodeAvailable,
             checkOpenCodeAuth = checkOpenCodeAuth,
-            onSelectEngine = { e ->
-                // 选引擎不关弹窗：切换后自动滑到模型页继续选（拍板交互；qa P1-5）
-                onSelectEngine(e)
-            },
+            onSelectEngine = onSelectEngine,
             onInstallClaudeCode = onInstallClaudeCode,
             onInstallCodex = onInstallCodex,
             onInstallOpenCode = onInstallOpenCode,
@@ -323,7 +321,8 @@ internal fun ModelSheet(
     checkCodexAuth: suspend () -> String? = { null },
     checkOpenCodeAvailable: suspend () -> Boolean = { false },
     checkOpenCodeAuth: suspend () -> String? = { null },
-    onSelectEngine: (String?) -> Unit,
+    /** 返回是否实际切换成功（运行中被拒返回 false，弹窗不滑页）。 */
+    onSelectEngine: (String?) -> Boolean,
     onInstallClaudeCode: () -> Unit,
     onInstallCodex: () -> Unit = {},
     onInstallOpenCode: () -> Unit = {},
@@ -382,8 +381,9 @@ internal fun ModelSheet(
                         checkOpenCodeAvailable = checkOpenCodeAvailable,
                         checkOpenCodeAuth = checkOpenCodeAuth,
                         onSelectEngine = { e ->
-                            onSelectEngine(e)
-                            if (e != null) scope.launch { pagerState.animateScrollToPage(0) }
+                            val ok = onSelectEngine(e)
+                            if (ok && e != null) scope.launch { pagerState.animateScrollToPage(0) }
+                            ok
                         },
                         onInstallClaudeCode = onInstallClaudeCode,
                         onInstallCodex = onInstallCodex,
@@ -414,14 +414,15 @@ private fun EnginePage(
     // 三张 CLI 引擎卡同构（探测/认证态/安装/去登录），用描述符循环避免三段复制
     var states by remember { mutableStateOf<Map<String, Pair<Boolean?, String?>>>(emptyMap()) }
     LaunchedEffect(Unit) {
+        // 三引擎并行探测：串行会让最后一张卡的「检测中」时长达三倍（发版 qa P2-4）
         suspend fun probe(id: String, available: suspend () -> Boolean, auth: suspend () -> String?) {
             // 已安装才查登录态：未装时探测无意义
             val a = available()
             states = states + (id to (a to (if (a) auth() else null)))
         }
-        probe(AgentEngines.CLAUDE_CODE, checkClaudeCodeAvailable, checkClaudeCodeAuth)
-        probe(AgentEngines.CODEX, checkCodexAvailable, checkCodexAuth)
-        probe(AgentEngines.OPENCODE, checkOpenCodeAvailable, checkOpenCodeAuth)
+        launch { probe(AgentEngines.CLAUDE_CODE, checkClaudeCodeAvailable, checkClaudeCodeAuth) }
+        launch { probe(AgentEngines.CODEX, checkCodexAvailable, checkCodexAuth) }
+        launch { probe(AgentEngines.OPENCODE, checkOpenCodeAvailable, checkOpenCodeAuth) }
     }
     data class CliEngineDescriptor(
         val id: String,

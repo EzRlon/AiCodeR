@@ -130,7 +130,7 @@ class ClaudeCodeBridge @Inject constructor(
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
         if (transmittableAnthropicProvider() != null) return null
         cachedAuthHint?.let { cached ->
-            if (System.currentTimeMillis() - cachedAuthAtMs < 60_000L) return cached
+            if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
         }
         val hint = probeAuthHint()
         cachedAuthHint = hint
@@ -251,7 +251,10 @@ class ClaudeCodeBridge @Inject constructor(
         }
 
         FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath authViaKey=${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
-        val process = containerEngine.startStdioProcess("claude", args, projectPath, extraEnv, resolveRuntimeProfile())
+        // 进程孵化阻塞，移出主线程（发版 optimizer P1-1）
+        val process = withContext(Dispatchers.IO) {
+            containerEngine.startStdioProcess("claude", args, projectPath, extraEnv, resolveRuntimeProfile())
+        }
 
         // 取消即杀进程：本体停止按钮取消 collect 时，进程必须立刻死，否则僵尸 claude 继续烧 token
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
@@ -537,7 +540,8 @@ class ClaudeCodeBridge @Inject constructor(
 
     /** 每回合确保脚本与 MCP 配置就位（幂等写入，端口/会话可能变化）。 */
     private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) = assetsMutex.withLock {
-        runCatching {
+        withContext(Dispatchers.IO) {
+            runCatching {
             fileAccess.writeFile(bridgeScript(), BRIDGE_SCRIPT_SOURCE, overwrite = true)
             fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
             val bridgeEnv = buildJsonObject {
@@ -593,6 +597,7 @@ class ClaudeCodeBridge @Inject constructor(
                 })
             }
             fileAccess.writeFile(mcpConfigPath(), config.toString(), overwrite = true)
+            }
         }.onFailure { e ->
             FileLogger.e(TAG, "写桥接资产失败", e)
             throw RuntimeException("初始化权限桥资产失败: ${e.message}", e)
@@ -701,7 +706,7 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+function send(obj) { try { process.stdout.write(JSON.stringify(obj) + '\n'); } catch {} }
 
 const TOOLS = [
   { name: 'memory_list', description: 'List memory files (global and current project) with sizes and mtime', inputSchema: { type: 'object', properties: {} } },
@@ -748,6 +753,8 @@ function handleLine(line) {
   let msg; try { msg = JSON.parse(line); } catch { return; }
   if (msg.id === undefined || msg.id === null) return;
   const id = msg.id; const method = msg.method; const params = msg.params || {};
+  // 工具体内任何未捕获异常（EISDIR/磁盘满等）只回 JSON-RPC error，不杀 MCP server 进程（发版 qa P1-2）
+  try {
   if (method === 'initialize') {
     send({ jsonrpc: '2.0', id, result: {
       protocolVersion: params.protocolVersion || '2024-11-05',
@@ -767,12 +774,17 @@ function handleLine(line) {
     if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search') {
       askApp(name, name === 'recall_search' ? Object.assign({ projectRoot: PROJECT }, args) : args).then((res) => {
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.ok ? (res.result || '成功') : ('错误：' + (res.message || '未知错误')) }] } });
+      }).catch((e) => {
+        send({ jsonrpc: '2.0', id, error: { code: -32603, message: '数据通道失败: ' + (e && e.message ? e.message : String(e)) } });
       });
     } else {
       send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unknown tool: ' + name } });
     }
   } else {
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found: ' + method } });
+  }
+  } catch (e) {
+    send({ jsonrpc: '2.0', id, error: { code: -32603, message: '工具执行失败: ' + (e && e.message ? e.message : String(e)) } });
   }
 }
 """
@@ -816,7 +828,7 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+function send(obj) { try { process.stdout.write(JSON.stringify(obj) + '\n'); } catch {} }
 
 function handleLine(line) {
   let msg; try { msg = JSON.parse(line); } catch { return; }
@@ -842,6 +854,8 @@ function handleLine(line) {
         ? { behavior: 'allow', updatedInput: input }
         : { behavior: 'deny', message: res.message || 'denied' };
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(behavior) }] } });
+    }).catch((e) => {
+      send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ behavior: 'deny', message: '权限桥异常: ' + (e && e.message ? e.message : String(e)) }) }] } });
     });
   } else {
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found: ' + method } });

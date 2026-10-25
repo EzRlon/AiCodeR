@@ -203,7 +203,8 @@ internal fun ChatInputBar(
     sessionCliModel: String? = null,
     /** 是否有等待用户裁决的审批（授权/提问/计划）：外框红色快脉冲。 */
     awaitingApproval: Boolean = false,
-    onSelectEngine: (String?) -> Unit = {},
+    /** 返回是否实际切换成功（运行中被拒 false，弹窗不滑页）。 */
+    onSelectEngine: (String?) -> Boolean = { true },
     checkClaudeCodeAvailable: suspend () -> Boolean = { false },
     checkClaudeCodeAuth: suspend () -> String? = { null },
     onInstallClaudeCode: () -> Unit = {},

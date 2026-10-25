@@ -2291,9 +2291,10 @@ class AIAgentViewModel @Inject constructor(
                 return@launch
             }
         }
-        // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话
+        // 兼容历史会话：若会话尚未持久化绑定 providerId/model，发消息时将其固化，避免后续默认模型变动影响已有会话。
+        // CLI 引擎会话跳过：其 model 是 CLI 侧模型名（providerId 恒空），回填会把用户选的 CLI 模型覆盖成内置默认（发版 qa P0-1）
         val currentSession = sessionUseCase.getSessionById(sessionId)
-        if (currentSession != null && (currentSession.providerId.isNullOrBlank() || currentSession.model.isNullOrBlank())) {
+        if (currentSession != null && currentSession.engine == null && (currentSession.providerId.isNullOrBlank() || currentSession.model.isNullOrBlank())) {
             val defaultProviderId = defaultModelSettingsRepository.getDefaultProviderId().takeIf { it.isNotBlank() }
             val defaultModel = defaultModelSettingsRepository.getDefaultModel().takeIf { it.isNotBlank() }
             if (defaultProviderId != null && defaultModel != null) {

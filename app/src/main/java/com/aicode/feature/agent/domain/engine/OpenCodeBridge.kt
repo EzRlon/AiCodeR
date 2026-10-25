@@ -127,7 +127,7 @@ class OpenCodeBridge @Inject constructor(
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
         if (transmittableProvider(ProviderType.OPENAI) != null || transmittableProvider(ProviderType.ANTHROPIC) != null) return null
         cachedAuthHint?.let { cached ->
-            if (System.currentTimeMillis() - cachedAuthAtMs < 60_000L) return cached
+            if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
         }
         val hint = probeAuthHint()
         cachedAuthHint = hint
@@ -246,12 +246,14 @@ class OpenCodeBridge @Inject constructor(
         }
 
         FileLogger.i(TAG, "启动 opencode 桥接进程: resume=$effectiveResume model=$model project=$projectPath authViaEnv=${extraEnv.containsKey("OPENAI_API_KEY") || extraEnv.containsKey("ANTHROPIC_API_KEY")}")
-        // spawn 失败（未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（与 CodexBridge 同修）
-        val process = try {
-            containerEngine.startStdioProcess("opencode", args, projectPath, extraEnv, resolveRuntimeProfile())
-        } catch (e: Exception) {
-            permissionBridgeServer.removeToken(sessionId)
-            throw e
+        // spawn 失败（未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（与 CodexBridge 同修）；孵化阻塞，移出主线程（optimizer P1-1）
+        val process = withContext(Dispatchers.IO) {
+            try {
+                containerEngine.startStdioProcess("opencode", args, projectPath, extraEnv, resolveRuntimeProfile())
+            } catch (e: Exception) {
+                permissionBridgeServer.removeToken(sessionId)
+                throw e
+            }
         }
 
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
@@ -314,10 +316,13 @@ class OpenCodeBridge @Inject constructor(
             if (!gotResult) {
                 val tail = synchronized(stderrTail) { stderrTail.toString() }
                 // opencode 成功回合没有结束事件（v1.19.0 源码：事件循环内部收尾后仅置退出码，不再输出），
-                // EOF 后按退出码判定：0 = 正常完成；非 0 / 零事件走错误分类（保住认证/续接缺失识别）
-                val exited = runCatching { process.waitFor(10, TimeUnit.SECONDS) }.getOrDefault(false)
-                if (!exited) runCatching { process.destroy() }
-                val exitCode = if (exited) runCatching { process.exitValue() }.getOrDefault(-1) else -1
+                // EOF 后按退出码判定：0 = 正常完成；非 0 / 零事件走错误分类（保住认证/续接缺失识别）。
+                // waitFor 最长阻塞 10s，必须移出主线程（发版 qa P1-1）
+                val exitCode = withContext(Dispatchers.IO) {
+                    val exited = runCatching { process.waitFor(10, TimeUnit.SECONDS) }.getOrDefault(false)
+                    if (!exited) runCatching { process.destroy() }
+                    if (exited) runCatching { process.exitValue() }.getOrDefault(-1) else -1
+                }
                 if (exitCode == 0 && acc.emittedAny) {
                     emit(AgentEvent.Completed)
                 } else {

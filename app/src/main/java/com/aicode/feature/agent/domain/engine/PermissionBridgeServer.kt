@@ -104,9 +104,17 @@ class PermissionBridgeServer @Inject constructor(
             val line = reader.readLine() ?: return
             val request = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
                 ?: return
-            // 鉴权：token 由启动方经 env 下发给脚本，脚本原样带回；不匹配即丢弃（防伪造弹窗）
+            // 鉴权：token 由启动方经 env 下发给脚本，脚本原样带回；不匹配即丢弃（防伪造弹窗）。
+            // 回写 deny：否则 mjs 侧会空等满 5 分钟超时（发版 optimizer P2-3）
             if (request["token"]?.jsonPrimitive?.content !in expectedTokens) {
                 FileLogger.w(TAG, "权限桥请求 token 不匹配，丢弃")
+                runCatching {
+                    conn.getOutputStream().bufferedWriter().use { w ->
+                        w.write("{\"behavior\":\"deny\",\"message\":\"token mismatch\"}")
+                        w.write("\n")
+                        w.flush()
+                    }
+                }
                 return
             }
             val sessionId = request["session"]?.jsonPrimitive?.content.orEmpty()

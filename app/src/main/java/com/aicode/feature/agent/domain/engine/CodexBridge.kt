@@ -130,7 +130,7 @@ class CodexBridge @Inject constructor(
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
         if (transmittableOpenAIProvider() != null) return null
         cachedAuthHint?.let { cached ->
-            if (System.currentTimeMillis() - cachedAuthAtMs < 60_000L) return cached
+            if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
         }
         val hint = probeAuthHint()
         cachedAuthHint = hint
@@ -237,6 +237,11 @@ class CodexBridge @Inject constructor(
                     continue
                 }
                 if (server.isStdio) {
+                    // env 键拼进 TOML 键路径，含非法字符会使整条 -c 解析失败（发版 qa P2-4）
+                    if (server.env.keys.any { !it.matches(Regex("[A-Za-z0-9_]+")) }) {
+                        FileLogger.w(TAG, "MCP 服务器 ${server.name} 的 env 键名非法，跳过映射")
+                        continue
+                    }
                     add("-c"); add("mcp_servers.${server.name}.command=${tomlString(server.command!!)}")
                     if (server.args.isNotEmpty()) {
                         val tomlArgs = server.args.joinToString(",") { tomlString(it) }
@@ -277,12 +282,14 @@ class CodexBridge @Inject constructor(
         val prompt = userRequest + attachmentSuffix(attachments)
 
         FileLogger.i(TAG, "启动 codex 桥接进程: resume=$effectiveResume model=$model project=$projectPath authViaKey=${extraEnv.containsKey("OPENAI_API_KEY")}")
-        // spawn 失败（codex 未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（qa P2-1）
-        val process = try {
-            containerEngine.startStdioProcess("codex", args, projectPath, extraEnv, resolveRuntimeProfile())
-        } catch (e: Exception) {
-            permissionBridgeServer.removeToken(sessionId)
-            throw e
+        // spawn 失败（codex 未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（qa P2-1）；孵化阻塞，移出主线程（optimizer P1-1）
+        val process = withContext(Dispatchers.IO) {
+            try {
+                containerEngine.startStdioProcess("codex", args, projectPath, extraEnv, resolveRuntimeProfile())
+            } catch (e: Exception) {
+                permissionBridgeServer.removeToken(sessionId)
+                throw e
+            }
         }
 
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
@@ -341,7 +348,7 @@ class CodexBridge @Inject constructor(
 
             if (!gotResult) {
                 val tail = synchronized(stderrTail) { stderrTail.toString() }
-                throw classifyEarlyExit(tail)
+                throw classifyEarlyExit(tail, acc.lastError)
             }
         } finally {
             killOnCancel?.dispose()
@@ -354,9 +361,9 @@ class CodexBridge @Inject constructor(
         }
     }
 
-    /** 无 result 行即退出：区分「续接会话不存在」（可重试）与认证/其它失败。 */
-    private fun classifyEarlyExit(stderrTail: String): Exception {
-        val lower = stderrTail.lowercase()
+    /** 无 result 行即退出：区分「续接会话不存在」（可重试）与认证/其它失败；[lastStdoutError] 兕住只走 stdout 的致命错误（发版 qa P2-2）。 */
+    private fun classifyEarlyExit(stderrTail: String, lastStdoutError: String? = null): Exception {
+        val lower = (stderrTail + "\n" + (lastStdoutError ?: "")).lowercase()
         if ("api key" in lower || "login" in lower || "unauthorized" in lower || "not logged in" in lower || "401" in lower) {
             return RuntimeException(
                 "Codex 尚未认证：请在终端打开一次交互式 codex 并完成 ChatGPT 登录（或配置 OPENAI_API_KEY），" +
@@ -378,6 +385,8 @@ class CodexBridge @Inject constructor(
         /** item id → 展示工具名：item.completed 回来时补齐 Finished 的 toolName。 */
         val toolNames = mutableMapOf<String, String>()
         var threadId: String? = null
+        /** 最近一条顶层 error 文本：EOF 分类时兕底（发版 qa P2-2）。 */
+        var lastError: String? = null
         var emittedAny = false
     }
 
@@ -393,8 +402,12 @@ class CodexBridge @Inject constructor(
                 emptyList()
             }
             "turn.started" -> emptyList()
-            // 顶层 error 多为重连等瞬态（实测 403 重连流），只有 turn.failed 才是回合失败
-            "error" -> emptyList()
+            // 顶层 error 多为重连等瞬态（实测 403 重连流），只有 turn.failed 才是回合失败；
+            // 但致命错误若只走 stdout（无 turn.failed），EOF 分类时用它兕底（发版 qa P2-2）
+            "error" -> {
+                acc.lastError = obj["message"]?.jsonPrimitive?.contentOrNull ?: acc.lastError
+                emptyList()
+ }
             "item.started" -> parseItemStarted(obj, acc)
             "item.completed" -> parseItemCompleted(obj, acc)
             "turn.completed" -> listOf(AgentEvent.Completed)
@@ -535,11 +548,13 @@ class CodexBridge @Inject constructor(
      */
     private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) =
         assetsMutex.withLock {
-            runCatching {
-                fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
-            }.onFailure { e ->
-                FileLogger.e(TAG, "写桥接资产失败", e)
-                throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
+                }.onFailure { e ->
+                    FileLogger.e(TAG, "写桥接资产失败", e)
+                    throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
+                }
             }
         }
 
