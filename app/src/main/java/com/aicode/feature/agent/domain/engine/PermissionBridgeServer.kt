@@ -182,12 +182,20 @@ class PermissionBridgeServer @Inject constructor(
                 val target = input["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 if (annotationId.isBlank()) return errData("缺少 annotationId")
                 val status = runCatching { AnnotationStatus.valueOf(target) }.getOrNull()
-                    ?: return errData("target 非法，可选 SENT / FIXING / REVIEW")
+                    ?: return errData("target 非法，可选 FIXING / REVIEW")
                 if (status == AnnotationStatus.PENDING || status == AnnotationStatus.CLOSED) {
-                    return errData("只能推进到 SENT / FIXING / REVIEW（待确认与关闭由用户手动）")
+                    return errData("只能推进到 FIXING / REVIEW（待确认与关闭由用户手动）")
                 }
-                val message = runCatching { fixLedgerRepository.advanceLinked(annotationId, status) }.getOrNull()
-                okData(message ?: "已推进到 ${status.name}")
+                // advanceLinked 在「标注不存在 / 不能后退 / 重复推进」时返回 null——必须如实报错，不能报假成功
+                val message = try {
+                    fixLedgerRepository.advanceLinked(annotationId, status)
+                } catch (e: Exception) {
+                    return errData("推进失败：" + (e.message ?: e.javaClass.simpleName))
+                }
+                if (message == null) {
+                    return errData("无法推进：标注不存在，或状态不能后退/重复推进（当前可能已在目标状态之后）")
+                }
+                okData(message)
             }
             else -> errData("未知数据工具: $tool")
         }

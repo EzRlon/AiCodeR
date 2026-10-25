@@ -90,6 +90,10 @@ class ClaudeCodeBridge @Inject constructor(
     @Volatile private var cachedAvailable: Boolean? = null
     @Volatile private var cachedAtMs: Long = 0
 
+    /** 认证探测缓存（60 秒 TTL）：每条消息都拉容器进程跑 test 代价过高，登录态变化频率极低。 */
+    @Volatile private var cachedAuthHint: String? = null
+    @Volatile private var cachedAuthAtMs: Long = 0
+
     /** 安装后失效可用性缓存：下次进引擎页立即重新检测（用户反馈：装完仍显示未安装）。 */
     fun invalidateAvailability() {
         cachedAvailable = null
@@ -121,16 +125,28 @@ class ClaudeCodeBridge @Inject constructor(
     suspend fun authHint(): String? {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
         if (transmittableAnthropicProvider() != null) return null
+        cachedAuthHint?.let { cached ->
+            if (System.currentTimeMillis() - cachedAuthAtMs < 60_000L) return cached
+        }
+        val hint = probeAuthHint()
+        cachedAuthHint = hint
+        cachedAuthAtMs = System.currentTimeMillis()
+        return hint
+    }
+
+    private suspend fun probeAuthHint(): String? {
+        // 容器内展开 $HOME，避免硬编码 /root 与 PathHomeResolver 的 home 解析约定不一致
         val probe = runCatching {
             containerEngine.runCommandSyncIfReady(
-                command = "test -f /root/.claude/.credentials.json && echo present || echo absent",
+                command = "test -f \"\$HOME/.claude/.credentials.json\" && echo present || echo absent",
                 projectPath = null,
                 timeoutMs = 8_000L
             )
         }.getOrNull() ?: return null // 容器未就绪等场景不拦截，交给可用性/流中错误链路
         if (probe.output.contains("present")) return null
         return "Claude Code 尚未登录：请二选一——① 在终端执行 aicode（或直接运行 claude）完成一次交互式登录；" +
-            "② 在 设置 → 模型 添加 Anthropic 类型的提供商并填入 API Key，切引擎时会自动透传给 claude。"
+            "② 在 设置 → 模型 添加 Anthropic 类型的提供商并填入 API Key，切引擎时会自动透传给 claude。" +
+            "若你已在容器内自行配置 ANTHROPIC_API_KEY，可忽略本提示。"
     }
 
     /** App 内已配置可用 Key 的 Anthropic 提供商（用于透传；无则 null，claude 走自身 oauth）。 */
@@ -214,10 +230,13 @@ class ClaudeCodeBridge @Inject constructor(
             put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
             // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代
             transmittableAnthropicProvider()?.let { p ->
-                put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
-                val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
-                if (base.isNotEmpty() && !base.contains("api.anthropic.com")) {
-                    put("ANTHROPIC_BASE_URL", base)
+                put("ANTHROPIC_API_KEY", p.firstUsableApiKey) // 多 Key 模式恒取首把可用 Key，与 App 内轮换调度不同步（见 P2-6）
+                // useFullUrl 的 baseUrl 是完整 endpoint（含路径），无法安全还原 base，只透 key 不透 URL
+                if (!p.useFullUrl) {
+                    val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
+                    if (base.isNotEmpty() && !base.contains("api.anthropic.com")) {
+                        put("ANTHROPIC_BASE_URL", base)
+                    }
                 }
             }
         }
@@ -553,8 +572,10 @@ function memoryList() {
 }
 
 function resolveMemory(p) {
-  const r = path.resolve(p);
-  if (!MEMORY_DIRS.some((dir) => r.startsWith(path.resolve(dir) + path.sep))) return null;
+  // realpathSync 归一后再比对前缀：挡 .. 与目录内符号链接逃逸（纵深防御，claude 本就有完整 shell）
+  let r;
+  try { r = fs.realpathSync(path.resolve(p)); } catch { return null; }
+  if (!MEMORY_DIRS.some((dir) => { try { return r.startsWith(fs.realpathSync(dir) + path.sep); } catch { return false; } })) return null;
   return r;
 }
 
@@ -618,7 +639,7 @@ const TOOLS = [
   { name: 'skills_list', description: 'List installed skills (name + description, global and project)', inputSchema: { type: 'object', properties: {} } },
   { name: 'skill_read', description: 'Read one skill SKILL.md by skill name', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   { name: 'ledger_list', description: 'List annotation ledger and fix ledger entries with statuses (queried via the AiCode app)', inputSchema: { type: 'object', properties: {} } },
-  { name: 'ledger_advance', description: 'Advance an annotation and its linked fix-ledger entry to SENT/FIXING/REVIEW via the AiCode app (closing is user-only)', inputSchema: { type: 'object', properties: { annotationId: { type: 'string' }, target: { type: 'string', enum: ['SENT', 'FIXING', 'REVIEW'] } }, required: ['annotationId', 'target'] } }
+  { name: 'ledger_advance', description: 'Advance an annotation and its linked fix-ledger entry to FIXING/REVIEW via the AiCode app (closing is user-only)', inputSchema: { type: 'object', properties: { annotationId: { type: 'string' }, target: { type: 'string', enum: ['FIXING', 'REVIEW'] } }, required: ['annotationId', 'target'] } }
 ];
 
 function toolsCall(name, args) {
