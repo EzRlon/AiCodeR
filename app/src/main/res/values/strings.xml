@@ -470,6 +470,10 @@
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_codex_hint">Codex 说明：无交互审批，命令在 workspace-write 沙箱内自动执行；文本与工具结果为整段返回，无逐字流式</string>
     <string name="engine_codex_install_started">已在新终端开始安装 Codex，跑完会发通知；装完重新打开引擎页即可检测到</string>
+    <string name="engine_opencode_not_authenticated">已安装 · 未配置凭据（或未配置可透传的 OpenAI/Anthropic Key）</string>
+    <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
+    <string name="engine_opencode_hint">OpenCode 说明：权限请求自动批准（未被显式 deny 时）；文本与工具结果为整段返回，无逐字流式</string>
+    <string name="engine_opencode_install_started">已在新终端开始安装 OpenCode，跑完会发通知；装完重新打开引擎页即可检测到</string>
     <string name="settings_default_engine_group">新会话默认引擎</string>
     <string name="settings_default_engine_claude_sub">新建会话默认用 Claude Code（需已安装）</string>
 

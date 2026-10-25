@@ -7,4 +7,7 @@ object AgentEngines {
 
     /** OpenAI Codex CLI 桥接（引擎切换三期）。 */
     const val CODEX = "codex"
+
+    /** OpenCode CLI 桥接（引擎切换三期）。 */
+    const val OPENCODE = "opencode"
 }

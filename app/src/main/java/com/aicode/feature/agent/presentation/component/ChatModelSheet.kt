@@ -119,6 +119,9 @@ internal fun ModelIconButton(
     checkCodexAvailable: suspend () -> Boolean = { false },
     checkCodexAuth: suspend () -> String? = { null },
     onInstallCodex: () -> Unit = {},
+    checkOpenCodeAvailable: suspend () -> Boolean = { false },
+    checkOpenCodeAuth: suspend () -> String? = { null },
+    onInstallOpenCode: () -> Unit = {},
     onSelectCliModel: (String) -> Unit = {},
     onOpenAgentCli: () -> Unit = {}
 ) {
@@ -126,9 +129,17 @@ internal fun ModelIconButton(
     val effectiveShowSheet = showSheet || forceOpenSheet
 
     if (engine != null) {
-        // CLI 引擎会话：显示「CC·/Codex·模型」文本胶囊（拍板定稿的底栏/输入栏文案形态）
-        val capsulePrefix = if (engine == AgentEngines.CODEX) "Codex·" else "CC·"
-        val capsuleModel = cliModel?.takeIf { it.isNotBlank() }?.takeIf { it != "default" } ?: if (engine == AgentEngines.CODEX) "default" else "claude"
+        // CLI 引擎会话：显示「CC·/Codex·/OpenCode·模型」文本胶囊（拍板定稿的底栏/输入栏文案形态）
+        val capsulePrefix = when (engine) {
+            AgentEngines.CODEX -> "Codex·"
+            AgentEngines.OPENCODE -> "OpenCode·"
+            else -> "CC·"
+        }
+        val fallbackModel = when (engine) {
+            AgentEngines.CODEX, AgentEngines.OPENCODE -> "default"
+            else -> "claude"
+        }
+        val capsuleModel = cliModel?.takeIf { it.isNotBlank() && it != "default" } ?: fallbackModel
         Surface(
             shape = RoundedCornerShape(Radius.pill),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -161,12 +172,15 @@ internal fun ModelIconButton(
             checkClaudeCodeAuth = checkClaudeCodeAuth,
             checkCodexAvailable = checkCodexAvailable,
             checkCodexAuth = checkCodexAuth,
+            checkOpenCodeAvailable = checkOpenCodeAvailable,
+            checkOpenCodeAuth = checkOpenCodeAuth,
             onSelectEngine = { e ->
                 // 选引擎不关弹窗：切换后自动滑到模型页继续选（拍板交互；qa P1-5）
                 onSelectEngine(e)
             },
             onInstallClaudeCode = onInstallClaudeCode,
             onInstallCodex = onInstallCodex,
+            onInstallOpenCode = onInstallOpenCode,
             onOpenAgentCli = {
                 onOpenAgentCli()
                 showSheet = false
@@ -307,9 +321,12 @@ internal fun ModelSheet(
     checkClaudeCodeAuth: suspend () -> String? = { null },
     checkCodexAvailable: suspend () -> Boolean = { false },
     checkCodexAuth: suspend () -> String? = { null },
+    checkOpenCodeAvailable: suspend () -> Boolean = { false },
+    checkOpenCodeAuth: suspend () -> String? = { null },
     onSelectEngine: (String?) -> Unit,
     onInstallClaudeCode: () -> Unit,
     onInstallCodex: () -> Unit = {},
+    onInstallOpenCode: () -> Unit = {},
     onOpenAgentCli: () -> Unit = {},
     onSelectModel: (String, String) -> Unit,
     onSelectCliModel: (String) -> Unit,
@@ -362,12 +379,15 @@ internal fun ModelSheet(
                         checkClaudeCodeAuth = checkClaudeCodeAuth,
                         checkCodexAvailable = checkCodexAvailable,
                         checkCodexAuth = checkCodexAuth,
+                        checkOpenCodeAvailable = checkOpenCodeAvailable,
+                        checkOpenCodeAuth = checkOpenCodeAuth,
                         onSelectEngine = { e ->
                             onSelectEngine(e)
                             if (e != null) scope.launch { pagerState.animateScrollToPage(0) }
                         },
                         onInstallClaudeCode = onInstallClaudeCode,
                         onInstallCodex = onInstallCodex,
+                        onInstallOpenCode = onInstallOpenCode,
                         onOpenAgentCli = onOpenAgentCli
                     )
                 }
@@ -383,22 +403,37 @@ private fun EnginePage(
     checkClaudeCodeAuth: suspend () -> String?,
     checkCodexAvailable: suspend () -> Boolean,
     checkCodexAuth: suspend () -> String?,
+    checkOpenCodeAvailable: suspend () -> Boolean,
+    checkOpenCodeAuth: suspend () -> String?,
     onSelectEngine: (String?) -> Unit,
     onInstallClaudeCode: () -> Unit,
     onInstallCodex: () -> Unit = {},
+    onInstallOpenCode: () -> Unit = {},
     onOpenAgentCli: () -> Unit = {}
 ) {
-    var claudeAvailable by remember { mutableStateOf<Boolean?>(null) }
-    var claudeAuthHint by remember { mutableStateOf<String?>(null) }
-    var codexAvailable by remember { mutableStateOf<Boolean?>(null) }
-    var codexAuthHint by remember { mutableStateOf<String?>(null) }
+    // 三张 CLI 引擎卡同构（探测/认证态/安装/去登录），用描述符循环避免三段复制
+    var states by remember { mutableStateOf<Map<String, Pair<Boolean?, String?>>>(emptyMap()) }
     LaunchedEffect(Unit) {
-        claudeAvailable = checkClaudeCodeAvailable()
-        // 已安装才查登录态：未装时探测无意义
-        if (claudeAvailable == true) claudeAuthHint = checkClaudeCodeAuth()
-        codexAvailable = checkCodexAvailable()
-        if (codexAvailable == true) codexAuthHint = checkCodexAuth()
+        suspend fun probe(id: String, available: suspend () -> Boolean, auth: suspend () -> String?) {
+            // 已安装才查登录态：未装时探测无意义
+            val a = available()
+            states = states + (id to (a to (if (a) auth() else null)))
+        }
+        probe(AgentEngines.CLAUDE_CODE, checkClaudeCodeAvailable, checkClaudeCodeAuth)
+        probe(AgentEngines.CODEX, checkCodexAvailable, checkCodexAuth)
+        probe(AgentEngines.OPENCODE, checkOpenCodeAvailable, checkOpenCodeAuth)
     }
+    data class CliEngineDescriptor(
+        val id: String,
+        val title: String,
+        val notAuthenticatedRes: Int,
+        val hintRes: Int?
+    )
+    val descriptors = listOf(
+        CliEngineDescriptor(AgentEngines.CLAUDE_CODE, "Claude Code", R.string.engine_claude_not_authenticated, null),
+        CliEngineDescriptor(AgentEngines.CODEX, "Codex", R.string.engine_codex_not_authenticated, R.string.engine_codex_hint),
+        CliEngineDescriptor(AgentEngines.OPENCODE, "OpenCode", R.string.engine_opencode_not_authenticated, R.string.engine_opencode_hint)
+    )
 
     Column(
         modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),
@@ -410,62 +445,47 @@ private fun EnginePage(
             selected = engine == null,
             onClick = { onSelectEngine(null) }
         )
-        EngineCard(
-            title = "Claude Code",
-            subtitle = when {
-                claudeAvailable == false -> stringResource(R.string.engine_claude_missing)
-                claudeAvailable == true && claudeAuthHint != null -> stringResource(R.string.engine_claude_not_authenticated)
-                claudeAvailable == true -> stringResource(R.string.engine_claude_ready)
-                else -> stringResource(R.string.engine_detecting)
-            },
-            selected = engine == AgentEngines.CLAUDE_CODE,
-            onClick = { if (claudeAvailable != false && claudeAuthHint == null) onSelectEngine(AgentEngines.CLAUDE_CODE) },
-            trailingAction = when {
-                claudeAvailable == false -> {
-                    { TextButton(onClick = onInstallClaudeCode) { Text(stringResource(R.string.engine_install)) } }
-                }
+        descriptors.forEach { d ->
+            val (available, authHint) = states[d.id] ?: (null to null)
+            val onInstall = when (d.id) {
+                AgentEngines.CLAUDE_CODE -> onInstallClaudeCode
+                AgentEngines.CODEX -> onInstallCodex
+                else -> onInstallOpenCode
+            }
+            EngineCard(
+                title = d.title,
+                subtitle = when {
+                    available == false -> stringResource(R.string.engine_claude_missing)
+                    available == true && authHint != null -> stringResource(d.notAuthenticatedRes)
+                    available == true -> stringResource(R.string.engine_claude_ready)
+                    else -> stringResource(R.string.engine_detecting)
+                },
+                selected = engine == d.id,
                 // 已装未登录：选中无意义（发送会被预检拦下），引导先去终端登录
-                claudeAvailable == true && claudeAuthHint != null -> {
-                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_go_login)) } }
+                onClick = { if (available != false && authHint == null) onSelectEngine(d.id) },
+                trailingAction = when {
+                    available == false -> {
+                        { TextButton(onClick = onInstall) { Text(stringResource(R.string.engine_install)) } }
+                    }
+                    available == true && authHint != null -> {
+                        { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_go_login)) } }
+                    }
+                    available == true -> {
+                        { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }
+                    }
+                    else -> null
                 }
-                claudeAvailable == true -> {
-                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }
-                }
-                else -> null
-            }
-        )
-        EngineCard(
-            title = "Codex",
-            subtitle = when {
-                codexAvailable == false -> stringResource(R.string.engine_claude_missing)
-                codexAvailable == true && codexAuthHint != null -> stringResource(R.string.engine_codex_not_authenticated)
-                codexAvailable == true -> stringResource(R.string.engine_claude_ready)
-                else -> stringResource(R.string.engine_detecting)
-            },
-            selected = engine == AgentEngines.CODEX,
-            onClick = { if (codexAvailable != false && codexAuthHint == null) onSelectEngine(AgentEngines.CODEX) },
-            trailingAction = when {
-                codexAvailable == false -> {
-                    { TextButton(onClick = onInstallCodex) { Text(stringResource(R.string.engine_install)) } }
-                }
-                codexAvailable == true && codexAuthHint != null -> {
-                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_go_login)) } }
-                }
-                codexAvailable == true -> {
-                    { TextButton(onClick = onOpenAgentCli) { Text(stringResource(R.string.engine_open_manager)) } }
-                }
-                else -> null
-            }
-        )
+            )
+        }
         Text(
             text = stringResource(R.string.engine_limits_hint),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs)
         )
-        if (engine == AgentEngines.CODEX) {
+        descriptors.firstOrNull { it.id == engine }?.hintRes?.let { res ->
             Text(
-                text = stringResource(R.string.engine_codex_hint),
+                text = stringResource(res),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs)
@@ -525,11 +545,14 @@ private fun EngineCard(
 /** CLI 引擎的模型页：一行一个 CLI 侧模型名；历史由桥接自动续接（App 会话与 CLI 侧会话自动对齐）。 */
 @Composable
 private fun CliModelPage(engine: String, currentModel: String, onSelect: (String) -> Unit) {
-    val models = if (engine == AgentEngines.CODEX) {
-        // default = 不透传 -m，跟随 CLI 侧配置的默认模型（Codex 模型名变动频繁，不硬编码更多）
-        listOf("default", "gpt-5.3-codex", "gpt-5.1-codex-max", "gpt-5-codex-mini")
-    } else {
-        listOf("sonnet", "opus", "haiku")
+    val models = when (engine) {
+        AgentEngines.CODEX ->
+            // default = 不透传 -m，跟随 CLI 侧配置的默认模型（Codex 模型名变动频繁，不硬编码更多）
+            listOf("default", "gpt-5.3-codex", "gpt-5.1-codex-max", "gpt-5-codex-mini")
+        AgentEngines.OPENCODE ->
+            // default 同上；其余为 models.dev 常用 provider/model 形态
+            listOf("default", "openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-5")
+        else -> listOf("sonnet", "opus", "haiku")
     }
     Column(
         modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp),

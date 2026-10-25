@@ -469,6 +469,10 @@
     <string name="engine_codex_unavailable">Codex engine is not ready. Install Codex in the container first, or switch this session back to the built-in engine.</string>
     <string name="engine_codex_hint">Codex specifics: no interactive approvals — commands run automatically inside the workspace-write sandbox; text and tool results arrive in whole blocks, without token-by-token streaming.</string>
     <string name="engine_codex_install_started">A terminal has started installing Codex. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
+    <string name="engine_opencode_not_authenticated">Installed · no credentials (or no OpenAI/Anthropic key to pass through)</string>
+    <string name="engine_opencode_unavailable">OpenCode engine is not ready. Install OpenCode in the container first, or switch this session back to the built-in engine.</string>
+    <string name="engine_opencode_hint">OpenCode specifics: permission requests are auto-approved unless explicitly denied; text and tool results arrive in whole blocks, without token-by-token streaming.</string>
+    <string name="engine_opencode_install_started">A terminal has started installing OpenCode. You will get a notification when it finishes. Reopen the engine page to re-detect.</string>
     <string name="settings_default_engine_group">Default engine for new sessions</string>
     <string name="settings_default_engine_claude_sub">New sessions use Claude Code by default (must be installed)</string>
 

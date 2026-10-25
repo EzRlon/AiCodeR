@@ -236,6 +236,7 @@ class AIAgentViewModel @Inject constructor(
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
     private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
+    private val openCodeBridge: com.aicode.feature.agent.domain.engine.OpenCodeBridge,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -1075,11 +1076,40 @@ class AIAgentViewModel @Inject constructor(
     /** Codex 引擎是否就绪（本地容器 + CLI 已安装）。 */
     suspend fun isCodexAvailable(): Boolean = codexBridge.isAvailable()
 
+    /** OpenCode 引擎是否就绪（本地容器 + CLI 已安装）。 */
+    suspend fun isOpenCodeAvailable(): Boolean = openCodeBridge.isAvailable()
+
     /** 引擎卡片认证态：null = 已就绪（oauth 或将透传 App 内 key）；非 null = 引导文案。 */
     suspend fun claudeCodeAuthHint(): String? = claudeCodeBridge.authHint()
 
     /** Codex 引擎卡片认证态：null = 已就绪；非 null = 引导文案。 */
     suspend fun codexAuthHint(): String? = codexBridge.authHint()
+
+    /** OpenCode 引擎卡片认证态：null = 已就绪；非 null = 引导文案。 */
+    suspend fun openCodeAuthHint(): String? = openCodeBridge.authHint()
+
+    /** 一键安装 OpenCode：开终端标签跑安装命令；装完失效可用性缓存，回引擎页立即可检测。 */
+    fun installOpenCode() {
+        viewModelScope.launch {
+            runCatching { openCodeBridge.installCli() }
+                .onSuccess {
+                    openCodeBridge.invalidateAvailability()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.engine_opencode_install_started),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                .onFailure {
+                    openCodeBridge.invalidateAvailability()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.engine_install_failed, it.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
 
     /** 一键安装 Codex：开终端标签跑安装命令；装完失效可用性缓存，回引擎页立即可检测。 */
     fun installCodex() {
@@ -2417,6 +2447,28 @@ class AIAgentViewModel @Inject constructor(
                             }
                         } else {
                             codexBridge.runTurn(
+                                sessionId = sessionId,
+                                userRequest = modelRequest,
+                                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
+                                model = currentSession.model,
+                                resume = true
+                            )
+                        }
+                    }
+                }
+                AgentEngines.OPENCODE -> {
+                    if (!openCodeBridge.isAvailable()) {
+                        kotlinx.coroutines.flow.flow {
+                            emit(AgentEvent.Failed(error = context.getString(R.string.engine_opencode_unavailable)))
+                        }
+                    } else {
+                        val authHint = openCodeBridge.authHint()
+                        if (authHint != null) {
+                            kotlinx.coroutines.flow.flow {
+                                emit(AgentEvent.Failed(error = authHint))
+                            }
+                        } else {
+                            openCodeBridge.runTurn(
                                 sessionId = sessionId,
                                 userRequest = modelRequest,
                                 projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },

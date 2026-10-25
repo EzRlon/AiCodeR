@@ -1,0 +1,457 @@
+package com.aicode.feature.agent.domain.engine
+
+import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
+import com.aicode.feature.agent.domain.cliagent.CliAgentManager
+import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
+import com.aicode.feature.settings.data.repository.ExecutionMode
+import com.aicode.feature.settings.domain.model.ProviderType
+import com.aicode.feature.settings.domain.repository.AIProviderRepository
+import com.aicode.feature.agent.domain.workflow.AgentEvent
+import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.PathHomeResolver
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * OpenCode CLI 桥接（引擎切换三期）。
+ *
+ * 每个用户回合在 PRoot 容器内起一个 headless 进程：
+ * `opencode run --format json --auto --thinking [--dir 项目根] [-s <sessionID>] [-m provider/model]`
+ * 提示词经 stdin 传入（位置参数留空），把 stdout 的 NDJSON 事件翻译成 [AgentEvent]，
+ * 落库 / 停止 / 队列 / UI 状态机全部复用本体链路。事件形态经 opencode 1.19.0 实测与
+ * 仓库 noninteractive.ts 源码核对：step_start / text / reasoning / tool_use / step_finish / error，
+ * 每行都带 sessionID（新会话首轮从事件里取，持久化映射后续接 `-s`）。
+ *
+ * 与 Claude Code 的差异（协议决定，非缺漏）：
+ * - 文本按块整发（session.text.ended 触发），无逐 token 增量；工具调用也只在成败后一次性到达，
+ *   翻译层立即补发 Started+Finished 配对。
+ * - 权限无交互审批：`--auto` 自动批准未被显式 deny 的请求；工具成败以 tool_use 事件外显。
+ * - MCP 无命令行 flag：经 `OPENCODE_CONFIG_CONTENT` 内联 JSON 挂 aicode_bridge（实测会拉起 server；
+ *   该变量按官方优先级链合并、不整体替换用户配置，但同键 mcp 会被本桥覆盖）。
+ * - 续会话：opencode 不接受外部指定 session id，App sessionId → `ses_...` 映射持久化在桥接目录。
+ */
+@Singleton
+class OpenCodeBridge @Inject constructor(
+    private val containerEngine: LinuxContainerEngine,
+    private val permissionBridgeServer: PermissionBridgeServer,
+    private val cliAgentManager: CliAgentManager,
+    private val fileAccess: FileAccessProvider,
+    private val pathHomeResolver: PathHomeResolver,
+    private val containerSettingsRepository: ContainerSettingsRepository,
+    private val aiProviderRepository: AIProviderRepository
+) {
+    private companion object {
+        const val TAG = "OpenCodeBridge"
+
+        const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
+
+        /** App sessionId → opencode sessionID 映射文件（容器内路径）。 */
+        const val SESSIONS_FILE = "/opencode-sessions.json"
+
+        const val MCP_SERVER_NAME = "aicode_bridge"
+
+        const val IDLE_TIMEOUT_MS = 30 * 60_000L
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
+    private val assetsMutex = Mutex()
+
+    private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
+    private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
+    private fun sessionsPath(): String = bridgeDir() + SESSIONS_FILE
+
+    private val sessionIds = ConcurrentHashMap<String, String>()
+
+    @Volatile private var cachedAvailable: Boolean? = null
+    @Volatile private var cachedAtMs: Long = 0
+
+    @Volatile private var cachedAuthHint: String? = null
+    @Volatile private var cachedAuthAtMs: Long = 0
+
+    fun invalidateAvailability() {
+        cachedAvailable = null
+        cachedAtMs = 0
+    }
+
+    /** 引擎是否可用：本地 PRoot 容器 + opencode 已安装。远程 SSH 不支持。 */
+    suspend fun isAvailable(): Boolean {
+        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
+        cachedAvailable?.let { cached ->
+            if (System.currentTimeMillis() - cachedAtMs < 5 * 60_000L) return cached
+        }
+        val opencode = CliAgentCatalog.ALL.firstOrNull { it.command == "opencode" } ?: return false
+        val available = cliAgentManager.detectVersion(opencode) != null
+        cachedAvailable = available
+        cachedAtMs = System.currentTimeMillis()
+        return available
+    }
+
+    /** 一键安装：复用 CLI 智能体管理器（目录里已锁定实测版本 1.19.0）。 */
+    suspend fun installCli(): String =
+        cliAgentManager.install(CliAgentCatalog.ALL.first { it.command == "opencode" })
+
+    /**
+     * 认证状态：null = 已可用（auth.json 凭据在，或将透传 App 内 OpenAI/Anthropic key）；
+     * 非 null = 未认证引导文案。探测为轻量 test 命令，不拉起 opencode。
+     */
+    suspend fun authHint(): String? {
+        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (transmittableProvider(ProviderType.OPENAI) != null || transmittableProvider(ProviderType.ANTHROPIC) != null) return null
+        cachedAuthHint?.let { cached ->
+            if (System.currentTimeMillis() - cachedAuthAtMs < 60_000L) return cached
+        }
+        val hint = probeAuthHint()
+        cachedAuthHint = hint
+        cachedAuthAtMs = System.currentTimeMillis()
+        return hint
+    }
+
+    private suspend fun probeAuthHint(): String? {
+        val probe = runCatching {
+            containerEngine.runCommandSyncIfReady(
+                command = "test -f \"\$HOME/.local/share/opencode/auth.json\" && echo present || echo absent",
+                projectPath = null,
+                timeoutMs = 8_000L
+            )
+        }.getOrNull() ?: return null // 容器未就绪等场景不拦截，交给可用性/流中错误链路
+        if (probe.output.contains("present")) return null
+        return "OpenCode 尚未登录：请二选一——① 在终端执行 opencode auth login 配置 provider 凭据；" +
+            "② 在 设置 → 模型 添加 OpenAI 或 Anthropic 类型提供商并填入 API Key，切引擎时会自动透传。" +
+            "若你已在容器内自行配置环境变量或 opencode.json 自定义 provider，可忽略本提示。"
+    }
+
+    /** App 内已配置可用 Key 的指定类型提供商（用于透传；无则 null）。 */
+    private suspend fun transmittableProvider(type: ProviderType): com.aicode.feature.settings.domain.model.AIProviderConfig? =
+        runCatching {
+            aiProviderRepository.getAllProviders().first().firstOrNull {
+                it.type == type && it.isEnabled && it.hasUsableApiKey
+            }
+        }.getOrNull()
+
+    private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
+        val id = containerSettingsRepository.activeProfileIdFlow.first()
+        val profiles = containerSettingsRepository.customProfilesFlow.first()
+        return profiles.firstOrNull { it.id == id } ?: com.aicode.feature.agent.domain.container.ContainerProfile.BUILTIN_ALPINE
+    }
+
+    /** 跑一个用户回合。[resume] 为 true 时先尝试 `-s` 续接（映射缺失或续接失败自动转全新回合）。 */
+    fun runTurn(
+        sessionId: String,
+        userRequest: String,
+        projectPath: String?,
+        model: String?,
+        resume: Boolean
+    ): Flow<AgentEvent> = flow {
+        if (resume) {
+            var emittedAny = false
+            try {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true).collect {
+                    emittedAny = true
+                    emit(it)
+                }
+            } catch (e: ResumeSessionMissingException) {
+                // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
+                if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
+                FileLogger.w(TAG, "opencode 续接会话缺失，转全新回合重试: ${e.message}")
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+            }
+        } else {
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false).collect { emit(it) }
+        }
+    }.catch { e ->
+        emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
+    }
+
+    private fun runTurnOnce(
+        sessionId: String,
+        userRequest: String,
+        projectPath: String?,
+        model: String?,
+        resume: Boolean
+    ): Flow<AgentEvent> = flow {
+        val port = permissionBridgeServer.ensureStarted(token = sessionId)
+        writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+
+        val resumeSessionId = if (resume) readMappedSessionId(sessionId) else null
+        val effectiveResume = resume && resumeSessionId != null
+        if (resume && resumeSessionId == null) {
+            FileLogger.i(TAG, "无 opencode session 映射，按全新回合执行: sid=$sessionId")
+        }
+
+        val args = buildList {
+            add("run")
+            add("--format"); add("json")
+            // headless 权限请求无人应答：--auto 自动批准未被显式 deny 的请求（引擎卡 hint 已写明）
+            add("--auto")
+            // 思考过程事件（session.reasoning.ended）需要该开关才外发
+            add("--thinking")
+            if (!projectPath.isNullOrBlank()) { add("--dir"); add(projectPath) }
+            if (effectiveResume) { add("-s"); add(resumeSessionId!!) }
+            // 会话模型格式为 provider/model（如 openai/gpt-5.3-codex）；default/空 不传，跟随 CLI 配置
+            if (!model.isNullOrBlank() && model != "default") { add("-m"); add(model) }
+        }
+        val extraEnv = buildMap {
+            put("PERMISSION_BRIDGE_PORT", port.toString())
+            put("PERMISSION_BRIDGE_SESSION", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
+            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+            // MCP 挂载：官方优先级链合并（不整体替换用户配置；mcp 同键会被覆盖）
+            put("OPENCODE_CONFIG_CONTENT", mcpConfigContent())
+            // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）
+            transmittableProvider(ProviderType.OPENAI)?.let { p ->
+                put("OPENAI_API_KEY", p.firstUsableApiKey)
+            }
+            transmittableProvider(ProviderType.ANTHROPIC)?.let { p ->
+                put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
+            }
+        }
+
+        FileLogger.i(TAG, "启动 opencode 桥接进程: resume=$effectiveResume model=$model project=$projectPath authViaEnv=${extraEnv.containsKey("OPENAI_API_KEY") || extraEnv.containsKey("ANTHROPIC_API_KEY")}")
+        // spawn 失败（未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（与 CodexBridge 同修）
+        val process = try {
+            containerEngine.startStdioProcess("opencode", args, projectPath, extraEnv, resolveRuntimeProfile())
+        } catch (e: Exception) {
+            permissionBridgeServer.removeToken(sessionId)
+            throw e
+        }
+
+        val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
+            runCatching { process.destroy() }
+        }
+
+        val stderrTail = StringBuilder()
+        val lastActivity = AtomicLong(System.currentTimeMillis())
+        val stderrDrain = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                process.errorStream.bufferedReader().forEachLine { line ->
+                    lastActivity.set(System.currentTimeMillis())
+                    synchronized(stderrTail) {
+                        stderrTail.appendLine(line)
+                        if (stderrTail.length > 8000) stderrTail.delete(0, stderrTail.length - 4000)
+                    }
+                }
+            }
+        }
+
+        val watchdog = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            while (true) {
+                delay(60_000)
+                if (System.currentTimeMillis() - lastActivity.get() > IDLE_TIMEOUT_MS) {
+                    FileLogger.w(TAG, "空闲超时（${IDLE_TIMEOUT_MS / 60_000} 分钟无输出），中止 opencode 进程")
+                    runCatching { process.destroy() }
+                    break
+                }
+            }
+        }
+
+        val acc = TurnAccumulator()
+        try {
+            withContext(Dispatchers.IO) {
+                val w = process.outputStream.bufferedWriter()
+                w.write(userRequest)
+                w.write("\n")
+                w.flush()
+                w.close()
+            }
+
+            var gotResult = false
+            val reader = process.inputStream.bufferedReader()
+            while (!gotResult) {
+                val line = withContext(Dispatchers.IO) {
+                    lastActivity.set(System.currentTimeMillis())
+                    reader.readLine()
+                } ?: break
+                if (line.isBlank()) continue
+                for (event in parseLine(line, acc)) {
+                    acc.emittedAny = true
+                    emit(event)
+                    if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
+                }
+            }
+
+            if (!gotResult) {
+                val tail = synchronized(stderrTail) { stderrTail.toString() }
+                // opencode 成功回合没有结束事件（v1.19.0 源码：事件循环内部收尾后仅置退出码，不再输出），
+                // EOF 后按退出码判定：0 = 正常完成；非 0 / 零事件走错误分类（保住认证/续接缺失识别）
+                val exited = runCatching { process.waitFor(10, TimeUnit.SECONDS) }.getOrDefault(false)
+                if (!exited) runCatching { process.destroy() }
+                val exitCode = if (exited) runCatching { process.exitValue() }.getOrDefault(-1) else -1
+                if (exitCode == 0 && acc.emittedAny) {
+                    emit(AgentEvent.Completed)
+                } else {
+                    throw classifyEarlyExit(tail)
+                }
+            }
+        } finally {
+            killOnCancel?.dispose()
+            stderrDrain.cancel()
+            watchdog.cancel()
+            permissionBridgeServer.removeToken(sessionId)
+            runCatching { process.destroy() }
+            // 事件行带 sessionID：即便回合失败，映射也已建立，下回合可续接
+            acc.remoteSessionId?.let { persistSessionId(sessionId, it) }
+        }
+    }
+
+    /** 无完成事件即退出：区分「续接会话不存在」（可重试）与认证/其它失败。 */
+    private fun classifyEarlyExit(stderrTail: String): Exception {
+        val lower = stderrTail.lowercase()
+        if ("api key" in lower || "unauthorized" in lower || "401" in lower || "credential" in lower || "not authenticated" in lower) {
+            return RuntimeException(
+                "OpenCode 尚未认证：请在终端执行 opencode auth login（或配置 OPENAI_API_KEY/ANTHROPIC_API_KEY），" +
+                    "然后回到会话重发消息。原始错误：" + stderrTail.takeLast(300).trim()
+            )
+        }
+        return if ("session not found" in lower || "no session" in lower) {
+            ResumeSessionMissingException(stderrTail.takeLast(400).trim())
+        } else {
+            RuntimeException("OpenCode 提前退出: " + stderrTail.takeLast(400).trim().ifEmpty { "（无 stderr 输出）" })
+        }
+    }
+
+    // ── run --format json NDJSON → AgentEvent 翻译 ─────────────────
+
+    /** 单回合累积状态。 */
+    private class TurnAccumulator {
+        val reasoning = StringBuilder()
+        var remoteSessionId: String? = null
+        var emittedAny = false
+    }
+
+    private fun parseLine(line: String, acc: TurnAccumulator): List<AgentEvent> {
+        val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
+        if (obj == null) {
+            FileLogger.i(TAG, "跳过非 JSON 行: ${line.take(200)}")
+            return emptyList()
+        }
+        (obj["sessionID"]?.jsonPrimitive?.contentOrNull)?.let { acc.remoteSessionId = it }
+        return when (obj["type"]?.jsonPrimitive?.contentOrNull) {
+            "step_start", "step_finish" -> emptyList() // 步进边界与 token/cost 暂不接（无预算基准，见台账待办）
+            "text" -> {
+                val part = obj["part"] as? JsonObject ?: return emptyList()
+                // 思考随首块正文落库并清空（与 CodexBridge 一致；qa P1-1）
+                val reasoning = acc.reasoning.toString()
+                acc.reasoning.clear()
+                listOf(
+                    AgentEvent.AssistantText(
+                        content = part["text"]?.jsonPrimitive?.contentOrNull ?: "",
+                        reasoning = reasoning
+                    )
+                )
+            }
+            "reasoning" -> {
+                val part = obj["part"] as? JsonObject ?: return emptyList()
+                acc.reasoning.append(part["text"]?.jsonPrimitive?.contentOrNull ?: "")
+                listOf(AgentEvent.ReasoningDelta(accumulated = acc.reasoning.toString()))
+            }
+            "tool_use" -> parseToolUse(obj)
+            "error" -> {
+                val error = obj["error"] as? JsonObject
+                val message = error?.get("message")?.jsonPrimitive?.contentOrNull
+                    ?: (error?.get("data") as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
+                    ?: "OpenCode 运行失败"
+                listOf(AgentEvent.Failed(error = message))
+            }
+            else -> emptyList()
+        }
+    }
+
+    /**
+     * 工具调用只在成败后一次性到达（session.tool.success/failed）：补发 Started+Finished 同 id 配对，
+     * 保证下游「执行中」工具行被 REPLACE 而非残留。
+     */
+    private fun parseToolUse(obj: JsonObject): List<AgentEvent> {
+        val part = obj["part"] as? JsonObject ?: return emptyList()
+        val state = part["state"] as? JsonObject ?: return emptyList()
+        val id = part["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
+        val toolName = part["tool"]?.jsonPrimitive?.contentOrNull ?: "tool"
+        val input = state["input"] as? JsonObject ?: JsonObject(emptyMap())
+        val isError = state["status"]?.jsonPrimitive?.contentOrNull == "error"
+        val result = state["output"]?.jsonPrimitive?.contentOrNull
+            ?: (state["error"] as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
+            ?: (state["error"] as? JsonPrimitive)?.contentOrNull
+            ?: state["output"]?.toString() // 结构化输出兑底（qa P2-2）
+            ?: "（无结果）"
+        return listOf(
+            AgentEvent.ToolCallStarted(id = id, toolName = toolName, argsPreview = input.toString().take(400)),
+            AgentEvent.ToolCallFinished(id = id, toolName = toolName, result = result.take(4000), isError = isError)
+        )
+    }
+
+    // ── session 映射持久化 ────────────────────────────────────────
+
+    private fun readMappedSessionId(appSessionId: String): String? {
+        sessionIds[appSessionId]?.let { return it }
+        return runCatching {
+            if (!fileAccess.exists(sessionsPath())) return null
+            val map = json.parseToJsonElement(fileAccess.readFile(sessionsPath()))
+                .let { it as? JsonObject } ?: return null
+            map[appSessionId]?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+    }
+
+    private fun persistSessionId(appSessionId: String, remoteSessionId: String) {
+        sessionIds[appSessionId] = remoteSessionId
+        runCatching {
+            fileAccess.writeFile(
+                sessionsPath(),
+                buildJsonObject {
+                    for ((k, v) in sessionIds) put(k, JsonPrimitive(v))
+                }.toString(),
+                overwrite = true
+            )
+        }.onFailure { e -> FileLogger.w(TAG, "持久化 session 映射失败: ${e.message}") }
+    }
+
+    // ── 桥接资产 ──────────────────────────────────────────────────
+
+    /** 每回合确保 aicode_bridge 脚本就位（与 ClaudeCodeBridge/CodexBridge 共用同一 mjs 源）。 */
+    private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) =
+        assetsMutex.withLock {
+            runCatching {
+                fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
+            }.onFailure { e ->
+                FileLogger.e(TAG, "写桥接资产失败", e)
+                throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
+            }
+        }
+
+    /** aicode_bridge 的 OPENCODE_CONFIG_CONTENT 内联值（local stdio MCP；env 由进程环境继承）。 */
+    private fun mcpConfigContent(): String = buildJsonObject {
+        put("mcp", buildJsonObject {
+            put(MCP_SERVER_NAME, buildJsonObject {
+                put("type", "local")
+                put("command", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("node"), JsonPrimitive(dataBridgeScript()))))
+                put("enabled", true)
+            })
+        })
+    }.toString()
+}
