@@ -14,6 +14,7 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.settings.data.remote.ModelMetadataService
@@ -46,7 +47,9 @@ class ContextCompactor @Inject constructor(
     private val systemPromptProvider: SystemPromptProvider,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val generalSettingsRepository: GeneralSettingsRepository,
-    private val messagePersistenceUseCase: MessagePersistenceUseCase
+    private val messagePersistenceUseCase: MessagePersistenceUseCase,
+    private val sessionUseCase: SessionUseCase,
+    private val graphRepository: com.aicode.feature.memorygraph.data.GraphRepository
 ) {
     private companion object {
         const val TAG = "ContextCompactor"
@@ -248,6 +251,20 @@ class ContextCompactor @Inject constructor(
                 messagePersistenceUseCase.invalidateHistory(sessionId)
             }
             FileLogger.i(TAG, "上下文压缩完成：$block 块，$estimatedTokens → $compactedTokens tokens")
+            // 摘要里已有「关键决定」「教训与坑」段落：直接解析成图谱结论，零额外模型调用。
+            // 仅当用户开启结论抽取时才写（默认关，数据不外发）。
+            if (sessionId != null) {
+                runCatching {
+                    if (generalSettingsRepository.graphExtractEnabled()) {
+                        val workspacePath = sessionUseCase.getSessionById(sessionId)?.workspacePath.orEmpty()
+                        graphRepository.extractConclusionsFromSummary(
+                            workspacePath = workspacePath,
+                            sessionId = sessionId,
+                            summary = summary
+                        )
+                    }
+                }.onFailure { FileLogger.w(TAG, "压缩后抽取结论失败（不影响压缩）", it) }
+            }
             return CompactionResult(compacted, compacted = true)
         } catch (e: CancellationException) {
             throw e

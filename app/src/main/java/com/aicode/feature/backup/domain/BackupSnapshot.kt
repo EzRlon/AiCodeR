@@ -280,3 +280,34 @@ data class TodoItemDto(
     val createdAt: Long,
     val updatedAt: Long
 )
+
+/** 记忆图谱节点（备份用）：结论与关系是 AI 的长期沉淀，换机/重装不能丢。 */
+@Serializable
+data class GraphNodeDto(
+    val id: String,
+    val workspacePath: String,
+    val name: String,
+    val type: String,
+    val summary: String = "",
+    val sourceRefId: String? = null,
+    val scope: String = "PROJECT",
+    val validFrom: Long = 0,
+    val invalidAt: Long? = null,
+    val sourceSessionId: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/** 记忆图谱边（备份用）。 */
+@Serializable
+data class GraphEdgeDto(
+    val id: String,
+    val workspacePath: String,
+    val fromNodeId: String,
+    val toNodeId: String,
+    val relation: String,
+    val validAt: Long = 0,
+    val invalidAt: Long? = null,
+    val createdAt: Long,
+    val updatedAt: Long
+)

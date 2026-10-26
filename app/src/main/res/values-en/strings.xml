@@ -12,6 +12,7 @@
     <string name="settings_default_models">Models &amp; Engines</string>
     <string name="settings_engine_group">Engines</string>
     <string name="engine_not_logged_in">Not signed in</string>
+    <string name="engine_switch_busy">Current session is busy; set as default for new sessions, this session unchanged</string>
     <string name="settings_general">Preferences</string>
     <string name="settings_general_models">Models</string>
     <string name="settings_auto_remove_stale_models">Remove stale models after fetching</string>
@@ -473,6 +474,15 @@
     <string name="graph_type_session">Thread</string>
     <string name="graph_type_memory">Memory</string>
     <string name="graph_type_custom">Custom</string>
+    <string name="graph_type_conclusion">Conclusion</string>
+    <string name="graph_conclusion_outdated">Outdated</string>
+    <string name="graph_conclusion_count">AI remembers %1$d conclusions, %2$d outdated</string>
+    <string name="graph_conclusion_empty">No conclusions yet. Do some work and they get recorded automatically at the end, or add one with the button below.</string>
+    <string name="graph_conclusion_mark_outdated">Wrong / outdated</string>
+    <string name="graph_conclusion_jump_source">Go to source session</string>
+    <string name="graph_extract_off_hint">Conclusion extraction is off, so AI won\'t record conclusions. When on, AI remembers decisions and pitfalls each time it compacts the context (a few dozen tokens).</string>
+    <string name="graph_extract_enable">Turn on</string>
+    <string name="graph_timeline_title">Conclusions AI learned</string>
     <string name="graph_no_relations">No relations yet</string>
     <string name="graph_delete_node">Delete node</string>
     <string name="graph_node_name_hint">Node name (required)</string>

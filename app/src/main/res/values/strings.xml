@@ -12,6 +12,7 @@
     <string name="settings_default_models">模型与引擎</string>
     <string name="settings_engine_group">引擎</string>
     <string name="engine_not_logged_in">未登录</string>
+    <string name="engine_switch_busy">当前会话正在运行，已设为新会话默认引擎，本会话未切换</string>
     <string name="settings_general">偏好设置</string>
     <string name="settings_general_models">模型</string>
     <string name="settings_auto_remove_stale_models">拉取模型后自动移除无效模型</string>
@@ -474,6 +475,15 @@
     <string name="graph_type_session">会话</string>
     <string name="graph_type_memory">记忆</string>
     <string name="graph_type_custom">自定义</string>
+    <string name="graph_type_conclusion">结论</string>
+    <string name="graph_conclusion_outdated">已过时</string>
+    <string name="graph_conclusion_count">AI 已记住 %1$d 条结论，其中 %2$d 条已过时</string>
+    <string name="graph_conclusion_empty">AI 还没有记住任何结论。去干一件活，结束时它会自动记下；或点右下角手动记一条。</string>
+    <string name="graph_conclusion_mark_outdated">这条不对/已过时</string>
+    <string name="graph_conclusion_jump_source">去来源会话</string>
+    <string name="graph_extract_off_hint">结论抽取已关闭：AI 不会自动记下结论。开启后 AI 每次压缩上下文时自动记住定案与坑（约几十 token）。</string>
+    <string name="graph_extract_enable">开启</string>
+    <string name="graph_timeline_title">AI 学到的结论</string>
     <string name="graph_no_relations">暂无关系</string>
     <string name="graph_delete_node">删除节点</string>
     <string name="graph_node_name_hint">节点名称（必填）</string>

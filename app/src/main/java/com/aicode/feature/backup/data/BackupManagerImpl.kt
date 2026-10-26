@@ -31,6 +31,8 @@ import com.aicode.feature.backup.domain.RemoteConnectionDto
 import com.aicode.feature.backup.domain.RemoteMountDto
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.TodoItemDto
+import com.aicode.feature.backup.domain.GraphNodeDto
+import com.aicode.feature.backup.domain.GraphEdgeDto
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.toMetadata
 import com.aicode.feature.credentials.data.repository.FileCredentialRepository
@@ -108,7 +110,8 @@ class BackupManagerImpl @Inject constructor(
     private val toolPermissionTierRepository: ToolPermissionTierRepository,
     private val scheduledTaskRepository: ScheduledTaskRepository,
     private val fileCredentialRepository: FileCredentialRepository,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val graphDao: com.aicode.feature.memorygraph.data.local.dao.GraphDao
 ) : BackupManager {
 
     private val json = Json {
@@ -377,6 +380,13 @@ class BackupManagerImpl @Inject constructor(
                                 lastId = batch.last().id
                             }
                         }
+                        // 记忆图谱：AI 的长期沉淀（结论/关系），换机不能丢
+                        writeJsonlFileEntry(tar, FILE_GRAPH_NODES) { writer ->
+                            graphDao.allNodes().forEach { writer.writeLine(json.encodeToString(GraphNodeDto.serializer(), it.toDto())) }
+                        }
+                        writeJsonlFileEntry(tar, FILE_GRAPH_EDGES) { writer ->
+                            graphDao.allEdges().forEach { writer.writeLine(json.encodeToString(GraphEdgeDto.serializer(), it.toDto())) }
+                        }
                     }
                 }
             }
@@ -613,6 +623,18 @@ class BackupManagerImpl @Inject constructor(
                     }
                     FileLogger.i(TAG, "恢复待办 $count 条")
                     stats += RestoreStats(todoItems = count)
+                }
+                FILE_GRAPH_NODES -> {
+                    val count = restoreJsonl(tar, GraphNodeDto.serializer()) { dtos ->
+                        dtos.forEach { graphDao.upsertNode(it.toEntity()) }
+                    }
+                    FileLogger.i(TAG, "恢复图谱节点 $count 条")
+                }
+                FILE_GRAPH_EDGES -> {
+                    val count = restoreJsonl(tar, GraphEdgeDto.serializer()) { dtos ->
+                        dtos.forEach { graphDao.upsertEdge(it.toEntity()) }
+                    }
+                    FileLogger.i(TAG, "恢复图谱关系 $count 条")
                 }
                 else -> {
                     if (entry.name.startsWith(WORKSPACE_PREFIX)) {
@@ -1050,6 +1072,20 @@ class BackupManagerImpl @Inject constructor(
     private fun TodoItemEntity.toDto() = TodoItemDto(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
     private fun TodoItemDto.toEntity() = TodoItemEntity(id, sessionId, subject, description, status, priority, order, createdAt, updatedAt)
 
+    private fun com.aicode.feature.memorygraph.data.local.entity.GraphNodeEntity.toDto() =
+        GraphNodeDto(id, workspacePath, name, type, summary, sourceRefId, scope, validFrom, invalidAt, sourceSessionId, createdAt, updatedAt)
+
+    private fun GraphNodeDto.toEntity() = com.aicode.feature.memorygraph.data.local.entity.GraphNodeEntity(
+        id, workspacePath, name, type, summary, sourceRefId, scope, validFrom, invalidAt, sourceSessionId, createdAt, updatedAt
+    )
+
+    private fun com.aicode.feature.memorygraph.data.local.entity.GraphEdgeEntity.toDto() =
+        GraphEdgeDto(id, workspacePath, fromNodeId, toNodeId, relation, validAt, invalidAt, createdAt, updatedAt)
+
+    private fun GraphEdgeDto.toEntity() = com.aicode.feature.memorygraph.data.local.entity.GraphEdgeEntity(
+        id, workspacePath, fromNodeId, toNodeId, relation, validAt, invalidAt, createdAt, updatedAt
+    )
+
     internal companion object {
         private const val TAG = "BackupManager"
         const val PAGE_SIZE = 500
@@ -1057,6 +1093,8 @@ class BackupManagerImpl @Inject constructor(
         const val FILE_SESSIONS = "chatSessions.jsonl"
         const val FILE_MESSAGES = "messages.jsonl"
         const val FILE_TODOS = "todoItems.jsonl"
+        const val FILE_GRAPH_NODES = "graphNodes.jsonl"
+        const val FILE_GRAPH_EDGES = "graphEdges.jsonl"
         const val FILE_LEGACY_SNAPSHOT = "snapshot.json"
         const val WORKSPACE_PREFIX = "workspaces/"
         const val AICODE_DIR = "aicode"

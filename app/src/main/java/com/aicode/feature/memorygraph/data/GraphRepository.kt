@@ -2,10 +2,13 @@ package com.aicode.feature.memorygraph.data
 
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.domain.memory.MemoryRepository
+import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.memorygraph.data.local.dao.GraphDao
 import com.aicode.feature.memorygraph.data.local.entity.GraphEdgeEntity
 import com.aicode.feature.memorygraph.data.local.entity.GraphNodeEntity
+import com.aicode.feature.memorygraph.data.local.entity.GraphNodeScope
 import com.aicode.feature.memorygraph.data.local.entity.GraphNodeType
+import com.aicode.feature.memorygraph.domain.ConclusionExtractor
 import com.aicode.feature.memorygraph.domain.model.GraphEdge
 import com.aicode.feature.memorygraph.domain.model.GraphNode
 import com.aicode.feature.memorygraph.domain.model.GraphSearchHit
@@ -18,18 +21,23 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 记忆图谱 v2 仓库：节点/边存储 + 双源同步 + 三路混合检索。
+ * 记忆图谱仓库：节点/边存储 + 双源同步 + 混合检索 + 时间轴。
  *
- * 双源（调研确认现版两套记忆互不相通）：①工作区会话（chat_sessions，节点=SESSION）；
- * ②memory 工具的记忆条目（~/.aicode 全局 + 项目级 md，节点=MEMORY）。边=会话内发生过
- * memory 工具调用即连「记录于」。检索=关键词直接命中 + 沿边 1 跳扩散 + updatedAt 时序，
- * 纯本地无 embedding（不上云、无分词库，关键词路为子串匹配——中文抽取质量受限已在交付说明标注）。
+ * 双源：①工作区会话（chat_sessions，节点=SESSION）；②memory 工具的记忆条目
+ * （全局 + 项目级 md，节点=MEMORY）。边=会话内发生过 memory 工具调用即连「记录于」。
+ *
+ * 内容真源是 memory md 文件：节点只存「名称/摘要/出处/关系/时间」，不复制正文——
+ * AI 从系统提示词读到的是同一份 md，避免两处存储互相打架。
+ *
+ * 时间轴（迁移 73）：结论被取代时只标 [GraphNodeEntity.invalidAt]，不删除、不覆盖，
+ * 检索默认过滤失效项（AI 不会把过期结论当现状），UI 灰显可回溯历史。
  */
 @Singleton
 class GraphRepository @Inject constructor(
     private val graphDao: GraphDao,
     private val chatSessionDao: ChatSessionDao,
-    private val memoryRepository: MemoryRepository
+    private val memoryRepository: MemoryRepository,
+    private val conclusionExtractor: ConclusionExtractor
 ) {
 
     fun observeGraph(workspacePath: String): Flow<Pair<List<GraphNode>, List<GraphEdge>>> =
@@ -38,13 +46,16 @@ class GraphRepository @Inject constructor(
             graphDao.edgesByWorkspace(workspacePath)
         ) { nodes, edges ->
             nodes.map { it.toDomain() } to edges.map { e ->
-                GraphEdge(e.id, e.workspacePath, e.fromNodeId, e.toNodeId, e.relation)
+                GraphEdge(e.id, e.workspacePath, e.fromNodeId, e.toNodeId, e.relation, e.validAt, e.invalidAt)
             }
         }
 
     /**
      * 幂等同步工作区图谱：SESSION 节点对齐会话（含回收站外的全部根会话）、MEMORY 节点对齐
      * 记忆条目、边按会话内的 memory 工具调用连接。可反复调用（upsert 幂等）。
+     *
+     * 全局记忆只存一份（workspacePath 空串、scope=GLOBAL），项目级记忆按工作区隔离——
+     * 否则同一条全局记忆会在每个工作区各生成一个重复节点。
      */
     suspend fun syncWorkspaceGraph(workspacePath: String) {
         if (workspacePath.isBlank()) return
@@ -65,6 +76,10 @@ class GraphRepository @Inject constructor(
                     type = GraphNodeType.SESSION,
                     summary = "",
                     sourceRefId = session.id,
+                    scope = GraphNodeScope.PROJECT,
+                    validFrom = session.createdAt,
+                    invalidAt = existing?.invalidAt,
+                    sourceSessionId = session.id,
                     createdAt = existing?.createdAt ?: session.createdAt,
                     updatedAt = session.updatedAt
                 )
@@ -75,17 +90,24 @@ class GraphRepository @Inject constructor(
         val memories = runCatching { memoryRepository.listMemories(workspacePath) }.getOrDefault(emptyList())
         val memoryNodeIds = mutableMapOf<String, String>()
         memories.forEach { memory ->
-            val existing = graphDao.findBySourceRef(workspacePath, GraphNodeType.MEMORY, memory.name)
+            val isGlobal = memory.scope == MemoryScope.GLOBAL
+            // 全局记忆落在空 workspacePath 下（跨项目共享一份），项目记忆落在本项目下
+            val nodeWorkspace = if (isGlobal) "" else workspacePath
+            val existing = graphDao.findBySourceRef(nodeWorkspace, GraphNodeType.MEMORY, memory.name)
             val id = existing?.id ?: UUID.randomUUID().toString()
             memoryNodeIds[memory.name] = id
             graphDao.upsertNode(
                 GraphNodeEntity(
                     id = id,
-                    workspacePath = workspacePath,
+                    workspacePath = nodeWorkspace,
                     name = memory.name,
                     type = GraphNodeType.MEMORY,
                     summary = memory.description,
                     sourceRefId = memory.name,
+                    scope = if (isGlobal) GraphNodeScope.GLOBAL else GraphNodeScope.PROJECT,
+                    validFrom = existing?.validFrom?.takeIf { it > 0 } ?: now,
+                    invalidAt = existing?.invalidAt,
+                    sourceSessionId = existing?.sourceSessionId,
                     createdAt = existing?.createdAt ?: now,
                     updatedAt = now
                 )
@@ -104,13 +126,16 @@ class GraphRepository @Inject constructor(
                 memoryNodeIds.forEach { (name, memoryNodeId) ->
                     val pattern = Regex("\"name\"\\s*:\\s*\"" + Regex.escape(name) + "\"")
                     if (pattern.containsMatchIn(args)) {
+                        // 记忆节点的所属空间：全局记忆在空 workspacePath，项目记忆在本工作区
+                        val nodeWorkspace = graphDao.nodeById(memoryNodeId)?.workspacePath ?: workspacePath
                         graphDao.upsertEdge(
                             GraphEdgeEntity(
-                                id = edgeId(workspacePath, sessionNodeId, memoryNodeId, RELATION_RECORDED_IN),
-                                workspacePath = workspacePath,
+                                id = edgeId(nodeWorkspace, memoryNodeId, sessionNodeId, RELATION_RECORDED_IN),
+                                workspacePath = nodeWorkspace,
                                 fromNodeId = memoryNodeId,
                                 toNodeId = sessionNodeId,
                                 relation = RELATION_RECORDED_IN,
+                                validAt = now,
                                 createdAt = now,
                                 updatedAt = now
                             )
@@ -122,24 +147,33 @@ class GraphRepository @Inject constructor(
     }
 
     /**
-     * 三路混合检索：关键词直接命中 → 沿边 1 跳扩散（图谱游走）→ updatedAt 时序兜底排序。
+     * 混合检索：关键词直接命中 → 沿边 1 跳扩散（图谱游走）→ updatedAt 时序兜底排序。
+     * 默认只看当前有效的节点（[includeInvalid]=false），AI 查询不会拿到过期结论；
      * 查询过短（<2 字符）退化为按时间返回最近节点。
      */
-    suspend fun search(workspacePath: String, query: String, limit: Int = 30): List<GraphSearchHit> {
+    suspend fun search(
+        workspacePath: String,
+        query: String,
+        limit: Int = 30,
+        includeInvalid: Boolean = false
+    ): List<GraphSearchHit> {
         val trimmed = query.trim()
         val hits = LinkedHashMap<String, GraphSearchHit>()
         if (trimmed.length >= 2) {
-            graphDao.searchNodes(workspacePath, trimmed, limit).forEach { node ->
+            graphDao.searchNodes(workspacePath, trimmed, if (includeInvalid) 1 else 0, limit).forEach { node ->
                 hits[node.id] = GraphSearchHit(node.toDomain(), VIA_KEYWORD)
             }
         }
         // 图谱游走：命中节点的 1 跳邻居也纳入（去重）
         hits.values.toList().forEach { hit ->
-            graphDao.edgesTouching(workspacePath, hit.node.id).forEach { edge ->
+            graphDao.edgesTouching(hit.node.id).forEach { edge ->
+                if (edge.invalidAt != null) return@forEach
                 val peerId = if (edge.fromNodeId == hit.node.id) edge.toNodeId else edge.fromNodeId
                 if (peerId !in hits) {
                     graphDao.nodeById(peerId)?.let { peer ->
-                        hits[peerId] = GraphSearchHit(peer.toDomain(), VIA_WALK)
+                        if (includeInvalid || peer.invalidAt == null) {
+                            hits[peerId] = GraphSearchHit(peer.toDomain(), VIA_WALK)
+                        }
                     }
                 }
             }
@@ -147,6 +181,84 @@ class GraphRepository @Inject constructor(
         return hits.values
             .sortedByDescending { it.node.updatedAt }
             .take(limit)
+    }
+
+    /**
+     * 当前有效结论（会话开始注入用）：只看未失效的 MEMORY/CUSTOM 节点，
+     * 按结论时间倒序取前 [limit] 条。返回「名称 + 摘要 + 出处会话」，不含正文（省 token）。
+     */
+    suspend fun validConclusions(workspacePath: String, limit: Int = DEFAULT_INJECT_LIMIT): List<GraphNode> =
+        runCatching { graphDao.validConclusions(workspacePath, limit).map { it.toDomain() } }
+            .onFailure { FileLogger.w(TAG, "读有效结论失败: ${it.message}") }
+            .getOrDefault(emptyList())
+
+    /**
+     * 标记结论失效（被新结论取代）：不删除、不覆盖，只写 invalidAt。
+     * 这样 AI 默认查不到旧结论，人仍能在页面上回溯「以前是怎么定的、什么时候改的」。
+     */
+    suspend fun invalidateNode(id: String, at: Long = System.currentTimeMillis()) {
+        graphDao.invalidateNode(id, at)
+    }
+
+    /**
+     * 记录一条结论节点（抽取路径）：类型 CUSTOM（无 md 来源）、带类型标签与出处会话。
+     * 幂等：同一会话同一结论名只建一个节点；已存在则只刷新摘要与时间，不重复建。
+     */
+    suspend fun recordConclusion(
+        workspacePath: String,
+        name: String,
+        summary: String,
+        label: String,
+        sourceSessionId: String
+    ): String {
+        val now = System.currentTimeMillis()
+        val existing = graphDao.findBySourceRef(workspacePath, GraphNodeType.CONCLUSION, name)
+        val id = existing?.id ?: UUID.randomUUID().toString()
+        graphDao.upsertNode(
+            GraphNodeEntity(
+                id = id,
+                workspacePath = workspacePath,
+                name = name,
+                type = GraphNodeType.CONCLUSION,
+                summary = summary,
+                sourceRefId = name,
+                scope = GraphNodeScope.PROJECT,
+                validFrom = existing?.validFrom?.takeIf { it > 0 } ?: now,
+                invalidAt = existing?.invalidAt,
+                sourceSessionId = sourceSessionId,
+                createdAt = existing?.createdAt ?: now,
+                updatedAt = now
+            )
+        )
+        // 连边：结论「出自」来源会话，便于页面一键跳回去看证据
+        graphDao.findBySourceRef(workspacePath, GraphNodeType.SESSION, sourceSessionId)?.let { sessionNode ->
+            graphDao.upsertEdge(
+                GraphEdgeEntity(
+                    id = edgeId(workspacePath, id, sessionNode.id, RELATION_DERIVED_FROM),
+                    workspacePath = workspacePath,
+                    fromNodeId = id,
+                    toNodeId = sessionNode.id,
+                    relation = RELATION_DERIVED_FROM,
+                    validAt = now,
+                    createdAt = now,
+                    updatedAt = now
+                )
+            )
+        }
+        FileLogger.i(TAG, "记录结论节点「$name」[$label] 来自会话 $sourceSessionId")
+        return id
+    }
+
+    /**
+     * 从压缩摘要抽取结论写入图谱（零额外模型调用：摘要已在压缩时生成，这里只解析文本）。
+     * 失败静默——抽取是附加价值，绝不能让压缩本身失败。
+     */
+    suspend fun extractConclusionsFromSummary(workspacePath: String, sessionId: String, summary: String) {
+        if (workspacePath.isBlank() || summary.isBlank()) return
+        runCatching {
+            val written = conclusionExtractor.extractFromSummary(workspacePath, sessionId, summary)
+            if (written > 0) FileLogger.i(TAG, "压缩摘要抽取结论：$written 条")
+        }.onFailure { FileLogger.w(TAG, "从压缩摘要抽取结论失败", it) }
     }
 
     /** 手动节点（类型 CUSTOM，无来源引用）。 */
@@ -161,6 +273,8 @@ class GraphRepository @Inject constructor(
                 type = GraphNodeType.CUSTOM,
                 summary = summary,
                 sourceRefId = null,
+                scope = GraphNodeScope.PROJECT,
+                validFrom = now,
                 createdAt = now,
                 updatedAt = now
             )
@@ -178,6 +292,7 @@ class GraphRepository @Inject constructor(
                 fromNodeId = fromNodeId,
                 toNodeId = toNodeId,
                 relation = relation,
+                validAt = now,
                 createdAt = now,
                 updatedAt = now
             )
@@ -195,7 +310,13 @@ class GraphRepository @Inject constructor(
     companion object {
         private const val TAG = "GraphRepository"
         const val RELATION_RECORDED_IN = "记录于"
+        const val RELATION_RELATED = "相关"
+        const val RELATION_SUPERSEDED = "被取代"
+        const val RELATION_DERIVED_FROM = "出自"
         const val VIA_KEYWORD = "KEYWORD"
         const val VIA_WALK = "WALK"
+
+        /** 会话开始注入的结论条数上限：太多会挤占上下文，且旧结论参考价值递减。 */
+        const val DEFAULT_INJECT_LIMIT = 8
     }
 }

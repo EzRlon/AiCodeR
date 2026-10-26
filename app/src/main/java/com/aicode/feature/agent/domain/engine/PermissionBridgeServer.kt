@@ -47,7 +47,8 @@ class PermissionBridgeServer @Inject constructor(
     private val toolPermissionManager: ToolPermissionManager,
     private val fixLedgerRepository: FixLedgerRepository,
     private val annotationRepository: com.aicode.feature.annotation.data.AnnotationRepository,
-    private val recallTool: com.aicode.feature.agent.domain.tool.recall.RecallTool
+    private val recallTool: com.aicode.feature.agent.domain.tool.recall.RecallTool,
+    private val graphSearchTool: com.aicode.feature.memorygraph.domain.tool.GraphSearchTool
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -219,6 +220,27 @@ class PermissionBridgeServer @Inject constructor(
                 when (val result = recallTool.executeWithContext(input, context)) {
                     is com.aicode.feature.agent.domain.tool.ToolResult.Success -> {
                         // recall 的成功结果是纯文本 JsonPrimitive；非原始值兑底 JSON 字符串
+                        val text = (result.data as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.takeIf { it.isString }
+                            ?.content
+                            ?: result.data.toString()
+                        okData(text)
+                    }
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Error -> errData(result.message)
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Partial -> okData(result.message)
+                }
+            }
+            "graph_search" -> {
+                // 图谱结论检索：复用本体 GraphSearchTool（只看当前有效结论，可含已失效）
+                val context = com.aicode.feature.agent.domain.model.AgentContext(
+                    currentFile = null,
+                    selectedCode = null,
+                    projectRoot = (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty(),
+                    language = null,
+                    sessionId = sessionId.ifBlank { null }
+                )
+                when (val result = graphSearchTool.executeWithContext(input, context)) {
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Success -> {
                         val text = (result.data as? kotlinx.serialization.json.JsonPrimitive)
                             ?.takeIf { it.isString }
                             ?.content

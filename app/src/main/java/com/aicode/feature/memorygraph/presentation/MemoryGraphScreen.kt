@@ -63,6 +63,210 @@ import java.util.Date
 import java.util.Locale
 
 /**
+ * 结论时间线（默认页）：给用户的「AI 学到了什么」大白话视图。
+ *
+ * 为什么不做节点图：小白看不懂节点网；用户只需要三件事——看到 AI 记住了什么、
+ * 跳回来源会话查证据、发现记错了一键标过时。图谱关系视图保留在「图谱」页签。
+ */
+@Composable
+private fun ConclusionsSection(
+    workspacePath: String,
+    viewModel: MemoryGraphViewModel,
+    onOpenSession: (String) -> Unit
+) {
+    val graph by viewModel.graph.collectAsStateWithLifecycle()
+    val extractEnabled by viewModel.extractEnabled.collectAsStateWithLifecycle()
+    var detailNode by remember { mutableStateOf<GraphNode?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showOutdated by rememberSaveable { mutableStateOf(false) }
+
+    val (nodes, edges) = graph ?: (emptyList<GraphNode>() to emptyList())
+    val allConclusions = nodes.filter { it.type == "CONCLUSION" || it.type == "CUSTOM" }
+    val conclusions = allConclusions
+        .filter { showOutdated || it.invalidAt == null }
+        .sortedByDescending { it.validFrom.takeIf { v -> v > 0 } ?: it.updatedAt }
+    val outdatedCount = allConclusions.count { it.invalidAt != null }
+    val totalCount = allConclusions.size
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // 抽取开关提示（默认关，首次进入用一句人话解释）
+        if (!extractEnabled) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.graph_extract_off_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { viewModel.setExtractEnabled(true) }) {
+                        Text(stringResource(R.string.graph_extract_enable))
+                    }
+                }
+            }
+        }
+
+        // 统计条：一眼看懂「记住了多少、几条过时」
+        if (totalCount > 0 || outdatedCount > 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.graph_conclusion_count, totalCount, outdatedCount),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                if (outdatedCount > 0) {
+                    TextButton(onClick = { showOutdated = !showOutdated }) {
+                        Text(
+                            text = if (showOutdated) stringResource(R.string.common_cancel) else "${stringResource(R.string.graph_conclusion_outdated)} $outdatedCount",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+        }
+
+        if (conclusions.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = Spacing.xl)
+                ) {
+                    Text(
+                        text = stringResource(R.string.graph_conclusion_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(Spacing.md))
+                    TextButton(onClick = { showAddDialog = true }) {
+                        Text(stringResource(R.string.graph_add_node))
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                items(conclusions, key = { it.id }) { node ->
+                    val outdated = node.invalidAt != null
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (outdated) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        onClick = { detailNode = node },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = node.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (outdated) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (outdated) {
+                                    Spacer(Modifier.width(Spacing.xs))
+                                    Text(
+                                        text = stringResource(R.string.graph_conclusion_outdated),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            if (node.summary.isNotBlank()) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = node.summary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            // 三键操作：跳来源会话 / 标过时 / 删除（全在详情弹层，列表不拥挤）
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val whenText = formatRelative(node.validFrom.takeIf { v -> v > 0 } ?: node.updatedAt)
+                                Text(
+                                    text = whenText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Spacer(Modifier.weight(1f))
+                                if (!outdated && node.sourceSessionId != null) {
+                                    TextButton(onClick = { onOpenSession(node.sourceSessionId!!) }) {
+                                        Text(stringResource(R.string.graph_conclusion_jump_source), style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                                if (!outdated) {
+                                    TextButton(onClick = { viewModel.markOutdated(node.id) }) {
+                                        Text(
+                                            text = stringResource(R.string.graph_conclusion_mark_outdated),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    detailNode?.let { node ->
+        GraphNodeDetailDialog(
+            node = node,
+            edges = edges,
+            nodes = nodes,
+            onDelete = {
+                viewModel.deleteGraphNode(node.id)
+                detailNode = null
+            },
+            onDismiss = { detailNode = null }
+        )
+    }
+
+    if (showAddDialog) {
+        AddGraphNodeDialog(
+            onConfirm = { name, summary ->
+                viewModel.addGraphNode(workspacePath, name, summary)
+                showAddDialog = false
+            },
+            onDismiss = { showAddDialog = false }
+        )
+    }
+}
+
+/** 相对时间：今天显示时分，本年显示月日，跨年显示年月日。 */
+private fun formatRelative(ts: Long): String {
+    if (ts <= 0) return ""
+    if (DateUtils.isToday(ts)) return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
+    val pattern = if (isSameYear(ts)) "MM-dd" else "yyyy-MM-dd"
+    return SimpleDateFormat(pattern, Locale.getDefault()).format(Date(ts))
+}
+
+private fun isSameYear(ts: Long): Boolean {
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = ts }
+    return now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR)
+}
+
+/**
  * 记忆图谱 v2 节点/边视图：三路混合检索（关键词直中 + 图谱游走 + 时序）+ 节点详情（关系与删除）。
  * 数据由 GraphRepository 双源同步（会话 + memory 工具的记忆条目）。
  */
@@ -321,7 +525,7 @@ fun MemoryGraphScreen(
     onBack: () -> Unit,
     viewModel: MemoryGraphViewModel = hiltViewModel(),
 ) {
-    var filter by rememberSaveable { mutableStateOf("all") } // all / running / goal / today
+    var filter by rememberSaveable { mutableStateOf("conclusions") } // conclusions / all / running / goal / today / graph
     var expandedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val activity by viewModel.activity.collectAsStateWithLifecycle()
     val detail by viewModel.detail.collectAsStateWithLifecycle()
@@ -432,6 +636,11 @@ fun MemoryGraphScreen(
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
             FilterChip(
+                selected = filter == "conclusions",
+                onClick = { filter = "conclusions" },
+                label = { Text(stringResource(R.string.graph_timeline_title)) },
+            )
+            FilterChip(
                 selected = filter == "all",
                 onClick = { filter = "all" },
                 label = { Text(stringResource(R.string.memory_graph_filter_all)) },
@@ -459,8 +668,14 @@ fun MemoryGraphScreen(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        // ── 记忆图谱 v2：节点/边视图（v1 泳道保留为默认页）──
-        if (filter == "graph") {
+        // ── 默认页：结论时间线（AI 学到的结论）；「图谱」页签是节点/边关系视图 ──
+        if (filter == "conclusions") {
+            ConclusionsSection(
+                workspacePath = workspacePath,
+                viewModel = viewModel,
+                onOpenSession = onOpenSession
+            )
+        } else if (filter == "graph") {
             GraphSection(
                 workspacePath = workspacePath,
                 viewModel = viewModel

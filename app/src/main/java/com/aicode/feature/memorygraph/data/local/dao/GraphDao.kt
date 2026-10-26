@@ -17,10 +17,15 @@ interface GraphDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertEdge(entity: GraphEdgeEntity)
 
-    @Query("SELECT * FROM graph_nodes WHERE workspacePath = :workspacePath ORDER BY updatedAt DESC")
+    /**
+     * 工作区节点 = 本项目节点 + 全局节点（workspacePath 为空串，跨项目共享一份）。
+     * 全局记忆不再在每个工作区重复建节点（迁移 73）。
+     */
+    @Query("SELECT * FROM graph_nodes WHERE workspacePath = :workspacePath OR workspacePath = '' ORDER BY updatedAt DESC")
     fun nodesByWorkspace(workspacePath: String): Flow<List<GraphNodeEntity>>
 
-    @Query("SELECT * FROM graph_edges WHERE workspacePath = :workspacePath")
+    /** 工作区边 = 本项目边 + 全局节点之间的边。 */
+    @Query("SELECT * FROM graph_edges WHERE workspacePath = :workspacePath OR workspacePath = ''")
     fun edgesByWorkspace(workspacePath: String): Flow<List<GraphEdgeEntity>>
 
     @Query("SELECT * FROM graph_nodes WHERE workspacePath = :workspacePath AND type = :type AND sourceRefId = :refId LIMIT 1")
@@ -29,13 +34,22 @@ interface GraphDao {
     @Query("SELECT * FROM graph_nodes WHERE id = :id LIMIT 1")
     suspend fun nodeById(id: String): GraphNodeEntity?
 
-    /** 关键词命中（名称/摘要子串，大小写不敏感）。 */
+    /** 关键词命中（名称/摘要子串，大小写不敏感）；[includeInvalid]=1 时含已失效节点。 */
     @Query(
-        "SELECT * FROM graph_nodes WHERE workspacePath = :workspacePath AND " +
-            "(name LIKE '%' || :query || '%' OR summary LIKE '%' || :query || '%') " +
+        "SELECT * FROM graph_nodes WHERE (workspacePath = :workspacePath OR workspacePath = '') AND " +
+            "(name LIKE '%' || :query || '%' OR summary LIKE '%' || :query || '%') AND " +
+            "(:includeInvalid = 1 OR invalidAt IS NULL) " +
             "ORDER BY updatedAt DESC LIMIT :limit"
     )
-    suspend fun searchNodes(workspacePath: String, query: String, limit: Int): List<GraphNodeEntity>
+    suspend fun searchNodes(workspacePath: String, query: String, includeInvalid: Int, limit: Int): List<GraphNodeEntity>
+
+    /** 当前有效的结论类节点（MEMORY/CONCLUSION/CUSTOM），按时间倒序——会话开始注入用。 */
+    @Query(
+        "SELECT * FROM graph_nodes WHERE (workspacePath = :workspacePath OR workspacePath = '') " +
+            "AND type IN ('MEMORY', 'CONCLUSION', 'CUSTOM') AND invalidAt IS NULL " +
+            "ORDER BY validFrom DESC, updatedAt DESC LIMIT :limit"
+    )
+    suspend fun validConclusions(workspacePath: String, limit: Int): List<GraphNodeEntity>
 
     /** 工作区内发生过 memory 工具调用的（会话, 参数）对——图谱同步用它替代逐会话全量读消息（optimizer P0）。 */
     @Query(
@@ -46,8 +60,12 @@ interface GraphDao {
     suspend fun memoryToolCallsByWorkspace(workspacePath: String): List<MemoryToolCallRow>
 
     /** 与某节点相连的全部边。 */
-    @Query("SELECT * FROM graph_edges WHERE workspacePath = :workspacePath AND (fromNodeId = :nodeId OR toNodeId = :nodeId)")
-    suspend fun edgesTouching(workspacePath: String, nodeId: String): List<GraphEdgeEntity>
+    @Query("SELECT * FROM graph_edges WHERE fromNodeId = :nodeId OR toNodeId = :nodeId")
+    suspend fun edgesTouching(nodeId: String): List<GraphEdgeEntity>
+
+    /** 标记节点失效（事实不覆盖，只标失效）。 */
+    @Query("UPDATE graph_nodes SET invalidAt = :invalidAt, updatedAt = :invalidAt WHERE id = :id AND invalidAt IS NULL")
+    suspend fun invalidateNode(id: String, invalidAt: Long)
 
     @Query("DELETE FROM graph_nodes WHERE id = :id")
     suspend fun deleteNodeById(id: String)
@@ -58,6 +76,14 @@ interface GraphDao {
 
     @Query("DELETE FROM graph_edges WHERE workspacePath = :workspacePath")
     suspend fun deleteEdgesOfWorkspace(workspacePath: String)
+
+    /** 全量导出（备份用）。 */
+    @Query("SELECT * FROM graph_nodes")
+    suspend fun allNodes(): List<GraphNodeEntity>
+
+    /** 全量导出（备份用）。 */
+    @Query("SELECT * FROM graph_edges")
+    suspend fun allEdges(): List<GraphEdgeEntity>
 }
 
 /** memory 工具调用投影（GraphDao.memoryToolCallsByWorkspace 用）。 */

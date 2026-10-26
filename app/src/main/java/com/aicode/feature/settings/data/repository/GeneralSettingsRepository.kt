@@ -59,6 +59,10 @@ class GeneralSettingsRepository @Inject constructor(
         val HANDOFF_AUTO_ENABLED_KEY = booleanPreferencesKey("handoff_auto_enabled")
         val HANDOFF_AUTO_PERCENT_KEY = intPreferencesKey("handoff_auto_percent")
         val FLOAT_BALL_ENABLED_KEY = booleanPreferencesKey("float_ball_enabled")
+        /** 记忆图谱结论抽取开关；默认关闭（抽取会把对话内容发给模型，属数据外发且耗 token）。 */
+        val GRAPH_EXTRACT_ENABLED_KEY = booleanPreferencesKey("graph_extract_enabled")
+        /** 记忆图谱页的首次引导是否已展示（默认关时提示用户可开启）。 */
+        val GRAPH_EXTRACT_INTRO_SHOWN_KEY = booleanPreferencesKey("graph_extract_intro_shown")
         /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
         val PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("prompts_announcement_shown_hash")
 
@@ -239,6 +243,25 @@ class GeneralSettingsRepository @Inject constructor(
 
     suspend fun setFloatBallEnabled(enabled: Boolean) {
         context.generalDataStore.edit { it[FLOAT_BALL_ENABLED_KEY] = enabled }
+    }
+
+    /** 记忆图谱结论抽取开关；默认关闭。 */
+    val graphExtractEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[GRAPH_EXTRACT_ENABLED_KEY] ?: false }
+
+    suspend fun setGraphExtractEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[GRAPH_EXTRACT_ENABLED_KEY] = enabled }
+    }
+
+    /** 抽取是否开启（回合结束/压缩前的快路径判断，单次冷读）。 */
+    suspend fun graphExtractEnabled(): Boolean = graphExtractEnabledFlow.first()
+
+    /** 首次引导是否已展示；展示后写 true，不再重复弹。 */
+    suspend fun graphExtractIntroShown(): Boolean =
+        context.generalDataStore.data.first()[GRAPH_EXTRACT_INTRO_SHOWN_KEY] ?: false
+
+    suspend fun setGraphExtractIntroShown() {
+        context.generalDataStore.edit { it[GRAPH_EXTRACT_INTRO_SHOWN_KEY] = true }
     }
 
     /** 压缩前读取一次触发阈值百分比。 */

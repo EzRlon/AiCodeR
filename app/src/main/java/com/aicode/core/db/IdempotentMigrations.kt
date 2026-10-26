@@ -186,6 +186,27 @@ internal class Migration71To72 : Migration(71, 72) {
     }
 }
 
+/**
+ * 幂等版 72→73（替代 `73_add_graph_temporal.sql` 执行）：记忆图谱加时间轴与作用域列。
+ *
+ * 时间轴：事实不覆盖、只标失效（Graphiti/Zep 的双时间语义）——旧结论被新结论取代时写
+ * `invalidAt`，检索默认过滤失效项、UI 灰显可回溯，避免 AI 把过期结论当现状。
+ * 作用域：全局记忆跨工作区只存一份（scope=GLOBAL、workspacePath 为空串），
+ * 避免同一记忆在每个工作区各生成一份重复节点。
+ */
+internal class Migration72To73 : Migration(72, 73) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "graph_nodes", "scope", "ALTER TABLE `graph_nodes` ADD COLUMN `scope` TEXT NOT NULL DEFAULT 'PROJECT'")
+        addColumnIfMissing(db, "graph_nodes", "validFrom", "ALTER TABLE `graph_nodes` ADD COLUMN `validFrom` INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(db, "graph_nodes", "invalidAt", "ALTER TABLE `graph_nodes` ADD COLUMN `invalidAt` INTEGER")
+        addColumnIfMissing(db, "graph_nodes", "sourceSessionId", "ALTER TABLE `graph_nodes` ADD COLUMN `sourceSessionId` TEXT")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_graph_nodes_invalidAt` ON `graph_nodes` (`invalidAt`)")
+        addColumnIfMissing(db, "graph_edges", "validAt", "ALTER TABLE `graph_edges` ADD COLUMN `validAt` INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(db, "graph_edges", "invalidAt", "ALTER TABLE `graph_edges` ADD COLUMN `invalidAt` INTEGER")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_graph_edges_invalidAt` ON `graph_edges` (`invalidAt`)")
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {

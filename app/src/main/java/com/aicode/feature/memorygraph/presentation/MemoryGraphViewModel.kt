@@ -38,7 +38,8 @@ class MemoryGraphViewModel @Inject constructor(
     private val agentMessageDao: AgentMessageDao,
     private val todoItemDao: TodoItemDao,
     private val checkpointDao: CheckpointDao,
-    private val graphRepository: GraphRepository
+    private val graphRepository: GraphRepository,
+    private val generalSettingsRepository: com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 ) : ViewModel() {
 
     /** 每会话活动统计（sessionId → 行）。 */
@@ -153,6 +154,24 @@ class MemoryGraphViewModel @Inject constructor(
     }
 
     private var graphSearchJob: Job? = null
+
+    /** 结论抽取开关（默认关；页面上可一键开启）。 */
+    val extractEnabled: StateFlow<Boolean> = generalSettingsRepository.graphExtractEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setExtractEnabled(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { generalSettingsRepository.setGraphExtractEnabled(enabled) }
+        }
+    }
+
+    /** 标记某条结论已过时（事实不覆盖、只标失效）：AI 以后不再把它当现状。 */
+    fun markOutdated(nodeId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { graphRepository.invalidateNode(nodeId) }
+                .onFailure { FileLogger.e("MemoryGraphVM", "标记结论过时失败", it) }
+        }
+    }
 
     fun searchGraph(workspacePath: String, query: String) {
         viewModelScope.launch(Dispatchers.IO) {

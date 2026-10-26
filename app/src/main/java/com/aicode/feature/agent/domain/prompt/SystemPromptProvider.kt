@@ -42,7 +42,8 @@ class SystemPromptProvider @Inject constructor(
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val teamRepository: TeamRepository,
     private val taskBriefRepository: TaskBriefRepository,
-    private val executionModeHolder: ExecutionModeHolder
+    private val executionModeHolder: ExecutionModeHolder,
+    private val graphRepository: com.aicode.feature.memorygraph.data.GraphRepository
 ) {
     // 抽象独立的 Source
     interface PromptSource {
@@ -278,6 +279,40 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
+    /**
+     * 已有结论注入（读回路）：把工作区里当前有效的结论（定案/坑/待续）注入系统提示词。
+     *
+     * 这是让记忆图谱「真有用」的关键一环：AI 不主动查也能知道本项目之前定过什么、踩过什么坑。
+     * 只注入「类型 + 名称 + 一句说明 + 出处会话」，不注入正文（正文用 memory/recall 按需取）——
+     * 与「返回指针而非全文」的上下文工程原则一致。会话级缓存：同一会话内只查一次，不扰动 KV Cache。
+     */
+    private inner class ConclusionsSource {
+        private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
+
+        suspend fun build(ctx: AgentContext): String? {
+            if (ctx.projectRoot.isBlank()) return null
+            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
+            cachedByKey[key]?.let { return it.ifEmpty { null } }
+            val nodes = try {
+                graphRepository.validConclusions(ctx.projectRoot)
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "读图谱结论失败: ${e.message}", e)
+                return null
+            }
+            if (nodes.isEmpty()) {
+                cachedByKey[key] = ""
+                return null
+            }
+            val content = nodes.joinToString("\n") { node ->
+                val summary = node.summary.replace(Regex("\\s+"), " ").take(120)
+                "- ${node.name}: $summary"
+            }
+            cachedByKey[key] = content
+            if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
+            return content
+        }
+    }
+
     /** 会话级缓存 key：同一会话同一工作区共享一份快照，避免每轮重扫磁盘导致 system prompt 变化。 */
     private data class SourceCacheKey(val sessionId: String?, val projectRoot: String)
 
@@ -286,6 +321,7 @@ class SystemPromptProvider @Inject constructor(
     private val subAgentListSource = SubAgentListSource()
     private val taskBriefListSource = TaskBriefListSource()
     private val memoryListSource = MemoryListSource()
+    private val conclusionsSource = ConclusionsSource()
 
     private val activeSkillsSource = ActiveSkillsSource()
     private val projectRuleSource = ProjectRuleSource()
@@ -303,7 +339,7 @@ class SystemPromptProvider @Inject constructor(
         PromptFragmentResolver.numberedFragments(customDir).toMap()
     }
 
-    fun build(agentContext: AgentContext): String {
+    suspend fun build(agentContext: AgentContext): String {
         agentContext.agentDefinition?.let { return buildForSubAgent(it, agentContext) }
 
         if (PromptFragmentResolver.isBuiltinDisabled(customDir)) {
@@ -319,6 +355,7 @@ class SystemPromptProvider @Inject constructor(
         val workspaceContent = workspaceSource.build(agentContext)
         val environmentContent = environmentSource.build(agentContext)
         val selfImproveContent = selfImproveInstructionsSource.build(agentContext)
+        val conclusionsContent = conclusionsSource.build(agentContext)
 
         // 2. 变量就地展开：`{{AICODE_*}}` 替换为纯数据；未写变量的片段原样保留。
         val staticContent = renderVariables(
@@ -336,7 +373,8 @@ class SystemPromptProvider @Inject constructor(
             modelContext = modelContextText(agentContext),
             goal = renderGoalBlock(agentContext),
             taskBriefs = taskBriefListSource.build(agentContext),
-            projectNotes = projectNotesSource.build(agentContext)
+            projectNotes = projectNotesSource.build(agentContext),
+            conclusions = conclusionsContent
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -350,7 +388,7 @@ class SystemPromptProvider @Inject constructor(
      * [PromptFragmentResolver.DISABLE_BUILTIN_FILE] 生效时：只输出 `prompts.custom/` 顶层的数字片段，
      * 不注入任何内置来源；动态内容仅通过 `{{AICODE_*}}` 变量按需取回。
      */
-    private fun buildCustomOnly(ctx: AgentContext): String {
+    private suspend fun buildCustomOnly(ctx: AgentContext): String {
         val content = promptFragmentCatalog.renderCustomOnly(ctx.projectRoot)
         if (content.isEmpty()) {
             FileLogger.w(
@@ -471,7 +509,8 @@ class SystemPromptProvider @Inject constructor(
         modelContext: String = "",
         goal: String? = null,
         taskBriefs: String? = null,
-        projectNotes: String? = null
+        projectNotes: String? = null,
+        conclusions: String? = null
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -480,6 +519,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(SUBAGENTS_VAR, subAgents.orEmpty())
         out = out.replace(TASK_BRIEFS_VAR, taskBriefs.orEmpty())
         out = out.replace(PROJECT_NOTES_VAR, projectNotes.orEmpty())
+        out = out.replace(CONCLUSIONS_VAR, conclusions.orEmpty())
         out = out.replace(PROJECT_RULES_GLOBAL_VAR, projectRulesGlobal.orEmpty())
         out = out.replace(PROJECT_RULES_PROJECT_VAR, projectRulesProject.orEmpty())
         out = out.replace(PROJECT_RULES_VAR, projectRulesProject.orEmpty())
@@ -616,6 +656,8 @@ class SystemPromptProvider @Inject constructor(
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
         const val TASK_BRIEFS_VAR = "{{AICODE_TASK_BRIEFS}}"
         const val PROJECT_NOTES_VAR = "{{AICODE_PROJECT_NOTES}}"
+        /** 已有结论（记忆图谱读回路）：当前工作区未失效的结论清单。 */
+        const val CONCLUSIONS_VAR = "{{AICODE_CONCLUSIONS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
         const val PROJECT_RULES_GLOBAL_VAR = "{{AICODE_PROJECT_RULES_GLOBAL}}"
         const val PROJECT_RULES_PROJECT_VAR = "{{AICODE_PROJECT_RULES_PROJECT}}"

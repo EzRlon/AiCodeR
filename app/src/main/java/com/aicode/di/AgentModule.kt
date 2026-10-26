@@ -419,6 +419,7 @@ object AgentModule {
         todoTool: TodoTool,
         memoryTool: MemoryTool,
         recallTool: RecallTool,
+        graphSearchTool: com.aicode.feature.memorygraph.domain.tool.GraphSearchTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
         browserTool: BrowserTool,
@@ -449,6 +450,7 @@ object AgentModule {
             register("todo", todoTool)
             register("memory", memoryTool)
             register("recall", recallTool)
+            register("graph_search", graphSearchTool)
             register("task", taskTool)
             register("messageParent", messageParentTool)
             register("browser", browserTool)

@@ -747,7 +747,8 @@ const TOOLS = [
   { name: 'skill_read', description: 'Read one skill SKILL.md by skill name', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   { name: 'ledger_list', description: 'List annotation ledger and fix ledger entries with statuses (queried via the AiCode app)', inputSchema: { type: 'object', properties: {} } },
   { name: 'ledger_advance', description: 'Advance an annotation and its linked fix-ledger entry to FIXING/REVIEW via the AiCode app (closing is user-only)', inputSchema: { type: 'object', properties: { annotationId: { type: 'string' }, target: { type: 'string', enum: ['FIXING', 'REVIEW'] } }, required: ['annotationId', 'target'] } },
-  { name: 'recall_search', description: 'Full-text search archived history sessions via the AiCode app, including messages compacted out of context (FTS for ASCII, fuzzy for CJK)', inputSchema: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string', enum: ['session', 'workspace', 'all'] }, limit: { type: 'integer' } }, required: ['query'] } }
+  { name: 'recall_search', description: 'Full-text search archived history sessions via the AiCode app, including messages compacted out of context (FTS for ASCII, fuzzy for CJK)', inputSchema: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string', enum: ['session', 'workspace', 'all'] }, limit: { type: 'integer' } }, required: ['query'] } },
+  { name: 'graph_search', description: 'Search the project conclusion graph via the AiCode app: decisions, verified pitfalls and pending items already settled in this project, with their source sessions. Use recall_search for raw message details instead.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, includeInvalid: { type: 'boolean' }, limit: { type: 'integer' } } } }
 ];
 
 function toolsCall(name, args) {
@@ -801,8 +802,8 @@ function handleLine(line) {
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: local }] } });
       return;
     }
-    if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search') {
-      askApp(name, name === 'recall_search' ? Object.assign({ projectRoot: PROJECT }, args) : args).then((res) => {
+    if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search' || name === 'graph_search') {
+      askApp(name, (name === 'recall_search' || name === 'graph_search') ? Object.assign({ projectRoot: PROJECT }, args) : args).then((res) => {
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.ok ? (res.result || '成功') : ('错误：' + (res.message || '未知错误')) }] } });
       }).catch((e) => {
         send({ jsonrpc: '2.0', id, error: { code: -32603, message: '数据通道失败: ' + (e && e.message ? e.message : String(e)) } });
