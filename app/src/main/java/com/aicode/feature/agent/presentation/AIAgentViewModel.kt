@@ -1727,23 +1727,39 @@ class AIAgentViewModel @Inject constructor(
         // - COMPLETED/FAILED：由子会话工作流结束时发出（见 handleSubAgentFinished），注入父会话通知。
         viewModelScope.launch {
             subAgentEventBus.events.collect { event ->
-                when (event.type) {
-                    SubAgentEventType.SPAWNED -> spawnSubAgentWorkflow(event)
-                    SubAgentEventType.STOPPED -> stopAgentSession(event.subSessionId)
-                    SubAgentEventType.COMPLETED, SubAgentEventType.FAILED -> {
-                        enqueueSubAgentNotification(event)
+                // 每个事件独立兜底：collect 块里任何一处抛异常都会让整个收集协程永久终止，
+                // 之后所有 SPAWNED 都被静默丢弃——子代理显示 running 却永不启动、无任何报错。
+                // 这个失败模式极难察觉（App 其余功能正常，只有子代理全静默），故必须逐事件隔离。
+                runCatching {
+                    when (event.type) {
+                        SubAgentEventType.SPAWNED -> spawnSubAgentWorkflow(event)
+                        SubAgentEventType.STOPPED -> stopAgentSession(event.subSessionId)
+                        SubAgentEventType.COMPLETED, SubAgentEventType.FAILED -> {
+                            enqueueSubAgentNotification(event)
+                        }
+                        SubAgentEventType.MESSAGE_FROM_PARENT -> {
+                            deliverMessageToSubAgent(event)
+                            if (event.messageId.isNotBlank()) deliveryTracker.markDelivered(event.messageId)
+                            // 父会话来话 = 对子代理未决外发消息的回复，结清
+                            deliveryTracker.markRepliedBySender(event.subSessionId)
+                        }
+                        SubAgentEventType.MESSAGE_FROM_SUB -> {
+                            deliverMessageToParent(event)
+                            if (event.messageId.isNotBlank()) deliveryTracker.markDelivered(event.messageId)
+                            // 收件方（父/子）来话即视为对未决消息的回复，结清追踪
+                            deliveryTracker.markRepliedFromTarget(event.subSessionId)
+                        }
                     }
-                    SubAgentEventType.MESSAGE_FROM_PARENT -> {
-                        deliverMessageToSubAgent(event)
-                        if (event.messageId.isNotBlank()) deliveryTracker.markDelivered(event.messageId)
-                        // 父会话来话 = 对子代理未决外发消息的回复，结清
-                        deliveryTracker.markRepliedBySender(event.subSessionId)
-                    }
-                    SubAgentEventType.MESSAGE_FROM_SUB -> {
-                        deliverMessageToParent(event)
-                        if (event.messageId.isNotBlank()) deliveryTracker.markDelivered(event.messageId)
-                        // 收件方（父/子）来话即视为对未决消息的回复，结清追踪
-                        deliveryTracker.markRepliedFromTarget(event.subSessionId)
+                }.onFailure { e ->
+                    FileLogger.e(
+                        TAG,
+                        "子代理事件处理失败 type=${event.type} sub=${event.subSessionId}（已隔离，收集器继续运行）",
+                        e
+                    )
+                    // SPAWNED 失败意味着子会话已建但工作流没起来：必须释放活跃位，
+                    // 否则该会话永久占坑，isFull 到顶后所有后续派发都被拒。
+                    if (event.type == SubAgentEventType.SPAWNED) {
+                        subAgentEventBus.release(event.subSessionId)
                     }
                 }
             }

@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.subagent
 
+import com.aicode.core.util.FileLogger
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -109,7 +110,19 @@ class SubAgentEventBus @Inject constructor() {
                 // 收发消息不改变运行状态，活跃集合保持不变。
             }
         }
-        _events.tryEmit(event)
+        // 投递结果必须检查：缓冲区满时 tryEmit 返回 false，事件被静默丢弃——
+        // SPAWNED 丢掉就是「子代理显示 running 但工作流永不启动」，且无任何报错可查。
+        // 丢掉时回滚已占的活跃位，避免子会话永久占坑导致 isFull 到顶、后续派发全被拒。
+        if (!_events.tryEmit(event)) {
+            FileLogger.w(TAG, "子代理事件投递失败（缓冲区已满）type=${event.type} sub=${event.subSessionId}")
+            when (event.type) {
+                SubAgentEventType.SPAWNED -> {
+                    _activeSubSessionIds.value = _activeSubSessionIds.value - event.subSessionId
+                    startedAt.remove(event.subSessionId)
+                }
+                else -> Unit
+            }
+        }
     }
 
     /**
@@ -130,6 +143,8 @@ class SubAgentEventBus @Inject constructor() {
 
 
     companion object {
+        private const val TAG = "SubAgentEventBus"
+
         /** 同时运行的子代理上限。判定以此为准，工具层只引用不自己再写一份。 */
         const val MAX_RUNNING = 5
     }
