@@ -26,8 +26,27 @@
 
 ## A/B 待完成
 
-- A/B#4：正式包恢复 build cache（串行构建下验证坏缓存不复现；复现则维持 --no-build-cache）
-- 注：本表均为单次测量（手机上跑官方 gradle-profiler 多轮基准需数小时，暂不值）；关键取舍如需定论可对单项做 3 轮取均值
+- ~~A/B#4（正式包恢复 build cache）~~ ✅ 2026-10-26 已完成：`assembleArmsoloRelease --no-configuration-cache` **不带** --no-build-cache，13m17s 构建成功（90 tasks，80 up-to-date），坏 KSP 缓存未复发。**结论：正式包可恢复使用 build cache，--no-build-cache 从正式包流程移除**（正式包仍必须带 --no-configuration-cache，版本号冻结坑独立存在）。耗时已入 build-times.csv。
+- 注：本表均为单次测量（手机上跑官方 gradle-profiler 多轮基准需数小时，暂不值）；关键取舍如需定论可对单项做 3 轮取均值。
+
+## daemon 3 轮均值复核（2026-10-26，已定案）
+
+热态增量（同一变体，每轮对 MainActivity.kt 追加全新注释行防缓存命中，走 build-with-lock.sh）：
+
+| 轮次 | 墙钟 | 配置缓存 | Kotlin 增量 | 说明 |
+|---|---|---|---|---|
+| 1 | 80s | 首次落库 | 10.7s | 含一次性配置缓存 store 代价 |
+| 2 | 55s | 复用 | 8.0s | |
+| 3 | 60s | 复用 | 10.2s | |
+
+- 2/3 轮方差 9%（±10% 内），Kotlin 增量方差更小 → **daemon 策略定案维持**。
+- **基线修正**：本表第 4 行的 6m05s 是 daemon 切换后冷启动单次测量（Kotlin daemon 增量管线首次重建）；**热态下 daemon 增量实际约 1 分钟墙钟**（Kotlin ~10s + KSP ~28s + Gradle 固定底价）。此后的「增量编译 ~8 分钟」结论按热/冷两态重新理解：冷启动（新 daemon/大改）才付分钟级代价。
+- 构建耗时曲线已落地：ai-config/notes/build-times.csv（build-with-lock.sh 自动追加，含 task/秒数/退出码）。
+
+## 并行会话注意事项（2026-10-24）
+
+- 另一会话已将本会话的构建配置优化（daemon 策略/jetifier off/build report）与 detekt 工具收编入提交（6762a79、f05e0fc）；f05e0fc 误收本会话的构建测试注释（`// build-timing-ab2b-20261024`），工作区已删除该注释待下次提交入库。
+- 本会话在用户通知前**不再跑任何 Gradle 构建**。
 
 ## 已落地的 QA 链路改造（同日完成，非编译）
 
