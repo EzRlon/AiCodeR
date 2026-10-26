@@ -22,6 +22,8 @@ import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
+import com.aicode.feature.settings.data.repository.ModelCapabilityRepository
+import com.aicode.feature.settings.data.repository.ModelRoutingTable
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonElement
@@ -61,6 +63,7 @@ class TaskTool @Inject constructor(
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val taskBriefRepository: TaskBriefRepository,
     private val subAgentReportCatalog: SubAgentReportCatalog,
+    private val modelCapabilityRepository: ModelCapabilityRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository
 ) : AbstractContextualTool() {
@@ -213,24 +216,35 @@ class TaskTool @Inject constructor(
             }
         }
 
-        // 模型覆盖优先级：自定义 agent 定义里的显式配置 > 设置页「子代理模型」覆盖 > 继承父会话（跟随主代理）。
+        // 模型覆盖优先级：自定义 agent 定义里的显式配置 > 设置页「子代理模型」覆盖 > 路由表档位（4.2）> 继承父会话。
         // 默认通用子代理的覆盖 key 为空串（与设置页、仓库约定一致）。
         val overrideKey = definition?.name ?: ""
         val override = defaultModelSettingsRepository.subAgentModelOverridesSnapshot()[overrideKey]
         // 定义/覆盖都按 provider+model 成对采用，避免拼出「A 家 provider + B 家 model」的幽灵组合。
         val definitionOwnsModel = definition != null && (definition.providerId != null || definition.model != null)
+        // 路由表（4.2 静态路由）：只在前面几级都没指定模型时生效；表是配置数据，未配置就是空表（行为与改动前一致）。
+        val routedModel = if (!definitionOwnsModel && override == null) {
+            runCatching {
+                val table = modelCapabilityRepository.routingTable()
+                table.modelFor(definition?.name ?: ModelRoutingTable.DEFAULT_TASK)
+            }.getOrNull()
+        } else null
         // 创建子代理会话
         val subSession = sessionUseCase.newSubSessionEntity(
             title = description,
             parentId = parentSessionId,
             parent = parentSession,
             subagentType = definition?.name ?: DEFAULT_SUBAGENT_TYPE,
-            providerId = if (definitionOwnsModel) {
-                definition?.providerId?.let { resolveProviderId(it) }
-            } else {
-                override?.first?.let { resolveProviderId(it) }
+            providerId = when {
+                definitionOwnsModel -> definition?.providerId?.let { resolveProviderId(it) }
+                override != null -> override.first.let { resolveProviderId(it) }
+                else -> routedModel?.providerId?.let { resolveProviderId(it) }
             },
-            model = if (definitionOwnsModel) definition?.model else override?.second,
+            model = when {
+                definitionOwnsModel -> definition?.model
+                override != null -> override.second
+                else -> routedModel?.model
+            },
             reasoningEffort = definition?.reasoningEffort?.let { effort ->
                 ReasoningEffort.entries.firstOrNull { it.apiValue == effort }?.name
             },

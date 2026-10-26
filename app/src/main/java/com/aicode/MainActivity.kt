@@ -487,6 +487,19 @@ fun AppNavigation(
         settingsViewModel.checkUpdate(manual = false)
     }
 
+    // 模型能力自动探测（4.1）：启动后延迟跑一次，1 小时 TTL 内不重复打网络；
+    // 失败静默不影响主流程。放在延迟里是为了不与首屏渲染、会话加载抢网络与 CPU。
+    val probeContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(8_000)
+        runCatching {
+            val probe = dagger.hilt.android.EntryPointAccessors
+                .fromApplication(probeContext.applicationContext, ModelProbeEntryPoint::class.java)
+                .modelProbeService()
+            probe.probeAll()
+        }
+    }
+
     // 侧边栏打开时，系统返回键先收起侧边栏。
     BackHandler(enabled = drawerState.isOpen) {
         scope.launch { drawerState.close() }
@@ -1458,4 +1471,11 @@ internal fun splitPathAndLine(path: String): Pair<String, Int> {
     val cleaned = path.substringBefore('#').trim()
     val m = TRAILING_LINE.find(cleaned) ?: return cleaned to 0
     return m.groupValues[1] to (m.groupValues[2].toIntOrNull() ?: 0)
+}
+
+/** 模型能力探测的 Hilt 入口（AppNavigation 是独立 Composable，取 Activity 注入字段拿不到）。 */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface ModelProbeEntryPoint {
+    fun modelProbeService(): com.aicode.feature.settings.domain.model.ModelProbeService
 }
