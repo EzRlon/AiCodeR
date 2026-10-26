@@ -1,45 +1,66 @@
-# 子代理「全部失效」根因排查（2026-10-26）
+# 子代理「全部失效」真因（2026-10-26 定案）
 
-## 现象
-本轮审查连派 4 个 qa 子代理，全部静默无响应：`task(action="read")` 永远显示「子代理尚未回复」，`state` 一直是 running，无报错、无残留进程，只能 `stop`。累计等待超过 1 小时。当时判断「子代理链路坏了」。
+> 前一版笔记 `subagent-stall-rootcause-2026-10-26.md` 的结论**是错的**——那版把原因归为「长回合 + 重负载窗口导致 LLM 流式卡死」。本文是用时间戳证据推翻后重写的定案版。
 
-## 排查过程（逐步排除）
+## 决定性证据：时间戳
 
-| # | 假设 | 验证方式 | 结论 |
+`task(action="list")` 的 `createdAt` / `updatedAt` 给出铁证：
+
+| 子代理 | createdAt | updatedAt | 存活 |
 |---|---|---|---|
-| 1 | 子代理链路整体失效 | 派 Explore 做极简任务（读一行配置） | **排除**，几秒返回 |
-| 2 | `optimizer` 定义丢失 | `task(agent="optimizer")` | 报 AGENT_NOT_FOUND——本环境只加载 Explore 与 qa（内置 `assets/agents/` 有 8 个定义，但用户只启用了这两个）。**这是配置现状，不是故障** |
-| 3 | 模型路由表指向坏模型 | 读 `ModelCapabilityRepository`：默认 `tierModels` 为空表 → 回退继承父会话 | **排除** |
-| 4 | qa 的工具集有问题（含 Bash/terminal） | 派 qa 做禁 Bash 的小任务 | 秒回。**排除** |
-| 5 | qa 的 Bash 调用卡在授权弹窗 | 派 qa 跑 `echo hello-from-qa` | 秒回（`Bash` 的 `permissionPolicy=ASK`，但此处未触发挂起）。**排除** |
-| 6 | 首字节/数据块间隔看门狗没兜住 | 读 `RetryPolicy` / `GeneralSettingsRepository`：首字节 120s、数据块间隔 120s，provider 层统一装配，子代理走同一路径 | **排除**（看门狗存在且正确） |
-| 7 | **任务规模**：失败的 4 个都是「要读多文件、写长报告」的大任务；成功的 5 个都是「读一个文件、答一句话」的小任务 | 对比任务书长度与产出要求 | **命中** |
+| ed806e6a 审查批次6/7全量 | 13:37:49 | 13:37:49 | **0.0s** |
+| 8d594894 脚本+schema复核 | 14:17:28 | 14:17:28 | **0.2s** |
+| f52ddf67 性能功耗维度 | 14:25:00 | 14:25:00 | **0.1s** |
+| 794f1e59 小范围复核A | 15:22:15 | 15:22:15 | **0.1s** |
+| bd8cdc93 Explore探针 | 15:11:40 | 15:11:49 | 9.8s |
+| c9b22eef qa链路探针 | 15:13:25 | 15:13:50 | 25.4s |
+| 3f6647bc qa禁Bash探针 | 15:15:42 | 15:16:12 | 30.5s |
+| a9978cab qa-Bash探针 | 15:18:40 | 15:19:03 | 22.4s |
 
-## 根因（与 2026-10-19 记录同源）
+`updatedAt == createdAt` 意味着**会话行从未被更新过一次**。而 `executeAgentRequestStream` 只要启动就会走 `persist(USER)` + `sessionUseCase.touch()`（`AIAgentViewModel.kt:2357`/`2365`），`touch` 是 `UPDATE chat_sessions SET updatedAt`（`ChatSessionDao.kt:92-93`）。
 
-子代理的 **LLM 流式回合静默冻结**：不报错、不结束、`state` 永远 running。触发条件是**长回合 + 重负载窗口**——本轮 4 个失败任务都发生在主线程跑 Gradle 正式包构建（9–10 分钟 R8 全量）期间，且任务书本身要求多文件通读 + 长篇报告。
+**结论：失败的子代理从未启动工作流，不是「跑到一半卡死」。** 之前"流式卡死"的判断从一开始就不成立。
 
-这不是本次新引入的 bug，是 `network-switch-stream-hang` 记忆里已记录的 App 层流卡死问题的又一次命中（2026-10-19 已在 qa 上验证过同一现象，当时的规避是「构建不与 qa 并发 + 单批小范围派发」）。
+## 第二个证据：间歇性，与任务大小无关
 
-**本轮我自己违反了这条纪律**：在正式包构建期间派了 3 个大范围 qa，还要求「15 分钟内出结论、不要扩散」——既违反并发纪律，又给了长回合任务。
+同一形态的三文件任务：
+- 17:07 派发「二分-读三文件」→ 失败（0.0s）
+- 17:15 派发「计时实验-三文件」（同样三个文件、同样问题）→ **成功**（111s）
 
-## 已做的修复（不是消除卡死，而是让它可见）
+如果是任务太大/构建并发，同一任务不会先败后成。这是**进程内累积状态的间歇性故障**。
 
-卡死本身在代码层无法区分「已死」与「正常但很慢」，**不做超时自动杀**（误杀会丢掉正在出结果的审查）。改的是可观测性：
+## 真因：事件链上三处静默失败
 
-1. `SubAgentEventBus` 记录子代理启动时刻（SPAWNED 写入，COMPLETED/FAILED/STOPPED/release 清除），新增 `runningMillis()`
-2. `TaskTool list` 对运行中的子代理输出 `runningSeconds` —— 主代理据此判断「还在干活」还是「该 stop 重派」
-3. `99-runtime-context.md` 写明现象与处置：先 `task(action="read")` 确认有无输出，再 `task(action="stop")` 停掉重派；**重派时缩小范围**（一次一个文件/一个问题），超长单回合显著提高卡死概率
+子代理启动链路：`TaskTool.emit(SPAWNED)` → `SubAgentEventBus.tryEmit` → `AIAgentViewModel` 的 collect → `spawnSubAgentWorkflow` → `executeAgentRequestStream`。
 
-提交 `d1d6e88`。
+三处都能让事件静默消失，且**全都无日志、无报错**，表现完全一致：子会话建成、UI 显示 running、工作流永不启动。
 
-## 纪律（本轮教训，后续必须遵守）
+### 1. 事件收集协程没有异常隔离（`AIAgentViewModel.kt:1728`）
+```kotlin
+viewModelScope.launch {
+    subAgentEventBus.events.collect { event ->   // 整个块裸奔
+        when (event.type) { ... }
+    }
+}
+```
+`collect` 块里任何一处抛异常，**整个收集协程永久终止**。之后所有 SPAWNED 事件进 SharedFlow 却无人消费——子代理全部静默失效，而 App 其余功能完全正常。这解释了「5 个失败全在 16:47 前、6 个成功全在 16:52 后」：进程内发生过一次异常后收集器就死了，直到 ViewModel 重建（约 16:50 用户操作导致）才恢复。
 
-1. **正式包构建期间不派子代理做长任务**。构建窗口内只派「读一个文件、答一句话」级别的探针，或干脆等构建结束。
-2. **单次 qa 范围 ≤ 一个文件 / 一个问题**，禁止「通读 N 个文件 + 写分级报告」这种超长单回合。
-3. 派发后 **3–5 分钟无输出就该 read 确认**，不要连续等 15–35 分钟；确认无输出立即 stop 重派小任务。
-4. 每次派发前先派一个**极简探针**（读一行配置）验证链路，成本几秒，能省掉整轮误判。
+### 2. `tryEmit` 返回值被丢弃（`SubAgentEventBus.kt:116`）
+`MutableSharedFlow(extraBufferCapacity = 64)`，缓冲区满时 `tryEmit` 返回 false，事件被丢。原代码直接 `_events.tryEmit(event)` 不检查。
 
-## 未消除的风险
+### 3. 三处提前返回不释放活跃位（`AIAgentViewModel.kt:1832`）
+`spawnSubAgentWorkflow` 的「父会话不存在」「子会话已删」两处 early return 正常返回，但 SPAWNED 已在总线里占了活跃位——该会话永久占名额，`isFull` 到顶（5 个）后所有后续派发被拒。
 
-App 层流卡死 bug（`network-switch-stream-hang`）**仍未修复**，本轮的修复只解决「卡死了看不出来」。真正治本需要按该记忆里的修复方向推进（网络变化主动打断已落地；首字节/数据块看门狗已存在；剩下的是「长回合 + 重负载」这个组合本身没有专门的保护）。
+## 修复（提交 fca946b + 9fcb2b7）
+
+1. 事件收集逐事件 `runCatching`，失败记 `FileLogger.e` 并释放活跃位——收集器永不因单个事件死亡
+2. `tryEmit` 返回值检查，失败记日志；SPAWNED 投递失败时回滚活跃位与 `startedAt`
+3. 两处「不启动」的 early return 补 `release()`；第三处（同会话已有活跃 job）刻意不 release——会话本就在跑，清掉会把正在运行的会话名额错误释放
+
+另（提交 65a2d1d）：`SubAgentEventBus` 记录启动时刻，`task(action="list")` 输出 `runningSeconds`，让「跑了多久」可见——这是定位本次问题所用的工具本身。
+
+## 方法论教训
+
+- **不要用「等多久没反应」判断卡死**，要用 `updatedAt == createdAt` 这类**结构性证据**。前两次我都因为「等了 15–35 分钟没输出」下结论，都是错的。
+- **同一形态任务先败后成**，就该怀疑状态污染而非任务规模。我第一次没做这个对照，直接写了错误的根因笔记。
+- `task(action="read")` 返回「（子代理尚未回复）请求内容：<prompt>」时，注意那是**回退到用户消息**的分支（`TaskTool.kt:372`），说明一条助手消息都没有——不是"回复慢"。

@@ -1833,14 +1833,19 @@ class AIAgentViewModel @Inject constructor(
         val parentSession = sessionUseCase.getSessionById(event.parentSessionId)
         if (parentSession == null) {
             FileLogger.w(TAG, "子代理父会话不存在: ${event.parentSessionId}")
+            // 不启动就必须释放活跃位：SPAWNED 已在总线里占坑，否则该会话永久占名额，
+            // isFull 到顶后所有后续派发都被拒。
+            subAgentEventBus.release(event.subSessionId)
             return
         }
         // 子会话可能已被用户删除，跳过
         if (sessionUseCase.getSessionById(event.subSessionId) == null) {
             FileLogger.w(TAG, "子代理会话已被删除，跳过启动: ${event.subSessionId}")
+            subAgentEventBus.release(event.subSessionId)
             return
         }
-        // 子代理运行中不允许重复启动（同一会话已有活跃 job）
+        // 子代理运行中不允许重复启动（同一会话已有活跃 job）；重复事件不额外占坑，
+        // 活跃位保持（它本就在跑），不能 release，否则会把正在运行的会话名额错误清掉。
         if (sessionJobs[event.subSessionId]?.isActive == true) return
 
         executeAgentRequestStream(
