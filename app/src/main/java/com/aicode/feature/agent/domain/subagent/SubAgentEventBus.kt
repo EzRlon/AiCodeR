@@ -56,6 +56,16 @@ class SubAgentEventBus @Inject constructor() {
     private val _activeSubSessionIds = MutableStateFlow<Set<String>>(emptySet())
     val activeSubSessionIds: StateFlow<Set<String>> = _activeSubSessionIds.asStateFlow()
 
+    /**
+     * 子代理启动时刻（子会话 id → System.currentTimeMillis）。
+     *
+     * 只记启动时间不记心跳：子代理的 LLM 回合可能静默卡死（流式请求冻结，不报错不结束），
+     * 表现为 state 永远 running。有了启动时刻，`task(action="list")` 就能报出「已运行多久」，
+     * 主代理据此判断该 stop 重派，而不是无限等一个死掉的子代理。
+     * 刻意不做常驻轮询/超时自动杀：卡死与「正常但很慢」在代码层无法区分，误杀会丢掉正在出结果的审查。
+     */
+    private val startedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     /** 运行中的子代理数量。 */
     val activeCount: Int get() = _activeSubSessionIds.value.size
 
@@ -74,17 +84,24 @@ class SubAgentEventBus @Inject constructor() {
         val current = _activeSubSessionIds.value
         if (subSessionId !in current) return false
         _activeSubSessionIds.value = current - subSessionId
+        startedAt.remove(subSessionId)
         return true
     }
+
+    /** 子代理已运行毫秒数；不在运行返回 null。 */
+    fun runningMillis(subSessionId: String, now: Long = System.currentTimeMillis()): Long? =
+        startedAt[subSessionId]?.let { now - it }
 
     fun emit(event: SubAgentEvent) {
         // 同步维护活跃集合
         when (event.type) {
             SubAgentEventType.SPAWNED -> {
                 _activeSubSessionIds.value = _activeSubSessionIds.value + event.subSessionId
+                startedAt[event.subSessionId] = System.currentTimeMillis()
             }
             SubAgentEventType.COMPLETED, SubAgentEventType.FAILED, SubAgentEventType.STOPPED -> {
                 _activeSubSessionIds.value = _activeSubSessionIds.value - event.subSessionId
+                startedAt.remove(event.subSessionId)
                 // 任务期工具准入随之失效：限制只约束本次派发，子代理后续被追问时回到自己的完整工具集
                 _stepToolLimits.remove(event.subSessionId)
             }

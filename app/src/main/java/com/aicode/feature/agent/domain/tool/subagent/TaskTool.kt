@@ -455,6 +455,9 @@ class TaskTool @Inject constructor(
                     put("id", entity.id)
                     put("title", entity.title)
                     put("state", if (entity.id in activeIds) "running" else "completed")
+                    // 运行中的报出已跑时长：LLM 回合可能静默卡死（不报错不结束，state 永远 running），
+                    // 有时长才能判断「还在干活」还是「已经死了该 stop 重派」。
+                    eventBus.runningMillis(entity.id)?.let { put("runningSeconds", it / 1000) }
                     put("createdAt", entity.createdAt)
                     put("updatedAt", entity.updatedAt)
                 }
