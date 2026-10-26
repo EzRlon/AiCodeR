@@ -422,7 +422,8 @@ object AgentModule {
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
         browserTool: BrowserTool,
-        fixLedgerTool: com.aicode.feature.fixledger.domain.tool.FixLedgerTool
+        fixLedgerTool: com.aicode.feature.fixledger.domain.tool.FixLedgerTool,
+        taskLedgerTool: com.aicode.feature.agent.domain.tool.ledger.TaskLedgerTool
     ): ToolRegistry {
         return ToolRegistry().apply {
             register("readFile", readFileTool)
@@ -452,6 +453,7 @@ object AgentModule {
             register("messageParent", messageParentTool)
             register("browser", browserTool)
             register("fixledger", fixLedgerTool)
+            register("taskLedger", taskLedgerTool)
         }
     }
 

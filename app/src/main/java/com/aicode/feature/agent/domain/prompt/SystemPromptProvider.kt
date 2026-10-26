@@ -290,6 +290,7 @@ class SystemPromptProvider @Inject constructor(
     private val activeSkillsSource = ActiveSkillsSource()
     private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
+    private val projectNotesSource = ProjectNotesSource()
     private val environmentSource = EnvironmentSource()
     private val selfImproveInstructionsSource = SelfImproveInstructionsSource()
     private val teamLeaderSource = TeamLeaderSource()
@@ -334,7 +335,8 @@ class SystemPromptProvider @Inject constructor(
             selfImprove = selfImproveContent,
             modelContext = modelContextText(agentContext),
             goal = renderGoalBlock(agentContext),
-            taskBriefs = taskBriefListSource.build(agentContext)
+            taskBriefs = taskBriefListSource.build(agentContext),
+            projectNotes = projectNotesSource.build(agentContext)
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -468,7 +470,8 @@ class SystemPromptProvider @Inject constructor(
         selfImprove: String? = null,
         modelContext: String = "",
         goal: String? = null,
-        taskBriefs: String? = null
+        taskBriefs: String? = null,
+        projectNotes: String? = null
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -476,6 +479,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(MEMORY_PROJECT_VAR, memoryProject.orEmpty())
         out = out.replace(SUBAGENTS_VAR, subAgents.orEmpty())
         out = out.replace(TASK_BRIEFS_VAR, taskBriefs.orEmpty())
+        out = out.replace(PROJECT_NOTES_VAR, projectNotes.orEmpty())
         out = out.replace(PROJECT_RULES_GLOBAL_VAR, projectRulesGlobal.orEmpty())
         out = out.replace(PROJECT_RULES_PROJECT_VAR, projectRulesProject.orEmpty())
         out = out.replace(PROJECT_RULES_VAR, projectRulesProject.orEmpty())
@@ -543,13 +547,63 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
+    /**
+     * 项目知识库索引（3.3）：`<项目>/.aicode/notes` 下各 md 文件的一级标题清单。
+     *
+     * 只注入「文件名 + 首行标题」而不注入正文：知识库的价值是「知道去哪里查」，
+     * 全文注入会把上下文吃满。会话级缓存，不扰动 KV Cache。
+     */
+    private inner class ProjectNotesSource : PromptSource {
+        private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
+
+        override fun build(ctx: AgentContext): String? {
+            if (ctx.projectRoot.isBlank()) return null
+            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
+            cachedByKey[key]?.let { return it.ifEmpty { null } }
+            val content = try {
+                projectNotesIndex(ctx.projectRoot)
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "扫描项目知识库失败: ${e.message}", e)
+                return null
+            }
+            cachedByKey[key] = content
+            if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
+            return content.ifEmpty { null }
+        }
+
+        private fun projectNotesIndex(projectRoot: String): String {
+            // 与记忆/技能同一套做法：直接读容器内目录（项目根在容器里就是工作区挂载点）。
+            val dir = File(projectRoot.trimEnd('/') + PROJECT_NOTES_DIR)
+            if (!dir.isDirectory) return ""
+            val files = dir.listFiles { f -> f.isFile && f.extension.equals("md", ignoreCase = true) }
+                ?: return ""
+            val lines = ArrayList<String>()
+            for (file in files.sortedBy { it.name }.take(MAX_NOTES_LISTED)) {
+                val name = file.name.removeSuffix(".md")
+                val title = try {
+                    file.useLines { seq ->
+                        seq.firstOrNull { it.startsWith("# ") }?.removePrefix("# ")?.trim()
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+                lines.add(if (title.isNullOrBlank()) "- " + name else "- " + name + " - " + title)
+            }
+            return lines.joinToString("\n")
+        }
+    }
+
     private companion object {
         const val TAG = "SystemPromptProvider"
         const val AGENTS_FILE = "AGENTS.md"
         const val CLAUDE_FILE = "CLAUDE.md"
         const val SUBAGENT_BASE_FILE = "agent/subagent-base.md"
         const val SUBAGENT_CONTEXT_FILE = "agent/subagent-context.md"
+        const val MAX_NOTES_LISTED = 30
         const val MAX_AGENTS_CHARS = 32_000
+
+        /** 项目知识库目录（相对项目根）：领域笔记/决策/踩坑记录的沉淀位置。 */
+        const val PROJECT_NOTES_DIR = "/.aicode/notes"
         /** 会话级缓存 key 数量上限：超过后整体清空，仅防长期累积；正常会话数远小于此。 */
         const val SOURCE_CACHE_LIMIT = 32
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")
@@ -561,6 +615,7 @@ class SystemPromptProvider @Inject constructor(
         const val MEMORY_PROJECT_VAR = "{{AICODE_MEMORY_PROJECT}}"
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
         const val TASK_BRIEFS_VAR = "{{AICODE_TASK_BRIEFS}}"
+        const val PROJECT_NOTES_VAR = "{{AICODE_PROJECT_NOTES}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
         const val PROJECT_RULES_GLOBAL_VAR = "{{AICODE_PROJECT_RULES_GLOBAL}}"
         const val PROJECT_RULES_PROJECT_VAR = "{{AICODE_PROJECT_RULES_PROJECT}}"
@@ -585,4 +640,5 @@ class SystemPromptProvider @Inject constructor(
                 "步骤：a) 反思最近交互的得失；b) 选一个具体改进项；c) 落盘；d) 在回复中用一两句说明改动与目的。\n" +
                 "目标不是一次大改，而是持续的小改进——改进保存在 ~/.aicode/，软件升级时会被继承。"
     }
+
 }
