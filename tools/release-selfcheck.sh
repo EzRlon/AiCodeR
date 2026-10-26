@@ -63,14 +63,20 @@ echo
 
 # ── 2. 体积差分 ──────────────────────────────────────────────
 echo "── 2. 体积差分 ──"
-size="$("$A" apk file-size "$APK")"
-dl="$("$A" apk download-size "$APK")"
+size="$("$A" apk file-size "$APK" || true)"
+dl="$("$A" apk download-size "$APK" || true)"
+case "$size" in ''|*[!0-9]*) fail "读不到包体大小（apk 损坏或非 APK）"; size=0 ;; esac
+case "$dl" in ''|*[!0-9]*) dl=0 ;; esac
 echo "包体 $(($size / 1024)) KB / 估算下载 $(($dl / 1024)) KB"
 
 BASE="$2"
 if [ -z "$BASE" ]; then
-    # 缺省在 ~/workspace 里找最近一次交付包作为基线
-    BASE="$(ls -t "$HOME"/workspace/*.apk 2>/dev/null | head -1)"
+    # 缺省在 ~/workspace 里找最近一次交付包作为基线（排除本次待检包自身）
+    for cand in $(ls -t "$HOME"/workspace/*.apk 2>/dev/null || true); do
+        [ "$(cd "$(dirname "$cand")" && pwd)/$(basename "$cand")" = "$(cd "$(dirname "$APK")" && pwd)/$(basename "$APK")" ] && continue
+        BASE="$cand"
+        break
+    done
 fi
 if [ -n "$BASE" ] && [ -f "$BASE" ]; then
     base_abs="$(cd "$(dirname "$BASE")" && pwd)/$(basename "$BASE")"
@@ -78,7 +84,13 @@ if [ -n "$BASE" ] && [ -f "$BASE" ]; then
     if [ "$base_abs" = "$apk_abs" ]; then
         echo "无基线（未提供，且未找到其他交付包）——跳过差分"
     else
-        base_size="$("$A" apk file-size "$BASE")"
+        base_size="$("$A" apk file-size "$BASE" || true)"
+        case "$base_size" in ''|*[!0-9]*)
+            echo "基线包读不出大小（可能已损坏）——跳过差分"
+            base_size=""
+            ;;
+        esac
+        if [ -n "$base_size" ]; then
         delta=$((size - base_size))
         echo "基线 $(basename "$BASE")：$(($base_size / 1024)) KB → 本包 $(($size / 1024)) KB（${delta} 字节）"
         "$A" files list --raw-size "$BASE" | awk -F'\t' 'NF==2 && $2!="/"{print $2"\t"$1}' > "$TMP/base.txt"
@@ -98,6 +110,7 @@ if [ -n "$BASE" ] && [ -f "$BASE" ]; then
             warn "包体增长超过 2MB（${delta} 字节），确认是否来自预期内的新增资源"
         else
             pass "包体变化在 2MB 以内"
+        fi
         fi
     fi
 else
