@@ -20,6 +20,7 @@ import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
+import com.aicode.feature.agent.domain.subagent.SubAgentReportCatalog
 import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import com.aicode.feature.agent.domain.tool.ToolRegistry
@@ -91,6 +92,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val approvalNotificationSettings: ApprovalNotificationSettingsRepository,
     private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
+    private val subAgentReportCatalog: SubAgentReportCatalog,
     private val deliveryTracker: com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
@@ -143,6 +145,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         approvalNotificationSettings,
         agentApprovalNotificationManager,
         subAgentEventBus,
+        subAgentReportCatalog,
         deliveryTracker,
         agentNotificationCenter,
         agentDefinitionRepository,

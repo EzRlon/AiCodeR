@@ -227,6 +227,7 @@ class AIAgentViewModel @Inject constructor(
     private val approvalNotificationSettings: ApprovalNotificationSettingsRepository,
     private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
+    private val subAgentReportCatalog: com.aicode.feature.agent.domain.subagent.SubAgentReportCatalog,
     private val deliveryTracker: com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
@@ -1831,6 +1832,31 @@ class AIAgentViewModel @Inject constructor(
      * [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），空闲时立即注入一条系统通知消息触发新一轮。
      * 父代理据此得知子代理结束，可 task(action="read") 取回结果。与 terminal 后台通知同机制。
      */
+    /**
+     * 归档子代理最终输出到报告 catalog（`~/.aicode/subagent-reports/`）。
+     * 子会话被 task(del) 删除后仍可回溯结论；qa/optimizer 报告也能跨会话检索复用。
+     */
+    private suspend fun archiveSubAgentReport(subSessionId: String, outcome: String) {
+        runCatching {
+            val session = sessionUseCase.getSessionById(subSessionId) ?: return@runCatching
+            val messages = withContext(Dispatchers.IO) { agentMessageDao.getMessagesBySessionOnce(subSessionId) }
+            val content = messages.lastOrNull {
+                it.role == MessageRole.ASSISTANT.name && it.content.isNotBlank()
+            }?.content.orEmpty()
+            withContext(Dispatchers.IO) {
+                subAgentReportCatalog.record(
+                    subSessionId = subSessionId,
+                    agentType = session.subagentType ?: "subagent",
+                    title = session.title,
+                    outcome = outcome,
+                    content = content
+                )
+            }
+        }.onFailure { e ->
+            FileLogger.w(TAG, "归档子代理报告失败: $subSessionId", e)
+        }
+    }
+
     private fun enqueueSubAgentNotification(event: SubAgentEvent) {
         viewModelScope.launch {
             val title = sessionUseCase.getSessionById(event.subSessionId)?.title ?: "子代理"
@@ -2319,6 +2345,12 @@ class AIAgentViewModel @Inject constructor(
                 // goal 自主循环期间禁用 PLAN（其退出门禁需人工审查）；非 goal 期间不暴露 goalStatus 工具。
                 if (goalActive) list.filterNot { it.name == "planMode" }
                 else list.filterNot { it.name == "goalStatus" }
+            }.let { list ->
+                // 任务期工具准入（step-owned）：task(tools=[...]) 声明的限制只收窄不放开，
+                // 支持 `mcp__server__*` 通配；未声明限制时原样返回。
+                val limit = if (isSub) subAgentEventBus.stepToolLimit(sessionId) else null
+                if (limit.isNullOrEmpty()) list
+                else list.filter { tool -> limit.any { it == tool.name || (it.endsWith("*") && tool.name.startsWith(it.dropLast(1), ignoreCase = true)) } }
             }
 
             var currentReasoningStart: Long? = null
@@ -2616,6 +2648,7 @@ class AIAgentViewModel @Inject constructor(
                         setAgentState(sessionId, AgentUIState.Error(describeFailure(event)))
                         // 子代理会话失败时通知父会话
                         if (isSub) {
+                            archiveSubAgentReport(sessionId, outcome = "failed")
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
                                 subAgentEventBus.emit(
                                     SubAgentEvent(
@@ -2634,6 +2667,7 @@ class AIAgentViewModel @Inject constructor(
                         setCompacting(sessionId, false)
                         // 子代理会话完成时通知父会话（异步回调）
                         if (isSub) {
+                            archiveSubAgentReport(sessionId, outcome = "completed")
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
                                 subAgentEventBus.emit(
                                     SubAgentEvent(

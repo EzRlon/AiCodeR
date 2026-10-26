@@ -11,6 +11,7 @@ import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.InjectPart
+import com.aicode.feature.agent.domain.subagent.TaskBriefRepository
 import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.ExecutionModeHolder
@@ -40,6 +41,7 @@ class SystemPromptProvider @Inject constructor(
     private val containerInstaller: ContainerInstaller,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val teamRepository: TeamRepository,
+    private val taskBriefRepository: TaskBriefRepository,
     private val executionModeHolder: ExecutionModeHolder
 ) {
     // 抽象独立的 Source
@@ -89,6 +91,34 @@ class SystemPromptProvider @Inject constructor(
                 .replace(LEADING_COMMENT, "")
                 .trim()
                 .also { cached = it }
+    }
+
+    /**
+     * 任务书模板清单（仅注入主代理）：让 AI 知道 `task(brief=...)` 可引用哪些模板。
+     * 会话级缓存，与子代理清单同一套不扰动 KV Cache 的做法。
+     */
+    private inner class TaskBriefListSource : PromptSource {
+        private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
+
+        override fun build(ctx: AgentContext): String? {
+            val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
+            val cached = cachedByKey[key]
+            if (cached != null) return cached.ifEmpty { null }
+            val names = try {
+                taskBriefRepository.listAll(ctx.projectRoot).map { it.name }
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "扫描任务书模板失败: ${e.message}", e)
+                return null
+            }
+            if (names.isEmpty()) {
+                cachedByKey[key] = ""
+                return null
+            }
+            val content = names.joinToString("\n") { "- $it" }
+            cachedByKey[key] = content
+            if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
+            return content
+        }
     }
 
     /**
@@ -254,6 +284,7 @@ class SystemPromptProvider @Inject constructor(
     private val staticRuleSource = StaticRuleSource()
     private val subAgentBaseSource = SubAgentBaseSource()
     private val subAgentListSource = SubAgentListSource()
+    private val taskBriefListSource = TaskBriefListSource()
     private val memoryListSource = MemoryListSource()
 
     private val activeSkillsSource = ActiveSkillsSource()
@@ -302,7 +333,8 @@ class SystemPromptProvider @Inject constructor(
             currentDate(),
             selfImprove = selfImproveContent,
             modelContext = modelContextText(agentContext),
-            goal = renderGoalBlock(agentContext)
+            goal = renderGoalBlock(agentContext),
+            taskBriefs = taskBriefListSource.build(agentContext)
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -435,13 +467,15 @@ class SystemPromptProvider @Inject constructor(
         subAgentName: String = "",
         selfImprove: String? = null,
         modelContext: String = "",
-        goal: String? = null
+        goal: String? = null,
+        taskBriefs: String? = null
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
         out = out.replace(MEMORY_GLOBAL_VAR, memoryGlobal.orEmpty())
         out = out.replace(MEMORY_PROJECT_VAR, memoryProject.orEmpty())
         out = out.replace(SUBAGENTS_VAR, subAgents.orEmpty())
+        out = out.replace(TASK_BRIEFS_VAR, taskBriefs.orEmpty())
         out = out.replace(PROJECT_RULES_GLOBAL_VAR, projectRulesGlobal.orEmpty())
         out = out.replace(PROJECT_RULES_PROJECT_VAR, projectRulesProject.orEmpty())
         out = out.replace(PROJECT_RULES_VAR, projectRulesProject.orEmpty())
@@ -526,6 +560,7 @@ class SystemPromptProvider @Inject constructor(
         const val MEMORY_GLOBAL_VAR = "{{AICODE_MEMORY_GLOBAL}}"
         const val MEMORY_PROJECT_VAR = "{{AICODE_MEMORY_PROJECT}}"
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
+        const val TASK_BRIEFS_VAR = "{{AICODE_TASK_BRIEFS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"
         const val PROJECT_RULES_GLOBAL_VAR = "{{AICODE_PROJECT_RULES_GLOBAL}}"
         const val PROJECT_RULES_PROJECT_VAR = "{{AICODE_PROJECT_RULES_PROJECT}}"

@@ -85,6 +85,8 @@ class SubAgentEventBus @Inject constructor() {
             }
             SubAgentEventType.COMPLETED, SubAgentEventType.FAILED, SubAgentEventType.STOPPED -> {
                 _activeSubSessionIds.value = _activeSubSessionIds.value - event.subSessionId
+                // 任务期工具准入随之失效：限制只约束本次派发，子代理后续被追问时回到自己的完整工具集
+                _stepToolLimits.remove(event.subSessionId)
             }
             SubAgentEventType.MESSAGE_FROM_PARENT, SubAgentEventType.MESSAGE_FROM_SUB -> {
                 // 收发消息不改变运行状态，活跃集合保持不变。
@@ -92,6 +94,23 @@ class SubAgentEventBus @Inject constructor() {
         }
         _events.tryEmit(event)
     }
+
+    /**
+     * 任务期工具准入（step-owned）：`task(tools=[...])` 声明的本任务允许工具集，按子会话 id 登记。
+     *
+     * 只存内存不落库：限制属于「本次派发」的约束，App 重启后子代理已不在跑，限制自然失效；
+     * 存库反而会让追问时被旧限制卡住。空集合 = 不限（继承子代理定义的工具集）。
+     */
+    private val _stepToolLimits = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
+
+    /** 登记/覆盖某子会话的任务期工具限制；传空集合表示清除限制。 */
+    fun setStepToolLimit(subSessionId: String, tools: Set<String>) {
+        if (tools.isEmpty()) _stepToolLimits.remove(subSessionId) else _stepToolLimits[subSessionId] = tools
+    }
+
+    /** 取某子会话的任务期工具限制；null 表示未声明限制。 */
+    fun stepToolLimit(subSessionId: String): Set<String>? = _stepToolLimits[subSessionId]
+
 
     companion object {
         /** 同时运行的子代理上限。判定以此为准，工具层只引用不自己再写一份。 */

@@ -12,6 +12,8 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEvent
 import com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
+import com.aicode.feature.agent.domain.subagent.SubAgentReportCatalog
+import com.aicode.feature.agent.domain.subagent.TaskBriefRepository
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.ToolCapability
@@ -57,6 +59,8 @@ class TaskTool @Inject constructor(
     private val eventBus: SubAgentEventBus,
     private val deliveryTracker: SubAgentDeliveryTracker,
     private val agentDefinitionRepository: AgentDefinitionRepository,
+    private val taskBriefRepository: TaskBriefRepository,
+    private val subAgentReportCatalog: SubAgentReportCatalog,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository
 ) : AbstractContextualTool() {
@@ -64,6 +68,9 @@ class TaskTool @Inject constructor(
     private companion object {
         const val TAG = "TaskTool"
         const val TASK_DESCRIPTION_MAX = 30
+
+        /** `list` 返回的归档报告条数上限（避免历史堆积后把工具结果撞爆上下文）。 */
+        const val ARCHIVE_LIST_LIMIT = 20
         /** 未指定 agent 时子会话记录的类型标识。 */
         const val DEFAULT_SUBAGENT_TYPE = "subagent"
     }
@@ -80,7 +87,7 @@ class TaskTool @Inject constructor(
         }
     }
 
-    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理。"
+    override val description = "管理子代理：创建、发消息、读取结果、停止、删除、列表。子代理拥有独立上下文与完整工具能力，可并行工作，最多同时运行 5 个。完成后会收到后台通知，不要轮询。用 send 可反复追加指令或对已完成子代理继续追问；子代理运行中也可能主动发消息。create 可用 agent 指定自定义子代理、brief 引用任务书模板、tools 收敛本任务工具集。子代理结束会自动归档报告，list 可查归档（含子会话已删的），read 对已删除会话回退读归档。"
 
     override val parameters: Map<String, ToolParameter> = mapOf(
         "action" to ToolParameter(
@@ -111,6 +118,18 @@ class TaskTool @Inject constructor(
             name = "agent",
             type = ParameterType.STRING,
             description = "自定义子代理名（create 可选）：取系统提示词「可用子代理」清单中的名称，按其专属提示词、模型与工具集运行；省略则用继承本会话模型的默认通用子代理",
+            required = false
+        ),
+        "tools" to ToolParameter(
+            name = "tools",
+            type = ParameterType.STRING,
+            description = "本任务允许子代理使用的工具名（create 可选，逗号分隔，支持 `mcp__server__*` 通配）。只约束本次派发：省略则继承子代理定义的工具集。任务只需要读时给 readFile,list,search 可省 token 并防误调",
+            required = false
+        ),
+        "brief" to ToolParameter(
+            name = "brief",
+            type = ParameterType.STRING,
+            description = "任务书模板名（create 可选）：`~/.aicode/task-briefs/<名>.md` 或项目级同名模板，正文会前置到 prompt 前面",
             required = false
         ),
         "message" to ToolParameter(
@@ -152,6 +171,30 @@ class TaskTool @Inject constructor(
         if (prompt.isNullOrBlank()) {
             return ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
         }
+
+        // 任务书模板（可选）：把模板正文前置到任务书，省得每次重写五要素；
+        // 写错模板名直接报错并列出可用名，不静默忽略（否则会以为模板生效了）。
+        val briefName = (args["brief"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+        val fullPrompt = if (briefName == null) {
+            prompt
+        } else {
+            val brief = taskBriefRepository.find(parentSession.workspacePath, briefName)
+            if (brief == null) {
+                val available = taskBriefRepository.listAll(parentSession.workspacePath).map { it.name }
+                val hint = if (available.isEmpty()) "未配置任何任务书模板（~/.aicode/task-briefs/）"
+                else "可用：${available.joinToString(", ")}"
+                return ToolResult.Error("任务书模板不存在：$briefName（$hint）", "BRIEF_NOT_FOUND")
+            }
+            "${TaskBriefRepository.BRIEF_HEADER}\n${brief.body}\n\n$prompt"
+        }
+
+        // 任务期工具准入（step-owned）：只收窄本次派发的工具集，不放开定义里已有的限制。
+        val requestedTools = (args["tools"] as? JsonPrimitive)?.contentOrNull
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            .orEmpty()
         val description = (args["description"] as? JsonPrimitive)?.contentOrNull?.trim()
             ?.replace(Regex("\\s+"), " ")
             ?.take(TASK_DESCRIPTION_MAX)
@@ -196,13 +239,16 @@ class TaskTool @Inject constructor(
         sessionUseCase.upsertSession(subSession)
         val subSessionId = subSession.id
 
+        // 登记任务期工具限制（在 SPAWNED 之前，避免子代理启动读不到）
+        eventBus.setStepToolLimit(subSessionId, requestedTools)
+
         // 通知 ViewModel 在子会话上启动 AI 工作流
         eventBus.emit(
             SubAgentEvent(
                 subSessionId = subSessionId,
                 parentSessionId = parentSessionId,
                 type = SubAgentEventType.SPAWNED,
-                detail = prompt
+                detail = fullPrompt
             )
         )
         FileLogger.i(TAG, "子代理已创建: session=$subSessionId parent=$parentSessionId agent=${definition?.name ?: "-"}")
@@ -278,14 +324,25 @@ class TaskTool @Inject constructor(
         return all.firstOrNull { it.name.equals(raw, ignoreCase = true) }?.id
     }
 
-    /** 读取指定子代理的最后输出。 */
+    /** 读取指定子代理的最后输出。子会话已被删除时回退到报告 catalog（归档结论仍可查）。 */
     private suspend fun readSubagent(args: Map<String, JsonElement>, context: AgentContext): ToolResult {
         val subSessionId = (args["id"] as? JsonPrimitive)?.contentOrNull?.trim()
         if (subSessionId.isNullOrBlank()) {
             return ToolResult.Error("参数无效：id 不能为空", "INVALID_ARGS")
         }
         val sub = sessionUseCase.getSessionById(subSessionId)
-            ?: return ToolResult.Error("子会话不存在：$subSessionId", "SESSION_NOT_FOUND")
+        if (sub == null) {
+            val archived = subAgentReportCatalog.read(subSessionId)
+                ?: return ToolResult.Error("子会话不存在：$subSessionId", "SESSION_NOT_FOUND")
+            return ToolResult.Success(
+                buildJsonObject {
+                    put("id", subSessionId)
+                    put("state", "archived")
+                    put("lastOutput", archived)
+                    put("message", "子会话已删除，以下为归档的报告全文。")
+                }
+            )
+        }
         if (sub.parentId != context.sessionId) {
             return ToolResult.Error("只能读取当前会话派生的子代理", "NOT_YOUR_SUBAGENT")
         }
@@ -396,6 +453,20 @@ class TaskTool @Inject constructor(
                 put("count", subs.size)
                 put("runningCount", activeIds.size)
                 put("maxRunning", SubAgentEventBus.MAX_RUNNING)
+                // 已归档报告（含子会话已删除的）：同范围审查可先查这里，避免重复整轮派发
+                val archived = subAgentReportCatalog.listEntries().take(ARCHIVE_LIST_LIMIT)
+                put("archivedReports", buildJsonArray {
+                    archived.forEach { entry ->
+                        addJsonObject {
+                            put("id", entry.subSessionId)
+                            put("agent", entry.agentType)
+                            put("title", entry.title)
+                            put("outcome", entry.outcome)
+                            put("finishedAt", entry.finishedAt)
+                        }
+                    }
+                })
+                put("archivedCount", archived.size)
             }
         )
     }
