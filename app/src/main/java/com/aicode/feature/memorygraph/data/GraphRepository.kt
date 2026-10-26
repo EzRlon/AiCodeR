@@ -8,7 +8,7 @@ import com.aicode.feature.memorygraph.data.local.entity.GraphEdgeEntity
 import com.aicode.feature.memorygraph.data.local.entity.GraphNodeEntity
 import com.aicode.feature.memorygraph.data.local.entity.GraphNodeScope
 import com.aicode.feature.memorygraph.data.local.entity.GraphNodeType
-import com.aicode.feature.memorygraph.domain.ConclusionExtractor
+import com.aicode.feature.memorygraph.domain.ConclusionParser
 import com.aicode.feature.memorygraph.domain.model.GraphEdge
 import com.aicode.feature.memorygraph.domain.model.GraphNode
 import com.aicode.feature.memorygraph.domain.model.GraphSearchHit
@@ -36,8 +36,7 @@ import javax.inject.Singleton
 class GraphRepository @Inject constructor(
     private val graphDao: GraphDao,
     private val chatSessionDao: ChatSessionDao,
-    private val memoryRepository: MemoryRepository,
-    private val conclusionExtractor: ConclusionExtractor
+    private val memoryRepository: MemoryRepository
 ) {
 
     fun observeGraph(workspacePath: String): Flow<Pair<List<GraphNode>, List<GraphEdge>>> =
@@ -255,10 +254,20 @@ class GraphRepository @Inject constructor(
      */
     suspend fun extractConclusionsFromSummary(workspacePath: String, sessionId: String, summary: String) {
         if (workspacePath.isBlank() || summary.isBlank()) return
-        runCatching {
-            val written = conclusionExtractor.extractFromSummary(workspacePath, sessionId, summary)
-            if (written > 0) FileLogger.i(TAG, "压缩摘要抽取结论：$written 条")
-        }.onFailure { FileLogger.w(TAG, "从压缩摘要抽取结论失败", it) }
+        val conclusions = ConclusionParser.parse(summary)
+        if (conclusions.isEmpty()) return
+        conclusions.forEach { conclusion ->
+            runCatching {
+                recordConclusion(
+                    workspacePath = workspacePath,
+                    name = conclusion.name,
+                    summary = conclusion.text,
+                    label = conclusion.label,
+                    sourceSessionId = sessionId
+                )
+            }.onFailure { FileLogger.w(TAG, "写结论节点失败「${conclusion.name}」: ${it.message}") }
+        }
+        FileLogger.i(TAG, "压缩摘要抽取结论：${conclusions.size} 条")
     }
 
     /** 手动节点（类型 CUSTOM，无来源引用）。 */
