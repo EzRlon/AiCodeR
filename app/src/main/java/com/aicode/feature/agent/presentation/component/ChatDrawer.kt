@@ -158,6 +158,7 @@ import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.MoreHorizontal
 import compose.icons.feathericons.Trash2
+import compose.icons.feathericons.Upload
 import compose.icons.feathericons.X
 import androidx.compose.ui.res.stringResource
 import com.aicode.R
@@ -296,6 +297,7 @@ fun ChatDrawerContent(
     onRename: (ChatSession, String) -> Unit,
     onTogglePin: (ChatSession) -> Unit,
     onExport: (ChatSession) -> Unit,
+    onImport: () -> Unit,
     subSessionsByParent: Map<String, List<ChatSession>> = emptyMap(),
     browseState: FileBrowseState,
     expandedPaths: Set<String>,
@@ -739,6 +741,10 @@ fun ChatDrawerContent(
             onExport = {
                 menuSession = null
                 onExport(session)
+            },
+            onImport = {
+                menuSession = null
+                onImport()
             },
             onBatchSelect = {
                 menuSession = null
@@ -1915,7 +1921,7 @@ private val FILE_TREE_ROW_OVERHEAD = 68.dp
 
 
 /**
- * 会话行长按弹出的功能菜单：置顶 / 重命名 / 导出 / 删除。底部 sheet 样式参照 git 分支的 RefActionSheet。
+ * 会话行长按弹出的功能菜单：置顶 / 重命名 / 复制会话 id / 导出 / 导入 / 批量选择 / 删除。底部 sheet 样式参照 git 分支的 RefActionSheet。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1924,6 +1930,7 @@ private fun SessionActionSheet(
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onImport: () -> Unit,
     onBatchSelect: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
@@ -1990,6 +1997,15 @@ private fun SessionActionSheet(
                 onClick = {
                     onDismiss()
                     onExport()
+                }
+            )
+            SheetActionRow(
+                icon = FeatherIcons.Upload,
+                label = stringResource(R.string.chat_import_session),
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = {
+                    onDismiss()
+                    onImport()
                 }
             )
             SheetActionRow(

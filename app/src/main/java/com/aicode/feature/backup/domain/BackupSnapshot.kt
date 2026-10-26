@@ -108,6 +108,8 @@ data class BackupMetadata(
     /** 容器与镜像设置（当前 profile / 远程默认容器 / 自定义 profile 列表）；null = 未包含。 */
     val containerSettings: ContainerSettingsSnapshot? = null,
     val workspaces: List<WorkspaceBackupMeta> = emptyList(),
+    /** 单会话导出包标记（exportSession 产物）；聊天侧「导入会话」入口只接受该类包，全量备份走备份页。 */
+    val sessionExport: Boolean = false,
     val includesAppSettings: Boolean = themeMode != null
 )
 

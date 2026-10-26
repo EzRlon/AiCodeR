@@ -169,7 +169,8 @@ class BackupManagerImpl @Inject constructor(
                             writeMetadataEntry(tar, BackupMetadata(
                                 schemaVersion = currentSchemaVersion(),
                                 appVersion = appVersionName(),
-                                createdAt = System.currentTimeMillis()
+                                createdAt = System.currentTimeMillis(),
+                                sessionExport = true
                             ))
                             writeJsonlFileEntry(tar, FILE_SESSIONS) { writer ->
                                 writer.writeLine(json.encodeToString(ChatSessionDto.serializer(), session.toDto()))
@@ -233,6 +234,9 @@ class BackupManagerImpl @Inject constructor(
                 openTar(input, pw).use { source ->
                     val tar = source.tar
                     var workspaces: List<WorkspaceBackupMeta> = emptyList()
+                    var sessionId: String? = null
+                    var sessionTitle: String? = null
+                    var isSessionExport = false
                     var entry = tar.nextEntry
                     while (entry != null) {
                         if (entry.name == FILE_METADATA) {
@@ -240,12 +244,22 @@ class BackupManagerImpl @Inject constructor(
                             val metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
                             checkVersion(metadata.schemaVersion)
                             workspaces = metadata.workspaces
-                            // 导出时 metadata.json 为首个条目，读到即可停，避免遍历大段 jsonl
+                            isSessionExport = metadata.sessionExport
+                            // 单会话包还要读出包内会话 id/标题供冲突判断，不能在 metadata 处停；
+                            // 其余场景 metadata.json 为首个条目，读到即可停，避免遍历大段 jsonl
+                            if (!isSessionExport) break
+                        } else if (isSessionExport && entry.name == FILE_SESSIONS) {
+                            val firstLine = readFirstLine(tar)
+                            if (firstLine != null) {
+                                val dto = json.decodeFromString(ChatSessionDto.serializer(), firstLine)
+                                sessionId = dto.id
+                                sessionTitle = dto.title
+                            }
                             break
                         }
                         entry = tar.nextEntry
                     }
-                    ImportPreview(workspaces)
+                    ImportPreview(workspaces, sessionId, sessionTitle)
                 }
             }
             .onSuccess { FileLogger.i(TAG, "导入预览完成：${it.workspaces.size} 个工作区") }
@@ -616,6 +630,23 @@ class BackupManagerImpl @Inject constructor(
         }
         FileLogger.i(TAG, "tar 解析完成，开始还原元数据段")
         return stats + restoreMeta(meta)
+    }
+
+    /** 从当前 tar 条目读首行（到 \n 或流末尾）；不关闭流，剩余内容由调用方决定是否继续读。 */
+    private fun readFirstLine(tar: TarArchiveInputStream): String? {
+        val buffer = ByteArray(64 * 1024)
+        val line = ByteArrayOutputStream(16 * 1024)
+        while (true) {
+            val n = tar.read(buffer)
+            if (n < 0) break
+            for (i in 0 until n) {
+                if (buffer[i] == '\n'.code.toByte()) {
+                    return String(line.toByteArray(), Charsets.UTF_8)
+                }
+                line.write(buffer[i].toInt())
+            }
+        }
+        return if (line.size() > 0) String(line.toByteArray(), Charsets.UTF_8) else null
     }
 
     /** 逐行解析 jsonl 条目，每 [PAGE_SIZE] 条回调一次批量插入；返回该文件的总条数。 */

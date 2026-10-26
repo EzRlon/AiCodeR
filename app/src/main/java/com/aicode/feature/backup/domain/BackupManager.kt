@@ -51,7 +51,11 @@ interface BackupManager {
 
 /** 导入预览结果：备份中的工作区列表（供勾选）。 */
 data class ImportPreview(
-    val workspaces: List<WorkspaceBackupMeta>
+    val workspaces: List<WorkspaceBackupMeta>,
+    /** 单会话包（metadata.sessionExport=true）内的会话 id；非单会话包为 null。 */
+    val sessionId: String? = null,
+    /** 单会话包内的会话标题（供导入前的同标题冲突判断）；非单会话包为 null。 */
+    val sessionTitle: String? = null
 ) {
     val hasWorkspaceData: Boolean get() = workspaces.isNotEmpty()
 }

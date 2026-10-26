@@ -29,8 +29,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -543,6 +545,57 @@ fun AppNavigation(
         }
     }
 
+    // ── 导入会话：SAF 选择单会话包（导出会话的 tar.gz）──
+    val sessionImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            agentViewModel.importSession(uri) { result ->
+                val (msgRes, long) = when (result) {
+                    AIAgentViewModel.SessionImportResult.SUCCESS ->
+                        R.string.chat_import_session_done to false
+                    AIAgentViewModel.SessionImportResult.NOT_SESSION_PACKAGE ->
+                        R.string.chat_import_session_not_single to true
+                    AIAgentViewModel.SessionImportResult.BUSY ->
+                        R.string.chat_import_session_busy to true
+                    AIAgentViewModel.SessionImportResult.FAILED ->
+                        R.string.chat_import_session_failed to true
+                }
+                Toast.makeText(context, context.getString(msgRes), if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 同标题冲突：用户选「覆盖/另存副本」；点击外部或返回 = 取消导入
+    val sessionImportConflict by agentViewModel.sessionImportConflict.collectAsStateWithLifecycle()
+    sessionImportConflict?.let { conflictTitle ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { agentViewModel.cancelSessionImport() },
+            title = { Text(stringResource(R.string.chat_import_session_conflict_title)) },
+            text = { Text(stringResource(R.string.chat_import_session_conflict_message, conflictTitle)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    agentViewModel.confirmSessionImport(overwrite = true) { result ->
+                        val msgRes = if (result == AIAgentViewModel.SessionImportResult.SUCCESS) R.string.chat_import_session_done
+                        else R.string.chat_import_session_failed
+                        Toast.makeText(context, context.getString(msgRes),
+                            if (result == AIAgentViewModel.SessionImportResult.SUCCESS) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                    }
+                }) { Text(stringResource(R.string.chat_import_session_overwrite)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    agentViewModel.confirmSessionImport(overwrite = false) { result ->
+                        val msgRes = if (result == AIAgentViewModel.SessionImportResult.SUCCESS) R.string.chat_import_session_done
+                        else R.string.chat_import_session_failed
+                        Toast.makeText(context, context.getString(msgRes),
+                            if (result == AIAgentViewModel.SessionImportResult.SUCCESS) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                    }
+                }) { Text(stringResource(R.string.chat_import_session_copy)) }
+            }
+        )
+    }
+
     // ── 大屏（平板横屏及以上）布局 ──
     val expanded = isExpandedWidth()
     // 常驻侧栏只在聊天页开：终端 / 编辑器 / 设置都是全屏页，被侧栏挤窄反而难用。
@@ -748,6 +801,17 @@ fun AppNavigation(
                 pendingExportSessionId = session.id
                 val safeTitle = session.title.replace(Regex("[^\\w\\u4e00-\\u9fa5\\-]"), "_")
                 sessionExportLauncher.launch("aicode-session-$safeTitle-${System.currentTimeMillis()}.tar.gz")
+            },
+            onImport = {
+                sessionImportLauncher.launch(
+                    arrayOf(
+                        "application/octet-stream",
+                        "application/gzip",
+                        "application/x-gzip",
+                        "application/x-tar",
+                        "application/x-compressed"
+                    )
+                )
             },
             onNavigateToBrowser = {
                 openWorkbench(WorkbenchPaneKind.BROWSER)

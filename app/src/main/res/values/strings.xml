@@ -961,6 +961,15 @@
     <string name="chat_export_session">导出会话</string>
     <string name="chat_export_session_done">会话已导出</string>
     <string name="chat_export_session_failed">导出失败</string>
+    <string name="chat_import_session">导入会话</string>
+    <string name="chat_import_session_done">会话已导入</string>
+    <string name="chat_import_session_failed">导入会话失败</string>
+    <string name="chat_import_session_busy">已有导入进行中，请稍候</string>
+    <string name="chat_import_session_not_single">这不是单会话导出包；全量备份请在 设置 → 备份与恢复 中导入</string>
+    <string name="chat_import_session_conflict_title">已存在同名会话</string>
+    <string name="chat_import_session_conflict_message">本地已有名为「%1$s」的会话。「覆盖」会将其移入回收站并导入此会话；「另存副本」则两个会话并存。</string>
+    <string name="chat_import_session_overwrite">覆盖</string>
+    <string name="chat_import_session_copy">另存副本</string>
 
     <!-- Chat Input Bar -->
     <string name="chat_input_placeholder">输入消息，与 AI 对话…</string>

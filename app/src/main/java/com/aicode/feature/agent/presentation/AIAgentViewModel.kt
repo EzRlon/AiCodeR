@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.core.app.NotificationCompat
@@ -122,7 +123,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -148,6 +151,7 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import java.io.OutputStream
 import java.util.Calendar
 import java.util.UUID
@@ -3016,6 +3020,11 @@ class AIAgentViewModel @Inject constructor(
     override fun onCleared() {
         // 兑现未落盘的输入草稿（防抖窗口内退出时补写，最多丢 500ms 的最后几次键入）
         runCatching { flushDraftWrites() }
+        // 挂起中的会话导入临时文件随 VM 销毁一并清理（viewModelScope 已不可靠，同步删）
+        runCatching { pendingSessionImportFile?.delete() }
+        pendingSessionImportFile = null
+        pendingSessionImportTitle = null
+        _sessionImportConflict.value = null
         // 投递追踪回调：按引用注销自己的处理器（qa FULL P1-3：多 VM 并存互不覆盖）
         deliveryTracker.removeExpiredHandler(deliveryExpiredHandler)
         // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
@@ -3952,6 +3961,134 @@ class AIAgentViewModel @Inject constructor(
         } finally {
             runCatching { output.close() }
         }
+    }
+
+    /** 导入单会话包的结果；NOT_SESSION_PACKAGE 表示选到的不是单会话导出包（全量备份/加密包应走备份页）；BUSY 表示已有导入在进行。 */
+    enum class SessionImportResult { SUCCESS, FAILED, NOT_SESSION_PACKAGE, BUSY }
+
+    /** 同标题冲突待选时的会话标题；null = 无挂起的冲突。UI 据此弹「覆盖/另存副本」。 */
+    private val _sessionImportConflict = MutableStateFlow<String?>(null)
+    val sessionImportConflict: StateFlow<String?> = _sessionImportConflict.asStateFlow()
+
+    /** 导入互斥：从发起直到冲突确认/取消的整个周期持锁，防止并发导入互相覆盖单槽临时文件。 */
+    private val sessionImportMutex = kotlinx.coroutines.sync.Mutex()
+
+    private var pendingSessionImportFile: File? = null
+    private var pendingSessionImportTitle: String? = null
+
+    /**
+     * 从 SAF Uri 导入单会话包（exportSession 产物，无密码）。包内会话与本地同 id 时视为恢复直接
+     * upsert 覆盖；同标题不同 id 时挂起等用户选「覆盖/另存副本」（见 [confirmSessionImport]）；
+     * 其余情况正常新增。加密包/全量备份归为 [SessionImportResult.NOT_SESSION_PACKAGE]。
+     */
+    fun importSession(uri: Uri, onResult: (SessionImportResult) -> Unit) = viewModelScope.launch {
+        if (!sessionImportMutex.tryLock()) {
+            onResult(SessionImportResult.BUSY)
+            return@launch
+        }
+        try {
+            val prepared = withContext(Dispatchers.IO) {
+                // 加密备份带 AICODEBK 魔数：聊天入口不收（导出的单会话包永无密码），避免把密文当损坏文件报错
+                val peek = context.contentResolver.openInputStream(uri)
+                if (peek != null) {
+                    val magic = peek.use { stream ->
+                        val head = ByteArray(8)
+                        val n = stream.read(head)
+                        if (n == 8) head else ByteArray(0)
+                    }
+                    if (String(magic, Charsets.US_ASCII) == "AICODEBK") return@withContext null
+                }
+                val input = context.contentResolver.openInputStream(uri)
+                    ?: error(context.getString(R.string.backup_read_failed))
+                try {
+                    backupManager.prepareImport(input, null)
+                } finally {
+                    runCatching { input.close() }
+                }
+            }
+            if (prepared == null) {
+                onResult(SessionImportResult.NOT_SESSION_PACKAGE)
+                clearPendingSessionImport()
+                return@launch
+            }
+            pendingSessionImportFile = prepared
+            val preview = withContext(Dispatchers.IO) {
+                prepared.inputStream().use { backupManager.previewImport(it, null) }
+            }
+            val p = preview.getOrThrow()
+            val id = p.sessionId
+            val title = p.sessionTitle
+            if (id == null || title == null) {
+                // 全量备份或旧版导出包：聊天入口不收，避免从聊天页误覆盖全量数据
+                onResult(SessionImportResult.NOT_SESSION_PACKAGE)
+                clearPendingSessionImport()
+                return@launch
+            }
+            val localSessions = sessions.value
+            if (localSessions.any { it.id == id } || localSessions.none { it.title.trim() == title.trim() }) {
+                onResult(if (runSessionImport(prepared)) SessionImportResult.SUCCESS else SessionImportResult.FAILED)
+                clearPendingSessionImport()
+            } else {
+                pendingSessionImportTitle = title
+                _sessionImportConflict.value = title
+            }
+        } catch (e: Exception) {
+            FileLogger.e("AIAgentViewModel", "importSession failed", e)
+            // 旧版加密格式无魔数，openTar 报错文案含「加密备份」字样，同样归为引导去备份页
+            val encrypted = e.message?.contains("加密备份") == true
+            onResult(if (encrypted) SessionImportResult.NOT_SESSION_PACKAGE else SessionImportResult.FAILED)
+            clearPendingSessionImport()
+        }
+    }
+
+    /** 同标题冲突后用户的选择：覆盖=旧同名会话入回收站后导入；副本=直接导入共存。 */
+    fun confirmSessionImport(overwrite: Boolean, onResult: (SessionImportResult) -> Unit) {
+        val prepared = pendingSessionImportFile ?: return
+        val title = pendingSessionImportTitle
+        // 同步置空作重入闸：双击「覆盖」只生效第一次
+        pendingSessionImportFile = null
+        _sessionImportConflict.value = null
+        viewModelScope.launch {
+            val success = runCatching {
+                if (overwrite) {
+                    // 软删入回收站（可恢复），导入的新会话取而代之；等待软删完成再导入，
+                    // 避免旧会话恰为当前会话时，导入完成后用户被切到新推出的空会话
+                    sessions.value.filter { it.title.trim() == title?.trim() }
+                        .map { deleteSession(it.id) }.joinAll()
+                }
+                runSessionImport(prepared)
+            }.getOrElse { e ->
+                FileLogger.e("AIAgentViewModel", "confirmSessionImport failed", e)
+                false
+            }
+            onResult(if (success) SessionImportResult.SUCCESS else SessionImportResult.FAILED)
+            clearPendingSessionImport(prepared)
+        }
+    }
+
+    /** 取消同标题冲突的导入，丢弃已解包的临时文件。 */
+    fun cancelSessionImport() {
+        clearPendingSessionImport()
+    }
+
+    private suspend fun runSessionImport(prepared: File): Boolean {
+        val result = withContext(Dispatchers.IO) {
+            prepared.inputStream().use { backupManager.import(it, null, null) }
+        }
+        result.onFailure { FileLogger.e("AIAgentViewModel", "importSession restore failed", it) }
+        return result.isSuccess
+    }
+
+    /** 清理导入中间态并释放导入互斥锁（仅 onCleared 等无锁路径可能未持锁，unlock 异常吞掉）。 */
+    private fun clearPendingSessionImport(prepared: File? = null) {
+        _sessionImportConflict.value = null
+        pendingSessionImportTitle = null
+        val file = prepared ?: pendingSessionImportFile
+        pendingSessionImportFile = null
+        if (file != null) {
+            viewModelScope.launch(Dispatchers.IO + NonCancellable) { file.delete() }
+        }
+        runCatching { sessionImportMutex.unlock() }
     }
 
     private suspend fun ensureSession(): String {

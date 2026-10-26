@@ -886,6 +886,15 @@
     <string name="chat_export_session">Export Session</string>
     <string name="chat_export_session_done">Session exported</string>
     <string name="chat_export_session_failed">Export failed</string>
+    <string name="chat_import_session">Import Session</string>
+    <string name="chat_import_session_done">Session imported</string>
+    <string name="chat_import_session_failed">Failed to import session</string>
+    <string name="chat_import_session_busy">An import is already in progress</string>
+    <string name="chat_import_session_not_single">Not a single-session export; import full backups in Settings → Backup &amp; Restore</string>
+    <string name="chat_import_session_conflict_title">Session with same name exists</string>
+    <string name="chat_import_session_conflict_message">A session named "%1$s" already exists locally. "Overwrite" moves it to trash and imports this one; "Keep both" imports alongside it.</string>
+    <string name="chat_import_session_overwrite">Overwrite</string>
+    <string name="chat_import_session_copy">Keep both</string>
 
     <!-- Subagent -->
     <string name="subagent_tab_sessions">Chats</string>
