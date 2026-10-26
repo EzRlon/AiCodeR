@@ -148,6 +148,21 @@ class StatefulAgentWorkflow @Inject constructor(
         const val WORKING_SET_FILE_MAX_BYTES = 1_000_000L
         // 有界捕获：结果可能是紧凑单行 JSON（无空白分隔），\S+ 会吞到串尾，必须排除 ] 与引号
         val TOOL_OUTPUT_ARCHIVE_PATH = Regex("完整内容已保存到 ([^\\s\\]\"]+)")
+
+        /** 微压缩保留的语义锚点：行数上限与单行长度上限（成本可控，不把占位符变成另一份全文）。 */
+        const val ANCHOR_MAX_LINES = 6
+        const val ANCHOR_LINE_MAX_CHARS = 200
+
+        /** 锚点行特征：退出码、错误、构建结论、断言失败、堆栈头。 */
+        val ANCHOR_PATTERNS = listOf(
+            Regex("\\bexit(?:\\s*code)?\\s*[:=]?\\s*\\d+", RegexOption.IGNORE_CASE),
+            Regex("\\bBUILD (?:SUCCESSFUL|FAILED)", RegexOption.IGNORE_CASE),
+            Regex("^e: "),
+            Regex("\\berror\\b[:\\s]", RegexOption.IGNORE_CASE),
+            Regex("\\b(?:FAILED|FAILURE|FATAL)\\b", RegexOption.IGNORE_CASE),
+            Regex("\\b(?:Exception|Error):"),
+            Regex("\\b\\d+ (?:failed|passed)\\b", RegexOption.IGNORE_CASE)
+        )
         /** 压缩失败熔断：连续失败次数达到该值后暂停尝试。 */
         const val COMPACTION_FAILURES_TO_TRIP = 3
         /** 熔断后暂停的 LLM 调用轮数，期满恢复尝试。 */
@@ -1293,18 +1308,41 @@ class StatefulAgentWorkflow @Inject constructor(
                 msg
             } else {
                 val archivePath = TOOL_OUTPUT_ARCHIVE_PATH.find(toolResult.result)?.groupValues?.getOrNull(1)
+                // 语义锚点（3.4）：压缩后仍要可判错——保留退出码/错误首行/关键结论，而不是纯截断。
+                // 只取很短的锚点行，成本可控；丢它会让模型把「构建失败」当成「命令没输出」。
+                val anchors = extractSemanticAnchors(toolResult.result)
                 val placeholder = buildString {
                     append("[工具结果已清理（上下文微压缩）：工具 ")
                     append(toolResult.toolName)
                     append("。读取类工具可直接重新调用取回；写类/有副作用的工具请先核实当前状态，勿盲目重放。")
+                    if (anchors.isNotEmpty()) {
+                        append("\n关键信息（原文）：")
+                        append(anchors)
+                    }
                     if (archivePath != null) {
-                        append("完整内容已存档：")
+                        append("\n完整内容已存档：")
                         append(archivePath)
                     }
                 }
                 toolResult.copy(result = placeholder, modelResult = null)
             }
         }
+    }
+
+    /**
+     * 从工具输出里抽取语义锚点（3.4 压缩保真）：退出码、错误首行、BUILD/FAILED 类结论行。
+     * 最多 [ANCHOR_MAX_LINES] 行、每行截断，总长可控；抽不到锚点返回空串（不硬造内容）。
+     */
+    private fun extractSemanticAnchors(result: String): String {
+        val lines = result.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        if (lines.isEmpty()) return ""
+        val picked = LinkedHashSet<String>()
+        for (line in lines) {
+            if (picked.size >= ANCHOR_MAX_LINES) break
+            val hit = ANCHOR_PATTERNS.any { it.containsMatchIn(line) }
+            if (hit) picked.add(line.take(ANCHOR_LINE_MAX_CHARS))
+        }
+        return picked.joinToString("\n")
     }
 
     /**
