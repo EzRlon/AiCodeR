@@ -29,6 +29,17 @@ interface ChatSessionDao {
     @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL AND deletedAt IS NULL ORDER BY isPinned DESC, updatedAt DESC")
     suspend fun getRootSessionsByWorkspaceOnce(workspacePath: String): List<ChatSessionEntity>
 
+    /**
+     * 工作区下可复用的空会话（未发过任何消息的根会话，取最近更新的一个）。
+     * 下沉到 SQL：原先取全部根会话再逐条查消息，每次新建会话都要多轮 DB 查询。
+     */
+    @Query(
+        "SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL AND deletedAt IS NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM agent_messages WHERE sessionId = chat_sessions.id) " +
+            "ORDER BY isPinned DESC, updatedAt DESC LIMIT 1"
+    )
+    suspend fun getEmptyRootSessionByWorkspace(workspacePath: String): ChatSessionEntity?
+
     /** 最近更新的根会话（忽略置顶，仅按 updatedAt 降序），供启动时「打开最近会话」。 */
     @Query("SELECT * FROM chat_sessions WHERE workspacePath = :workspacePath AND parentId IS NULL AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT 1")
     suspend fun getLatestRootSessionByWorkspace(workspacePath: String): ChatSessionEntity?

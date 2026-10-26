@@ -162,14 +162,6 @@ class TaskTool @Inject constructor(
         val parentSession = sessionUseCase.getSessionById(parentSessionId)
             ?: return ToolResult.Error("当前会话不存在", "SESSION_NOT_FOUND")
 
-        // 检查并发上限
-        if (eventBus.isFull) {
-            return ToolResult.Error(
-                "子代理已达上限（最多 ${SubAgentEventBus.MAX_RUNNING} 个同时运行），请先等待其中某个完成或用 stop 停止后再创建",
-                "MAX_SUBAGENTS_REACHED"
-            )
-        }
-
         val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()
         if (prompt.isNullOrBlank()) {
             return ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
@@ -229,52 +221,68 @@ class TaskTool @Inject constructor(
                 table.modelFor(definition?.name ?: ModelRoutingTable.DEFAULT_TASK)
             }.getOrNull()
         } else null
-        // 创建子代理会话
-        val subSession = sessionUseCase.newSubSessionEntity(
-            title = description,
-            parentId = parentSessionId,
-            parent = parentSession,
-            subagentType = definition?.name ?: DEFAULT_SUBAGENT_TYPE,
-            providerId = when {
-                definitionOwnsModel -> definition?.providerId?.let { resolveProviderId(it) }
-                override != null -> override.first.let { resolveProviderId(it) }
-                else -> routedModel?.providerId?.let { resolveProviderId(it) }
-            },
-            model = when {
-                definitionOwnsModel -> definition?.model
-                override != null -> override.second
-                else -> routedModel?.model
-            },
-            reasoningEffort = definition?.reasoningEffort?.let { effort ->
-                ReasoningEffort.entries.firstOrNull { it.apiValue == effort }?.name
-            },
-            mode = definition?.mode
-        )
-        sessionUseCase.upsertSession(subSession)
-        val subSessionId = subSession.id
-
-        // 登记任务期工具限制（在 SPAWNED 之前，避免子代理启动读不到）
-        eventBus.setStepToolLimit(subSessionId, requestedTools)
-
-        // 通知 ViewModel 在子会话上启动 AI 工作流
-        eventBus.emit(
-            SubAgentEvent(
-                subSessionId = subSessionId,
-                parentSessionId = parentSessionId,
-                type = SubAgentEventType.SPAWNED,
-                detail = fullPrompt
+        // 并发名额：检查与占位在同一锁内原子完成。同一批工具调用是并行执行的，
+        // 「先读计数再创建」会让并行的 task(create) 双双通过检查后超额创建。
+        if (!eventBus.tryReserveSlots(1)) {
+            return ToolResult.Error(
+                "子代理已达上限（全局最多 ${SubAgentEventBus.MAX_RUNNING} 个同时运行，当前已有 ${eventBus.activeCount} 个在运行），" +
+                    "请先等待其中某个完成或用 stop 停止后再创建",
+                "MAX_SUBAGENTS_REACHED"
             )
-        )
-        FileLogger.i(TAG, "子代理已创建: session=$subSessionId parent=$parentSessionId agent=${definition?.name ?: "-"}")
+        }
+        // 占位在 emit(SPAWNED) 时转为正式活跃；中途任何提前返回都必须归还名额。
+        var slotHandedOver = false
+        try {
+            // 创建子代理会话
+            val subSession = sessionUseCase.newSubSessionEntity(
+                title = description,
+                parentId = parentSessionId,
+                parent = parentSession,
+                subagentType = definition?.name ?: DEFAULT_SUBAGENT_TYPE,
+                providerId = when {
+                    definitionOwnsModel -> definition?.providerId?.let { resolveProviderId(it) }
+                    override != null -> override.first.let { resolveProviderId(it) }
+                    else -> routedModel?.providerId?.let { resolveProviderId(it) }
+                },
+                model = when {
+                    definitionOwnsModel -> definition?.model
+                    override != null -> override.second
+                    else -> routedModel?.model
+                },
+                reasoningEffort = definition?.reasoningEffort?.let { effort ->
+                    ReasoningEffort.entries.firstOrNull { it.apiValue == effort }?.name
+                },
+                mode = definition?.mode
+            )
+            sessionUseCase.upsertSession(subSession)
+            val subSessionId = subSession.id
 
-        return ToolResult.Success(
-            buildJsonObject {
-                put("id", subSessionId)
-                put("state", "running")
-                definition?.let { put("agent", it.name) }
-                put("message", "子代理已创建并开始执行，任务完成后会收到通知。可用 task(action=\"read\", id=...) 读取输出，task(action=\"stop\", id=...) 主动关闭。")
-            }
-        )
+            // 登记任务期工具限制（在 SPAWNED 之前，避免子代理启动读不到）
+            eventBus.setStepToolLimit(subSessionId, requestedTools)
+
+            // 通知 ViewModel 在子会话上启动 AI 工作流
+            eventBus.emit(
+                SubAgentEvent(
+                    subSessionId = subSessionId,
+                    parentSessionId = parentSessionId,
+                    type = SubAgentEventType.SPAWNED,
+                    detail = fullPrompt
+                )
+            )
+            slotHandedOver = true
+            FileLogger.i(TAG, "子代理已创建: session=$subSessionId parent=$parentSessionId agent=${definition?.name ?: "-"}")
+
+            return ToolResult.Success(
+                buildJsonObject {
+                    put("id", subSessionId)
+                    put("state", "running")
+                    definition?.let { put("agent", it.name) }
+                    put("message", "子代理已创建并开始执行，任务完成后会收到通知。可用 task(action=\"read\", id=...) 读取输出，task(action=\"stop\", id=...) 主动关闭。")
+                }
+            )
+        } finally {
+            if (!slotHandedOver) eventBus.releaseSlots(1)
+        }
     }
 
     /**
@@ -427,7 +435,7 @@ class TaskTool @Inject constructor(
                 SubAgentEvent(
                     subSessionId = subSessionId,
                     parentSessionId = context.sessionId!!,
-                    type = SubAgentEventType.STOPPED
+                    type = SubAgentEventType.DELETED
                 )
             )
         }

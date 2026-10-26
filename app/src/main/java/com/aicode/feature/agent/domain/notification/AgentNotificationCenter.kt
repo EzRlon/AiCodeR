@@ -23,6 +23,8 @@ enum class NotificationOutcome { COMPLETED, FAILED, STOPPED }
  * @property fromParent [AgentNotificationKind.AGENT_MESSAGE] 的方向：true 表示发送方是主会话（收件人为子代理），
  *   false 表示发送方是子代理（收件人为主会话）。供 Formatter 生成对应的回复提示。
  * @property newMode [AgentNotificationKind.MODE_CHANGE] 的目标模式：用户在工作期间切换后的新模式。
+ * @property resultExcerpt [AgentNotificationKind.SUBAGENT] 完成时的结果摘要：子代理最后一条有正文的回复（已截断）。
+ * @property changedFiles [AgentNotificationKind.SUBAGENT] 本次执行改动过的文件容器路径。
  * @property seq [AgentNotificationCenter] 分配的单调序号，供 peek 后精确 ack；未入队时为 0。
  */
 data class PendingNotification(
@@ -37,6 +39,8 @@ data class PendingNotification(
     val message: String? = null,
     val fromParent: Boolean = false,
     val newMode: AgentMode? = null,
+    val resultExcerpt: String? = null,
+    val changedFiles: List<String> = emptyList(),
     val seq: Long = 0
 )
 

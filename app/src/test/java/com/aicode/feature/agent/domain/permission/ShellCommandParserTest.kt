@@ -62,6 +62,32 @@ class ShellCommandParserTest {
         assertFalse(ShellCommandParser.analyze("echo \"abc").analyzable)
     }
 
+    /** 拦截原因要能说出具体构造：否则 AI 不知道是 `$(...)` 还是重定向被拦，只能整条反复重试。 */
+    @Test
+    fun blockers_nameTheTriggeringConstruct() {
+        assertEquals(listOf("命令替换 \$(...)"), ShellCommandParser.analyze("echo \$(whoami)").blockers)
+        assertEquals(listOf("反引号命令替换"), ShellCommandParser.analyze("echo `whoami`").blockers)
+        assertEquals(listOf("子 shell 或分组括号"), ShellCommandParser.analyze("(cd x && ls)").blockers)
+        assertEquals(
+            listOf("输出重定向到绝对路径 /etc/passwd"),
+            ShellCommandParser.analyze("echo hi > /etc/passwd").blockers
+        )
+        assertEquals(listOf("未闭合的引号"), ShellCommandParser.analyze("echo \"abc").blockers)
+        assertTrue(ShellCommandParser.analyze("git status").blockers.isEmpty())
+    }
+
+    /**
+     * 命令替换内部的括号只是 `$(...)` 的一部分，不能被再记成「子 shell」：
+     * 否则原因里会多出一条与实际问题无关的构造，把人引到错的方向。
+     */
+    @Test
+    fun blockers_doNotCountParenthesesInsideSubstitution() {
+        val a = ShellCommandParser.analyze("echo \$(echo (x))")
+
+        assertFalse(a.analyzable)
+        assertEquals(listOf("命令替换 \$(...)"), a.blockers)
+    }
+
     @Test
     fun matches_isTokenPrefix() {
         assertTrue(ShellCommandParser.matches("git", listOf("git", "status")))

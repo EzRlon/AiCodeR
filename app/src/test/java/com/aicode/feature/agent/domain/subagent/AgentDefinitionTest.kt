@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.subagent
 
 import com.aicode.core.watch.FileChangeHub
 import com.aicode.feature.agent.domain.container.ContainerInstaller
+import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.ProjectAicodeRoot
 import io.mockk.Called
@@ -109,14 +110,32 @@ class AgentDefinitionTest {
 
     private fun def(
         allowed: List<String> = emptyList(),
-        disallowed: List<String> = emptyList()
+        disallowed: List<String> = emptyList(),
+        mode: AgentMode? = null
     ) = AgentDefinition(
         name = "a",
         description = "",
+        mode = mode,
         allowedTools = allowed,
         disallowedTools = disallowed,
         prompt = "p"
     )
+
+    /** 白名单未列 messageParent 时也默认保留：基线提示词教子代理用它汇报，裁掉会变成教模型调不存在的工具。 */
+    @Test
+    fun filter_allowlistKeepsMessageParentByDefault() {
+        val result = def(allowed = listOf("readFile")).filterToolNames(allTools + "messageParent")
+
+        assertEquals(listOf("readFile", "messageParent"), result)
+    }
+
+    /** 黑名单显式禁用 messageParent 时尊重用户意愿，照常剔除。 */
+    @Test
+    fun filter_messageParentRemovableViaDenylist() {
+        val result = def(disallowed = listOf("messageParent")).filterToolNames(allTools + "messageParent")
+
+        assertEquals(allTools - "task", result)
+    }
 
     /** 省略两个名单即继承全量工具，但 task 永远剔除（子代理不能嵌套派发）。 */
     @Test
@@ -171,6 +190,76 @@ class AgentDefinitionTest {
     @Test
     fun filter_toolNameMatchIsCaseInsensitive() {
         assertEquals(listOf("Bash"), def(allowed = listOf("bash")).filterToolNames(allTools))
+    }
+
+    /** 默认继承全量工具，三种能力全为「是」。 */
+    @Test
+    fun capability_fullInheritanceAllowsEverything() {
+        assertEquals("文件读取 是 · 文件修改 是 · 执行命令 是", def().capabilitySummary())
+    }
+
+    /** 白名单只给读工具：主代理据此知道不能派修改任务。 */
+    @Test
+    fun capability_readOnlyAllowlistMarksWriteAndExecNo() {
+        val summary = def(allowed = listOf("readFile", "list", "search", "viewImage")).capabilitySummary()
+
+        assertEquals("文件读取 是 · 文件修改 否 · 执行命令 否", summary)
+    }
+
+    @Test
+    fun capability_denylistRemovesExec() {
+        val summary = def(disallowed = listOf("Bash", "terminal", "Shizuku")).capabilitySummary()
+
+        assertEquals("文件读取 是 · 文件修改 是 · 执行命令 否", summary)
+    }
+
+    /** 摘要与工具裁剪同源：黑名单优先，允许名单里也写着 Bash 也照样是「否」。 */
+    @Test
+    fun capability_denyWinsOverAllowLikeFilter() {
+        val definition = def(allowed = listOf("readFile", "Bash"), disallowed = listOf("Bash"))
+
+        assertEquals("文件读取 是 · 文件修改 否 · 执行命令 否", definition.capabilitySummary())
+    }
+
+    /** 通配黑名单只作用于它匹配到的工具，不应误伤内置的读写与命令能力。 */
+    @Test
+    fun capability_wildcardDenyApplies() {
+        assertEquals("文件读取 是 · 文件修改 是 · 执行命令 是", def(disallowed = listOf("mcp__*")).capabilitySummary())
+    }
+
+    /**
+     * PLAN 下子代理继承只读：即使定义配了写工具，摘要也要如实显示不可用。
+     * 否则主代理照摘要把修改任务派出去，子代理跑到一半才被模式拦下。
+     */
+    @Test
+    fun capability_planModeShowsWriteAndExecBlocked() {
+        val summary = def().capabilitySummary(AgentMode.PLAN)
+
+        assertEquals("文件读取 是 · 文件修改 否（PLAN 只读） · 执行命令 否（PLAN 只读）", summary)
+    }
+
+    /**
+     * 定义钉死 mode: plan 而父会话是 BUILD：子代理实际跑在只读边界（resolveChildMode 采纳更严值），
+     * 摘要必须同样标注「否（PLAN 只读）」。
+     */
+    @Test
+    fun capability_definitionPinnedPlan_blocksEvenUnderBuildParent() {
+        val summary = def(mode = AgentMode.PLAN).capabilitySummary(AgentMode.BUILD)
+
+        assertEquals("文件读取 是 · 文件修改 否（PLAN 只读） · 执行命令 否（PLAN 只读）", summary)
+    }
+
+    /** 定义想放宽（mode: auto）不会放大权限：仍按父会话模式判定。 */
+    @Test
+    fun capability_definitionCannotEscalateBeyondParent() {
+        assertEquals(
+            "文件读取 是 · 文件修改 否（PLAN 只读） · 执行命令 否（PLAN 只读）",
+            def(mode = AgentMode.AUTO).capabilitySummary(AgentMode.PLAN)
+        )
+        assertEquals(
+            "文件读取 是 · 文件修改 是 · 执行命令 是",
+            def().capabilitySummary(AgentMode.AUTO)
+        )
     }
 
     /** 同名定义项目级覆盖全局，结果按名称排序。 */

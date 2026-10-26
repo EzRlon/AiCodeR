@@ -650,6 +650,8 @@ class StatefulAgentWorkflow @Inject constructor(
         if (aiProvider is AnthropicAdapter) {
             aiProvider.maxOutputTokens = ModelContextPolicy.outputReserveTokens(metadata)
         }
+        // 思考档位随模型走：每次请求刷新，适配器据此判断能否如实透传 max/xhigh 或需降级。
+        aiProvider.reasoningLevels = metadata.reasoningEffortOptions
         val lastAssistantIndex = currentContext.history.indexOfLast { it is AgentMessage.AssistantMessage && it.inputTokens > 0 }
         var baselineEstimate = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             ContextTokenEstimator.estimate(systemPrompt,

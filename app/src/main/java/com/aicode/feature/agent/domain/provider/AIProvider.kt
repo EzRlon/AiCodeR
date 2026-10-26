@@ -173,6 +173,14 @@ interface AIProvider {
     var temperature: Float?
 
     /**
+     * 当前模型声明支持的思考档位（models.dev `reasoning_options` 中 effort 的 values）。
+     * 调用前由工作流按元数据写入；null/空表示未知。
+     *
+     * 适配器据此决定降级目标：声明了 `max`/`xhigh` 的模型应如实透传，不再无脑压成 high。
+     */
+    var reasoningLevels: List<String>?
+
+    /**
      * 流式请求等待首个内容块的上限（毫秒），调用前由工作流按「偏好设置 → 网络」写入。
      * 默认 5 分钟；0 表示不限制，此时仅靠连接超时与手动取消兜底。
      */

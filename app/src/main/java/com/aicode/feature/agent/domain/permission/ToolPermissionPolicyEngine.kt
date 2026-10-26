@@ -113,6 +113,15 @@ class ToolPermissionPolicyEngine @Inject constructor(
         const val REASON_UNANALYZABLE_DESTRUCTIVE =
             "安全防护：命令含命令替换、子 shell 或绝对路径重定向等无法静态判定的构造，且疑似破坏性操作，无法确认安全"
 
+        /**
+         * 不可静态判定时的拦截原因：附带具体触发构造。
+         * 只说「无法静态分析」时 AI 不知道是 `$(...)` 还是绝对路径重定向，只能整条反复重试。
+         */
+        internal fun unanalyzableReason(analysis: ShellCommandParser.Analysis): String {
+            val constructs = analysis.blockers.joinToString("、").ifEmpty { "未知构造" }
+            return "$REASON_UNANALYZABLE_DESTRUCTIVE（触发构造：$constructs）"
+        }
+
         /** 疑似破坏性程序（仅在命令不可静态判定时用于保守拦截）。 */
         val DESTRUCTIVE_PROGRAM = Regex(
             "(^|[\\s;&|()`<>])(rm|dd|shred|truncate|mkfs(?:\\.[a-z0-9]+)?|wipefs|fdisk|sfdisk|parted|mkswap|blkdiscard)([\\s;&|()`<>]|$)"
@@ -185,7 +194,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                     // 命令替换/子 shell/绝对路径重定向等无法静态判定的构造，删除目标不可知；
                     // 若同时疑似破坏性，宁可拦下（可提权），避免绕过安全防护。
                     if (!analysis.analyzable && looksDestructive(command)) {
-                        return elevationOrDeny(REASON_UNANALYZABLE_DESTRUCTIVE, args, watchMode)
+                        return elevationOrDeny(unanalyzableReason(analysis), args, watchMode)
                     }
                 }
             }
@@ -211,7 +220,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                         val analysis = ShellCommandParser.analyze(command)
                         checkCatastrophicRm(analysis.segments)?.let { return elevationOrDeny(it, args, watchMode) }
                         if (!analysis.analyzable && looksDestructive(command)) {
-                            return elevationOrDeny(REASON_UNANALYZABLE_DESTRUCTIVE, args, watchMode)
+                            return elevationOrDeny(unanalyzableReason(analysis), args, watchMode)
                         }
                     }
                 }
@@ -538,7 +547,7 @@ class ToolPermissionPolicyEngine @Inject constructor(
                     EvalResult(
                         Verdict.DENY,
                         emptyList(),
-                        denyReason = "守夜模式：命令包含命令替换/子 shell/绝对路径重定向等无法静态判定的构造且疑似破坏性，已自动拒绝。请改写为不含这些构造、路径明确可分析的简单命令后重试。"
+                        denyReason = "守夜模式：命令包含命令替换/子 shell/绝对路径重定向等无法静态判定的构造且疑似破坏性，已自动拒绝（触发构造：${analysis.blockers.joinToString("、")}）。请改写为不含这些构造、路径明确可分析的简单命令后重试。"
                     )
                 } else if (scheduledRun) {
                     EvalResult(
@@ -554,7 +563,12 @@ class ToolPermissionPolicyEngine @Inject constructor(
                     )
                 }
             }
-            return EvalResult(Verdict.ASK, emptyList())
+            return EvalResult(
+                Verdict.ASK,
+                emptyList(),
+                // 把触发构造写进弹窗说明：用户与 AI 都能看出这条命令为什么没法自动判定。
+                rememberDisabledReason = "命令含无法静态判定的构造（${analysis.blockers.joinToString("、").ifEmpty { "未知构造" }}），只能单次授权、不可记忆"
+            )
         }
 
         // 3.5) 守夜：删除动作分级（本层 + 嵌套 shell / find 变体）。

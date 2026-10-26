@@ -843,6 +843,7 @@
     <string name="backup_net_test_success">连接成功</string>
     <string name="backup_net_test_failed">连接失败</string>
     <string name="backup_net_upload_failed">上传失败</string>
+    <string name="backup_net_upload_password_required">网络备份包含密钥与凭据，必须先设置口令再上传（不允许明文上传云端）</string>
     <string name="backup_net_list_failed">读取云端备份失败</string>
     <string name="backup_net_delete_failed">删除云端备份失败</string>
     <string name="backup_net_upload_done">已上传到 %1$s</string>

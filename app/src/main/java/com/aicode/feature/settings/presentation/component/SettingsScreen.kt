@@ -51,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -538,6 +539,10 @@ fun SettingsScreen(
     // 滚动位置必须提到 AnimatedContent 之外持有：菜单页作为分区分支被切走时会被 dispose，
     // 内部 rememberScrollState 一并丢弃，从二级页返回就跳回顶部。
     val menuScrollState = rememberScrollState()
+    // 一级分区页整块内容在 AnimatedContent 里被切走时会 dispose，内部 rememberScrollState
+    // （基于 rememberSaveable）随之丢失，从下一级页面返回就跳回顶部。按分区名接住这些状态；
+    // 编辑类页面不走这一步（它们在 AnimatedContent 里是独立分支），否则每次进编辑器会把上次的输入恢复出来。
+    val sectionStateHolder = rememberSaveableStateHolder()
     val menuBody: @Composable () -> Unit = {
         SettingsMenu(
             scrollState = menuScrollState,
@@ -831,6 +836,14 @@ fun SettingsScreen(
             // 密钥管理页同理：独立 ViewModel 仅进入该分区时创建（构造即触发一次扫描）。
             val keysViewModel: com.aicode.feature.settings.presentation.KeysViewModel? =
                 if (current == SettingsSection.DevKeys) androidx.hilt.navigation.compose.hiltViewModel() else null
+            // 详情页要带上条目身份：换成另一个技能 / 子代理 / 提示词进来，不能继承上一条的滚动位置。
+            val stateKey: String = when (current) {
+                SettingsSection.SkillDetail -> "SkillDetail:${selectedSkill?.name.orEmpty()}"
+                SettingsSection.SubAgentDetail -> "SubAgentDetail:${selectedSubAgent?.name.orEmpty()}"
+                SettingsSection.PromptDetail -> "PromptDetail:${selectedPrompt?.number ?: 0}"
+                else -> current.name
+            }
+            sectionStateHolder.SaveableStateProvider(stateKey) {
             Scaffold(
         containerColor = settingsPageBackground(),
         topBar = {
@@ -1529,6 +1542,7 @@ fun SettingsScreen(
         }
     }
         } // else 分支结束（storageViewModel 作用域）
+        } // SaveableStateProvider 结束
         } // 详情区 when 结束
         } // AnimatedContent 结束
         } // 右栏结束

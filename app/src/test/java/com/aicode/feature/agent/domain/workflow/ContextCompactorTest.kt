@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -29,8 +30,12 @@ class ContextCompactorTest {
     private val prompts = mockk<SystemPromptProvider>()
     private val settings = mockk<GeneralSettingsRepository>()
     private val persistence = mockk<MessagePersistenceUseCase>(relaxed = true)
+    private val sessionUseCase = mockk<SessionUseCase>(relaxed = true)
+    private val graphRepository = mockk<com.aicode.feature.memorygraph.data.GraphRepository>(relaxed = true)
     private val provider = mockk<AIProvider>(relaxed = true)
-    private val compactor = ContextCompactor(dao, metadata, prompts, records, settings, persistence)
+    private val compactor = ContextCompactor(
+        dao, metadata, prompts, records, settings, persistence, sessionUseCase, graphRepository
+    )
 
     private fun prepare(context: Int = 16_000) {
         every { provider.providerId } returns "provider"

@@ -59,6 +59,9 @@ class AnthropicAdapter @Inject constructor(
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认；开启 thinking 时官方要求必须不带。
     override var temperature: Float? = null
 
+    // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
+    override var reasoningLevels: List<String>? = null
+
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
 

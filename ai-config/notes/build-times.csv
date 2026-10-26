@@ -4,3 +4,28 @@ date,time,task,seconds,exit
 2026-10-26,09:21:36,:app:compileArmsoloReleaseKotlin --profile,80,0
 2026-10-26,09:29:07,:app:compileArmsoloReleaseKotlin --profile,55,0
 2026-10-26,09:33:00,:app:compileArmsoloReleaseKotlin --profile,60,0
+2026-10-26,11:32:18,:app:compileArmsoloReleaseKotlin,99,0
+2026-10-26,11:46:21,:app:compileArmsoloReleaseKotlin :app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.eval.*,146,0
+2026-10-26,11:51:59,:app:compileArmsoloReleaseKotlin,85,0
+2026-10-26,12:08:38,:app:compileArmsoloReleaseKotlin,90,0
+2026-10-26,13:30:25,:app:compileArmsoloReleaseKotlin,327,0
+2026-10-26,13:48:22,assembleArmsoloRelease --no-configuration-cache,628,0
+2026-10-26,14:01:48,:app:compileArmsoloReleaseKotlin,72,0
+2026-10-26,14:34:21,assembleArmsoloRelease --no-configuration-cache,594,0
+2026-10-26,15:41:48,:app:compileArmsoloReleaseKotlin,78,0
+2026-10-26,15:56:06,assembleArmsoloRelease --no-configuration-cache,458,0
+2026-10-26,17:28:59,:app:compileArmsoloReleaseKotlin,101,0
+2026-10-26,17:38:39,assembleArmsoloRelease --no-configuration-cache,536,0
+2026-10-26,17:53:43,assembleArmsoloRelease --no-configuration-cache,664,0
+2026-10-26,21:14:43,assembleArmsoloRelease --no-configuration-cache,990,0
+2026-10-27,04:26:25,:app:compileArmsoloReleaseKotlin,483,0
+2026-10-27,04:35:34,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest --tests com.aicode.feature.agent.domain.workflow.ContextCompactorTest,83,0
+2026-10-27,04:57:40,:app:compileArmsoloReleaseKotlin,184,0
+2026-10-27,05:03:40,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.tool.container.BackgroundTerminalToolsParsingTest,164,0
+2026-10-27,05:26:12,:app:compileArmsoloReleaseKotlin,172,0
+2026-10-27,05:30:30,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest,207,0
+2026-10-27,05:44:50,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.permission.ShellCommandParserTest --tests com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngineTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest,282,0
+2026-10-27,05:56:37,:app:compileArmsoloReleaseKotlin,63,0
+2026-10-27,06:37:35,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest,152,0
+2026-10-27,06:57:26,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest --tests com.aicode.feature.agent.domain.permission.ShellCommandParserTest --tests com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngineTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest --tests com.aicode.feature.agent.domain.tool.container.BackgroundTerminalToolsParsingTest --tests com.aicode.feature.agent.domain.workflow.ContextCompactorTest,233,0
+2026-10-27,07:16:16,assembleArmsoloRelease --no-configuration-cache,885,0

@@ -68,6 +68,7 @@ import com.aicode.feature.agent.domain.permission.PermissionChoice
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
+import com.aicode.feature.agent.domain.subagent.SubAgentDigester
 import com.aicode.feature.agent.domain.subagent.SubAgentEvent
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.core.watch.FileChangeHub
@@ -1658,15 +1659,23 @@ class AIAgentViewModel @Inject constructor(
             combine(
                 awaitingPermissionSessionIds,
                 askUserQuestionManager.pendingQuestion,
-                planApprovalManager.pendingApproval
-            ) { awaiting, question, plan ->
-                val labels = LinkedHashMap<String, Pair<Int, ApprovalKind>>()
-                awaiting.forEach { labels[it] = R.string.notification_approval_label_permission to ApprovalKind.PERMISSION }
+                planApprovalManager.pendingApproval,
+                toolPermissionManager.pendingRequest
+            ) { awaiting, question, plan, _ ->
+                // requestId 随值传递：通知按钮要精确回传到具体请求，不能只靠「最早待决」。
+                val labels = LinkedHashMap<String, Triple<Int, ApprovalKind, String?>>()
+                awaiting.forEach {
+                    labels[it] = Triple(
+                        R.string.notification_approval_label_permission,
+                        ApprovalKind.PERMISSION,
+                        toolPermissionManager.pendingForSession(it)?.id
+                    )
+                }
                 question?.sessionId?.takeIf { it.isNotBlank() }?.let {
-                    labels.putIfAbsent(it, R.string.notification_approval_label_question to ApprovalKind.QUESTION)
+                    labels.putIfAbsent(it, Triple(R.string.notification_approval_label_question, ApprovalKind.QUESTION, null))
                 }
                 plan?.sessionId?.takeIf { it.isNotBlank() }?.let {
-                    labels.putIfAbsent(it, R.string.notification_approval_label_plan to ApprovalKind.PLAN)
+                    labels.putIfAbsent(it, Triple(R.string.notification_approval_label_plan, ApprovalKind.PLAN, plan.id))
                 }
                 labels
             }.collect { labels ->
@@ -1676,7 +1685,8 @@ class AIAgentViewModel @Inject constructor(
                         sessionId = sid,
                         sessionTitle = session.title.ifBlank { context.getString(R.string.chat_new_session_btn) },
                         label = context.getString(info.first),
-                        kind = info.second
+                        kind = info.second,
+                        requestId = info.third
                     )
                 }
                 agentApprovalNotificationManager.update(pending)
@@ -1724,6 +1734,7 @@ class AIAgentViewModel @Inject constructor(
         // 订阅子代理生命周期事件（类比 terminal 的 notify=true 异步回调）：
         // - SPAWNED：task 工具已创建子会话并替用户发消息，这里在子会话上自动启动 AI 工作流；
         // - STOPPED：task(action="stop") 请求停止子代理，取消对应会话的 AI 任务；
+        // - DELETED：task(action="del") 已删库，只清运行时状态，不做任何停止收尾；
         // - COMPLETED/FAILED：由子会话工作流结束时发出（见 handleSubAgentFinished），注入父会话通知。
         viewModelScope.launch {
             subAgentEventBus.events.collect { event ->
@@ -1734,6 +1745,11 @@ class AIAgentViewModel @Inject constructor(
                     when (event.type) {
                         SubAgentEventType.SPAWNED -> spawnSubAgentWorkflow(event)
                         SubAgentEventType.STOPPED -> stopAgentSession(event.subSessionId)
+                        SubAgentEventType.DELETED -> {
+                            // 不能走 stopAgentSession：它的收尾会往已删除会话落「已停止」占位消息，
+                            // 取消中 job 的 finally 也会对着不存在的会话补送通知、烧一轮 LLM。
+                            clearSubAgentRuntimeState(event.subSessionId)
+                        }
                         SubAgentEventType.COMPLETED, SubAgentEventType.FAILED -> {
                             enqueueSubAgentNotification(event)
                         }
@@ -1848,12 +1864,53 @@ class AIAgentViewModel @Inject constructor(
         // 活跃位保持（它本就在跑），不能 release，否则会把正在运行的会话名额错误清掉。
         if (sessionJobs[event.subSessionId]?.isActive == true) return
 
-        executeAgentRequestStream(
-            request = event.detail,
-            projectRoot = parentSession.workspacePath,
-            targetSessionId = event.subSessionId,
-            skipTitleUpdate = true
-        )
+        try {
+            executeAgentRequestStream(
+                request = event.detail,
+                projectRoot = parentSession.workspacePath,
+                targetSessionId = event.subSessionId,
+                skipTitleUpdate = true
+            )
+        } catch (e: CancellationException) {
+            // 取消不走 COMPLETED/FAILED 事件，不释放的话名额一直占到进程重启。
+            subAgentEventBus.release(event.subSessionId)
+            throw e
+        } catch (e: Exception) {
+            // 子会话在工作流之外失败（如历史构建异常）：不补这一手，父代理会一直等一条
+            // 永不到来的完成通知，名额也泄漏到进程重启。
+            FileLogger.e(TAG, "子代理工作流异常退出: ${event.subSessionId}", e)
+            subAgentEventBus.release(event.subSessionId)
+            notifyParentSubAgentFinished(
+                parentSessionId = event.parentSessionId,
+                subSessionId = event.subSessionId,
+                title = parentSession.title,
+                outcome = NotificationOutcome.FAILED,
+                detail = e.message?.takeIf { it.isNotBlank() } ?: "子代理工作流异常退出"
+            )
+        }
+    }
+
+    /**
+     * 清掉一个子会话的全部运行时状态（并发名额、通知队列、待发请求、job、流式/工具占位）。
+     *
+     * 用于会话已被删除的场景：不能再走 [stopAgentSession]，那会把内容落库到已不存在的会话，
+     * 并在 finally 里为它补送通知、烧一轮 LLM。
+     */
+    private fun clearSubAgentRuntimeState(sessionId: String) {
+        subAgentEventBus.release(sessionId)
+        // 先清队列再取消 job：cancel 可能在调用栈内同步跑 finally → flushPendingNotifications，
+        // 队列已空则直接返回，不会为已删除会话再起一轮。
+        agentNotificationCenter.clear(sessionId)
+        _queuedRequests.value = _queuedRequests.value - sessionId
+        sessionJobs[sessionId]?.cancel()
+        sessionJobs.remove(sessionId)
+        _agentStates.value = _agentStates.value - sessionId
+        _streamingTexts.value = _streamingTexts.value - sessionId
+        setStreamingReasoning(sessionId, null)
+        _runningTools.value = _runningTools.value - sessionId
+        setRetryState(sessionId, null)
+        _inputDrafts.value = _inputDrafts.value - sessionId
+        draftPrefs.edit().remove(sessionId).apply()
     }
 
     /**
@@ -1926,11 +1983,23 @@ class AIAgentViewModel @Inject constructor(
     /**
      * 子代理完成/失败通知：父会话忙碌时先入队（由本轮内下一批工具结果搭车送达，见
      * [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），空闲时立即注入一条系统通知消息触发新一轮。
-     * 父代理据此得知子代理结束，可 task(action="read") 取回结果。与 terminal 后台通知同机制。
+     * 父代理据此得知子代理结束；正常完成时结果摘要已随通知送达，需完整报告再 `task(action="read")`。
+     * 与 terminal 后台通知同机制。
      */
     private fun enqueueSubAgentNotification(event: SubAgentEvent) {
         viewModelScope.launch {
             val title = sessionUseCase.getSessionById(event.subSessionId)?.title ?: "子代理"
+            // 摘要只在正常完成时提炼：失败/终止带的是错误原因（detail），再抽正文只会误导。
+            // 读整段消息 + 解析 toolArgs 放 IO 线程：长会话的子代理消息量大，不该占主线程。
+            val digest = if (event.type == SubAgentEventType.COMPLETED) {
+                withContext(Dispatchers.IO) {
+                    runCatching { SubAgentDigester.digest(agentMessageDao.getMessagesBySessionOnce(event.subSessionId)) }
+                        .onFailure { FileLogger.w(TAG, "子代理结果摘要提取失败: ${event.subSessionId}", it) }
+                        .getOrNull()
+                }
+            } else {
+                null
+            }
             notifyParentSubAgentFinished(
                 parentSessionId = event.parentSessionId,
                 subSessionId = event.subSessionId,
@@ -1940,7 +2009,9 @@ class AIAgentViewModel @Inject constructor(
                 } else {
                     NotificationOutcome.COMPLETED
                 },
-                detail = event.detail.takeIf { it.isNotBlank() && event.type == SubAgentEventType.FAILED }
+                detail = event.detail.takeIf { it.isNotBlank() && event.type == SubAgentEventType.FAILED },
+                resultExcerpt = digest?.excerpt,
+                changedFiles = digest?.changedFiles.orEmpty()
             )
         }
     }
@@ -2005,14 +2076,18 @@ class AIAgentViewModel @Inject constructor(
         subSessionId: String,
         title: String,
         outcome: NotificationOutcome,
-        detail: String?
+        detail: String?,
+        resultExcerpt: String? = null,
+        changedFiles: List<String> = emptyList()
     ) {
         val item = PendingNotification(
             kind = AgentNotificationKind.SUBAGENT,
             sourceId = subSessionId,
             title = title,
             outcome = outcome,
-            detail = detail
+            detail = detail,
+            resultExcerpt = resultExcerpt,
+            changedFiles = changedFiles
         )
         deliverSystemEvent(parentSessionId, item)
     }

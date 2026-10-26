@@ -507,7 +507,9 @@ class BrowserManager @Inject constructor(
         wv.settings.displayZoomControls = false
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
-        wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        // 混合内容不放行 https 页面加载 http 子资源，避免被 MITM 篡改；allowFileAccess 因浏览器
+        // 工具需直接渲染 file:// 本地文件（本地 HTML/Markdown）而保留。
+        wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         // 允许媒体自动播放：部分视频站在「需用户手势」限制下会静音或拒绝播放，表现为「视频没声音」。
         // [浏览器功能: 视频声音] 网页自动播放无需先触发用户手势
         wv.settings.mediaPlaybackRequiresUserGesture = false

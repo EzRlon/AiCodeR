@@ -842,6 +842,7 @@
     <string name="backup_net_test_success">Connection succeeded</string>
     <string name="backup_net_test_failed">Connection failed</string>
     <string name="backup_net_upload_failed">Upload failed</string>
+    <string name="backup_net_upload_password_required">Network backup contains keys and credentials. Set a password before uploading; plaintext upload to the cloud is not allowed.</string>
     <string name="backup_net_list_failed">Failed to read cloud backups</string>
     <string name="backup_net_delete_failed">Failed to delete cloud backup</string>
     <string name="backup_net_upload_done">Uploaded to %1$s</string>

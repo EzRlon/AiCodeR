@@ -64,6 +64,9 @@ class OpenAIAdapter @Inject constructor(
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认。
     override var temperature: Float? = null
 
+    // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
+    override var reasoningLevels: List<String>? = null
+
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
 
@@ -159,16 +162,41 @@ class OpenAIAdapter @Inject constructor(
 
     /**
      * 思考强度 → OpenAI reasoning_effort。
+     *
+     * 优先按模型声明的档位（[reasoningLevels]）判断：支持 max/xhigh 的模型（gpt-5.6、gpt-6 等）
+     * 如实透传，不再被压成 high；模型确实不支持的低档位向下取最近档，未知模型按保守集合发送。
+     *
      * OpenAI 官方 Chat Completions 的 reasoning_effort 仅接受 low/medium/high（gpt-5 系额外支持
      * none/minimal，但 o 系列不接受），"none"/"minimal" 原样透传会在多数推理模型上 400。
-     * 这里把 "none"/"minimal" 明确跳过（不发该字段，交由服务端默认），"xhigh"/"max" 归一到 high
-     * （OpenAI 无更高档），low/medium/high 原样透传。与 Anthropic/Gemini 对齐「不可表达即跳过」的策略。
+     * 无声明档位时退回原保守策略："none"/"minimal" 跳过（不发该字段），"xhigh"/"max" 归一到 high。
      */
-    private fun normalizeReasoningEffort(effort: String?): String? = when (effort) {
-        null -> null
-        "none", "minimal" -> null
-        "xhigh", "max" -> "high"
-        else -> effort
+    private fun normalizeReasoningEffort(effort: String?): String? {
+        if (effort == null) return null
+        val declared = reasoningLevels?.takeIf { it.isNotEmpty() }
+        if (declared != null) {
+            if (effort in declared) return effort
+            // 档位高于最高档：向下取最近档；低于最低档：向上取最近档。
+            val index = REASONING_ORDER.indexOf(effort)
+            if (index >= 0) {
+                for (i in index downTo 0) {
+                    if (REASONING_ORDER[i] in declared) return REASONING_ORDER[i]
+                }
+                for (i in index until REASONING_ORDER.size) {
+                    if (REASONING_ORDER[i] in declared) return REASONING_ORDER[i]
+                }
+            }
+            return null
+        }
+        return when (effort) {
+            "none", "minimal" -> null
+            "xhigh", "max" -> "high"
+            else -> effort
+        }
+    }
+
+    private companion object {
+        /** 档位由弱到强的顺序，用于在模型声明档位内找最近档。 */
+        val REASONING_ORDER = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
     }
 
     /**

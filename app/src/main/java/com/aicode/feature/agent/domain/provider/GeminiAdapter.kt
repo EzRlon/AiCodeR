@@ -48,6 +48,9 @@ class GeminiAdapter @Inject constructor(
     // 原生 generateContent 不发 generationConfig.temperature：Gemini 2.0 起服务端默认就是 1.0，与推荐值一致。
     override var temperature: Float? = null
 
+    // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
+    override var reasoningLevels: List<String>? = null
+
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
 
@@ -656,7 +659,12 @@ class GeminiAdapter @Inject constructor(
         }.getOrNull()
     }
 
-    /** 思考强度 → Gemini thinkingConfig。模型名含 gemini-3 用 thinkingLevel，否则用 thinkingBudget（2.5 系）。显式带上 includeThoughts 以返回思考内容。 */
+    /**
+     * 思考强度 → Gemini thinkingConfig。模型名含 gemini-3 用 thinkingLevel，否则用 thinkingBudget（2.5 系）。
+     *
+     * 显式带上 `includeThoughts` 以返回思考内容；预算 0 除外——Gemini 拒绝
+     * `thinkingBudget=0` 与 `includeThoughts=true` 同时出现（invalid argument，请求硬失败）。
+     */
     private fun buildThinkingConfig(reasoningEffort: String?): Map<String, Any>? {
         if (reasoningEffort == null) return null
         return if (model.contains("gemini-3")) {
@@ -672,9 +680,15 @@ class GeminiAdapter @Inject constructor(
                 "low" -> 1024
                 "medium" -> 4096
                 "high", "xhigh", "max" -> 8192
+                "none", "minimal" -> 0
                 else -> return null
             }
-            mapOf("thinkingBudget" to budget, "includeThoughts" to true)
+            if (budget == 0) {
+                // 关闭思考：预算 0 不能与 includeThoughts=true 并存。
+                mapOf("thinkingBudget" to 0)
+            } else {
+                mapOf("thinkingBudget" to budget, "includeThoughts" to true)
+            }
         }
     }
 
