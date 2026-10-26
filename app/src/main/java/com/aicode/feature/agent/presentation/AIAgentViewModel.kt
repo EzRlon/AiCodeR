@@ -30,6 +30,7 @@ import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
+import com.aicode.feature.agent.data.local.entity.FailureEventKind
 import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
@@ -228,6 +229,7 @@ class AIAgentViewModel @Inject constructor(
     private val agentApprovalNotificationManager: AgentApprovalNotificationManager,
     private val subAgentEventBus: SubAgentEventBus,
     private val subAgentReportCatalog: com.aicode.feature.agent.domain.subagent.SubAgentReportCatalog,
+    private val failureEventRecorder: com.aicode.feature.agent.domain.telemetry.FailureEventRecorder,
     private val deliveryTracker: com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker,
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
@@ -1499,6 +1501,12 @@ class AIAgentViewModel @Inject constructor(
         const val TRASH_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
         const val TAG = "AIAgentViewModel"
 
+        /** 意图纠正判定阈值（bigram Jaccard）：0.8 只抓「几乎原样重发」，宁漏不误。 */
+        const val CORRECTION_SIMILARITY = 0.8
+
+        /** 命令特征：命中即把 execute_command 失败归为「编译失败」而非普通任务失败。 */
+        val BUILD_COMMAND_HINTS = listOf("gradlew", "gradle ", "make", "cargo build", "npm run build", "tsc", "javac")
+
         /** 50% 软提醒的会话级上限：两次提醒后不再打扰。 */
         const val MAX_HANDOFF_REMINDERS = 2
         const val AGENT_COMPLETE_CHANNEL = "agent_complete"
@@ -1828,10 +1836,47 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 子代理完成/失败通知：父会话忙碌时先入队（由本轮内下一批工具结果搭车送达，见
-     * [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），空闲时立即注入一条系统通知消息触发新一轮。
-     * 父代理据此得知子代理结束，可 task(action="read") 取回结果。与 terminal 后台通知同机制。
+     * 意图纠正检测：取会话最近两条用户消息，若本条与上一条相似度足够高则记一次纠正事件。
+     *
+     * 判据刻意保守（字符 bigram Jaccard ≥ [CORRECTION_SIMILARITY]）：只抓「几乎重复发一遍」这类
+     * 明确的「AI 没听懂」信号，不把正常追问（加了新要求）误判成纠正。
      */
+    private suspend fun recordIntentCorrectionIfAny(sessionId: String, request: String) {
+        runCatching {
+            val messages = withContext(Dispatchers.IO) { agentMessageDao.getMessagesBySessionOnce(sessionId) }
+            val previousUser = messages.lastOrNull {
+                it.role == MessageRole.USER.name && it.content.isNotBlank() && it.content.trim() != request.trim()
+            } ?: return@runCatching
+            // 只比较最近一轮：上一条用户消息之后已有助手回复，才说明上一轮结束了（否则是排队消息）
+            val lastUserIndex = messages.indexOfLast { it.role == MessageRole.USER.name }
+            val repliedAfter = lastUserIndex >= 0 && messages.drop(lastUserIndex + 1)
+                .any { it.role == MessageRole.ASSISTANT.name && it.content.isNotBlank() }
+            if (!repliedAfter) return@runCatching
+            if (similarity(previousUser.content, request) >= CORRECTION_SIMILARITY) {
+                failureEventRecorder.record(
+                    kind = FailureEventKind.INTENT_CORRECTION,
+                    sessionId = sessionId,
+                    detail = request.take(120)
+                )
+            }
+        }.onFailure { e -> FileLogger.w(TAG, "意图纠正检测失败", e) }
+    }
+
+    /** 字符 bigram Jaccard 相似度：对中文短句足够稳定，且无需分词依赖。 */
+    private fun similarity(a: String, b: String): Double {
+        fun grams(s: String): Set<String> {
+            val t = s.trim().replace(Regex("\\s+"), " ")
+            if (t.length < 2) return setOf(t)
+            return (0 until t.length - 1).map { t.substring(it, it + 2) }.toSet()
+        }
+        val ga = grams(a)
+        val gb = grams(b)
+        if (ga.isEmpty() || gb.isEmpty()) return 0.0
+        val intersection = ga.count { it in gb }
+        val union = ga.size + gb.size - intersection
+        return if (union == 0) 0.0 else intersection.toDouble() / union
+    }
+
     /**
      * 归档子代理最终输出到报告 catalog（`~/.aicode/subagent-reports/`）。
      * 子会话被 task(del) 删除后仍可回溯结论；qa/optimizer 报告也能跨会话检索复用。
@@ -1857,6 +1902,11 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 子代理完成/失败通知：父会话忙碌时先入队（由本轮内下一批工具结果搭车送达，见
+     * [com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow]），空闲时立即注入一条系统通知消息触发新一轮。
+     * 父代理据此得知子代理结束，可 task(action="read") 取回结果。与 terminal 后台通知同机制。
+     */
     private fun enqueueSubAgentNotification(event: SubAgentEvent) {
         viewModelScope.launch {
             val title = sessionUseCase.getSessionById(event.subSessionId)?.title ?: "子代理"
@@ -2223,6 +2273,11 @@ class AIAgentViewModel @Inject constructor(
         if (sessionId.isBlank()) {
             FileLogger.w(TAG, "工作区未就绪，跳过请求")
             return@launch
+        }
+        // 意图纠正埋点：用户在上一轮 AI 回复后又发一条消息，且与上一轮用户消息高度相似
+        // （重述/改口/重发）→ 记一次纠正信号。只看相邻两条，不做语义判断，低成本且不误伤普通追问。
+        if (persistUserMessage && !isAutoTrigger && !request.startsWith("/")) {
+            recordIntentCorrectionIfAny(sessionId, request)
         }
         // 硬阈值暂停兜底：排队消费/直调等所有执行入口在此统一拒绝（队列保留不丢）。
         // 唯一放行 /compress：暂停的会话往往正是最需要压缩的，压缩成功后自动解除暂停。
@@ -2627,6 +2682,19 @@ class AIAgentViewModel @Inject constructor(
                     }
                     is AgentEvent.ToolCallFinished -> {
                         val msgId = "tool_${event.id}"
+                        // 失败埋点：工具报错即一次任务失败信号（按工具名聚合，看哪个工具最常出错）；
+                        // 命令类失败再按命令特征细分出「编译失败」，与普通任务失败分开统计。
+                        if (event.isError) {
+                            val isBuild = event.toolName == "execute_command" && BUILD_COMMAND_HINTS.any {
+                                (event.argsPreview ?: "").contains(it, ignoreCase = true)
+                            }
+                            failureEventRecorder.record(
+                                kind = if (isBuild) FailureEventKind.BUILD_FAILURE else FailureEventKind.TASK_FAILURE,
+                                sessionId = sessionId,
+                                source = event.toolName,
+                                detail = event.result
+                            )
+                        }
                         messagePersistenceUseCase.persist(
                             sessionId,
                             MessageRole.TOOL,

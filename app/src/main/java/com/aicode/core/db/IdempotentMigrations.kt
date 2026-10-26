@@ -173,6 +173,19 @@ internal class Migration70To71 : Migration(70, 71) {
     }
 }
 
+/** 71 → 72：运行时失败事件表（1.7 失败埋点）。全新建表，无需列存在性检查。 */
+internal class Migration71To72 : Migration(71, 72) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `failure_events` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sessionId` TEXT, `kind` TEXT NOT NULL, " +
+                "`source` TEXT, `detail` TEXT, `createdAt` INTEGER NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_failure_events_createdAt` ON `failure_events` (`createdAt`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_failure_events_kind` ON `failure_events` (`kind`)")
+    }
+}
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {

@@ -10,6 +10,7 @@ import com.aicode.feature.agent.data.local.dao.PermissionAuditDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.FailureEventDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.annotation.data.local.dao.AnnotationDao
 import com.aicode.feature.backup.data.local.dao.BackupTargetDao
@@ -165,6 +166,12 @@ object AgentModule {
     @Singleton
     fun provideLlmCallRecordDao(database: AgentDatabase): LlmCallRecordDao {
         return database.llmCallRecordDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFailureEventDao(database: AgentDatabase): FailureEventDao {
+        return database.failureEventDao()
     }
 
     @Provides
