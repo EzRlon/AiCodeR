@@ -135,9 +135,9 @@ class TaskLedgerTool @Inject constructor(
     }
 
     private fun addTask(path: String, args: Map<String, JsonElement>): ToolResult {
-        val task = (args["task"] as? JsonPrimitive)?.contentOrNull?.trim()
+        val task = cellText(args["task"])
         if (task.isNullOrBlank()) return ToolResult.Error("参数无效：task 不能为空", "INVALID_ARGS")
-        val note = (args["note"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        val note = cellText(args["note"]).orEmpty()
         val current = readOrInit(path)
         val rows = parseRows(current)
         if (rows.any { it.task.equals(task, ignoreCase = true) }) {
@@ -155,7 +155,7 @@ class TaskLedgerTool @Inject constructor(
     }
 
     private fun advanceTask(path: String, args: Map<String, JsonElement>): ToolResult {
-        val target = (args["task"] as? JsonPrimitive)?.contentOrNull?.trim()
+        val target = cellText(args["task"])
         if (target.isNullOrBlank()) return ToolResult.Error("参数无效：task 不能为空", "INVALID_ARGS")
         val status = (args["status"] as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase()
             ?: return ToolResult.Error("参数无效：status 不能为空（doing/done/accepted）", "INVALID_ARGS")
@@ -181,14 +181,17 @@ class TaskLedgerTool @Inject constructor(
                 "STATUS_NOT_ADVANCE"
             )
         }
-        val note = (args["note"] as? JsonPrimitive)?.contentOrNull?.trim()
+        val note = cellText(args["note"])
             ?.let { if (row.note.isBlank()) it else "${row.note}；$it" }
             ?: row.note
         val updatedRow = row.copy(status = status, note = note)
-        val updated = current.lineSequence()
-            .map { line -> if (line == renderRow(row)) renderRow(updatedRow) else line }
-            .joinToString("\n")
-        fileAccess.writeFile(path, updated, overwrite = true)
+        // 按行号替换而不是按整行文本相等：账本可能被外部编辑过（行尾空白、手工改备注），
+        // 文本相等匹配会静默不命中——工具报成功但文件没变，下次 list 仍是旧状态。
+        val lines = current.lines().toMutableList()
+        val index = lines.indexOfFirst { parseRow(it) == row }
+        if (index < 0) return ToolResult.Error("账本行定位失败，请用 read 查看原始正文后重试", "ROW_NOT_LOCATED")
+        lines[index] = renderRow(updatedRow)
+        fileAccess.writeFile(path, lines.joinToString("\n"), overwrite = true)
         return ToolResult.Success(
             buildJsonObject {
                 put("task", row.task)
@@ -201,13 +204,22 @@ class TaskLedgerTool @Inject constructor(
 
     private data class LedgerRow(val status: String, val task: String, val note: String)
 
+    /** 单元格文本：`|` 与换行会切断表格列（parseRows 按 `|` 分列），统一换成全角与空格。 */
+    private fun cellText(element: JsonElement?): String? =
+        (element as? JsonPrimitive)?.contentOrNull
+            ?.replace("|", "｜")
+            ?.replace(Regex("[\\r\\n]+"), " ")
+            ?.trim()
+
+    private fun parseRow(line: String): LedgerRow? {
+        if (!line.trimStart().startsWith("|")) return null
+        val cols = line.trim().removePrefix("|").removeSuffix("|").split("|").map(String::trim)
+        if (cols.size < 2 || cols[0] !in STATUS_ORDER) return null
+        return LedgerRow(cols[0], cols[1], cols.getOrElse(2) { "" })
+    }
+
     private fun parseRows(content: String): List<LedgerRow> =
-        content.lineSequence()
-            .filter { it.trimStart().startsWith("|") }
-            .map { it.trim().removePrefix("|").removeSuffix("|").split("|").map(String::trim) }
-            .filter { cols -> cols.size >= 2 && cols[0] in STATUS_ORDER }
-            .map { cols -> LedgerRow(cols[0], cols[1], cols.getOrElse(2) { "" }) }
-            .toList()
+        content.lineSequence().mapNotNull(::parseRow).toList()
 
     private fun renderRow(row: LedgerRow) = "| ${row.status} | ${row.task} | ${row.note} |"
 
