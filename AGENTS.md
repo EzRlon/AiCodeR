@@ -56,6 +56,7 @@
 - **Alpine（musl）容器必须带补丁前缀**（Debian/Ubuntu 镜像不需要）：`JAVA_HOME=/usr/lib/jvm/java-17-openjdk ANDROID_HOME=/root/android/sdk LD_PRELOAD=/root/tmp/fix_remove.so ./gradlew <任务>`。补丁来源与重编方法见 `tools/fix-remove/` 与 `ai-config/RESTORE.md` 第 4 步。
 - 快验：`:app:compileArmsoloReleaseKotlin`；正式包：`assembleArmsoloRelease`（R8），产物在 `app/build/outputs/apk/armsolo/release/`。
 - 构建失败先对照 `ai-config/RESTORE.md` 末尾「已知环境坑」表（KSP 缓存损坏 / apk add exit 2 / TLS 干扰）。
+- **交付前跑自检**：`sh tools/release-selfcheck.sh <apk> [基线 apk]`——核对版本号（versionCode == 提交数 + 1）、体积差分（逐文件增量 Top 8）、启动路径阻塞/轮询扫描、keep 规则（点名类 + 包级通配均有类存活）、dex 引用数余量。有 `[FAIL]` 不得交付；`[WARN]` 逐条在交付说明里回应。
 
 ## 会话交接
 
