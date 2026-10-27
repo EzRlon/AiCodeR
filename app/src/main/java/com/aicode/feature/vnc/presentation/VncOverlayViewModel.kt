@@ -82,12 +82,17 @@ class VncOverlayViewModel @Inject constructor(
                 autoPopupBlockedUntilMs = saved.dismissedAtMs + AUTO_POPUP_COOLDOWN_MS
             }
         }
-        // 自动弹出：聊天页存续期间每 PROBE_INTERVAL_MS 探测一次容器图形服务，
-        // 从无到有即弹窗（AI 跑图形测试/用户手动起服务都会触发）。
+        // 自动弹出：聊天页存续期间探测容器图形服务，从无到有即弹窗（AI 跑图形测试/用户手动起服务都会触发）。
+        // 指数退避到 PROBE_MAX_INTERVAL_MS：没起服务时是最常见的长稳态，固定 5s 一轮等于白白唤醒
+        // 容器探测；一旦探测到服务在跑就重置回短间隔，保证「刚起来就能弹」的跟手感不变。
         viewModelScope.launch {
+            var interval = PROBE_INTERVAL_MS
             while (coroutineContext.isActive) {
-                delay(PROBE_INTERVAL_MS)
-                if (_window.value.visible) continue
+                delay(interval)
+                if (_window.value.visible) {
+                    interval = PROBE_INTERVAL_MS
+                    continue
+                }
                 if (System.currentTimeMillis() < autoPopupBlockedUntilMs) continue
                 val running = try {
                     serviceController.probeRunning()
@@ -96,7 +101,12 @@ class VncOverlayViewModel @Inject constructor(
                 } catch (t: Throwable) {
                     false
                 }
-                if (running) show()
+                if (running) {
+                    interval = PROBE_INTERVAL_MS
+                    show()
+                } else {
+                    interval = (interval * 2).coerceAtMost(PROBE_MAX_INTERVAL_MS)
+                }
             }
         }
     }
@@ -193,6 +203,9 @@ class VncOverlayViewModel @Inject constructor(
 
     companion object {
         private const val PROBE_INTERVAL_MS = 5_000L
+
+        /** 退避上限：服务没起时最长的探测间隔。 */
+        private const val PROBE_MAX_INTERVAL_MS = 30_000L
         private const val AUTO_POPUP_COOLDOWN_MS = 10 * 60_000L
         const val MIN_WIDTH_DP = 200f
         const val MIN_HEIGHT_DP = 150f

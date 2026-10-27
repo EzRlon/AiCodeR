@@ -208,8 +208,9 @@ class CodexBridge @Inject constructor(
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
-        val port = permissionBridgeServer.ensureStarted(token = sessionId)
-        writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+        val bridgeToken = permissionBridgeServer.newToken()
+        val port = permissionBridgeServer.ensureStarted(token = bridgeToken, sessionId = sessionId)
+        writeBridgeAssets(port, sessionId, token = bridgeToken, projectPath = projectPath)
 
         val resumeThreadId = if (resume) readThreadId(sessionId) else null
         val effectiveResume = resume && resumeThreadId != null
@@ -229,7 +230,7 @@ class CodexBridge @Inject constructor(
             // MCP 无 --mcp-config flag，-c 内联覆盖挂载 aicode_bridge（0.162.1 实测会拉起 server）
             add("-c"); add("mcp_servers.aicode_bridge.command=\"node\"")
             add("-c"); add("mcp_servers.aicode_bridge.args=[\"${dataBridgeScript()}\"]")
-            add("-c"); add(mcpEnvOverride(port, sessionId, token = sessionId, projectPath))
+            add("-c"); add(mcpEnvOverride(port, sessionId, token = bridgeToken, projectPath))
             // 用户自装 MCP 自动映射（能力全域打通批一）：与 aicode_bridge 同样用 -c 内联，不写用户配置文件
             for (server in mcpConfigRepository.getEffectiveServers()) {
                 if (!server.enabled || !com.aicode.feature.agent.domain.mcp.McpServerConfig.isValidName(server.name)) continue
@@ -290,7 +291,7 @@ class CodexBridge @Inject constructor(
             try {
                 containerEngine.startStdioProcess("codex", args, projectPath, extraEnv, resolveRuntimeProfile())
             } catch (e: Exception) {
-                permissionBridgeServer.removeToken(sessionId)
+                permissionBridgeServer.removeToken(bridgeToken)
                 throw e
             }
         }
@@ -357,7 +358,7 @@ class CodexBridge @Inject constructor(
             killOnCancel?.dispose()
             stderrDrain.cancel()
             watchdog.cancel()
-            permissionBridgeServer.removeToken(sessionId)
+            permissionBridgeServer.removeToken(bridgeToken)
             runCatching { process.destroy() }
             // thread.started 在认证前就发出：即便回合失败，映射也已建立，下回合可续接
             acc.threadId?.let { persistThreadId(sessionId, it) }

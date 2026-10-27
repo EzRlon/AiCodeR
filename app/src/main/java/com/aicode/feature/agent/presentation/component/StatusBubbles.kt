@@ -608,7 +608,9 @@ internal fun ReasoningBubble(
             elapsedMillis = (System.currentTimeMillis() - timerStartMillis).coerceAtLeast(0L)
             timerSeenChars = latestText.length
             timerSeenHead = streamHeadFingerprint(latestText)
-            delay(100)
+            // 计时显示精确到秒，100ms 一次只是让秒数跟手；500ms 同样不误秒，
+            // 但把思考期间的重组频率降到 1/5（长思考动辄几十秒，这一项不小）。
+            delay(500)
         }
     }
     // 展开渲染用节流文本（流式思考时降低 md 解析频率）；preRendered 时外部已按打字机节奏给出渲染文本。

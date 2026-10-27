@@ -368,7 +368,12 @@ private fun LogContent(
                     state = listState,
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(entries) { index, entry ->
+                    // 日志行可能逐字重复（同一句多次打印），故 key 用「序号 + 内容哈希」：
+                    // 内容不变时序号稳定，滚动与状态不会因缺 key 而在新增行时整段错位。
+                    itemsIndexed(
+                        items = entries,
+                        key = { index, entry -> index * 31 + entry.raw.hashCode() }
+                    ) { index, entry ->
                         LogLine(
                             entry = entry,
                             copied = copiedIndex == index,

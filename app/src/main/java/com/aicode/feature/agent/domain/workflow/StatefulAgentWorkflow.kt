@@ -1103,8 +1103,13 @@ class StatefulAgentWorkflow @Inject constructor(
                 FileLogger.w(TAG, "收尾独立验收失败", e)
             }
         }
-        state.error?.let { send(AgentEvent.Failed(it, state.errorCode)) }
-        send(AgentEvent.Completed)
+        // 失败与完成互斥：Failed 已把状态置 Error 并归档 outcome=failed，
+        // 这里再发 Completed 会让父代理收到「子任务完成」，且 completed 归档会覆盖 failed。
+        if (state.error != null) {
+            send(AgentEvent.Failed(state.error, state.errorCode))
+        } else {
+            send(AgentEvent.Completed)
+        }
     }
 
     /**

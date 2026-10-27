@@ -468,4 +468,10 @@ private fun AddFixLedgerDialog(
 }
 
 private fun formatTime(ts: Long): String =
-    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(ts))
+    // 列表项里逐条调用，每次都 new 一个 SimpleDateFormat 等于每行一次对象分配与格式化器初始化。
+    // 格式化器非线程安全，但这里只在组合/主线程调用，用 ThreadLocal 兼顾复用与安全。
+    TIME_FORMATTER.get()!!.format(Date(ts))
+
+private val TIME_FORMATTER = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue() = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+}

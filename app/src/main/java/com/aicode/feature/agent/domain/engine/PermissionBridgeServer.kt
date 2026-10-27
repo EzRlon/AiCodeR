@@ -61,16 +61,23 @@ class PermissionBridgeServer @Inject constructor(
     private val startMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 一次性鉴权 token：随 env 下发给容器内脚本，请求行必须带回（防本机其它应用连端口伪造弹窗）。 */
-    /** 鉴权 token 集合：随 env 下发给容器内脚本，请求行必须带回；支持并发多 CLI 会话（qa FULL P1-1）。 */
+    /** 鉴权 token 集合：随 env 下发给容器内脚本，请求行必须带回；支持并发多 CLI 会话（qa FULL P1-1）。
+     *
+     * 不用 sessionId 当 token：sessionId 会出现在聊天界面、`session-<id>.log` 文件名与容器内 env，
+     * 本机任意进程拿到它就能带 token 连回环口发 `kind=data`，无弹窗读全部历史会话原文。
+     * token 与会话 id 的对应关系另存，用于数据通道的「仅当前活跃会话」校验。 */
     private val expectedTokens = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** token → 会话 id：数据通道据此判断请求是否来自某个仍在跑的会话。 */
+    private val tokenSessions = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     @Volatile private var serverSocket: ServerSocket? = null
     @Volatile private var closed = false
 
-    /** 惰性启动监听（幂等），返回回环端口。[token] 为本实例的请求鉴权令牌。 */
-    suspend fun ensureStarted(token: String): Int = startMutex.withLock {
+    /** 惰性启动监听（幂等），返回回环端口。[token] 为本实例的请求鉴权令牌（随机串，与会话 id 无关）。 */
+    suspend fun ensureStarted(token: String, sessionId: String): Int = startMutex.withLock {
         expectedTokens.add(token)
+        tokenSessions[token] = sessionId
         serverSocket?.let { return it.localPort }
         val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         serverSocket = socket
@@ -82,7 +89,11 @@ class PermissionBridgeServer @Inject constructor(
     /** 回合结束后移除该会话的 token（并发会话互不干扰）。 */
     fun removeToken(token: String) {
         expectedTokens.remove(token)
+        tokenSessions.remove(token)
     }
+
+    /** 生成本次回合的随机鉴权令牌（与会话 id 解耦，避免从 UI/日志/环境变量泄漏后被人直接复用）。 */
+    fun newToken(): String = UUID.randomUUID().toString()
 
     fun close() {
         closed = true
@@ -123,8 +134,22 @@ class PermissionBridgeServer @Inject constructor(
             val toolName = request["tool_name"]?.jsonPrimitive?.content ?: return
             val toolInput = request["input"] as? JsonObject ?: JsonObject(emptyMap())
 
-            // 数据通道（aicode_bridge 的 ledger_* / recall_search 工具）：只读查询与状态推进，不经权限弹窗
+            // 数据通道（aicode_bridge 的 ledger_* / recall_search 工具）：只读查询与状态推进，不经权限弹窗。
+            // 因此必须确认请求确实来自一个仍在跑的会话（token 与会话 id 绑定，removeToken 后即失效），
+            // 否则任意拿到 token 的本机进程都能无弹窗读历史原文。
             if (kind == "data") {
+                val presentedToken = request["token"]?.jsonPrimitive?.contentOrNull
+                val boundSession = presentedToken?.let { tokenSessions[it] }
+                if (boundSession == null || boundSession != sessionId) {
+                    FileLogger.w(TAG, "数据通道请求的会话与 token 不匹配，丢弃: tool=$toolName")
+                    val denied = errData("会话已结束或 token 无效")
+                    conn.getOutputStream().bufferedWriter().use { w ->
+                        w.write(denied.toString())
+                        w.write("\n")
+                        w.flush()
+                    }
+                    return
+                }
                 val dataResponse = handleDataRequest(toolName, toolInput, sessionId)
                 conn.getOutputStream().bufferedWriter().use { w ->
                     w.write(dataResponse.toString())

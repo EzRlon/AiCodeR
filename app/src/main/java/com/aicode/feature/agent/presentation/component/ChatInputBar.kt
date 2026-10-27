@@ -54,6 +54,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -163,6 +164,12 @@ private val INPUT_BAR_MASK_HEIGHT = 110.dp
 /** 输入框高度上下限：超过上限后文本在框内滚动，右上角露出「展开」按钮。与 TextField 的 heightIn 一致。 */
 private val INPUT_FIELD_MIN_HEIGHT = 44.dp
 private val INPUT_FIELD_MAX_HEIGHT = 140.dp
+
+/**
+ * 小于该字符数时直接判定「未超出」：三行高以内装不下这么多字（含宽字符也不超），
+ * 省掉键入路径上的全文测量。阈值取保守值，宁可多测不可误判为不溢出。
+ */
+private const val OVERFLOW_MEASURE_MIN_CHARS = 120
 
 /**
  * M3 无标签 TextField 的默认 contentPadding（上下左右各 16dp）。
@@ -314,21 +321,25 @@ internal fun ChatInputBar(
 
     // 文本是否已经超出输入框高度（超出后框内滚动，展开按钮才有意义）。
     // 按换行符数硬编码阈值在长行自动折行时会判断错，这里按 TextField 的实际宽度实测文本高度。
+    // 测量是同步且全量的，每敲一个字跑一次会把长文本压在键入路径上：短文本直接判否（不可能超高三行），
+    // 长文本则走 derivedStateOf，只在高度判定结果变化时重组，不必每次重组都重新测量。
     val textMeasurer = rememberTextMeasurer()
     val inputDensity = LocalDensity.current
     var inputFieldWidthPx by remember { mutableStateOf(0) }
     val inputTextStyle = MaterialTheme.typography.bodyLarge
-    val inputOverflows = remember(value, inputFieldWidthPx, inputDensity, inputTextStyle) {
-        val horizontalPaddingPx = with(inputDensity) { INPUT_FIELD_CONTENT_PADDING.toPx() }
-        val contentWidthPx = inputFieldWidthPx - (horizontalPaddingPx * 2).toInt()
-        val maxTextHeightPx = with(inputDensity) {
-            (INPUT_FIELD_MAX_HEIGHT - INPUT_FIELD_CONTENT_PADDING * 2).toPx()
+    val inputOverflows by remember(value, inputFieldWidthPx, inputDensity, inputTextStyle) {
+        derivedStateOf {
+            val horizontalPaddingPx = with(inputDensity) { INPUT_FIELD_CONTENT_PADDING.toPx() }
+            val contentWidthPx = inputFieldWidthPx - (horizontalPaddingPx * 2).toInt()
+            val maxTextHeightPx = with(inputDensity) {
+                (INPUT_FIELD_MAX_HEIGHT - INPUT_FIELD_CONTENT_PADDING * 2).toPx()
+            }
+            contentWidthPx > 0 && value.length > OVERFLOW_MEASURE_MIN_CHARS && textMeasurer.measure(
+                text = AnnotatedString(value),
+                style = inputTextStyle,
+                constraints = Constraints(maxWidth = contentWidthPx)
+            ).size.height > maxTextHeightPx
         }
-        contentWidthPx > 0 && value.isNotEmpty() && textMeasurer.measure(
-            text = AnnotatedString(value),
-            style = inputTextStyle,
-            constraints = Constraints(maxWidth = contentWidthPx)
-        ).size.height > maxTextHeightPx
     }
 
     Surface(

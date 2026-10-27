@@ -1410,11 +1410,10 @@ fun AIChatPanel(
                     }
                 } else {
                     // 收工那一刻内容未必已稳定（md 异步解析往往落在后面），再兜一小段再收手。
-                    val deadline = System.nanoTime() + CALIBRATE_TAIL_MS * 1_000_000L
-                    while (System.nanoTime() < deadline) {
-                        withFrameNanos { }
-                        calibrateToAnchor()
-                    }
+                    // 用 delay 而非逐帧 withFrameNanos：这段只是等异步解析落地，不需要每帧回调，
+                    // 1200ms 逐帧等于任务结束后再醒 72 次主线程。
+                    delay(CALIBRATE_TAIL_MS)
+                    calibrateToAnchor()
                 }
             }
     }

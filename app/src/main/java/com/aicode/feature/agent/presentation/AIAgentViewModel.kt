@@ -216,6 +216,7 @@ class AIAgentViewModel @Inject constructor(
     private val slashCommandRegistry: SlashCommandRegistry,
     private val fileMentionRepository: FileMentionRepository,
     private val checkpointManager: CheckpointManager,
+    private val fileVersionRegistry: com.aicode.feature.agent.domain.tool.FileVersionRegistry,
     private val checkpointDao: CheckpointDao,
     private val backupManager: BackupManager,
     private val mcpManager: McpManager,
@@ -246,6 +247,7 @@ class AIAgentViewModel @Inject constructor(
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
     private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
     private val openCodeBridge: com.aicode.feature.agent.domain.engine.OpenCodeBridge,
+    private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -566,6 +568,9 @@ class AIAgentViewModel @Inject constructor(
     /** 思考过程耗时（毫秒）：key = 助手消息 id。记录流式思考的实际耗时，供落库后的卡片展示一位小数秒数。 */
     val reasoningDurations = mutableStateMapOf<String, Long>()
 
+    /** 消息 id → 会话 id：供会话删除时清掉 [reasoningDurations] 里属于它的条目（那张表以消息 id 为键）。 */
+    private val reasoningDurationSessions = mutableMapOf<String, String>()
+
     fun loadMoreMessages() {
         val sid = _currentSessionId.value ?: return
         val state = messagesState.value
@@ -775,6 +780,9 @@ class AIAgentViewModel @Inject constructor(
         .onEach { _expandingPath.value = null }
         .catch { e ->
             FileLogger.e(TAG, "构建文件树失败", e)
+            // catch 在 onEach 下游，上游异常时 onEach 不会执行，必须在这里也清：
+            // 否则 _expandingPath 停留在该目录，toggleExpand 的「重复点击」判断会拒绝再次展开。
+            _expandingPath.value = null
             emit(FileBrowseState.Error(e.message ?: "读取目录失败"))
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FileBrowseState.Loading)
@@ -872,6 +880,11 @@ class AIAgentViewModel @Inject constructor(
             current.filterNot { it == path || it.startsWith(childPathPrefix(path)) }.toSet()
         } else {
             _expandingPath.value = path
+            // 兜底清除：树流可能因订阅超时（WhileSubscribed 5s）没跑完就停，标记会永久残留。
+            viewModelScope.launch {
+                delay(EXPAND_MARKER_TIMEOUT_MS)
+                if (_expandingPath.value == path) _expandingPath.value = null
+            }
             current + path
         }
         _expandedPaths.value = updated
@@ -1527,6 +1540,9 @@ class AIAgentViewModel @Inject constructor(
         /** 写文件会连珠触发多个 inotify 事件，合并后再重读目录。 */
         const val BROWSE_DEBOUNCE_MS = 300L
 
+        /** 展开等待态的兜底清除时长：覆盖一次完整列目录，超时即认为这轮不会再回来。 */
+        const val EXPAND_MARKER_TIMEOUT_MS = 10_000L
+
         /** 会话目标文本长度上限，避免 system 提示词过长。 */
         const val MAX_GOAL_CHARS = 2000
 
@@ -1897,6 +1913,16 @@ class AIAgentViewModel @Inject constructor(
      * 并在 finally 里为它补送通知、烧一轮 LLM。
      */
     private fun clearSubAgentRuntimeState(sessionId: String) {
+        clearSessionRuntimeState(sessionId)
+    }
+
+    /**
+     * 清掉一个会话的全部内存运行时状态。删除会话、批量删除、回收站彻底删除三处共用这一份。
+     *
+     * 这三处原本各写一份几乎逐字相同的清理块，且各自清的字段集合不同——每新增一个会话级状态
+     * 就得同步改三遍，漏掉任何一处都会只增不减。现以「全部会话级状态」为唯一基准收口到这里。
+     */
+    private fun clearSessionRuntimeState(sessionId: String) {
         subAgentEventBus.release(sessionId)
         // 先清队列再取消 job：cancel 可能在调用栈内同步跑 finally → flushPendingNotifications，
         // 队列已空则直接返回，不会为已删除会话再起一轮。
@@ -1909,7 +1935,19 @@ class AIAgentViewModel @Inject constructor(
         setStreamingReasoning(sessionId, null)
         _runningTools.value = _runningTools.value - sessionId
         setRetryState(sessionId, null)
+        setKeySwitchState(sessionId, null)
+        setPreparingTool(sessionId, null)
+        _compactionFailedSessions.value = _compactionFailedSessions.value - sessionId
+        _contextUsages.value = _contextUsages.value - sessionId
         _inputDrafts.value = _inputDrafts.value - sessionId
+        _intentDrafts.value = _intentDrafts.value - sessionId
+        reasoningDurationSessions.entries.removeAll { (msgId, sid) ->
+            val owned = sid == sessionId
+            if (owned) reasoningDurations.remove(msgId)
+            owned
+        }
+        // 文件版本指纹表按会话分桶（每桶最多 512 条），会话没了就没人再查它。
+        fileVersionRegistry.clearSession(sessionId)
         draftPrefs.edit().remove(sessionId).apply()
     }
 
@@ -2717,6 +2755,7 @@ class AIAgentViewModel @Inject constructor(
                         val msgId = event.messageId
                         if (reasoningDuration != null && reasoningDuration > 0) {
                             reasoningDurations[msgId] = reasoningDuration
+                            reasoningDurationSessions[msgId] = sessionId
                         }
                         messagePersistenceUseCase.persist(
                             sessionId,
@@ -2829,8 +2868,9 @@ class AIAgentViewModel @Inject constructor(
                         setRetryState(sessionId, null)
                         setKeySwitchState(sessionId, null)
                         setCompacting(sessionId, false)
-                        // 子代理会话完成时通知父会话（异步回调）
-                        if (isSub) {
+                        // 子代理会话完成时通知父会话（异步回调）。
+                        // 本轮已失败时不再发 COMPLETED：failed 归档会被 completed 覆盖，父代理会误以为子任务成功。
+                        if (isSub && !failed) {
                             archiveSubAgentReport(sessionId, outcome = "completed")
                             sessionUseCase.getSessionById(sessionId)?.parentId?.let { parentId ->
                                 subAgentEventBus.emit(
@@ -2978,6 +3018,7 @@ class AIAgentViewModel @Inject constructor(
             if (sessionId in handoffContinuedSessions) {
                 if (percent < promptPercent) {
                     handoffContinuedSessions.remove(sessionId)
+                    persistHandoffState()
                 } else if (action == HandoffAction.AUTO_HANDOFF) {
                     return
                 }
@@ -2990,6 +3031,7 @@ class AIAgentViewModel @Inject constructor(
                 HandoffAction.AUTO_HANDOFF -> {
                     if (sessionId in pausedHandoffSessions) return
                     pausedHandoffSessions[sessionId] = percent
+                    persistHandoffState()
                     _handoffPrompt.value = HandoffPrompt(sessionId, percent, paused = true, generating = true)
                     if (!handoffToNewSession(sessionId, closePromptOnSuccess = true)) {
                         _handoffPrompt.value = HandoffPrompt(sessionId, percent, paused = true)
@@ -2999,6 +3041,20 @@ class AIAgentViewModel @Inject constructor(
                 HandoffAction.NONE -> Unit
             }
         }.onFailure { FileLogger.w(TAG, "交接提醒评估失败", it) }
+    }
+
+    /**
+     * 把交接相关会话状态落盘（异步、失败只记日志）：暂停态/抑制集合/暂不计数/空回合计数
+     * 丢失会让硬阀值拦截失效或重复打扰，但都是可恢复的提示性状态，不值得阻塞主流程。
+     */
+    private fun persistHandoffState() {
+        val snapshot = com.aicode.feature.agent.data.repository.HandoffStateRepository.State(
+            paused = pausedHandoffSessions.toMap(),
+            continued = handoffContinuedSessions.toList(),
+            dismissedCounts = dismissedHandoffCounts.toMap(),
+            goalEmptyTurns = goalEmptyTurnCounts.toMap()
+        )
+        viewModelScope.launch { handoffStateRepository.save(snapshot) }
     }
 
     /**
@@ -3030,6 +3086,7 @@ class AIAgentViewModel @Inject constructor(
         messagePersistenceUseCase.invalidateHistory(newEntity.id)
         sessionUseCase.touch(newEntity.id, messagePersistenceUseCase.nextTimestamp())
         dismissedHandoffCounts.remove(oldSessionId)
+        persistHandoffState()
         // 只清理属于旧会话的提示，避免误清期间新产生的其它会话提醒。
         if (closePromptOnSuccess && _handoffPrompt.value?.sessionId == oldSessionId) {
             _handoffPrompt.value = null
@@ -3093,6 +3150,7 @@ class AIAgentViewModel @Inject constructor(
         val prompt = _handoffPrompt.value ?: return
         if (prompt.paused || prompt.generating || prompt.preparingCopy) return
         dismissedHandoffCounts[prompt.sessionId] = (dismissedHandoffCounts[prompt.sessionId] ?: 0) + 1
+        persistHandoffState()
         _handoffPrompt.value = null
     }
 
@@ -3103,6 +3161,7 @@ class AIAgentViewModel @Inject constructor(
         pausedHandoffSessions.remove(prompt.sessionId)
         // 抑制再次自动交接：继续后占用通常仍在阈值上方，若不抑制下一轮结束又会立即暂停。
         handoffContinuedSessions.add(prompt.sessionId)
+        persistHandoffState()
         _handoffPrompt.value = null
     }
 
@@ -3143,6 +3202,15 @@ class AIAgentViewModel @Inject constructor(
     }
 
     init {
+        // 恢复交接暂停态：「暂不」计数、已选继续的抑制集合、goal 空回合计数原本只在内存，
+        // 进程被杀后原本因上下文超限而暂停的会话会恢复成可发送，拦截失效。
+        viewModelScope.launch {
+            val state = handoffStateRepository.load()
+            if (state.paused.isNotEmpty()) pausedHandoffSessions.putAll(state.paused)
+            if (state.continued.isNotEmpty()) handoffContinuedSessions.addAll(state.continued)
+            if (state.dismissedCounts.isNotEmpty()) dismissedHandoffCounts.putAll(state.dismissedCounts)
+            if (state.goalEmptyTurns.isNotEmpty()) goalEmptyTurnCounts.putAll(state.goalEmptyTurns)
+        }
         // 跟随会话切换/冷启动/工具内绑定刷新当前专家团（单一同步点；summon_team 工具直接落库，经 DB 流反映到顶栏）
         viewModelScope.launch {
             currentSessionState.collect { session ->
@@ -3278,6 +3346,7 @@ class AIAgentViewModel @Inject constructor(
         agentNotificationCenter.clearAll()
         _queuedRequests.value = emptyMap()
         goalEmptyTurnCounts.clear()
+        persistHandoffState()
         _runningCommandSessions.value = emptySet()
         commandJobs.clear()
         _agentStates.value = _agentStates.value.mapValues { AgentUIState.Idle }
@@ -3745,6 +3814,8 @@ class AIAgentViewModel @Inject constructor(
                     return
                 }
                 goalEmptyTurnCounts[sessionId] = n
+                // 只在计数增长时落盘：这是熔断的唯一依据，丢失会让空转从 0 重来。
+                persistHandoffState()
             }
         } else if (hadActivity) {
             // 用户回合有活动也重置计数：熔断只针对「连续的」空 goal 回合，不被用户回合打断累积。
@@ -3870,6 +3941,7 @@ class AIAgentViewModel @Inject constructor(
                 // 暂停兑底的会话：压缩成功即解除暂停，用户无需再点「继续」。
                 if (!failed && changed && pausedHandoffSessions.remove(sid) != null) {
                     handoffContinuedSessions.add(sid)
+                    persistHandoffState()
                     if (_handoffPrompt.value?.sessionId == sid) _handoffPrompt.value = null
                 }
             } catch (e: CancellationException) {
@@ -3940,21 +4012,7 @@ class AIAgentViewModel @Inject constructor(
     private suspend fun forgetSessions(ids: List<String>) {
         if (ids.isEmpty()) return
         ids.forEach { checkpointManager.clearSessionCheckpoints(it) }
-        ids.forEach { sid ->
-            subAgentEventBus.release(sid)
-            sessionJobs[sid]?.cancel()
-            sessionJobs.remove(sid)
-            _agentStates.value = _agentStates.value - sid
-            _streamingTexts.value = _streamingTexts.value - sid
-            setStreamingReasoning(sid, null)
-            _runningTools.value = _runningTools.value - sid
-            _retryStates.value = _retryStates.value - sid
-            _queuedRequests.value = _queuedRequests.value - sid
-            _inputDrafts.value = _inputDrafts.value - sid
-            _intentDrafts.value = _intentDrafts.value - sid
-            draftPrefs.edit().remove(sid).apply()
-            agentNotificationCenter.clear(sid)
-        }
+        ids.forEach { sid -> clearSessionRuntimeState(sid) }
         if (_currentSessionId.value in ids) {
             val ws = _currentWorkspace.value
             _currentSessionId.value = if (ws.isBlank()) null
@@ -3974,21 +4032,7 @@ class AIAgentViewModel @Inject constructor(
             allDeletedIds.addAll(sessionUseCase.deleteSession(id))
         }
 
-        allDeletedIds.forEach { sid ->
-            subAgentEventBus.release(sid)
-            sessionJobs[sid]?.cancel()
-            sessionJobs.remove(sid)
-            _agentStates.value = _agentStates.value - sid
-            _streamingTexts.value = _streamingTexts.value - sid
-            setStreamingReasoning(sid, null)
-            _runningTools.value = _runningTools.value - sid
-            _retryStates.value = _retryStates.value - sid
-            _queuedRequests.value = _queuedRequests.value - sid
-            _inputDrafts.value = _inputDrafts.value - sid
-            _intentDrafts.value = _intentDrafts.value - sid
-            draftPrefs.edit().remove(sid).apply()
-            agentNotificationCenter.clear(sid)
-        }
+        allDeletedIds.forEach { sid -> clearSessionRuntimeState(sid) }
 
         if (_currentSessionId.value in allDeletedIds) {
             val ws = _currentWorkspace.value
@@ -4014,21 +4058,7 @@ class AIAgentViewModel @Inject constructor(
         // 软删（入回收站）：不动消息与检查点，恢复时才能整组回来
         val deletedIds = sessionUseCase.deleteSession(id)
 
-        deletedIds.forEach { sid ->
-            subAgentEventBus.release(sid)
-            sessionJobs[sid]?.cancel()
-            sessionJobs.remove(sid)
-            _agentStates.value = _agentStates.value - sid
-            _streamingTexts.value = _streamingTexts.value - sid
-            setStreamingReasoning(sid, null)
-            _runningTools.value = _runningTools.value - sid
-            _retryStates.value = _retryStates.value - sid
-            _queuedRequests.value = _queuedRequests.value - sid
-            _inputDrafts.value = _inputDrafts.value - sid
-            _intentDrafts.value = _intentDrafts.value - sid
-            draftPrefs.edit().remove(sid).apply()
-            agentNotificationCenter.clear(sid)
-        }
+        deletedIds.forEach { sid -> clearSessionRuntimeState(sid) }
 
         if (_currentSessionId.value in deletedIds) {
             val ws = _currentWorkspace.value

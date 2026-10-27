@@ -261,17 +261,22 @@ class TerminalKeepaliveService : Service() {
 
     /**
      * 获取 Wi-Fi 锁，尽量保持 Wi-Fi 不休眠。延后到首次进入前台时惰性创建：只有真正保活期间
-     * 才需要，避免无谓占用。API 29+ 同时持低延迟锁（前台亮屏时生效）与兼容锁（后台/息屏时生效）。
+     * 才需要，避免无谓占用。
+     *
+     * 只持一把：WIFI_MODE_FULL_LOW_LATENCY 是 HIGH_PERF 的超集（在 API 29+ 上取代它），
+     * 同时持两把只会多占一份系统资源、多一份耗电，并不能额外提升保活效果。
      */
     private fun acquireWifiLocks() {
         runCatching {
             if (!wifiLocksInitialized) {
                 val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    wifiLocks += wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "AiCode:Keepalive:low-latency")
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
                 }
-                @Suppress("DEPRECATION")
-                wifiLocks += wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "AiCode:Keepalive")
+                wifiLocks += wm.createWifiLock(mode, "AiCode:Keepalive")
                 wifiLocks.forEach { it.setReferenceCounted(false) }
                 wifiLocksInitialized = true
             }

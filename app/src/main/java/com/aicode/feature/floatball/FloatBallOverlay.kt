@@ -970,7 +970,13 @@ class FloatBallOverlay(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            itemsIndexed(hub.messages) { _, msg ->
+                            // HubMessage 无 id，key 用「角色 + 内容 + 位置」：内容变了 key 跟着变，
+                            // 比无 key 时按位置复用更准，又不会因两条内容相同的消息撞 key。
+                            itemsIndexed(
+                                items = hub.messages,
+                                key = { index, msg -> "$index:${msg.role}:${msg.text.hashCode()}" },
+                                contentType = { _, msg -> msg.role }
+                            ) { _, msg ->
                                 val isUser = msg.role == "USER"
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -1013,7 +1019,9 @@ class FloatBallOverlay(
                                     .clickable {
                                         if (hub.messages.isNotEmpty()) {
                                             listScope.launch {
-                                                chatListState.animateScrollToItem(hub.messages.lastIndex)
+                                                // 协程启动到执行之间可能又有新消息插入，届时旧 lastIndex 会越界。
+                                                val target = chatListState.layoutInfo.totalItemsCount - 1
+                                                if (target >= 0) chatListState.animateScrollToItem(target)
                                             }
                                         }
                                     },
@@ -1429,8 +1437,7 @@ private fun ModelPickerView(
                         modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
                     )
                 }
-                items(models.size) { idx ->
-                    val model = models[idx]
+                itemsIndexed(models, key = { _, model -> model }) { idx, model ->
                     val selected = p.id == data.currentProviderId && model == data.currentModel
                     Row(
                         modifier = Modifier

@@ -1,6 +1,7 @@
 package com.aicode.feature.git.domain
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.shellQuote
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.git.domain.model.GitBranch
 import com.aicode.feature.git.domain.model.GitCommit
@@ -795,16 +796,6 @@ class GitRepository @Inject constructor(
         return if (out.startsWith("fatal:") || out.startsWith("error:")) "" else out
     }
 
-    /**
-     * 对单个 shell 参数做单引号转义。含「安全字符」之外的字符（空格、`|`、`$`、反引号、`*` 等）时
-     * 整体包单引号，内嵌单引号用 `'\''` 关闭-转义-重开。格式串（带 `|`、`%(...)`）、含空格路径、
-     * 提交消息均由此安全传递。注意 `|` 是 shell 管道符，**不可**列入安全集。
-     */
-    private fun shellQuote(arg: String): String {
-        if (arg.isEmpty()) return "''"
-        if (arg.all { it.isLetterOrDigit() || it in "_.@/:=+,%-" }) return arg
-        return "'" + arg.replace("'", "'\\''") + "'"
-    }
 }
 
 /**

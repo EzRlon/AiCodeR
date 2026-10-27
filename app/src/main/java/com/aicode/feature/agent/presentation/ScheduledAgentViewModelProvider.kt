@@ -79,6 +79,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val slashCommandRegistry: SlashCommandRegistry,
     private val fileMentionRepository: FileMentionRepository,
     private val checkpointManager: CheckpointManager,
+    private val fileVersionRegistry: com.aicode.feature.agent.domain.tool.FileVersionRegistry,
     private val checkpointDao: CheckpointDao,
     private val backupManager: BackupManager,
     private val mcpManager: McpManager,
@@ -109,6 +110,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
     private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
     private val openCodeBridge: com.aicode.feature.agent.domain.engine.OpenCodeBridge,
+    private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -133,6 +135,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         slashCommandRegistry,
         fileMentionRepository,
         checkpointManager,
+        fileVersionRegistry,
         checkpointDao,
         backupManager,
         mcpManager,
@@ -163,6 +166,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         claudeCodeBridge,
         codexBridge,
         openCodeBridge,
+        handoffStateRepository,
         context
     )
 }

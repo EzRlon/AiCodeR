@@ -1,6 +1,7 @@
 package com.aicode.feature.hooks.domain
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.shellQuote
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.hooks.data.HooksRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -73,8 +74,6 @@ class HookRunner @Inject constructor(
             FileLogger.w(TAG, "钩子脚本被安全防护拒绝: $scriptPath")
             return HookOutcome(blocked = event == HooksConfig.EVENT_PRE_TOOL_USE, message = "钩子脚本被安全防护拒绝")
         }
-        // 环境变量经单引号包裹防注入（值内单引号做 '\'' 转义）
-        fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
         val envPrefix = buildString {
             append("export AICODE_HOOK_EVENT=").append(shellQuote(event)).append("; ")
             append("export AICODE_TOOL_NAME=").append(shellQuote(toolName)).append("; ")

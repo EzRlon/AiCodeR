@@ -215,8 +215,9 @@ class ClaudeCodeBridge @Inject constructor(
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
-        val port = permissionBridgeServer.ensureStarted(token = sessionId)
-        writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+        val bridgeToken = permissionBridgeServer.newToken()
+        val port = permissionBridgeServer.ensureStarted(token = bridgeToken, sessionId = sessionId)
+        writeBridgeAssets(port, sessionId, token = bridgeToken, projectPath = projectPath)
         val hasCliAgents = writeCliAgentsConfig()
 
         val args = buildList {
@@ -364,7 +365,7 @@ class ClaudeCodeBridge @Inject constructor(
             killOnCancel?.dispose()
             stderrDrain.cancel()
             watchdog.cancel()
-            permissionBridgeServer.removeToken(sessionId)
+            permissionBridgeServer.removeToken(bridgeToken)
             runCatching { process.destroy() }
         }
     }

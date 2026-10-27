@@ -223,8 +223,9 @@ class OpenCodeBridge @Inject constructor(
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
-        val port = permissionBridgeServer.ensureStarted(token = sessionId)
-        writeBridgeAssets(port, sessionId, token = sessionId, projectPath = projectPath)
+        val bridgeToken = permissionBridgeServer.newToken()
+        val port = permissionBridgeServer.ensureStarted(token = bridgeToken, sessionId = sessionId)
+        writeBridgeAssets(port, sessionId, token = bridgeToken, projectPath = projectPath)
 
         // 会话选定 App 供应商：自定义端点时需注入 provider 段（模型引用串指向注入键），官方端点只透 Key
         val selectedProvider = resolveProvider(providerId)
@@ -284,7 +285,7 @@ class OpenCodeBridge @Inject constructor(
             try {
                 containerEngine.startStdioProcess("opencode", args, projectPath, extraEnv, resolveRuntimeProfile())
             } catch (e: Exception) {
-                permissionBridgeServer.removeToken(sessionId)
+                permissionBridgeServer.removeToken(bridgeToken)
                 throw e
             }
         }
@@ -366,7 +367,7 @@ class OpenCodeBridge @Inject constructor(
             killOnCancel?.dispose()
             stderrDrain.cancel()
             watchdog.cancel()
-            permissionBridgeServer.removeToken(sessionId)
+            permissionBridgeServer.removeToken(bridgeToken)
             runCatching { process.destroy() }
             // 事件行带 sessionID：即便回合失败，映射也已建立，下回合可续接
             acc.remoteSessionId?.let { persistSessionId(sessionId, it) }

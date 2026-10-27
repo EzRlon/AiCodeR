@@ -78,7 +78,9 @@ class FileChangeHub @Inject constructor(
         /** 单次快照最多收集的条目数，防止超大订阅每轮遍历开销失控。 */
         private const val MAX_SNAPSHOT_ENTRIES = 4096
 
-        /** 单订阅可持有 inotify 句柄的目录数上限，防止大仓库把 inotify watch 用尽。 */
+        /** 单订阅可持有 inotify 句柄的目录数上限，防止大仓库把 inotify watch 用尽。
+         *  配额按订阅自己的目录集合算（`myDirs`），不是全局共享表——否则一个大仓库订阅吃满后，
+         * 权限规则/MCP 配置/技能目录等其它订阅会静默失去 inotify，只剩轮询兑底。 */
         private const val MAX_WATCHED_DIRS = 512
 
         /** 待处理原始事件队列上限；超出时丢弃最旧事件（有快照轮询兜底），防止文件暴增时内存无界增长。 */
@@ -309,9 +311,9 @@ class FileChangeHub @Inject constructor(
                 diag("目录监听已登记，跳过重复注册: $path")
                 return
             }
-            if (dirWatches.size >= MAX_WATCHED_DIRS && !dirWatches.containsKey(path)) {
+            if (myDirs.size > MAX_WATCHED_DIRS) {
                 myDirs.remove(path)
-                FileLogger.w(TAG, "监听目录数达上限 $MAX_WATCHED_DIRS，停止扩展: $path")
+                FileLogger.w(TAG, "本订阅监听目录数达上限 $MAX_WATCHED_DIRS，停止扩展: $path")
                 return
             }
             // 新出现的目录在 watch 生效前，其内条目没有任何 watcher 在场、inotify 不会汇报。
