@@ -336,6 +336,12 @@ class EditFileTool @Inject constructor(
         if (m == 0 || m > n) return matches
         var i = 0
         outer@ while (i <= n - m) {
+            // 首字符快判：每个起点都先判首字符，不匹配立即右移一格。
+            // 缺这一步时大文件 + 长 old_string 且不匹配会退化为 n×m 次比较。
+            if (content[i] != pattern[0] && pattern[0] != '\n') {
+                i++
+                continue@outer
+            }
             var ci = i
             var pj = 0
             while (pj < m) {

@@ -76,8 +76,15 @@ class PlanApprovalManager @Inject constructor(
 
     /** UI 回传用户选择，唤醒最早挂起的 [awaitApproval]。 */
     fun resolve(choice: PlanApprovalChoice) {
-        val id = pendingApproval.value?.id ?: return
-        resolve(id, choice)
+        // 取最早条目与移除必须在同一持锁区内完成：先读 id 再进锁的话，两次之间该条目
+        // 可能已被取消并换成新请求，remove(staleId) 返回 null，用户这次点击被静默丢弃。
+        val entry = synchronized(lock) {
+            val earliest = pending.entries.firstOrNull() ?: return
+            pending.remove(earliest.key)
+            publish()
+            earliest.value
+        }
+        completeResolved(entry, choice)
     }
 
     /** 按请求 id 回传选择（通知按钮用，避免新通知复用旧 PendingIntent 误批后来的请求）。 */
@@ -87,7 +94,11 @@ class PlanApprovalManager @Inject constructor(
             publish()
             target
         }
+        completeResolved(entry, choice)
+    }
 
+    /** 完成一个已被移出内部表的请求：拒绝时回滚模式，然后唤醒挂起方。 */
+    private fun completeResolved(entry: Entry, choice: PlanApprovalChoice) {
         // 用户拒绝时，回滚数据库中的模式到 PLAN（SwitchModeTool 已写入 BUILD）
         if (choice == PlanApprovalChoice.REFINE) {
             rollbackModeToPlan(entry.sessionId)

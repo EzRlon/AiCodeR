@@ -39,8 +39,12 @@ object ConclusionParser {
         lines.forEach { raw ->
             val line = raw.trim()
             val matchedLabel = sectionLabels.entries.firstOrNull { (title, _) ->
-                // 允许「5. 关键决定与理由：」「关键决定与理由：」「**关键决定与理由**」等写法
-                line.contains(title)
+                // 允许「5. 关键决定与理由：」「关键决定与理由：」「**关键决定与理由**」等写法，
+                // 但要求标题出现在行首（前面只能有编号与强调符号）：正文里提到这几个词
+                // 不算标题，否则一句话就把当前段提前 flush 掉、后续行归到错标签。
+                val lead = SECTION_LEADING.find(line)
+                val body = if (lead != null) line.substring(lead.range.last + 1) else line
+                body.startsWith(title)
             }
             if (matchedLabel != null) {
                 flush()
@@ -96,6 +100,9 @@ object ConclusionParser {
 
     /** 数字段标题：「5. xxx」「5、xxx」「(5) xxx」——用于判断当前段结束。 */
     private val NUMBERED_SECTION = Regex("^[*\\s]*[（(]?\\d{1,2}[.、）)]\\s*\\S.*$")
+
+    /** 段标题前的修饰：编号、粗体/星号与空白；剥掉后行首即标题才算段标题。 */
+    private val SECTION_LEADING = Regex("^[*\\s]*([（(]?\\d{1,2}[.、）)])?[*\\s]*")
 
     /** 列表符号：- / • / * / 1. / （1）。 */
     private val BULLET_PREFIX = Regex("^[*\\s]*([-•*]|[（(]?\\d{1,2}[.、）)])\\s*")
