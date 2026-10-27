@@ -520,3 +520,28 @@
 下批若再遇，先重跑一次再定。
 
 **批次 5（架构重构）未开工**：层间依赖下沉、巨型文件拆分、`SettingsScreen` 状态收集下沉（P1-8）、增量 P1-2/P1-3/P1-4。
+
+---
+
+## 十二、optimizer 发版审查处置（2026-10-27，区间 171a4f5..HEAD）
+
+**审查模式**：BATCH + R8 发布面。**总评：风险中**，无 P0。R8 / 资源收缩 / 主线程三面已核实无风险（技能为纯文本 assets 不入 R8；`isShrinkResources` 只作用于 `res/`；释放走 `Dispatchers.IO`）。
+
+**已闭环（`21763c5` / `4803970`）**：
+1. `ui-ux-pro-max/SKILL.md` 11 处脚本路径为 `${CLAUDE_PLUGIN_ROOT}/.claude/skills/...`，AiCode 容器内是死路径 → 改为 `/root/.aicode/skills/ui-ux-pro-max/scripts/search.py`，实测检索正常返回。
+2. `writing-plans` / `executing-plans` / `brainstorming` 正文的 `superpowers:` 命名空间与 `docs/superpowers/` 路径在 AiCode 不存在 → 去掉命名空间，并补「AiCode 环境适配」说明（`subagent-driven-development` 与 `using-superpowers` 未随包发行，给出等价替代做法）。
+3. 技能 `.sh` 脚本无执行位（assets 不保留权限）→ `extractAssetsRecursive` 复制后对 `.sh` 补 `setExecutable`。
+4. 版本戳 `.builtin_version` 原在 `skills/` 内，会随备份（`AI_ASSET_DIRS` 含 skills）带走，同版本恢复时跳过释放 → 移到 skills 同级 `aicode/.builtin_skills_version`。
+5. 段标题不识别 `##` / `###`（模型输出 Markdown 标题即丢结论）→ 前缀字符类补 `#`，三份正则共享 `PREFIX` 常量。
+
+**记待排期（不修，均无发版阻断）**：
+- 释放 93 个文件后触发一次技能变更广播（`WhileSubscribed` 无订阅者时零开销）。
+- 技能清单 6→16 个，系统提示词注入净增约 2.2K 字符（≈800 tokens）/ 新会话；两大项是 `ui-ux-pro-max` 497 与 `build-mcp-server` 471，需瘦身只裁 description。
+- `EditFileTool` 快判在 `pattern[0]=='\n'` 时主动跳过，而多行 old_string 占多数 → **实际收益仅限单行 old_string**，注释口径需按此修正（避免后人误判为热路径优化）。
+- `extractAssetsRecursive` 用「`assets.open` 抛 IOException 判目录」的异常驱动控制流（本次 25 次异常，可忽略）。
+- 商店 `refreshInstalled` 用 `listAllSkills()` 判已安装 → 内置技能被商店视为已安装；同名冲突面从 6 扩到 16（升级时内置版会覆盖同名用户/商店技能）。
+- 首次启动并发 8+ 个 `appScope.launch`，IO 峰值约 2.8MB 写入 + 118 条目删除（推断，未实测）。
+- `BuiltinSkillsAssetsTest` 只在 JVM 验证 frontmatter，R8 后包未验证（已知盲区）。
+- dev 槽 `versionCode = gitCommitCount()+1`，开发期每次装新包都会重删重写 2.3MB（正式版仅升级时一次，属预期）。
+
+**顺带核实（非本次引入）**：`assets/notes/` 287 文件 5.8MB 是 Vditor 编辑器前端资源，自 `fd1e02d`（2026-10-13）起既有，与本次无关。
