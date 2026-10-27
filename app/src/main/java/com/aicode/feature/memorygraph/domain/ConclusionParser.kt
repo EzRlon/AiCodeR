@@ -98,12 +98,15 @@ object ConclusionParser {
     private const val NAME_MAX_CHARS = 40
     private const val SUMMARY_MAX_CHARS = 200
 
-    /** 数字段标题：「5. xxx」「5、xxx」「(5) xxx」——用于判断当前段结束。 */
-    private val NUMBERED_SECTION = Regex("^[*\\s]*[（(]?\\d{1,2}[.、）)]\\s*\\S.*$")
+    /** 段/列表前缀的共用字符类：Markdown 标题符 #、星号、空白。改一处三份正则同步生效。 */
+    private const val PREFIX = "[#*\\s]*"
 
-    /** 段标题前的修饰：编号、粗体/星号与空白；剥掉后行首即标题才算段标题。 */
-    private val SECTION_LEADING = Regex("^[*\\s]*([（(]?\\d{1,2}[.、）)])?[*\\s]*")
+    /** 数字段标题：「5. xxx」「5、xxx」「(5) xxx」——用于判断当前段结束。 */
+    private val NUMBERED_SECTION = Regex("^" + PREFIX + "[（(]?\\d{1,2}[.、）)]\\s*\\S.*$")
+
+    /** 段标题前的修饰：Markdown 标题符、编号、粗体/星号与空白；剥掉后行首即标题才算段标题。 */
+    private val SECTION_LEADING = Regex("^" + PREFIX + "([（(]?\\d{1,2}[.、）)])?" + PREFIX)
 
     /** 列表符号：- / • / * / 1. / （1）。 */
-    private val BULLET_PREFIX = Regex("^[*\\s]*([-•*]|[（(]?\\d{1,2}[.、）)])\\s*")
+    private val BULLET_PREFIX = Regex("^" + PREFIX + "([-•*]|[（(]?\\d{1,2}[.、）)])\\s*")
 }

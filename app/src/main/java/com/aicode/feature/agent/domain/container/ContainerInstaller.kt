@@ -35,8 +35,8 @@ class ContainerInstaller @Inject constructor(
         @Volatile private var docsExtractedSession = false
         @Volatile private var multiLlmExtractedSession = false
 
-        /** 内置技能已释放到的 App versionCode 标记文件（放在 skills 目录内，随目录重建自动失效）。 */
-        private const val SKILLS_VERSION_STAMP = ".builtin_version"
+        /** 内置技能已释放到的 App versionCode 标记文件（与 skills 同级，不随技能目录被备份带走）。 */
+        private const val SKILLS_VERSION_STAMP = ".builtin_skills_version"
 
         /**
          * 从 assets 提取文档到 ~/.aicode/docs (内置使用指导)，支持 guide/ advanced/ 等分类子目录。
@@ -103,8 +103,12 @@ class ContainerInstaller @Inject constructor(
          * [com.aicode.feature.agent.domain.skill.SkillDirectoryScanner] 实时扫描本目录得到，释放后无需额外注册。
          */
         fun extractBuiltinSkills(context: Context) {
-            val destDir = File(File(context.filesDir, "aicode"), "skills")
-            val stamp = File(destDir, SKILLS_VERSION_STAMP)
+            val aicodeDir = File(context.filesDir, "aicode")
+            val destDir = File(aicodeDir, "skills")
+            // 版本戳放 skills 同级而非目录内：skills/ 会被备份整体打包（AI_ASSET_DIRS），
+            // 戳若在里面就会随备份一起被带走，从同版本备份恢复时戳匹配 → 跳过释放，
+            // 结果用的是备份里的旧技能内容而非内置内容。
+            val stamp = File(aicodeDir, SKILLS_VERSION_STAMP)
             // 内置技能共 2.4MB（含 ui-ux-pro-max 的 1.8MB data/），全量重释放要删 12 棵目录树再写一遍。
             // 内容随 App 版本变化，版本号相同就没必要重做：冷启动不再重复写闪存（性能功耗纪律）。
             val version = appVersionCode(context)
@@ -149,6 +153,9 @@ class ContainerInstaller @Inject constructor(
                     context.assets.open(assetPath).use { input ->
                         destFile.outputStream().use { output -> input.copyTo(output) }
                     }
+                    // APK 的 assets 不保留文件权限：技能正文里直接调用的 .sh 脚本
+                    // （如 executing-plans/scripts/task-start）必须补执行位，否则 Permission denied。
+                    if (entry.endsWith(".sh")) destFile.setExecutable(true, false)
                 } catch (e: IOException) {
                     // 目录项：assets.open 对目录抛 IOException，递归处理
                     extractAssetsRecursive(context, assetPath, destFile)

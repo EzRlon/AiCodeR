@@ -63,4 +63,18 @@ class ConclusionParserEdgeTest {
 
         assertEquals(listOf("定案", "坑"), result.map { it.label })
     }
+
+    @Test
+    fun `Markdown 标题符开头的段标题也能识别`() {
+        val summary = """
+            ## 关键决定与理由
+            - 沿用九段式摘要
+            ### 7. 教训与坑
+            - 块注释可嵌套
+        """.trimIndent()
+
+        val result = ConclusionParser.parse(summary)
+
+        assertEquals(listOf("定案", "坑"), result.map { it.label })
+    }
 }
