@@ -59,3 +59,9 @@ date,time,task,seconds,exit
 2026-10-27,17:58:33,:app:testArmsoloReleaseUnitTest,37,0
 2026-10-27,19:10:46,:app:mergeArmsoloReleaseAssets,15,0
 2026-10-27,19:18:40,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.skill.*,61,0
+2026-10-27,20:02:10,:app:compileArmsoloReleaseKotlin,87,0
+2026-10-27,20:07:48,:app:testArmsoloReleaseUnitTest,256,0
+2026-10-27,20:17:39,:app:compileArmsoloReleaseKotlin,5,0
+2026-10-27,20:19:28,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.ConclusionParserTest,19,0
+2026-10-27,20:37:54,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.skill.* --tests com.aicode.feature.agent.domain.container.*,32,0
+2026-10-27,20:45:56,assembleArmsoloRelease --no-configuration-cache,467,0
