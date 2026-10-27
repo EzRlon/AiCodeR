@@ -1,6 +1,6 @@
 # 全库屎山/技术债审计（2026-10-27，Ponytail 方法论）
 
-> 状态：**批次 1 已开工并完工（2026-10-27，提交 `ca9b975`）**；批次 2~5 仍仅标记、未开工。
+> 状态：**批次 1~4 已完工（2026-10-27，提交 `ca9b975` / `e5d167c` / `ec8590c`）**；批次 5（架构重构）仍仅标记、未开工。
 > 基线提交 `c92a0c2`。审计方法：ponytail-audit（整仓质量审计）+ 仓库自带 detekt + 两路子代理并行深审 + 主线程逐条回源核实。
 > 本文件所有行号均为 2026-10-27 实测，代码变动后会漂移。
 > **2026-10-27 11:50 更新**：新增 §九「最近 18 小时增量审计」（上游 v1.13 合并 A/B/C/D/E1 + 记忆图谱 P1），原 §九 顺延为 §十。
@@ -88,6 +88,8 @@
 
 - **问题**：`executeEvents` 收尾无条件执行 `state.error?.let { send(AgentEvent.Failed(...)) }` 后紧接 `send(AgentEvent.Completed)`。ViewModel 的 `Failed` 分支发 `SubAgentEventType.FAILED` 并 `archiveSubAgentReport(outcome="failed")`；`Completed` 分支**再发一次** `COMPLETED` 并 `archiveSubAgentReport(outcome="completed")`。而 `SubAgentReportCatalog.kt:45` 是 `overwrite = true` —— 失败的 failed 归档被 completed **覆盖**。父代理据此认为子任务成功。
 - **改法**：ViewModel 的 `Completed` 分支加 `if (!failed)` 前置判断（`failed` 变量已在 2809 置位，作用域覆盖整个 collect）；workflow 侧改互斥发送。
+
+> **✅已修 e5d167c**（2026-10-27，批次 2）。两侧都改：workflow 收尾改 Failed/Completed 互斥；ViewModel 的 Completed 分支加 `!failed` 前置判断。
 - **不修后果**：任何子代理失败（API 报错、工具崩溃、上下文超限）都被父代理当成功，`task(action="read")` 拿到错误的 completed 归档并误导后续所有会话。
 
 ### 4. `extractDocs` 用裸 `deleteRecursively` 删 `~/.aicode/docs`
@@ -102,11 +104,11 @@
 ### 5. 删除工作区/SAF 文档仍用裸 `deleteRecursively`（用户主动操作即可触发）
 `feature/workspace/data/repository/WorkspaceRepository.kt:456`、`feature/workspace/data/provider/WorkspaceDocumentsProvider.kt:159`
 
-> **✅已修 ca9b975**（2026-10-27，批次 1）。两处改 `SafeDelete.deleteTree`；`deleteDocument` 保留原有「删不掉即抛 FileNotFoundException」语义。补单测 `SafeDeleteTest`（5 例，含符号链接不下钻）。
-
 - **问题**：`deleteWorkspace` 本地分支 `File(projectsRoot, name).deleteRecursively()`。工作区被 bind mount 到容器 `/root/workspace`（`LinuxContainerEngine.kt:742`），目录内容由 AI 全权写入，且 `WorkspaceRepository.kt:115` 注释明说 filesDir 支持 symlink（npm/pnpm/git 建软链）。AI 或用户脚本在工作区里建一个指向 `/root/.aicode` 的符号链接，用户点「删除工作区」就会跟着链接删出去。对照：`LocalFileAccess.deleteRecursively:199-207` 已做 NOFOLLOW 防护，说明纪律存在但未统一收口。此路径零单测。
 - **改法**：两处都换 `SafeDelete.deleteTree`。
 - **不修后果**：与 P0-4 同类数据丢失，但触发面更大（删工作区是常规操作）。
+
+> **✅已修 ca9b975**（2026-10-27，批次 1）。两处改 `SafeDelete.deleteTree`；`deleteDocument` 保留原有「删不掉即抛 FileNotFoundException」语义。补单测 `SafeDeleteTest`（5 例，含符号链接不下钻）。
 
 ---
 
@@ -118,11 +120,15 @@
 - **问题**：`ensureStarted(token = sessionId)`，三个引擎桥都把 sessionId 当鉴权令牌。而 sessionId 会出现在聊天界面、`session-<id>.log` 日志文件名、容器内 env。本机任意进程（含容器内 AI 脚本、第三方 MCP server）连 `127.0.0.1:<port>` 带该 token 发 `{"kind":"data"}` 即可**无弹窗**调用 `recall_search`（读全部历史会话原文）、`ledger_*`（读标注账本含图片路径）。`expectedTokens` 只加不删（`removeToken` 仅在回合结束调，异常路径漏调即永久有效）。
 - **改法**：token 改独立随机 UUID 与会话 id 解耦；data 通道加「仅允许当前活跃会话」判定；`expectedTokens` 在连接结束或 `close()` 时清理。
 
+> **✅已修 e5d167c**（2026-10-27，批次 3）。三桥改用 `newToken()` 随机 UUID，`token→sessionId` 绑定表，data 通道校验会话匹配，`removeToken` 同步清绑定。
+
 ### 2. VNC WebView `MIXED_CONTENT_ALWAYS_ALLOW` + JS 桥暴露剪贴板
 `feature/vnc/presentation/VncWebViewPanel.kt:76`、`:122-145`
 
 - **问题**：页面本身来自 `appassets.androidplatform.net`（安全），但 ALWAYS_ALLOW 允许 https 页面加载 http 子资源；`VncJsBridge` 暴露 `getAndroidClipboard()`/`pushToAndroid(text)`。noVNC 连用户指定的任意 VNC 服务器，页面一旦被 http 子资源劫持，JS 可静默读写系统剪贴板（含复制的密码）。对照 `BrowserManager.kt:507` 已收紧为 `MIXED_CONTENT_COMPATIBILITY_MODE`，此处不一致。
 - **改法**：改 `MIXED_CONTENT_COMPATIBILITY_MODE`；剪贴板桥加一次性令牌（仅用户显式点粘贴时允许一次）。
+
+> **部分修 e5d167c**（2026-10-27，批次 3）。剪贴板读取已加一次性放行令牌（仅用户点粘贴时允许一次）。mixed content **不降级**：实测降为 COMPATIBILITY_MODE 会直接断掉 noVNC 的 `ws://127.0.0.1:6080`（不是偏好问题）；改为封住滥用面——WebView 只放行自身资产域、禁止外部导航，被劫持的页面已无从加载外部子资源。
 
 ### 3. 备份导入无事务，中途失败留下「一半新一半旧」
 `feature/backup/data/BackupManagerImpl.kt:582`、`:831-856`
@@ -138,13 +144,15 @@
 - **问题**：`.onEach { _expandingPath.value = null }.catch { ... }` —— **`catch` 在 `onEach` 下游**，上游抛异常时 `onEach` 被跳过，标记不清。`toggleExpand` 开头 `if (path == _expandingPath.value) return` 于是拒绝该目录再次展开（表现为点了没反应、转圈不动）。切走 Tab 超过 5s（`WhileSubscribed(5_000)`）再切回会重新订阅自愈，故为 P1 而非 P0。
 - **改法**：把清除放进 `finally`/超时兜底（`_expandingPath` 置位时同时起 10s 超时协程无条件清空），或 `catch` 提到 `onEach` 之前。
 
+> **✅已修 e5d167c**（2026-10-27，批次 2）。两处都做了：`catch` 分支补清标记 + 置位时起 10s 兜底清除协程。
+
 ### 5. 删除/编辑消息无事务、无历史缓存失效
 `AIAgentViewModel.kt:4434-4452`
 
-> **✅已修 ca9b975**（2026-10-27，与 P0-2 同批）。删除改走 `MessagePersistenceUseCase.deleteMessage`（读角色与级联删除同事务 + 提交后 `invalidateHistory`）；`updateContent` 递增 `dbVersion` 主动失效缓存，不再依赖 InvalidationTracker 的异步回调。
-
 - **问题**：`deleteMessagesAfterTimestamp` + `deleteMessageById` 两条独立执行（无 `withTransaction`）；且 DAO 直调后没调 `invalidateHistory`，而 `MessagePersistenceUseCase` 的 `historyCache` 依赖 Room `InvalidationTracker` 异步回调递增 `dbVersion`（`:37-42`）。下一轮 `buildHistory` 若在回调到达前命中缓存，会把刚删的消息重新发给模型。`updateMessageContent` 同理。
 - **改法**：改走 `messagePersistenceUseCase` 用例方法（与 `rewindConversation` 一致，内含 `invalidateHistory`），级联删除包进 `withTransaction`。
+
+> **✅已修 ca9b975**（2026-10-27，与 P0-2 同批）。删除改走 `MessagePersistenceUseCase.deleteMessage`（读角色与级联删除同事务 + 提交后 `invalidateHistory`）；`updateContent` 递增 `dbVersion` 主动失效缓存，不再依赖 InvalidationTracker 的异步回调。
 
 ### 6. 交接暂停态纯内存，进程重启即失效
 `AIAgentViewModel.kt:334`、`:2380-2382`、`:2992`
@@ -152,11 +160,15 @@
 - **问题**：`pausedHandoffSessions = mutableMapOf<String, Int>()` 不落盘。进程被杀后原本因上下文超硬阈值暂停的会话恢复为可发送，`enqueueAgentRequest` 拦截失效。同文件 `handoffContinuedSessions`（253）、`dismissedHandoffCounts`（331）、`goalEmptyTurnCounts`（340）同为纯内存，其中 `goalEmptyTurnCounts` 丢失会让空回合熔断从 0 重来。
 - **改法**：暂停态与继续抑制集合落盘（`ChatSessionEntity` 加列或 DataStore）。
 
+> **✅已修 e5d167c**（2026-10-27，批次 2）。新增 `HandoffStateRepository`（DataStore + JSON）：暂停态/已继续抑制/暂不计数/goal 空回合计数启动时恢复、变更即落盘。
+
 ### 7. `reasoningDurations` / `_contextUsages` 等会话态只增不减，三处清理块重复且漏清
 `AIAgentViewModel.kt:567`、`:2719`、`:3940-3963`、`:3965-4007`、`:4008-4066`
 
 - **问题**：`reasoningDurations = mutableStateMapOf<String, Long>()` 只有写入点 2719，**全文件零清除路径**。`_contextUsages` 仅 4106（回滚路径）清，`forgetSessions`/`deleteSessions`/`deleteSession` 三处清理块几乎逐字重复却都漏清 `_contextUsages`、`_keySwitchStates`、`_preparingTools`、`_compactionFailedSessions`、`_reasoningTimings`、`reasoningDurations`、`toolArgsByMsgId`。
 - **改法**：抽 `clearSessionRuntimeState(sessionId)`（与 `clearSubAgentRuntimeState` 合并），补齐 7 个字段，三处改调一处；`reasoningDurations` 改为从消息实体读。
+
+> **✅已修 e5d167c**（2026-10-27，批次 4）。三处（`forgetSessions`/`deleteSessions`/`deleteSession`）合并为 `clearSessionRuntimeState`，补齐 keySwitch/preparingTool/compactionFailed/contextUsages/intentDrafts 等原先漏清的字段；`reasoningDurations` 加消息→会话映射以便按会话清理。
 
 ### 8. `SettingsScreen` 单函数内 96 个状态收集，任一设置变化整页重组
 `feature/settings/presentation/component/SettingsScreen.kt:244-340`
@@ -164,11 +176,15 @@
 - **问题**：实测 `grep -c collectAsStateWithLifecycle` 全文 110 个，其中 **96 个集中在 `SettingsScreen` 主函数 244-340 这 97 行内**。这些是 Compose snapshot 读取点，任一变化都会让整页重组；内部 `AnimatedContent`（`:609`）承载所有分区页，重组代价按当前分区复杂度放大。
 - **改法**：每类状态下沉到对应分区 Composable（`GeneralSettingsSection`/`AboutSection` 等已是独立组件，让它们自己 collect），`SettingsScreen` 只保留导航态。纯机械迁移。
 
+> **不修**（2026-10-27，批次 4 评估）。96 个状态收集属纯机械迁移，但 `SettingsScreen` 已 2300+ 行、内部 `AnimatedContent` 承载全部分区，一次性下沉涉及所有分区组件的参数面，回归面大而收益（重组范围）需真机对比才能量化。归入§七「巨型文件拆分」一并做，不单独动。
+
 ### 9. `ChatInputBar` 每次键入同步全文 `TextMeasurer.measure`
 `feature/agent/presentation/component/ChatInputBar.kt:321-332`
 
 - **问题**：`remember(value, inputFieldWidthPx, inputDensity, inputTextStyle) { ... textMeasurer.measure(AnnotatedString(value), ...) }` —— `value` 是输入框全文，**每敲一个字**都在组合期同步测量全文高度。长文本（几千字）时压在键入路径上。
 - **改法**：改 `derivedStateOf` + 按长度阈值短路，或挪到 `LaunchedEffect(value)` 异步测。
+
+> **✅已修 e5d167c**（2026-10-27，批次 4）。短文本（<120 字符）直接短路，其余走 `derivedStateOf`。
 
 ### 10. `AIChatPanel` 收工后仍逐帧跑 1200ms
 `feature/agent/presentation/component/AIChatPanel.kt:1395-1413`
@@ -176,11 +192,15 @@
 - **问题**：`snapshotFlow { ... }` 为 false 时进入 `else` 分支，用 `deadline = now + CALIBRATE_TAIL_MS(1200ms)` 继续 `withFrameNanos { }` 逐帧校准（`:1405-1409`）。这段「收尾兜底」每轮任务结束都无条件触发，60fps 下约 72 帧主线程帧回调。
 - **改法**：收尾分支改 `delay(CALIBRATE_TAIL_MS)` 后单次校准。
 
+> **✅已修 e5d167c**（2026-10-27，批次 4）。收尾分支改 `delay(CALIBRATE_TAIL_MS)` 后单次校准，不再逐帧醒 72 次。
+
 ### 11. `FileChangeHub` 512 目录上限是全局配额，与注释「单订阅」不符
 `core/watch/FileChangeHub.kt:82`（注释）、`:312`（实现）、`:118`（`dirWatches` 全局表）
 
 - **问题**：注释写「**单订阅**可持有 inotify 句柄的目录数上限」，实现是 `dirWatches.size >= MAX_WATCHED_DIRS`，而 `dirWatches` 是跨订阅共享的全局 `ConcurrentHashMap`。一个大仓库的文件树订阅把配额吃满后，**其它订阅**（权限规则、MCP 配置、技能目录）的 `register()` 直接 `return`，静默失去 inotify，只剩 15s 轮询兜底，且日志看不出是别人的订阅占的。
 - **改法**：判断改 `myDirs.size >= MAX_WATCHED_DIRS`（用订阅自己的集合）。
+
+> **✅已修 e5d167c**（2026-10-27，批次 4）。改按 `myDirs`（本订阅自己的集合）判定，并更新注释。
 
 ### 12. `FileVersionRegistry.clearSession` 定义了但全库零调用
 `feature/agent/domain/tool/FileVersionRegistry.kt:89`
@@ -188,9 +208,13 @@
 - **问题**：grep 实测 `clearSession(` 只在定义处出现。`sessions` 是 `ConcurrentHashMap`，每 sessionId 一桶、每桶最多 512 条。会话删除、`onCleared`、任务结束都没调用。长期使用后内存里堆着所有历史会话的路径指纹表。
 - **改法**：会话删除与 `AIAgentViewModel.onCleared` 各加一行 `versions.clearSession(sid)`。
 
+> **✅已修 e5d167c**（2026-10-27，批次 4）。接在 `clearSessionRuntimeState` 里（覆盖会话删除/批量删除/回收站清空三处）。
+
 ---
 
 ## 四、P2 可选（14 条）
+
+> **批次 4 处置（2026-10-27，`e5d167c` / `ec8590c`）**：1/2/3/4/6/7/9/12/13/14 **✅已修**；5 部分修（SDF 改 ThreadLocal 复用，状态映射合并未做）；8 不修（需新增 DAO 批量查询，收益有限）；10 不修（2s 轮询是文件树的正确性兑底，改 5s 会让外部改动感知变钝，需真机权衡）；11 无需改（`FileLogger.v` 仅在 VERBOSE 等级下写盘，默认等级更高）。
 
 | # | 问题 | 位置 | 改法 |
 |---|---|---|---|
@@ -217,7 +241,7 @@
 |---|---|---|
 | `SafeDelete` vs `SafeFileDelete` | `core/util/SafeDelete.kt`(51 行) / `SafeFileDelete.kt`(50 行)，9 个调用点分裂 | **值得合并**：给 SafeDelete 补 Boolean 重载，删 SafeFileDelete，净删约 45 行，消除「哪份权威」歧义 |
 | 三个 provider adapter 脚手架 | `OpenAIAdapter.kt:39-68` / `AnthropicAdapter.kt:39-63` / `GeminiAdapter.kt:30-52`，各 13-14 个同形 `override var` + 一字不差 `extraHeaders()` | **值得抽基类**（净删约 80 行）；但 `complete`/`completeStream` 三份协议差异真实，**不要**强行合并方法体 |
-| `shellQuote` 四份 | `ShellArgs.kt:148` / `GitRepository.kt:803` / `WorkspaceRepository.kt:493` / `HookRunner.kt:77` | **值得合并**（安全相关）：四份转义规则不完全一致，任一份改错即命令注入；下沉 `core/util/ShellQuote.kt` 取 Git 版 |
+| `shellQuote` 四份 | `ShellArgs.kt:148` / `GitRepository.kt:803` / `WorkspaceRepository.kt:493` / `HookRunner.kt:77` | **值得合并**（安全相关）：四份转义规则不完全一致，任一份改错即命令注入；下沉 `core/util/ShellQuote.kt` 取 Git 版 —— **✅已修 e5d167c**（内嵌单引号两种写法对 shell 等价，但安全集判定不同，已统一为 Git 版语义；补 `ShellQuoteTest`） |
 | `formatBytes` 六份 | `ChatAttachmentUtils.kt:287` / `RemoteBackupDialog.kt:125` / `StorageUsage.kt:86` / `ContainerImageDownloadSection.kt:71` / `KeysViewModel.kt:249` / `ListFilesTool.kt:261` | **前五份值得合并**（小数位/阈值/Locale 三种写法混用）；`ListFilesTool` 的 `humanSize` 保留（`ls -h` 语义不同） |
 | `FileAccess` 四件套 | `FileAccessProvider`(200) / `LocalFileAccess`(328) / `RemoteSftpFileAccess`(532) / `DelegatingFileAccess`(80) | **不合并**：`DelegatingFileAccess` 看似纯透传，但需每次调用读 `ExecutionModeHolder.currentMode()` 决定后端，删掉就要在每个调用点判模式 |
 | `SimpleDateFormat` 30 处 | 全库 | **不合并**（格式各异），但高频重组路径改 `remember`（见 P2-5） |
@@ -350,10 +374,10 @@
 ## 八、建议执行顺序（等批准）
 
 **批次 1（数据安全，最高优先）**：P0-1 编码损坏、P0-2 消息级联删除、P0-4/P0-5 裸 deleteRecursively、P1-3 备份事务 —— **✅ 已全部完工（`ca9b975`）**
-**批次 2（正确性）**：P0-3 子代理误报完成、P1-4 expandingPath、P1-5 历史失效、P1-6 暂停态落盘
-**批次 3（安全收口）**：P1-1 权限桥 token、P1-2 VNC mixed content、`shellQuote` 合并
-**批次 4（性能功耗）**：P1-7 会话态泄漏、P1-8 状态收集下沉、P1-9 输入测量、P1-10 逐帧、P1-11 配额、P2 全项
-**批次 5（架构重构，工程量大）**：层间依赖下沉、巨型文件拆分（建议单独立项、分批做）
+**批次 2（正确性）**：P0-3 子代理误报完成、P1-4 expandingPath、P1-5 历史失效、P1-6 暂停态落盘 —— **✅ 已全部完工（`e5d167c`）**
+**批次 3（安全收口）**：P1-1 权限桥 token、P1-2 VNC mixed content（部分修，见 §三）、`shellQuote` 合并 —— **✅ 已完工（`e5d167c`）**
+**批次 4（性能功耗）**：P1-7 会话态泄漏、P1-9 输入测量、P1-10 逐帧、P1-11 配额、P1-12、P2 全项、增量 P1-1 —— **✅ 已完工（`e5d167c` / `ec8590c`）**；P1-8 不修（并入批次 5）
+**批次 5（架构重构，工程量大）**：层间依赖下沉、巨型文件拆分（建议单独立项、分批做）—— **未开工**
 
 **增量项归位（§九，2026-10-27 窗口新引入/恶化）**：
 - 增量 P1-1（冷启动全量重释放 2.4MB 技能）→ 归**批次 4（性能功耗）**，改动小、收益直接。

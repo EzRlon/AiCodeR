@@ -49,8 +49,8 @@ class HandoffStateRepository @Inject constructor(
 
     /** 读取一次全部状态；解析失败按空状态继续（暂停态丢失只会让会话恢复可发送，不应阻断启动）。 */
     suspend fun load(): State = runCatching {
-        val raw = context.handoffStateDataStore.data.first()[STATE_KEY] ?: return@runCatching State()
-        json.decodeFromString<State>(raw)
+        val raw = context.handoffStateDataStore.data.first()[STATE_KEY]
+        if (raw == null) State() else json.decodeFromString<State>(raw)
     }.getOrElse { e ->
         FileLogger.w(TAG, "读取交接状态失败，按空状态继续", e)
         State()
