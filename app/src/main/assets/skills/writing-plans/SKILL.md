@@ -5,15 +5,20 @@ description: Use when you have a spec or requirements for a multi-step task, bef
 
 # Writing Plans
 
+> **AiCode 环境适配**：本技能原为 Claude Code 插件生态编写。计划文件按本文要求
+> 存在项目内（如 `docs/plans/`）即可；文中提到的 `subagent-driven-development`、
+> `using-git-worktrees` 等技能未随本包发行，遇到引用它们的地方改用本包已有的
+> `executing-plans`（同一会话内按任务逐步执行）或直接用 Task 工具派子代理。
+
 ## Overview
 
 Write implementation plans for an engineer who has not seen this codebase or this spec. Assume they write idiomatic code in the project's language once they know the exact interface and the exact test, and that they will make a reasonable choice wherever the plan leaves one open. What they cannot know is what you decided: which files, which names and signatures, which values from the spec, which tests prove each task. Document those. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-**Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
+**Context:** If working in an isolated worktree, it should have been created via the `using-git-worktrees` skill at execution time.
 
-**Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
+**Save plans to:** `docs/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)
 
 ## Scope Check
@@ -56,7 +61,7 @@ independently testable deliverable.
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** [One sentence describing what this builds]
 
@@ -186,7 +191,7 @@ them to review the plan and choose an execution method before implementation.
 
 **When no execution method has already been supplied:**
 
-**"Plan complete and saved to `docs/superpowers/plans/<filename>.md`. Please review the plan. Which execution approach would you prefer?**
+**"Plan complete and saved to `docs/plans/<filename>.md`. Please review the plan. Which execution approach would you prefer?**
 
 - **Subagent-driven** - A fresh subagent implements each task and a fresh reviewer checks it before the next one starts, then a whole-branch review at the end. Most thorough; costs a fresh context per task and per review.
 - **Native** - I implement every task myself in this session, the way this harness runs work, then one fresh reviewer on the most capable model checks the whole branch. Cheapest and fastest; no independent review until the end. Runs well with a mid-tier session model, since the plan carries the design.
@@ -195,10 +200,10 @@ them to review the plan and choose an execution method before implementation.
 
 **When an execution method has already been supplied:**
 
-**"Plan complete and saved to `docs/superpowers/plans/<filename>.md`. Please review the plan. Does it capture what you want?"**
+**"Plan complete and saved to `docs/plans/<filename>.md`. Please review the plan. Does it capture what you want?"**
 
 **If Subagent-driven chosen:**
-- **REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development
+- **REQUIRED SUB-SKILL:** Use subagent-driven-development
 
 **If Native chosen:**
-- **REQUIRED SUB-SKILL:** Use superpowers:executing-plans
+- **REQUIRED SUB-SKILL:** Use executing-plans
