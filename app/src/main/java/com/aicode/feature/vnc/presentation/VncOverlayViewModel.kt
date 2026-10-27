@@ -84,7 +84,8 @@ class VncOverlayViewModel @Inject constructor(
         }
         // 自动弹出：聊天页存续期间探测容器图形服务，从无到有即弹窗（AI 跑图形测试/用户手动起服务都会触发）。
         // 指数退避到 PROBE_MAX_INTERVAL_MS：没起服务时是最常见的长稳态，固定 5s 一轮等于白白唤醒
-        // 容器探测；一旦探测到服务在跑就重置回短间隔，保证「刚起来就能弹」的跟手感不变。
+        // 容器探测。代价是服务新起后最长要等 30s 才弹窗（原来的上限是 5s）——这是刻意的取舍：
+        // 自动弹窗是辅助入口，用户随时可手动打开，不值得为它每秒级轮询。
         viewModelScope.launch {
             var interval = PROBE_INTERVAL_MS
             while (coroutineContext.isActive) {

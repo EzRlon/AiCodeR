@@ -1952,6 +1952,13 @@ class AIAgentViewModel @Inject constructor(
         }
         // 文件版本指纹表按会话分桶（每桶最多 512 条），会话没了就没人再查它。
         fileVersionRegistry.clearSession(sessionId)
+        // 交接相关状态按会话存在内存与磁盘两份，会话没了就得一并清：
+        // 否则暂停态/暂不计数会随落盘长期残留，同 id 会话重建后直接带着旧状态复活。
+        // 落盘由调用方批量结束后统一做（见调用点），避免一次批量删写多次。
+        pausedHandoffSessions.remove(sessionId)
+        handoffContinuedSessions.remove(sessionId)
+        dismissedHandoffCounts.remove(sessionId)
+        goalEmptyTurnCounts.remove(sessionId)
         draftPrefs.edit().remove(sessionId).apply()
     }
 
@@ -4017,6 +4024,7 @@ class AIAgentViewModel @Inject constructor(
         if (ids.isEmpty()) return
         ids.forEach { checkpointManager.clearSessionCheckpoints(it) }
         ids.forEach { sid -> clearSessionRuntimeState(sid) }
+        persistHandoffState()
         if (_currentSessionId.value in ids) {
             val ws = _currentWorkspace.value
             _currentSessionId.value = if (ws.isBlank()) null
@@ -4037,6 +4045,7 @@ class AIAgentViewModel @Inject constructor(
         }
 
         allDeletedIds.forEach { sid -> clearSessionRuntimeState(sid) }
+        persistHandoffState()
 
         if (_currentSessionId.value in allDeletedIds) {
             val ws = _currentWorkspace.value
@@ -4063,6 +4072,7 @@ class AIAgentViewModel @Inject constructor(
         val deletedIds = sessionUseCase.deleteSession(id)
 
         deletedIds.forEach { sid -> clearSessionRuntimeState(sid) }
+        persistHandoffState()
 
         if (_currentSessionId.value in deletedIds) {
             val ws = _currentWorkspace.value
