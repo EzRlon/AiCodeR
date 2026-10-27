@@ -251,4 +251,62 @@ class AnthropicAdapterTest {
         val blocks = user.content as List<AnthropicContentBlock>
         assertEquals("ephemeral", blocks.last().cache_control?.get("type"))
     }
+
+    @Test
+    fun always_thinking_model_disable_falls_back_to_lowest_effort() = runTest {
+        // Opus 5.5 思考恒开：type=disabled 不报错但不生效，退最低档如实发送。
+        val api = FakeApi(response())
+        adapter(api).apply { model = "claude-opus-5-5" }.complete(
+            "sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "none"
+        )
+
+        assertEquals("adaptive", api.lastRequest?.thinking?.type)
+        assertEquals("low", api.lastRequest?.output_config?.effort)
+    }
+
+    @Test
+    fun sonnet55_disable_uses_between_tools() = runTest {
+        val api = FakeApi(response())
+        adapter(api).apply { model = "claude-sonnet-5-5" }.complete(
+            "sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "none"
+        )
+
+        assertEquals("between_tools", api.lastRequest?.thinking?.type)
+        assertNull(api.lastRequest?.output_config)
+    }
+
+    @Test
+    fun fable51_disable_falls_back_to_lowest_effort() = runTest {
+        // Fable 全系思考恒开（不限于 5.5）：type=disabled 不生效，退最低档。
+        val api = FakeApi(response())
+        adapter(api).apply { model = "claude-fable-5-1" }.complete(
+            "sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "none"
+        )
+
+        assertEquals("adaptive", api.lastRequest?.thinking?.type)
+        assertEquals("low", api.lastRequest?.output_config?.effort)
+    }
+
+    @Test
+    fun opus5_disable_sends_effort_high_cap() = runTest {
+        // Opus 5 关闭时 effort 不得超过 high，显式带上限避免残留高档位触发 400。
+        val api = FakeApi(response())
+        adapter(api).apply { model = "claude-opus-5" }.complete(
+            "sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "none"
+        )
+
+        assertEquals("disabled", api.lastRequest?.thinking?.type)
+        assertEquals("high", api.lastRequest?.output_config?.effort)
+    }
+
+    @Test
+    fun adaptive46_disable_sends_disabled_without_effort() = runTest {
+        val api = FakeApi(response())
+        adapter(api).apply { model = "claude-sonnet-4-6" }.complete(
+            "sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "none"
+        )
+
+        assertEquals("disabled", api.lastRequest?.thinking?.type)
+        assertNull(api.lastRequest?.output_config)
+    }
 }

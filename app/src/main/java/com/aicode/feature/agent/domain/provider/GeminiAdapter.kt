@@ -101,6 +101,7 @@ class GeminiAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         }
@@ -333,6 +334,7 @@ class GeminiAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         } finally {
@@ -379,11 +381,33 @@ class GeminiAdapter @Inject constructor(
         return request
     }
 
-    /** 思考强度 → `thinking_level`，仅支持 minimal/low/medium/high；none 跳过（不发 thinking），xhigh/max 归一到 high。 */
+    /** 思考强度 → `thinking_level`，仅支持 minimal/low/medium/high；none 见 [gemini3DisableLevel]，xhigh/max 归一到 high。 */
     private fun interactionsThinkingLevel(reasoningEffort: String?): String? = when (reasoningEffort) {
-        null, "none" -> null
-        "xhigh", "max" -> "high"
-        else -> reasoningEffort
+        null -> null
+        "none" -> gemini3DisableLevel()?.let { clampLearned(it) }
+        "xhigh", "max" -> clampLearned("high")
+        else -> clampLearned(reasoningEffort)
+    }
+
+    /**
+     * Gemini 3 系思考不可完全关闭（官方无关闭开关）：请求关闭时退到该模型最低档如实发送，
+     * 而不是裸发（裸发等于服务端默认思考，用户要「关」却全量思考）。其余模型返回 null（不发思考配置）。
+     */
+    private fun gemini3DisableLevel(): String? {
+        if (!model.contains("gemini-3")) return null
+        val noMinimal = model.contains("3.7-flash") || model.contains("3.8-flash")
+        return when {
+            // 图像模型档位只有 minimal/high，退 minimal（退 low 会不在白名单内直接 400）。
+            model.contains("image") -> "minimal"
+            model.contains("flash") && !noMinimal -> "minimal"
+            else -> "low"
+        }
+    }
+
+    /** 400 文案学到的白名单优先：请求档位不在白名单时向下钳到最近档。 */
+    private fun clampLearned(effort: String): String {
+        val learned = ReasoningLearning.recall(providerId, model) ?: return effort
+        return ReasoningLearning.clamp(effort, learned)
     }
 
     /**
@@ -413,6 +437,7 @@ class GeminiAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         }
@@ -551,6 +576,7 @@ class GeminiAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         } finally {
@@ -664,23 +690,27 @@ class GeminiAdapter @Inject constructor(
      *
      * 显式带上 `includeThoughts` 以返回思考内容；预算 0 除外——Gemini 拒绝
      * `thinkingBudget=0` 与 `includeThoughts=true` 同时出现（invalid argument，请求硬失败）。
+     * 关闭语义：gemini-3 系不可关闭，退最低档（见 [gemini3DisableLevel]）；
+     * 2.5 系仅 Flash / Flash-Lite 支持预算 0 关闭，Pro 最低预算 128，发 0 直接 400，退最低预算。
      */
     private fun buildThinkingConfig(reasoningEffort: String?): Map<String, Any>? {
         if (reasoningEffort == null) return null
         return if (model.contains("gemini-3")) {
-            // thinkingLevel 仅支持 minimal/low/medium/high；none 跳过（不发 thinking），xhigh/max 归一到 high（元数据未命中时 UI 会给出全部档位）
             val level = when (reasoningEffort) {
-                "none" -> return null
-                "xhigh", "max" -> "high"
-                else -> reasoningEffort
+                "none" -> clampLearned(gemini3DisableLevel() ?: return null)
+                "xhigh", "max" -> clampLearned("high")
+                else -> clampLearned(reasoningEffort)
             }
             mapOf("thinkingLevel" to level, "includeThoughts" to true)
         } else {
+            val is25Pro = model.contains("gemini-2.5") && model.contains("pro")
             val budget = when (reasoningEffort) {
+                "high", "xhigh", "max" -> 8192
+                // minimal 直发真实档位 512（上游 resolver 会钳到 low/1024，此处以 API 值为准）。
+                "minimal" -> 512
                 "low" -> 1024
                 "medium" -> 4096
-                "high", "xhigh", "max" -> 8192
-                "none", "minimal" -> 0
+                "none" -> if (is25Pro) 1024 else 0
                 else -> return null
             }
             if (budget == 0) {

@@ -110,6 +110,7 @@ class AnthropicAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Anthropic", enriched, seq)
             throw enriched
         }
@@ -387,6 +388,7 @@ class AnthropicAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Anthropic", enriched, seq)
             throw enriched
         } finally {
@@ -439,18 +441,32 @@ class AnthropicAdapter @Inject constructor(
     /**
      * 思考强度 → Anthropic thinking 配置。
      * - 新模型（4.6+/5 系，支持 adaptive）：effort 档位直传 output_config，thinking 用 adaptive+summarized；
-     *   "none" 关闭思考用 disabled；"minimal" 无对应档，归一到 low（官方仅 low/medium/high/xhigh/max）。
+     *   "minimal" 无对应档，归一到 low（官方仅 low/medium/high/xhigh/max）。
      * - 旧模型（4.5 及更早，仅 budget_tokens）：low/medium/high 映射 1024/4096/8192（须小于 max_tokens），
      *   minimal 归一到 low，xhigh/max 归一到 high。
+     * - 关闭思考（"none"）按代际细分：Opus 5.5 / Fable 5.1 思考恒开，type=disabled 不报错但不生效，
+     *   退最低档如实发送；Sonnet 5.5 的关闭语义是 between_tools；Opus 5 / Haiku 5 关闭时 effort
+     *   不得超过 high，显式带上限避免残留高档位触发 400；其余代际直接 type=disabled。
      */
     private fun buildThinkingConfig(reasoningEffort: String?): Pair<AnthropicThinkingConfig?, AnthropicOutputConfig?> {
         if (reasoningEffort == null) return null to null
         if (supportsAdaptiveThinking()) {
             if (reasoningEffort == "none") {
-                return AnthropicThinkingConfig(type = "disabled") to null
+                val g = claudeGeneration()
+                return when {
+                    // Fable 全系思考恒开；Opus 自 5.5 起恒开。
+                    g != null && g.major >= 5 && (g.family == "fable" || (g.family == "opus" && g.minor >= 5)) ->
+                        AnthropicThinkingConfig(type = "adaptive", display = "summarized") to
+                            AnthropicOutputConfig(effort = "low")
+                    g != null && g.major >= 5 && g.minor >= 5 && g.family == "sonnet" ->
+                        AnthropicThinkingConfig(type = "between_tools") to null
+                    g != null && g.major >= 5 && (g.family == "opus" || g.family == "haiku") ->
+                        AnthropicThinkingConfig(type = "disabled") to AnthropicOutputConfig(effort = "high")
+                    else -> AnthropicThinkingConfig(type = "disabled") to null
+                }
             }
             // 官方 effort 无 minimal 档，归一到 low，避免透传非法档位被 400。
-            val effort = if (reasoningEffort == "minimal") "low" else reasoningEffort
+            val effort = clampLearned(if (reasoningEffort == "minimal") "low" else reasoningEffort)
             return AnthropicThinkingConfig(type = "adaptive", display = "summarized") to AnthropicOutputConfig(effort = effort)
         }
         val budget = when (reasoningEffort) {
@@ -463,12 +479,25 @@ class AnthropicAdapter @Inject constructor(
         return AnthropicThinkingConfig(type = "enabled", budget_tokens = budget) to null
     }
 
+    /** claude-<family>-<major>[-<minor>] 的家族与代际；老命名（claude-3-5-sonnet-…）返回 null。 */
+    private fun claudeGeneration(): ClaudeGeneration? {
+        val m = Regex("claude-(opus|sonnet|haiku|fable|mythos)-(\\d+)(?:[-.](\\d+))?").find(model) ?: return null
+        val major = m.groupValues[2].toIntOrNull() ?: return null
+        return ClaudeGeneration(m.groupValues[1], major, m.groupValues[3].toIntOrNull() ?: 0)
+    }
+
+    private class ClaudeGeneration(val family: String, val major: Int, val minor: Int)
+
+    /** 400 文案学到的白名单优先：请求档位不在白名单时向下钳到最近档。 */
+    private fun clampLearned(effort: String): String {
+        val learned = ReasoningLearning.recall(providerId, model) ?: return effort
+        return ReasoningLearning.clamp(effort, learned)
+    }
+
     /** 是否支持 adaptive thinking：4.6+ 及 5 系（claude-<family>-4-6/4-7/4-8 或主版本 5）。 */
     private fun supportsAdaptiveThinking(): Boolean {
-        val m = Regex("claude-(?:opus|sonnet|haiku|fable|mythos)-(\\d+)(?:-(\\d+))?").find(model)
-        val major = m?.groupValues?.get(1)?.toIntOrNull() ?: return false
-        val minor = m?.groupValues?.get(2)?.toIntOrNull()
-        return major >= 5 || (major == 4 && (minor ?: 0) >= 6)
+        val g = claudeGeneration() ?: return false
+        return g.major >= 5 || (g.major == 4 && g.minor >= 6)
     }
 
     /** 把累积的工具入参 JSON 字符串解析为 JsonObject；为空或非法时回退为空对象。 */

@@ -32,3 +32,9 @@ date,time,task,seconds,exit
 2026-10-27,08:14:21,:app:compileArmsoloReleaseKotlin,386,0
 2026-10-27,08:20:05,:app:testArmsoloReleaseUnitTest --tests com.aicode.core.ui.ListSelectionStateTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest --tests com.aicode.feature.agent.domain.permission.ShellCommandParserTest --tests com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngineTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest --tests com.aicode.feature.agent.domain.tool.container.BackgroundTerminalToolsParsingTest --tests com.aicode.feature.agent.domain.workflow.ContextCompactorTest,236,0
 2026-10-27,08:31:41,assembleArmsoloRelease --no-configuration-cache,621,0
+2026-10-27,10:31:03,:app:testArmsoloReleaseUnitTest :app:compileArmsoloReleaseKotlin,315,0
+2026-10-27,10:40:39,assembleArmsoloRelease --no-configuration-cache,546,0
+2026-10-27,10:52:38,:app:testArmsoloReleaseUnitTest assembleArmsoloRelease --no-configuration-cache,491,0
+2026-10-27,10:31:02,:app:testArmsoloReleaseUnitTest :app:compileArmsoloReleaseKotlin,313,0
+2026-10-27,10:40:39,assembleArmsoloRelease --no-configuration-cache,545,0
+2026-10-27,10:52:38,:app:testArmsoloReleaseUnitTest assembleArmsoloRelease --no-configuration-cache,490,0

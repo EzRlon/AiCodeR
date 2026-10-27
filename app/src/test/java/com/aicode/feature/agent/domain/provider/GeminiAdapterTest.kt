@@ -453,4 +453,56 @@ class GeminiAdapterTest {
 
         assertEquals("https://gw.example.com/gemini/interactions", api.lastUrl)
     }
+
+    @Test
+    fun gemini3_disable_falls_back_to_lowest_thinking_level() = runTest {
+        // Gemini 3 系不能完全关闭：裸发等于默认思考，退最低档如实发送。
+        val api = FakeApi(textResponse())
+        adapter(api).apply { model = "gemini-3-pro" }.complete("sys", listOf(user("hi")), reasoningEffort = "none")
+
+        assertEquals(mapOf("thinkingLevel" to "low", "includeThoughts" to true), generationConfig(api.lastRequest)["thinkingConfig"])
+    }
+
+    @Test
+    fun gemini3_flash_disable_falls_back_to_minimal() = runTest {
+        val api = FakeApi(textResponse())
+        adapter(api).apply { model = "gemini-3-flash" }.complete("sys", listOf(user("hi")), reasoningEffort = "none")
+
+        assertEquals(mapOf("thinkingLevel" to "minimal", "includeThoughts" to true), generationConfig(api.lastRequest)["thinkingConfig"])
+    }
+
+    @Test
+    fun gemini25_pro_disable_falls_back_to_lowest_budget() = runTest {
+        // 2.5 Pro 最低预算 128，发 thinkingBudget=0 直接 400。
+        val api = FakeApi(textResponse())
+        adapter(api).apply { model = "gemini-2.5-pro" }.complete("sys", listOf(user("hi")), reasoningEffort = "none")
+
+        assertEquals(mapOf("thinkingBudget" to 1024, "includeThoughts" to true), generationConfig(api.lastRequest)["thinkingConfig"])
+    }
+
+    @Test
+    fun gemini25_flash_disable_uses_zero_budget_without_include_thoughts() = runTest {
+        val api = FakeApi(textResponse())
+        adapter(api).apply { model = "gemini-2.5-flash" }.complete("sys", listOf(user("hi")), reasoningEffort = "none")
+
+        assertEquals(mapOf("thinkingBudget" to 0), generationConfig(api.lastRequest)["thinkingConfig"])
+    }
+
+    @Test
+    fun gemini3_image_disable_falls_back_to_minimal() = runTest {
+        // 图像模型档位只有 minimal/high，退 low 会不在白名单内直接 400。
+        val api = FakeApi(textResponse())
+        adapter(api).apply { model = "gemini-3-pro-image" }.complete("sys", listOf(user("hi")), reasoningEffort = "none")
+
+        assertEquals(mapOf("thinkingLevel" to "minimal", "includeThoughts" to true), generationConfig(api.lastRequest)["thinkingConfig"])
+    }
+
+    @Test
+    fun gemini25_minimal_uses_512_budget() = runTest {
+        // minimal 是真实档位（预算 512），不再是「关闭」。
+        val api = FakeApi(textResponse())
+        adapter(api).apply { model = "gemini-2.5-flash" }.complete("sys", listOf(user("hi")), reasoningEffort = "minimal")
+
+        assertEquals(mapOf("thinkingBudget" to 512, "includeThoughts" to true), generationConfig(api.lastRequest)["thinkingConfig"])
+    }
 }
