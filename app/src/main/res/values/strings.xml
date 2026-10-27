@@ -287,7 +287,7 @@
     <string name="settings_title_follow_chat">跟随当前聊天模型</string>
     <string name="settings_image_gen_unconfigured">未配置</string>    <string name="settings_theme_title">外观主题</string>    <string name="theme_auto">自动</string>
     <string name="theme_dark">深色</string>
-    <string name="theme_black">极黑（OLED 省电）</string>
+    <string name="theme_black">极黑</string>
     <string name="theme_light">浅色</string>
     <string name="theme_mode_section">明暗模式</string>
     <string name="theme_preset_section">配色方案</string>
@@ -458,7 +458,7 @@
     <!-- 引擎切换 -->
     <string name="engine_bridge_unavailable">Claude Code 引擎未就绪：请先在容器中安装 Claude Code（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_builtin">内置引擎</string>
-    <string name="engine_builtin_sub">本体工作流：全套工具、专家团、标注、记忆、recall</string>
+    <string name="engine_builtin_sub">全套工具、专家团、标注、记忆、recall</string>
     <string name="engine_go_login">去登录</string>
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
     <string name="cli_model_builtin_group">引擎模型</string>

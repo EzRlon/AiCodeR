@@ -8,20 +8,21 @@ import javax.inject.Singleton
  *
  * 全局定义 `~/.aicode/teams`、项目级定义 `<workspace>/.aicode/teams`，两者都经来源层
  * 以容器路径访问，跟随当前执行环境（本地宿主目录或远程 SSH 工作区）。
+ *
+ * 段内顺序沿用各来源的扫描结果（按安装先后），不做二次排序：商店新装的团队因此落在列表末尾。
  */
 @Singleton
 class TeamRepository @Inject constructor(
     private val globalSource: GlobalDirectoryTeamSource,
     private val projectSource: ProjectDirectoryTeamSource
 ) {
-    /** 全部专家团（含来源作用域），按名称排序。 */
+    /** 全部专家团（含来源作用域）：项目级在前，全局在后，段内按安装先后。 */
     fun listAll(): List<TeamDefinitionEntry> {
         val projectDefs = projectSource.listDefinitions()
         val globalDefs = globalSource.listDefinitions()
             .filterNot { g -> projectDefs.any { it.name.equals(g.name, ignoreCase = true) } }
-        return (projectDefs.map { TeamDefinitionEntry(it, TeamDefinitionScope.PROJECT) } +
-            globalDefs.map { TeamDefinitionEntry(it, TeamDefinitionScope.GLOBAL) })
-            .sortedBy { it.definition.name.lowercase() }
+        return projectDefs.map { TeamDefinitionEntry(it, TeamDefinitionScope.PROJECT) } +
+            globalDefs.map { TeamDefinitionEntry(it, TeamDefinitionScope.GLOBAL) }
     }
 
     /** 按名称解析专家团（忽略大小写）；不存在时返回 null。 */

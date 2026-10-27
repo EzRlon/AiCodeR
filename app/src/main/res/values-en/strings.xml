@@ -286,7 +286,7 @@
     <string name="settings_title_follow_chat">Follow current chat model</string>
     <string name="settings_image_gen_unconfigured">Not configured</string>    <string name="settings_theme_title">Appearance</string>    <string name="theme_auto">Auto</string>
     <string name="theme_dark">Dark</string>
-    <string name="theme_black">Pitch black (OLED)</string>
+    <string name="theme_black">Pitch black</string>
     <string name="theme_light">Light</string>
     <string name="theme_mode_section">Appearance mode</string>
     <string name="theme_preset_section">Color theme</string>
@@ -457,7 +457,7 @@
     <!-- Engine switch -->
     <string name="engine_bridge_unavailable">Claude Code engine is not ready. Install Claude Code in the container first, or switch this session back to the built-in engine.</string>
     <string name="engine_builtin">Built-in engine</string>
-    <string name="engine_builtin_sub">Native workflow: full tools, teams, annotation, memory, recall</string>
+    <string name="engine_builtin_sub">Full tools, teams, annotation, memory, recall</string>
     <string name="engine_go_login">Sign in</string>
     <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
     <string name="cli_model_builtin_group">Engine models</string>

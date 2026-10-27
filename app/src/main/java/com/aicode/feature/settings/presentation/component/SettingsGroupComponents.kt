@@ -167,6 +167,8 @@ internal fun LazyGroupItem(
  * @param icon 左侧图标，null 则标题与无图标行对齐。
  * @param trailing 右侧尾随内容（如 [com.aicode.core.ui.AppSwitch]、chevron）。
  * @param onClick null 表示无点击行为（如开关行）；非 null 时行尾自动显示右箭头。
+ * @param showChevron 是否显示行尾右箭头。整行点击只切换开关的行传 false：箭头语义是「进入下一层」，
+ *   与就地切换冲突。
  * @param compact 紧凑模式：窄容器（如左侧栏底部功能组）专用——缩小行内边距与图标间距、
  *   标题降一档字号并限单行，保证「图标 + 完整标题」一排放下（验收反馈：窄卡片下不得换行成两排）。
  */
@@ -179,6 +181,7 @@ internal fun SettingsRow(
     subtitle: String? = null,
     enabled: Boolean = true,
     compact: Boolean = false,
+    showChevron: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val baseModifier = modifier
@@ -216,7 +219,7 @@ internal fun SettingsRow(
             }
         }
         trailing?.invoke(this)
-        if (onClick != null && enabled) {
+        if (onClick != null && enabled && showChevron) {
             Spacer(Modifier.width(Spacing.xs))
             Icon(
                 imageVector = FeatherIcons.ChevronRight,

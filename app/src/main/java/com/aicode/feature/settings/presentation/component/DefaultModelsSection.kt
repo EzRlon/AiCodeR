@@ -66,10 +66,12 @@ import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
+import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.User
 import compose.icons.feathericons.Users
+import compose.icons.feathericons.Zap
 
 /**
  * 默认模型二级页：集中管理应用中的默认/特定用途模型设置（如识图模型、压缩模型）。
@@ -236,7 +238,7 @@ internal fun DefaultModelsSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
+                        modifier = Modifier.weight(1f)
                     )
                 }
             )
@@ -253,7 +255,7 @@ internal fun DefaultModelsSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
+                        modifier = Modifier.weight(1f)
                     )
                 }
             )
@@ -270,7 +272,7 @@ internal fun DefaultModelsSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
+                        modifier = Modifier.weight(1f)
                     )
                 }
             )
@@ -287,7 +289,7 @@ internal fun DefaultModelsSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
+                        modifier = Modifier.weight(1f)
                     )
                 }
             )
@@ -304,7 +306,7 @@ internal fun DefaultModelsSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.End,
-                        modifier = Modifier.weight(2f)
+                        modifier = Modifier.weight(1f)
                     )
                 }
             )
@@ -821,6 +823,7 @@ private fun CliEngineRows(
             "codex" -> {
                 SettingsDivider()
                 EngineOptionToggleRow(
+                    icon = FeatherIcons.Shield,
                     title = stringResource(R.string.engine_codex_sandbox_toggle),
                     checked = codexSandboxFullAccess,
                     onCheckedChange = viewModel::setCodexSandboxFullAccess
@@ -829,6 +832,7 @@ private fun CliEngineRows(
             "opencode" -> {
                 SettingsDivider()
                 EngineOptionToggleRow(
+                    icon = FeatherIcons.Zap,
                     title = stringResource(R.string.engine_opencode_auto_toggle),
                     checked = openCodeAutoApprove,
                     onCheckedChange = viewModel::setOpenCodeAutoApprove
@@ -845,16 +849,19 @@ private fun engineIdOf(agentId: String): String = when (agentId) {
     else -> AgentEngines.OPENCODE
 }
 
-/** 引擎行为选项开关行：标题（弱化色）+ 右侧开关；整行可点切换。 */
+/** 引擎行为选项开关行：标题 + 右侧开关；整行可点切换。 */
 @Composable
 private fun EngineOptionToggleRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
     SettingsRow(
+        icon = icon,
         title = title,
         onClick = { onCheckedChange(!checked) },
+        showChevron = false,
         trailing = {
             AppSwitch(checked = checked, onCheckedChange = null)
         }
