@@ -501,11 +501,14 @@
 - 已修（回退）：Wi-Fi 锁改回只持 `HIGH_PERF`——原以为 `LOW_LATENCY` 是超集，但它是前台低延迟语义，息屏后台保活不一定等价，不拿真机验证赌。
 - 已改注释：VNC 退避的「跟手感不变」不成立（服务新起最长等 30s 才弹），改为如实描述取舍。
 
-**遗留 P2 待办**（记录不修，真机或后续批次再定）：
-1. 会话运行时清理对每个被删会话全表扫 `reasoningDurationSessions`，批量删是 O(n²)（当前会话数量级下无感）。
+**遗留 P2 待办**（记录不修，真机或后续批次再定）：1. 会话运行时清理对每个被删会话全表扫 `reasoningDurationSessions`，批量删是 O(n²)（当前会话数量级下无感）。
 2. `FileChangeHub` 全局 inotify 不再有 512 总闸，多个递归订阅各自可到 512，理论上可能触系统 `max_user_watches`（当前订阅数少）。
 3. `extractBuiltinSkills` 版本戳：同 versionCode 下 assets 内容变化不更新；用户删掉某内置技能目录在同版本内不再自动补回（release 语义无碍）。
 4. 滚动校准收尾的 1200ms 窗口内 md 异步解析导致的高度跳变要等末尾才纠正。
 5. `ScheduledAgentViewModelProvider` 与主 ViewModel 若都调 `HandoffStateRepository.save`，后写会全量覆盖先写（当前仅主 VM 调用）。
+
+**已知偶发测试失败（与本批无关）**：`SyncEngineIgnoreTest.upload_skips_custom_ignored_paths` 在全量跑时偶报
+`UncaughtExceptionsBeforeTest`（kotlinx-coroutines-test 的协程泄漏检测），单独跑必过、重跑全量也过。
+下批若再遇，先重跑一次再定。
 
 **批次 5（架构重构）未开工**：层间依赖下沉、巨型文件拆分、`SettingsScreen` 状态收集下沉（P1-8）、增量 P1-2/P1-3/P1-4。
