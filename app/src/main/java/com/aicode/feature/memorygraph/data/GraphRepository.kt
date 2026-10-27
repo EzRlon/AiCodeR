@@ -116,6 +116,8 @@ class GraphRepository @Inject constructor(
         // 3) 边：会话内发生过 memory 工具调用 → 该记忆「记录于」该会话。
         // 单条 SQL 聚合（optimizer P0：替代逐会话全量读消息），只认 JSON 键值模式防常见词误连边。
         if (memoryNodeIds.isNotEmpty() && sessionNodeIds.isNotEmpty()) {
+            val memoryNamePatterns = HashMap<String, Regex>()
+            val nodeWorkspaceCache = HashMap<String, String>()
             val memCalls = runCatching { graphDao.memoryToolCallsByWorkspace(workspacePath) }
                 .onFailure { FileLogger.w(TAG, "读 memory 工具调用失败（图谱跳过连边）: ${it.message}") }
                 .getOrDefault(emptyList())
@@ -123,10 +125,16 @@ class GraphRepository @Inject constructor(
                 val sessionNodeId = sessionNodeIds[row.sessionId] ?: return@forEach
                 val args = row.toolArgs ?: return@forEach
                 memoryNodeIds.forEach { (name, memoryNodeId) ->
-                    val pattern = Regex("\"name\"\\s*:\\s*\"" + Regex.escape(name) + "\"")
+                    // 正则预编译提到双层循环外：原先每条调用×每个记忆都重新编译一次，是纯浪费。
+                    val pattern = memoryNamePatterns.getOrPut(name) {
+                        Regex("\"name\"\\s*:\\s*\"" + Regex.escape(name) + "\"")
+                    }
                     if (pattern.containsMatchIn(args)) {
-                        // 记忆节点的所属空间：全局记忆在空 workspacePath，项目记忆在本工作区
-                        val nodeWorkspace = graphDao.nodeById(memoryNodeId)?.workspacePath ?: workspacePath
+                        // 记忆节点的所属空间：全局记忆在空 workspacePath，项目记忆在本工作区。
+                        // nodeById 提到循环外按 id 缓存：同一记忆在多条调用里命中时只查一次库。
+                        val nodeWorkspace = nodeWorkspaceCache.getOrPut(memoryNodeId) {
+                            graphDao.nodeById(memoryNodeId)?.workspacePath ?: workspacePath
+                        }
                         graphDao.upsertEdge(
                             GraphEdgeEntity(
                                 id = edgeId(nodeWorkspace, memoryNodeId, sessionNodeId, RELATION_RECORDED_IN),
@@ -187,7 +195,9 @@ class GraphRepository @Inject constructor(
      * 按结论时间倒序取前 [limit] 条。返回「名称 + 摘要 + 出处会话」，不含正文（省 token）。
      */
     suspend fun validConclusions(workspacePath: String, limit: Int = DEFAULT_INJECT_LIMIT): List<GraphNode> =
-        runCatching { graphDao.validConclusions(workspacePath, limit).map { it.toDomain() } }
+        runCatching {
+            graphDao.validConclusions(workspacePath, CONCLUSION_TYPES, limit).map { it.toDomain() }
+        }
             .onFailure { FileLogger.w(TAG, "读有效结论失败: ${it.message}") }
             .getOrDefault(emptyList())
 
@@ -327,5 +337,8 @@ class GraphRepository @Inject constructor(
 
         /** 会话开始注入的结论条数上限：太多会挤占上下文，且旧结论参考价值递减。 */
         const val DEFAULT_INJECT_LIMIT = 8
+
+        /** 结论类节点类型：单一来源是 [GraphNodeType]，避免 SQL 里再硬编码一份。 */
+        private val CONCLUSION_TYPES = listOf(GraphNodeType.MEMORY, GraphNodeType.CONCLUSION, GraphNodeType.CUSTOM)
     }
 }

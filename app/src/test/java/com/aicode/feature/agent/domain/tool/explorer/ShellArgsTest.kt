@@ -123,7 +123,7 @@ class ShellArgsTest {
             parseShellWords("-n \"fun main\" ~/workspace/app")!!
         )!!
         assertEquals(
-            "rg --line-number --no-heading --with-filename --color never '-n' 'fun main' '/root/workspace/app'",
+            "rg --line-number --no-heading --with-filename --color never -n 'fun main' /root/workspace/app",
             command
         )
     }
@@ -136,12 +136,12 @@ class ShellArgsTest {
             home = "/home/alice"
         )!!
         assertEquals(
-            "rg --line-number --no-heading --with-filename --color never '-n' 'fun main' '/home/alice/workspace/app'",
+            "rg --line-number --no-heading --with-filename --color never -n 'fun main' /home/alice/workspace/app",
             command
         )
         // 裸 ~ 也展开为 home
         assertEquals(
-            "rg --line-number --no-heading --with-filename --color never '-n' 'x' '/home/alice'",
+            "rg --line-number --no-heading --with-filename --color never -n x /home/alice",
             buildSearchCommand(parseShellWords("-n x ~")!!, home = "/home/alice")
         )
     }
@@ -182,6 +182,7 @@ class ShellArgsTest {
     @Test
     fun buildSearchCommand_singleQuoteEscaping_isPreserved() {
         val command = buildSearchCommand(parseShellWords("-n \"it's\" src/")!!)!!
-        assertTrue(command.contains("'it'\"'\"'s'"))
+        // 统一实现用 '\'' 形式：同样正确，且与其余调用点一致
+        assertTrue(command.contains("'it'\\''s'"))
     }
 }

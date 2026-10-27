@@ -35,6 +35,9 @@ class ContainerInstaller @Inject constructor(
         @Volatile private var docsExtractedSession = false
         @Volatile private var multiLlmExtractedSession = false
 
+        /** 内置技能已释放到的 App versionCode 标记文件（放在 skills 目录内，随目录重建自动失效）。 */
+        private const val SKILLS_VERSION_STAMP = ".builtin_version"
+
         /**
          * 从 assets 提取文档到 ~/.aicode/docs (内置使用指导)，支持 guide/ advanced/ 等分类子目录。
          *
@@ -101,6 +104,13 @@ class ContainerInstaller @Inject constructor(
          */
         fun extractBuiltinSkills(context: Context) {
             val destDir = File(File(context.filesDir, "aicode"), "skills")
+            val stamp = File(destDir, SKILLS_VERSION_STAMP)
+            // 内置技能共 2.4MB（含 ui-ux-pro-max 的 1.8MB data/），全量重释放要删 12 棵目录树再写一遍。
+            // 内容随 App 版本变化，版本号相同就没必要重做：冷启动不再重复写闪存（性能功耗纪律）。
+            val version = appVersionCode(context)
+            if (version != null && stamp.isFile && runCatching { stamp.readText().trim() }.getOrNull() == version) {
+                return
+            }
             runCatching {
                 destDir.mkdirs()
                 val entries = context.assets.list("skills") ?: return@runCatching
@@ -111,10 +121,17 @@ class ContainerInstaller @Inject constructor(
                     SafeDelete.deleteTree(dest)
                     extractAssetsRecursive(context, "skills/$entry", dest)
                 }
+                if (version != null) stamp.writeText(version)
             }.onFailure {
                 FileLogger.w(TAG, "提取内置技能失败: ${it.message}", it)
             }
         }
+
+        /** 当前 App 的 versionCode；取不到时返回 null（调用方退回「每次都释放」）。 */
+        private fun appVersionCode(context: Context): String? = runCatching {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0).versionCode.toString()
+        }.getOrNull()
 
         /**
          * 递归删除已改用 [com.aicode.core.util.SafeDelete.deleteTree]（符号链接安全，NOFOLLOW），

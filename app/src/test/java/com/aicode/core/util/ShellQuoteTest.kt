@@ -22,7 +22,7 @@ class ShellQuoteTest {
     fun 空格与特殊字符整体包单引号() {
         assertEquals("'a b'", shellQuote("a b"))
         assertEquals("'a|b'", shellQuote("a|b"))
-        assertEquals("'$HOME'", shellQuote("$HOME"))
+        assertEquals("'\$HOME'", shellQuote("\$HOME"))
         assertEquals("'`id`'", shellQuote("`id`"))
         assertEquals("'*'", shellQuote("*"))
     }

@@ -136,6 +136,16 @@ private fun PromptList(
     }
     val hapticFeedback = LocalHapticFeedback.current
 
+    // 行 key 预计算：原先在 key lambda 里 `take(index).count{}`，每次重组 O(n²)，且同一计算写两遍。
+    val rowKeys = remember(localFragments) {
+        val seen = HashMap<String, Int>()
+        localFragments.map { fragment ->
+            val n = (seen[fragment.stableReorderKey] ?: 0) + 1
+            seen[fragment.stableReorderKey] = n
+            "${fragment.stableReorderKey}:$n"
+        }
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier
@@ -147,11 +157,9 @@ private fun PromptList(
     ) {
         itemsIndexed(
             items = localFragments,
-            key = { index, fragment ->
-                "${fragment.stableReorderKey}:${localFragments.take(index).count { it.stableReorderKey == fragment.stableReorderKey }}"
-            }
+            key = { index, _ -> rowKeys[index] }
         ) { index, fragment ->
-            val rowKey = "${fragment.stableReorderKey}:${localFragments.take(index).count { it.stableReorderKey == fragment.stableReorderKey }}"
+            val rowKey = rowKeys[index]
             ReorderableItem(state = reorderableState, key = rowKey) { isDragging ->
                 val dragScale by animateFloatAsState(
                     targetValue = if (isDragging) 0.97f else 1f,
