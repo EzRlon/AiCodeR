@@ -1768,7 +1768,7 @@ class AIAgentViewModel @Inject constructor(
                         SubAgentEventType.DELETED -> {
                             // 不能走 stopAgentSession：它的收尾会往已删除会话落「已停止」占位消息，
                             // 取消中 job 的 finally 也会对着不存在的会话补送通知、烧一轮 LLM。
-                            clearSubAgentRuntimeState(event.subSessionId)
+                            clearSessionRuntimeState(event.subSessionId)
                         }
                         SubAgentEventType.COMPLETED, SubAgentEventType.FAILED -> {
                             enqueueSubAgentNotification(event)
@@ -1911,20 +1911,10 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 清掉一个子会话的全部运行时状态（并发名额、通知队列、待发请求、job、流式/工具占位）。
+     * 清掉一个会话的全部内存运行时状态。删除会话、批量删除、回收站彻底删除、子代理异常退出四路共用。
      *
-     * 用于会话已被删除的场景：不能再走 [stopAgentSession]，那会把内容落库到已不存在的会话，
-     * 并在 finally 里为它补送通知、烧一轮 LLM。
-     */
-    private fun clearSubAgentRuntimeState(sessionId: String) {
-        clearSessionRuntimeState(sessionId)
-    }
-
-    /**
-     * 清掉一个会话的全部内存运行时状态。删除会话、批量删除、回收站彻底删除三处共用这一份。
-     *
-     * 这三处原本各写一份几乎逐字相同的清理块，且各自清的字段集合不同——每新增一个会话级状态
-     * 就得同步改三遍，漏掉任何一处都会只增不减。现以「全部会话级状态」为唯一基准收口到这里。
+     * 这四路原本各写一份几乎逐字相同的清理块，且各自清的字段集合不同——每新增一个会话级状态
+     * 就得同步改四遍，漏掉任何一处都会只增不减。现以「全部会话级状态」为唯一基准收口到这里。
      */
     private fun clearSessionRuntimeState(sessionId: String) {
         subAgentEventBus.release(sessionId)
