@@ -5,6 +5,8 @@ description: bug 调查单：网络切换后流式请求静默卡死（根因待
 # 网络切换后流式请求静默卡死（bug 调查单）
 
 **状态：⚠️ 根因链为「代码事实支撑的推测」——未经真机复现验证、尚未修复。修复完成后请更新本记忆。**
+
+**状态更新（2026-10-23，代码层核实）：修复方向 1 已落地——NetworkWatcher.kt 已存在**（feature/agent/domain/provider/NetworkWatcher.kt:23-58，注册 registerDefaultNetworkCallback，切网 500ms 去抖后 ActiveStreamGuardRegistry.interruptAll() 主动打断活跃流，靠既有重试在新网快速重发）——下文「全库无任何网络变化监听」已过时。真机验证仍待验，不解除待验状态。
 - 调查：另一会话已完成只读核查（2026-10-12，用户转交）；本会话已二次核实关键行号（下述）。
 - 用户报告的场景：WiFi→移动、VPN 开→关等**默认网络/VPN 通道变化**后，大模型流式请求一直「正在思考」无输出无报错。
 
@@ -34,4 +36,3 @@ description: bug 调查单：网络切换后流式请求静默卡死（根因待
 ## 2026-10-19 新观察（子代理中招实录，已验证现象）
 - qa 子代理在重网络活动窗口（apk/pip/npm 下载 + 19 分钟 Gradle 完整打包并发）中，LLM 流式回合于某时刻静默冻结：state 永远 running、无报错、无残留进程，数小时后只能 stop——**子代理的 AI 回合同样会中招**，且表现为「子代理永远 running」而非任何错误。
 - 运维规避已写入 .aicode/notes/qa-discipline.md：构建不与 qa 并发、qa 禁自跑 gradle、单批小范围派发。
-
