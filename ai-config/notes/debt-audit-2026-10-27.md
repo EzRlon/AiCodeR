@@ -445,15 +445,23 @@
 
 **8. `EditFileTool.findLineEndingTolerant` 缺首字符快判，最坏 O(n·m)**（`EditFileTool.kt:322-355`）—— 逐字符扫描在每个起点都重新比对整个模式；大文件（内容 n 大）+ 长 `old_string`（m 大）且**不匹配**时退化为 n×m 次比较。改法：先判 `content[i] == pattern[0]` 再进内层循环。不修后果：极端输入下 tool 长时间占用线程（**无栈溢出风险**，这点相对正则方案是正确取舍）。
 
+> **✅已修 f11b2b7**（2026-10-27）。每个起点先判首字符再进内层；pattern 首字符为换行时不快判（\n 要按 \r\n / \n 两种形态匹配，交由内层处理）。
+
 **9. `AgentDefinition.capabilitySummary` 的能力分组是硬编码三个集合**（`AgentDefinition.kt` companion 的 `READ_TOOLS`/`WRITE_TOOLS`/`EXEC_TOOLS`）—— 判定用 `allowsTool`（与 `filterToolNames` 同源，这点好），但**分组本身**是手写清单；将来新增写类工具若不补进 `WRITE_TOOLS`，摘要会显示「文件修改 否」而实际可写。KDoc 已自认此风险。改法：由工具自身的 `ToolCapability` 推导分组（写能力 → 写组）。不修后果：主代理据摘要把修改任务派给「显示只读」的子代理，白跑一轮。
 
 **10. 圆角魔数两处硬编码**（`SettingsGroupComponents.kt:147-152` 与 `:126`）—— `LazyGroupItem` 与 `SettingsGroup` 各写 `14.dp`；同文件其它地方用 `Radius.lg` 令牌。改法：统一到 theme 令牌。
 
 **11. 6 个新技能资源未入库，且 `ui-ux-pro-max` 的 1.8MB `data/` 对 AI 无用**（`app/src/main/assets/skills/{brainstorming,executing-plans,frontend-design,ui-ux-pro-max,verification-before-completion,writing-plans}`，git status 为 `??`）—— AI 只用得上 `SKILL.md`（16KB），`ui-ux-pro-max/data/`（1.8MB）仅供其 `scripts/` 检索脚本；`scripts/` 139KB 需在容器里跑。改法：入库前裁剪无用 `data/`，或改为按需下载。不修后果：APK 与冷启动释放量白涨（与 P1-1 同源）。
 
+> **✅已入库 72a8716**（2026-10-27）。**原判断有误，已就地更正**：`data/` 不能裁——`scripts/core.py:15` 是 `DATA_DIR = Path(__file__).parent.parent / "data"`，`search.py` 的检索全靠这批 CSV，裁掉技能直接失效。故 `data/` 随包入库（压缩后仅 +391KB，自检实测），体积影响可接受。
+
 **12. `PlanApprovalManager.resolve(choice)` 在锁外读 id（小竞态）**（`PlanApprovalManager.kt:78-81`）—— `pendingApproval.value?.id` 在锁外取，`resolve(id, choice)` 再进锁；两次之间条目可能已被取消并换成新请求，于是 `pending.remove(staleId)` 返回 null → 静默丢弃用户这次点击。触发概率低（需精确交错）。改法：在锁内取最早 entry 并直接完成。
 
+> **✅已修 f11b2b7**（2026-10-27）。取最早条目与移除放进同一持锁区；完成逻辑抽 `completeResolved` 供两个 resolve 共用。
+
 **13. `ConclusionParser` 用 `line.contains(标题)` 判段标题，正文提及即误切段**（`ConclusionParser.kt:41-44`）—— 段落标题判定是「行内含『关键决定与理由』/『教训与坑』/『未完成』」，不是锚定行首的编号标题。模型输出里若有一条正文写到「…之前的关键决定与理由已过期」，会被当成新段标题：前段被提前 `flush()`，后续行被归到错误标签下。影响有限（节点不会丢，`recordConclusion` 按名称幂等，只是标签错位或段落被切碎），故列 P2 而非更高级。改法：标题判定改为锚定行首（如 `NUMBERED_SECTION` 命中且含标题名才算段标题）。
+
+> **✅已修 f11b2b7**（2026-10-27）。改为「剥掉编号与强调符号后行首匹配」；补 `ConclusionParserTest` 3 例（编号标题 / 正文误提不切段 / 粗体与无编号标题）。
 
 ### 本窗口核对后**排除**的两条（避免误记）
 
