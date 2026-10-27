@@ -75,6 +75,15 @@ data class BackupOptions(
     val keys: Boolean = false
 )
 
+/** 导入时文件段已写入磁盘、但后续步骤失败：磁盘上留下部分导入内容，异常文案必须告知用户。 */
+class PartialRestoreException(
+    val writtenFiles: Int,
+    cause: Throwable
+) : IllegalStateException(
+    "导入未完成：已有 $writtenFiles 个文件写入磁盘。请检查磁盘空间后重新导入，重复导入会覆盖同名文件",
+    cause
+)
+
 data class RestoreStats(
     val providers: Int = 0,
     val remoteConnections: Int = 0,

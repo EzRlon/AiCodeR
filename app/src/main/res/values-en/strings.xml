@@ -2262,6 +2262,9 @@
     <string name="chat_shared_text_queued">Content received; it will be added to the input box</string>
     <string name="chat_attachment_import_failed">Some attachments could not be loaded (unreadable or too large)</string>
     <string name="chat_action_delete">Delete Message</string>
+    <string name="chat_message_delete_confirm_title">Delete this message?</string>
+    <string name="chat_message_delete_confirm_user">All conversation after it (AI replies, tool records, later turns) will also be deleted permanently.</string>
+    <string name="chat_message_delete_confirm_other">This cannot be undone.</string>
     <string name="chat_message_actions_title">Message actions</string>
     <string name="chat_action_quote">Quote &amp; ask</string>
     <string name="chat_action_explain">Explain this</string>

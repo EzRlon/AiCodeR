@@ -85,6 +85,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AnchorMenuPopup
+import com.aicode.core.ui.BatchDeleteConfirmDialog
 import com.aicode.core.ui.ImageViewerHost
 import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.readableContentMaxWidth
@@ -820,8 +821,14 @@ fun AIChatPanel(
     var panelRootInWindow by remember { mutableStateOf(Offset.Zero) }
     var textSelectMessageId by remember { mutableStateOf<String?>(null) }
     var editingMessage by remember { mutableStateOf<AgentUIMessage?>(null) }
+    // 待确认删除的消息：删除会级联删掉其后整段对话，先弹确认再落库。
+    var pendingDeleteMessage by remember { mutableStateOf<AgentUIMessage?>(null) }
     // 切换会话退出选字模式，避免跨会话残留
-    LaunchedEffect(currentSessionId) { textSelectMessageId = null }
+    LaunchedEffect(currentSessionId) {
+        textSelectMessageId = null
+        // 待确认删除的消息同理：不清理会在 A 会话弹着确认框、确认后删到 B 会话的同 id 消息。
+        pendingDeleteMessage = null
+    }
     var queuedEditing by remember { mutableStateOf<QueuedRequest?>(null) }
     val listState = rememberLazyListState()
     // 消息未就绪时的加载提示：本地读库通常几十毫秒，立刻显示反而闪一下，等一小会儿还没就绪才提示。
@@ -2352,6 +2359,24 @@ fun AIChatPanel(
                 )
             }
 
+            pendingDeleteMessage?.let { message ->
+                BatchDeleteConfirmDialog(
+                    title = stringResource(R.string.chat_message_delete_confirm_title),
+                    message = stringResource(
+                        if (message.role == MessageRole.USER) {
+                            R.string.chat_message_delete_confirm_user
+                        } else {
+                            R.string.chat_message_delete_confirm_other
+                        }
+                    ),
+                    onConfirm = {
+                        viewModel.deleteMessage(message.id)
+                        pendingDeleteMessage = null
+                    },
+                    onDismiss = { pendingDeleteMessage = null }
+                )
+            }
+
             queuedEditing?.let { req ->
                 EditMessageDialog(
                     initialText = req.request,
@@ -2416,7 +2441,11 @@ fun AIChatPanel(
                     { editingMessage = message }
                 } else null,
                 // 删除不限角色：对齐原「更多」菜单的能力集（助手回复也能删）。
-                onDeleteClick = { viewModel.deleteMessage(message.id) }
+                // 用户消息的删除会级联删掉其后整段对话，必须先二次确认。
+                onDeleteClick = {
+                    messageMenuState = null
+                    pendingDeleteMessage = message
+                }
             )
         }
         // 文件卡片操作菜单（长按附件弹出；条目构建见 attachmentActionEntries）。

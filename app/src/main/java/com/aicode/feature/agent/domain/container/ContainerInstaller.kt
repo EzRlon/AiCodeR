@@ -45,7 +45,8 @@ class ContainerInstaller @Inject constructor(
             if (docsExtractedSession) return
             val destDir = File(File(context.filesDir, "aicode"), "docs")
             runCatching {
-                destDir.deleteRecursively()
+                // 与 multi-llm / skills 同理：docs 目录容器内对 AI 可写，符号链接只删链接、不下钻。
+                SafeDelete.deleteTree(destDir)
                 destDir.mkdirs()
                 extractAssetsRecursive(context, "docs", destDir)
                 docsExtractedSession = true

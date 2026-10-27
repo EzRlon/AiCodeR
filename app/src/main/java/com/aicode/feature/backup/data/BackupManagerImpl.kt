@@ -33,6 +33,7 @@ import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.TodoItemDto
 import com.aicode.feature.backup.domain.GraphNodeDto
 import com.aicode.feature.backup.domain.GraphEdgeDto
+import com.aicode.feature.backup.domain.PartialRestoreException
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.toMetadata
 import com.aicode.feature.credentials.data.repository.FileCredentialRepository
@@ -61,6 +62,7 @@ import com.aicode.feature.workspace.domain.model.RemoteProtocol
 import com.aicode.feature.workspace.domain.model.Workspace
 import com.aicode.feature.workspace.domain.model.WorkspaceType
 import dagger.hilt.android.qualifiers.ApplicationContext
+import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -111,7 +113,8 @@ class BackupManagerImpl @Inject constructor(
     private val scheduledTaskRepository: ScheduledTaskRepository,
     private val fileCredentialRepository: FileCredentialRepository,
     private val workspaceRepository: WorkspaceRepository,
-    private val graphDao: com.aicode.feature.memorygraph.data.local.dao.GraphDao
+    private val graphDao: com.aicode.feature.memorygraph.data.local.dao.GraphDao,
+    private val agentDatabase: AgentDatabase
 ) : BackupManager {
 
     private val json = Json {
@@ -583,75 +586,134 @@ class BackupManagerImpl @Inject constructor(
         val restoreMapping = mutableMapOf<String, Workspace>()
         var metadata: BackupMetadata? = null
         var stats = RestoreStats()
-        var entry = tar.nextEntry
-        while (entry != null) {
-            when (entry.name) {
-                FILE_LEGACY_SNAPSHOT -> {
+        try {
+            var entry = tar.nextEntry
+            // 第一阶段：metadata 与文件类条目（AI 资产 / 工作区文件）流式落地。
+            // 文件先写、DB 后写：DB 段可以整体包进一个事务，而文件段无法回滚（见下方的部分写入提示）。
+            while (entry != null && !isDatabaseEntry(entry.name)) {
+                if (entry.name == FILE_LEGACY_SNAPSHOT) {
                     val plain = tar.readBytes()
                     val snapshot = json.decodeFromString(BackupSnapshot.serializer(), String(plain, Charsets.UTF_8))
                     checkVersion(snapshot.schemaVersion)
                     return restoreLegacy(snapshot)
                 }
-                FILE_METADATA -> {
+                if (entry.name == FILE_METADATA) {
                     val plain = tar.readBytes()
                     metadata = json.decodeFromString(BackupMetadata.serializer(), String(plain, Charsets.UTF_8))
-                    checkVersion(metadata.schemaVersion)
+                    checkVersion(metadata!!.schemaVersion)
+                } else {
+                    stats += restoreFileEntry(tar, entry, selectedWorkspaces, restoreMapping)
                 }
-                FILE_SESSIONS -> {
-                    val count = restoreJsonl(tar, ChatSessionDto.serializer()) { dtos ->
-                        chatSessionDao.upsertAll(
-                            dtos.map { dto ->
-                                dto.copy(
-                                    workspacePath = resolveSessionWorkspace(dto.workspacePath, restoreMapping)
-                                ).toEntity()
-                            }
-                        )
-                    }
-                    FileLogger.i(TAG, "恢复会话 $count 条")
-                    stats += RestoreStats(chatSessions = count)
-                }
-                FILE_MESSAGES -> {
-                    val count = restoreJsonl(tar, AgentMessageDto.serializer()) { dtos ->
-                        agentMessageDao.insertAll(dtos.map { it.toEntity() })
-                    }
-                    FileLogger.i(TAG, "恢复消息 $count 条")
-                    stats += RestoreStats(agentMessages = count)
-                }
-                FILE_TODOS -> {
-                    val count = restoreJsonl(tar, TodoItemDto.serializer()) { dtos ->
-                        todoItemDao.upsertAll(dtos.map { it.toEntity() })
-                    }
-                    FileLogger.i(TAG, "恢复待办 $count 条")
-                    stats += RestoreStats(todoItems = count)
-                }
-                FILE_GRAPH_NODES -> {
-                    val count = restoreJsonl(tar, GraphNodeDto.serializer()) { dtos ->
-                        dtos.forEach { graphDao.upsertNode(it.toEntity()) }
-                    }
-                    FileLogger.i(TAG, "恢复图谱节点 $count 条")
-                }
-                FILE_GRAPH_EDGES -> {
-                    val count = restoreJsonl(tar, GraphEdgeDto.serializer()) { dtos ->
-                        dtos.forEach { graphDao.upsertEdge(it.toEntity()) }
-                    }
-                    FileLogger.i(TAG, "恢复图谱关系 $count 条")
-                }
-                else -> {
-                    if (entry.name.startsWith(WORKSPACE_PREFIX)) {
-                        stats += restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
-                    } else if (entry.name.startsWith(AICODE_PREFIX)) {
-                        stats += restoreAicodeEntry(tar, entry)
-                    }
-                }
+                entry = tar.nextEntry
             }
-            entry = tar.nextEntry
+            val meta = metadata ?: run {
+                FileLogger.e(TAG, "导入失败：tar 中缺少 metadata.json")
+                error("不是有效的许愿码备份文件：缺少 metadata.json")
+            }
+            FileLogger.i(TAG, "文件段还原完成，开始还原 DB 段")
+            // 第二阶段：DB 段同事务，中途失败整体回滚，不会留下「一半会话已入库」。
+            // 元数据段不进事务：它写的是 DataStore/配置文件，Room 事务管不到，包进来只会拉长事务。
+            var dbEntry = entry
+            val dbStats = agentDatabase.withTransaction {
+                var restored = RestoreStats()
+                while (dbEntry != null && isDatabaseEntry(dbEntry.name)) {
+                    restored += restoreDatabaseEntry(tar, dbEntry.name, restoreMapping)
+                    dbEntry = tar.nextEntry
+                }
+                restored
+            }
+            // 第三阶段：导出顺序固定为「metadata → 文件 → DB」，正常不会走到这里；
+            // 手改/第三方重打包把文件条目放到 DB 段之后时，仍在事务外补完，既不丢文件也不把文件 IO 塞进事务。
+            while (dbEntry != null) {
+                stats += if (isDatabaseEntry(dbEntry.name)) {
+                    // 乱序的 DB 条目单独开事务补做：跳过就等于丢数据。
+                    agentDatabase.withTransaction { restoreDatabaseEntry(tar, dbEntry.name, restoreMapping) }
+                } else {
+                    restoreFileEntry(tar, dbEntry, selectedWorkspaces, restoreMapping)
+                }
+                dbEntry = tar.nextEntry
+            }
+            val metaStats = restoreMeta(meta)
+            return stats + dbStats + metaStats
+        } catch (e: Throwable) {
+            // 文件段已落盘而后续失败时，磁盘上是「有新文件、没新会话」的半成品，必须让用户知道。
+            val writtenFiles = stats.workspaceFiles + stats.aiAssetFiles + stats.keyFiles
+            if (writtenFiles > 0 && e !is PartialRestoreException) {
+                throw PartialRestoreException(writtenFiles, e)
+            }
+            throw e
         }
-        val meta = metadata ?: run {
-            FileLogger.e(TAG, "导入失败：tar 中缺少 metadata.json")
-            error("不是有效的许愿码备份文件：缺少 metadata.json")
+    }
+
+    /** DB 段条目：全部走同一个事务。 */
+    private fun isDatabaseEntry(name: String): Boolean = when (name) {
+        FILE_SESSIONS, FILE_MESSAGES, FILE_TODOS, FILE_GRAPH_NODES, FILE_GRAPH_EDGES -> true
+        else -> false
+    }
+
+    /** 还原单个文件类条目（工作区文件 / AI 资产）；其余条目计数为 0。 */
+    private suspend fun restoreFileEntry(
+        tar: TarArchiveInputStream,
+        entry: TarArchiveEntry,
+        selectedWorkspaces: Set<String>?,
+        restoreMapping: MutableMap<String, Workspace>
+    ): RestoreStats = when {
+        entry.name.startsWith(WORKSPACE_PREFIX) ->
+            restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
+        entry.name.startsWith(AICODE_PREFIX) -> restoreAicodeEntry(tar, entry)
+        else -> RestoreStats()
+    }
+
+    /** 还原单个 DB 段 jsonl 条目（调用方负责事务）。未知条目记日志后跳过。 */
+    private suspend fun restoreDatabaseEntry(
+        tar: TarArchiveInputStream,
+        name: String,
+        restoreMapping: MutableMap<String, Workspace>
+    ): RestoreStats = when (name) {
+        FILE_SESSIONS -> {
+            val count = restoreJsonl(tar, ChatSessionDto.serializer()) { dtos ->
+                chatSessionDao.upsertAll(
+                    dtos.map { dto ->
+                        dto.copy(workspacePath = resolveSessionWorkspace(dto.workspacePath, restoreMapping))
+                            .toEntity()
+                    }
+                )
+            }
+            FileLogger.i(TAG, "恢复会话 $count 条")
+            RestoreStats(chatSessions = count)
         }
-        FileLogger.i(TAG, "tar 解析完成，开始还原元数据段")
-        return stats + restoreMeta(meta)
+        FILE_MESSAGES -> {
+            val count = restoreJsonl(tar, AgentMessageDto.serializer()) { dtos ->
+                agentMessageDao.insertAll(dtos.map { it.toEntity() })
+            }
+            FileLogger.i(TAG, "恢复消息 $count 条")
+            RestoreStats(agentMessages = count)
+        }
+        FILE_TODOS -> {
+            val count = restoreJsonl(tar, TodoItemDto.serializer()) { dtos ->
+                todoItemDao.upsertAll(dtos.map { it.toEntity() })
+            }
+            FileLogger.i(TAG, "恢复待办 $count 条")
+            RestoreStats(todoItems = count)
+        }
+        FILE_GRAPH_NODES -> {
+            val count = restoreJsonl(tar, GraphNodeDto.serializer()) { dtos ->
+                dtos.forEach { graphDao.upsertNode(it.toEntity()) }
+            }
+            FileLogger.i(TAG, "恢复图谱节点 $count 条")
+            RestoreStats()
+        }
+        FILE_GRAPH_EDGES -> {
+            val count = restoreJsonl(tar, GraphEdgeDto.serializer()) { dtos ->
+                dtos.forEach { graphDao.upsertEdge(it.toEntity()) }
+            }
+            FileLogger.i(TAG, "恢复图谱关系 $count 条")
+            RestoreStats()
+        }
+        else -> {
+            FileLogger.w(TAG, "跳过未知的备份条目：$name")
+            RestoreStats()
+        }
     }
 
     /** 从当前 tar 条目读首行（到 \n 或流末尾）；不关闭流，剩余内容由调用方决定是否继续读。 */
@@ -720,27 +782,30 @@ class BackupManagerImpl @Inject constructor(
 
     /** 旧格式（单文件 snapshot.json 完整快照）还原。 */
     private suspend fun restoreLegacy(snapshot: BackupSnapshot): RestoreStats {
-        var stats = restoreMeta(snapshot.toMetadata())
-        if (snapshot.chatSessions.isNotEmpty()) {
-            // 按备份中的工作区路径逐个解析到目标工作区（不存在则自动创建空工作区），不再全部塞进当前工作区。
-            val restoreMapping = mutableMapOf<String, Workspace>()
-            chatSessionDao.upsertAll(
-                snapshot.chatSessions.map {
-                    it.copy(workspacePath = resolveSessionWorkspace(it.workspacePath, restoreMapping)).toEntity()
-                }
+        // 先还原 DB 段（调用方已包事务），再还原元数据段：后者写 DataStore/配置文件，不属于 Room 事务范围。
+        val stats = agentDatabase.withTransaction {
+            if (snapshot.chatSessions.isNotEmpty()) {
+                // 按备份中的工作区路径逐个解析到目标工作区（不存在则自动创建空工作区），不再全部塞进当前工作区。
+                val restoreMapping = mutableMapOf<String, Workspace>()
+                chatSessionDao.upsertAll(
+                    snapshot.chatSessions.map {
+                        it.copy(workspacePath = resolveSessionWorkspace(it.workspacePath, restoreMapping)).toEntity()
+                    }
+                )
+            }
+            if (snapshot.agentMessages.isNotEmpty()) {
+                agentMessageDao.insertAll(snapshot.agentMessages.map { it.toEntity() })
+            }
+            if (snapshot.todoItems.isNotEmpty()) {
+                todoItemDao.upsertAll(snapshot.todoItems.map { it.toEntity() })
+            }
+            RestoreStats(
+                chatSessions = snapshot.chatSessions.size,
+                agentMessages = snapshot.agentMessages.size,
+                todoItems = snapshot.todoItems.size
             )
         }
-        if (snapshot.agentMessages.isNotEmpty()) {
-            agentMessageDao.insertAll(snapshot.agentMessages.map { it.toEntity() })
-        }
-        if (snapshot.todoItems.isNotEmpty()) {
-            todoItemDao.upsertAll(snapshot.todoItems.map { it.toEntity() })
-        }
-        return stats + RestoreStats(
-            chatSessions = snapshot.chatSessions.size,
-            agentMessages = snapshot.agentMessages.size,
-            todoItems = snapshot.todoItems.size
-        )
+        return restoreMeta(snapshot.toMetadata()) + stats
     }
 
     /** 元数据段还原（小表 + 应用设置），新旧格式共用。 */
@@ -750,18 +815,22 @@ class BackupManagerImpl @Inject constructor(
             "还原元数据：providers=${meta.providers.size} remoteConnections=${meta.remoteConnections.size} remoteMounts=${meta.remoteMounts.size} " +
                 "mcpServers=${meta.mcpServers.size} permissionRules=${meta.globalPermissionRules.size} syncSettings=${meta.syncSettings != null}"
         )
-        if (meta.providers.isNotEmpty()) {
-            aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
-        }
-        if (meta.remoteConnections.isNotEmpty()) {
-            remoteConnectionDao.insertAllConnections(meta.remoteConnections.mapNotNull { it.toEntity() })
-        }
-        if (meta.remoteMounts.isNotEmpty()) {
-            // 指向已移除协议（旧版本的本地通道）的挂载一并跳过，避免外键约束失败。
-            val connectionIds = remoteConnectionDao.getAllConnectionsOnce().map { it.id }.toSet()
-            remoteConnectionDao.insertAllMounts(
-                meta.remoteMounts.map { it.toEntity() }.filter { it.connectionId in connectionIds }
-            )
+        if (meta.providers.isNotEmpty() || meta.remoteConnections.isNotEmpty() || meta.remoteMounts.isNotEmpty()) {
+            agentDatabase.withTransaction {
+                if (meta.providers.isNotEmpty()) {
+                    aiProviderDao.insertAllProviders(meta.providers.map { it.toEntity() })
+                }
+                if (meta.remoteConnections.isNotEmpty()) {
+                    remoteConnectionDao.insertAllConnections(meta.remoteConnections.mapNotNull { it.toEntity() })
+                }
+                if (meta.remoteMounts.isNotEmpty()) {
+                    // 指向已移除协议（旧版本的本地通道）的挂载一并跳过，避免外键约束失败。
+                    val connectionIds = remoteConnectionDao.getAllConnectionsOnce().map { it.id }.toSet()
+                    remoteConnectionDao.insertAllMounts(
+                        meta.remoteMounts.map { it.toEntity() }.filter { it.connectionId in connectionIds }
+                    )
+                }
+            }
         }
         if (meta.mcpServers.isNotEmpty()) {
             mcpConfigRepository.setGlobalServers(meta.mcpServers)

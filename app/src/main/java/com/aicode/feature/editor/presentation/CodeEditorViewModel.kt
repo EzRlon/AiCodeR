@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.editor.data.EditorSettings
 import com.aicode.feature.editor.data.EditorSettingsRepository
+import com.aicode.feature.editor.domain.FileEncoding
+import com.aicode.feature.editor.domain.FileEncoding.Companion.strictEncode
 import com.aicode.feature.editor.domain.TextMateSetup
 import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.workspace.domain.FileAccessProvider
@@ -74,6 +76,12 @@ class CodeEditorViewModel @Inject constructor(
     /** 加载时磁盘内容的指纹，用于保存前判断「文件是否被 AI/其他会话改过」。 */
     private var loadedFingerprint: String? = null
 
+    /** 加载时检测到的编码，保存时原样写回，避免 GBK 等非 UTF-8 文件被静默转码。 */
+    private var loadedEncoding: FileEncoding = FileEncoding.UTF_8
+
+    /** 原文件带 BOM 时的 BOM 字节（无则 null），保存时补回，否则带 BOM 的文件会在保存后丢 BOM。 */
+    private var loadedBom: ByteArray? = null
+
     /** 重复调用同一路径不会重复读盘，供 Compose 重组时安全调用。 */
     fun load(path: String) {
         if (loadedPath == path) return
@@ -94,6 +102,10 @@ class CodeEditorViewModel @Inject constructor(
                 if (looksBinary(bytes)) {
                     return@runCatching EditorUiState.Binary
                 }
+                // 编码检测与解码统一走 FileEncoding：GBK 文件按 UTF-8 解会成乱码，保存时还会覆盖原编码。
+                val decoded = FileEncoding.decode(bytes)
+                loadedEncoding = decoded.encoding
+                loadedBom = decoded.bom
                 // 语法包解析放在这里，确保 AndroidView factory 在主线程创建编辑器时 registry 已就绪。
                 TextMateSetup.ensureInitialized(context)
                 val scope = TextMateSetup.scopeNameFor(path)
@@ -104,7 +116,7 @@ class CodeEditorViewModel @Inject constructor(
                     runCatching { TextMateLanguage.create(scope, false).destroy() }
                 }
                 EditorUiState.Success(
-                    content = bytes.toString(Charsets.UTF_8),
+                    content = decoded.text,
                     scopeName = scope
                 ).also {
                     // 记下磁盘指纹：保存前据此判断「编辑器打开后文件是否被 AI/其他会话改过」。
@@ -136,7 +148,9 @@ class CodeEditorViewModel @Inject constructor(
                 val current = runCatching { fileAccess.fingerprint(path) }.getOrNull()
                 if (loadedFingerprint != null && current != null && current != loadedFingerprint) {
                     FileLogger.w(TAG, "保存冲突（磁盘内容已变）: $path")
-                    val disk = runCatching { fileAccess.readFile(path) }.getOrNull()
+                    val disk = runCatching {
+                        FileEncoding.decode(fileAccess.readBytes(path)).text
+                    }.getOrNull()
                     _saveEvents.send(SaveResult.Conflict(disk.orEmpty()))
                     return@launch
                 }
@@ -178,7 +192,16 @@ class CodeEditorViewModel @Inject constructor(
 
     /** 真正写盘并维护版本基线；成功/失败统一转成 [SaveResult]。 */
     private fun writeThrough(path: String, content: String): SaveResult =
-        runCatching { fileAccess.writeFile(path, content) }
+        runCatching {
+            // 严格编码：GBK 等编码表示不了的字符会让 toByteArray 静默变 '?'，先拦下来报错而不是默默丢字。
+            val body = with(loadedEncoding.charset) { strictEncode(content) }
+            val bom = loadedBom
+            if (bom != null) {
+                fileAccess.writeBytes(path, bom + body)
+            } else {
+                fileAccess.writeBytes(path, body)
+            }
+        }
             .fold(
                 onSuccess = {
                     // 更新基线，否则紧接着的第二次保存会被自己上一次的写入判成冲突。

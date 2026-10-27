@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.MessageRole
+import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
@@ -147,6 +148,28 @@ class MessagePersistenceUseCase @Inject constructor(
 
     suspend fun updateContent(messageId: String, newContent: String) {
         agentMessageDao.updateMessageContent(messageId, sanitizeContent(newContent))
+        // 不等 InvalidationTracker 的异步回调：回调到达前的 buildHistory 会命中旧缓存，
+        // 把刚改的内容当旧值回放给模型。缓存按版本号比对，递增即全局失效。
+        dbVersion.incrementAndGet()
+    }
+
+    /**
+     * 删除单条消息。用户消息会连带删除其后的全部对话（timestamp 大于它的消息）：
+     * 其后内容都是基于这条输入产生的回答与工具结果，留下会成为无源头的孤儿。
+     *
+     * 级联与单条删除必须在同一事务里：否则中途失败会留下「后半段已删、本条还在」的破环历史。
+     */
+    suspend fun deleteMessage(messageId: String) {
+        val sessionId = agentDatabase.withTransaction {
+            // 读与删同事务：读到角色后、删除前消息被改写角色（如工具占位行收尾）会删错范围。
+            val msg = agentMessageDao.getMessageById(messageId) ?: return@withTransaction null
+            if (msg.role == MessageRole.USER.name) {
+                agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
+            }
+            agentMessageDao.deleteMessageById(messageId)
+            msg.sessionId
+        } ?: return
+        invalidateHistory(sessionId)
     }
 
     companion object {

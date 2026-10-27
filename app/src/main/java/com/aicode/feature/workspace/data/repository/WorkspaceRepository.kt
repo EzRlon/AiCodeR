@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeDelete
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
@@ -453,7 +454,9 @@ class WorkspaceRepository @Inject constructor(
             }
             FileLogger.i(TAG, "移除外部工作区关联: $name")
         } else if (isLocal()) {
-            File(projectsRoot, name).deleteRecursively()
+            // NOFOLLOW 删除：工作区 bind mount 进容器，AI/用户脚本可投放符号链接；
+            // File.deleteRecursively 会跟链接下钻删到链接目标（如 ~/.aicode）。
+            SafeDelete.deleteTree(File(projectsRoot, name))
             target?.let { sessionUseCase.deleteSessionsByWorkspace(it.path) }
         } else {
             val cfg = remoteSshConnection.config

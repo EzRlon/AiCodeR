@@ -2262,6 +2262,9 @@
     <string name="chat_shared_text_queued">内容已收到，将填入输入框</string>
     <string name="chat_attachment_import_failed">部分附件未能载入（文件不可读或过大）</string>
     <string name="chat_action_delete">删除消息</string>
+    <string name="chat_message_delete_confirm_title">删除这条消息？</string>
+    <string name="chat_message_delete_confirm_user">该消息之后的全部对话（AI 回复、工具记录、后续轮次）也会一并删除，且无法恢复。</string>
+    <string name="chat_message_delete_confirm_other">删除后无法恢复。</string>
     <string name="chat_message_actions_title">消息操作</string>
     <string name="chat_action_quote">引用追问</string>
     <string name="chat_action_explain">解释这段</string>

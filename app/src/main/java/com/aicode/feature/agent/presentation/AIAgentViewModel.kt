@@ -4441,11 +4441,7 @@ class AIAgentViewModel @Inject constructor(
 
     fun deleteMessage(messageId: String) = viewModelScope.launch {
         try {
-            val msg = agentMessageDao.getMessageById(messageId)
-            if (msg != null && msg.role == MessageRole.USER.name) {
-                agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
-            }
-            agentMessageDao.deleteMessageById(messageId)
+            messagePersistenceUseCase.deleteMessage(messageId)
         } catch (e: Exception) {
             FileLogger.e(TAG, "删除消息失败", e)
         }
