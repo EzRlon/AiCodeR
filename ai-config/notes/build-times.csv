@@ -71,3 +71,5 @@ date,time,task,seconds,exit
 2026-10-27,22:57:52,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.*,109,0
 2026-10-27,22:59:53,:app:compileArmsoloReleaseKotlin,70,0
 2026-10-27,23:01:31,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.* --tests com.aicode.feature.agent.domain.container.* --tests com.aicode.feature.agent.domain.skill.*,92,0
+2026-10-28,01:22:25,:app:testArmsoloReleaseUnitTest --no-configuration-cache,73,0
+2026-10-28,01:36:32,assembleArmsoloRelease --no-configuration-cache,672,0
