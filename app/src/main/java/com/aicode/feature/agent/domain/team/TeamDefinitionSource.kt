@@ -13,6 +13,9 @@ interface TeamDefinitionSource {
  *
  * 按文件修改时间升序（同时间再按名称），使新安装的定义排在列表末尾——用户在商店装完
  * 立刻打开选择器时，新条目就出现在最下方，而不是按名称插进中间。
+ *
+ * 已知限制：编辑已有定义会刷新 mtime，该专家团因此移到末尾；远程 SFTP 的 mtime 只到秒，
+ * 同一秒内写入的多个文件会回退到名称序。
  */
 internal object TeamDirectoryScanner {
     private const val TAG = "TeamDirectoryScanner"
