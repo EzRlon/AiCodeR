@@ -77,6 +77,10 @@ sh tools/release-selfcheck.sh app/build/outputs/apk/armsolo/release/app-armsolo-
 
 上游子代理模型档位 tier 与我方 `ModelRoutingTable`（FAST/BALANCED/STRONG 任务路由）功能重叠。评审结论：不建议并存两套，要做就合并成上游 tier 语义，属改造而非搬运。**未获用户确认前不要动手。**
 
+## 完结（2026-10-27 用户拍板）
+
+E1 已由后续会话完成（`0b66afa`，见 `handoff-2026-10-27-batch-e1-reasoning.md`）。**E2 与 F 经用户确认从计划中移除，不再排期**：上游 v1.13 合并至此全部完结，后续上游思考系统的零散修复按 E1 的摘取方式逐个处理即可。
+
 ## 硬约束（务必遵守）
 
 1. **dex 余量 767**：任何新增代码前先评估，每批构建后必须核 `release-selfcheck.sh` 的 dex 数。越界需拆 dex 或裁依赖。
