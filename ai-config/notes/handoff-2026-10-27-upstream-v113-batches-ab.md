@@ -86,9 +86,25 @@
 
 **dex 余量（正式包实测，批次 A+B+C 全部已含）**：`classes.dex` 64705 / 65536，余 **831**（本批 A+B+C 合计仅 +34 引用）。仍逼近上限，下一个大批次（多选组件 + LazyColumn）前必须先评估拆 dex 或裁依赖。
 
-## 批次 C 剩余候选
+## 批次 D 已完成（列表多选 + LazyColumn，2026-10-27）
 
-1. 列表多选批量操作 + LazyColumn 改造（上游 `ListSelection.kt` 274 行，我方技能/MCP 列表仍是 `Column+forEach`）——改动面大，建议独立批次
+调研纠正两点（与评审笔记的描述不同，已核实）：
+- 提示词页**不需要**改造：我方 `PromptsSection.kt` 早已是 `LazyColumn` + 拖拽排序，上游也只给技能/MCP/子代理接多选。
+- 真正的掉帧源在 `SwipeToDeleteRow` 本身：旧实现**在组合期**读 `offsetX.value` 算按钮宽度，手指每移动一帧都整行重组。
+
+| 文件 | 改动 |
+|---|---|
+| `core/ui/ListSelection.kt`（新增） | 多选状态机 `ListSelectionState` + 顶栏开关 + 操作条 + 紧凑动作按钮 + 批量删除确认弹窗 |
+| `core/ui/SwipeToDeleteRow.kt` | 宽度/透明度/缩放全部移入 `graphicsLayer`，按钮宽度固定 104dp；新增 `selectionMode`/`selected`/`onToggleSelect` |
+| `SettingsGroupComponents.kt` | 新增 `LazyGroupItem`：逐项画卡片背景，首末项圆角，项间补分隔线 |
+| `SkillsSection.kt` | `Column+verticalScroll` → `LazyColumn`；接多选、批量启用/停用/删除 |
+| `SubAgentsSection.kt` | 同上 |
+| `McpSettingsSection.kt` | 同上；全选只作用于**当前搜索结果**，另加批量重连 |
+| `SettingsScreen.kt` | 三个 section 各持一份多选状态，顶栏挂开关（列表空时不显示），离开分区自动退出多选 |
+| `strings.xml` × 2 | 新增 12 条中英文案（多选/全选/已选计数/三类批量删除确认/重连） |
+| `ListSelectionStateTest.kt`（新增） | 6 用例：初始态、toggle、exit 清空、retainOnly 剔除、replaceAll 幂等、selectedKeys 快照 |
+
+批量回调**复用现有 ViewModel 方法**循环调用（`deleteSkill`/`setSkillEnabled`/`deleteSubAgent`/`setSubAgentEnabled`/`deleteMcpServer`/`setMcpServerEnabled`/`reloadMcpServer`），未新增批量 API——每条都要清自己作用域下的文件与索引，合并反而容易漏。
 
 ## 明确未采纳（勿再评估）
 

@@ -1,10 +1,10 @@
 package com.aicode.feature.settings.presentation.component
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,15 +12,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,6 +36,10 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.settings.presentation.SubAgentUiEntry
@@ -45,16 +51,39 @@ import compose.icons.feathericons.Users
  * 子代理二级页：与「技能」一致的折叠分组列表——「当前项目 / 全局」两组各自可折叠，
  * 每行一个子代理（图标 + 名称 + 描述 + 模型标签），左滑删除，点击行进入详情。
  * 新建入口在顶栏的「＋」，启用开关与编辑入口在详情页。
+ *
+ * 列表走 [LazyColumn] 只组合可见行：子代理数量随项目增长且没有上限。
+ * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 删除。
+ * 全选覆盖两组（含折叠起来的组）。
  */
 @Composable
 internal fun SubAgentsSection(
     projectName: String?,
     entries: List<SubAgentUiEntry>,
+    selection: ListSelectionState,
     onDelete: (SubAgentUiEntry) -> Unit,
-    onOpenDetail: (SubAgentUiEntry) -> Unit
+    onOpenDetail: (SubAgentUiEntry) -> Unit,
+    onBatchDelete: (List<SubAgentUiEntry>) -> Unit,
+    onBatchSetEnabled: (List<SubAgentUiEntry>, Boolean) -> Unit
 ) {
-    val projectAgents = entries.filter { it.scope == AgentDefinitionScope.PROJECT }
-    val globalAgents = entries.filter { it.scope == AgentDefinitionScope.GLOBAL }
+    // 只在数据变化时分组，避免每次重组都产生两份新 List。
+    val (projectAgents, globalAgents) = remember(entries) {
+        entries.filter { it.scope == AgentDefinitionScope.PROJECT } to
+            entries.filter { it.scope == AgentDefinitionScope.GLOBAL }
+    }
+
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    val allKeys = remember(entries) { entries.map { subAgentSelectionKey(it) } }
+    val keyToEntry = remember(entries) { entries.associateBy { subAgentSelectionKey(it) } }
+    val selectedEntries = remember(selection.selectedKeys, keyToEntry) {
+        selection.selectedKeys.mapNotNull { keyToEntry[it] }
+    }
+
+    // 列表刷新后剔除已消失的选中项；全空了就退出多选。
+    LaunchedEffect(allKeys, selection.isActive) {
+        selection.retainOnly(allKeys.toSet())
+        if (selection.isActive && entries.isEmpty()) selection.exit()
+    }
 
     if (entries.isEmpty()) {
         Box(
@@ -98,79 +127,151 @@ internal fun SubAgentsSection(
 
     var projectExpanded by rememberSaveable { mutableStateOf(true) }
     var globalExpanded by rememberSaveable { mutableStateOf(true) }
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == allKeys.size
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        CollapsibleGroupHeader(
-            text = if (projectName != null) {
-                stringResource(R.string.perm_current_project, projectName)
-            } else {
-                stringResource(R.string.perm_current_project_none)
-            },
-            expanded = projectExpanded,
-            onToggle = { projectExpanded = !projectExpanded }
-        )
-        AnimatedVisibility(visible = projectExpanded) {
-            SettingsGroup {
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(allKeys)
+                },
+                onExit = { selection.exit() },
+                actions = {
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_enabled),
+                        enabled = selection.selectedCount > 0,
+                        onClick = { onBatchSetEnabled(selectedEntries, true) }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_disabled),
+                        enabled = selection.selectedCount > 0,
+                        onClick = { onBatchSetEnabled(selectedEntries, false) }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_delete),
+                        enabled = selection.selectedCount > 0,
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = { showBatchDeleteConfirm = true }
+                    )
+                }
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            item(key = "project-header", contentType = "header") {
+                CollapsibleGroupHeader(
+                    text = if (projectName != null) {
+                        stringResource(R.string.perm_current_project, projectName)
+                    } else {
+                        stringResource(R.string.perm_current_project_none)
+                    },
+                    expanded = projectExpanded,
+                    onToggle = { projectExpanded = !projectExpanded }
+                )
+            }
+            if (projectExpanded) {
                 if (projectAgents.isEmpty()) {
-                    SubAgentEmptyHint(stringResource(R.string.subagents_no_project))
+                    item(key = "project-empty", contentType = "empty") {
+                        SettingsGroup { SubAgentEmptyHint(stringResource(R.string.subagents_no_project)) }
+                    }
                 } else {
-                    projectAgents.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
-                        SubAgentRow(
-                            entry = entry,
-                            onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
-                        )
+                    itemsIndexed(
+                        items = projectAgents,
+                        key = { _, entry -> "project:${entry.name}" },
+                        contentType = { _, _ -> "subagent-row" }
+                    ) { index, entry ->
+                        LazyGroupItem(index = index, lastIndex = projectAgents.lastIndex) {
+                            SubAgentRow(
+                                entry = entry,
+                                onDelete = { onDelete(entry) },
+                                onClick = { onOpenDetail(entry) },
+                                selectionMode = selection.isActive,
+                                selected = selection.isSelected(subAgentSelectionKey(entry)),
+                                onToggleSelect = { selection.toggle(subAgentSelectionKey(entry)) }
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        CollapsibleGroupHeader(
-            text = stringResource(R.string.perm_global),
-            expanded = globalExpanded,
-            onToggle = { globalExpanded = !globalExpanded }
-        )
-        AnimatedVisibility(visible = globalExpanded) {
-            SettingsGroup {
+            item(key = "global-header", contentType = "header") {
+                CollapsibleGroupHeader(
+                    text = stringResource(R.string.perm_global),
+                    expanded = globalExpanded,
+                    onToggle = { globalExpanded = !globalExpanded }
+                )
+            }
+            if (globalExpanded) {
                 if (globalAgents.isEmpty()) {
-                    SubAgentEmptyHint(stringResource(R.string.subagents_no_global))
+                    item(key = "global-empty", contentType = "empty") {
+                        SettingsGroup { SubAgentEmptyHint(stringResource(R.string.subagents_no_global)) }
+                    }
                 } else {
-                    globalAgents.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
-                        SubAgentRow(
-                            entry = entry,
-                            onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
-                        )
+                    itemsIndexed(
+                        items = globalAgents,
+                        key = { _, entry -> "global:${entry.name}" },
+                        contentType = { _, _ -> "subagent-row" }
+                    ) { index, entry ->
+                        LazyGroupItem(index = index, lastIndex = globalAgents.lastIndex) {
+                            SubAgentRow(
+                                entry = entry,
+                                onDelete = { onDelete(entry) },
+                                onClick = { onOpenDetail(entry) },
+                                selectionMode = selection.isActive,
+                                selected = selection.isSelected(subAgentSelectionKey(entry)),
+                                onToggleSelect = { selection.toggle(subAgentSelectionKey(entry)) }
+                            )
+                        }
                     }
                 }
             }
         }
     }
+
+    if (showBatchDeleteConfirm) {
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.subagents_batch_delete_title),
+            message = stringResource(R.string.subagents_batch_delete_confirm, selectedEntries.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(selectedEntries)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
+    }
 }
+
+/** 多选 key：同名子代理可能同时存在于项目层与全局层，必须带作用域前缀。 */
+private fun subAgentSelectionKey(entry: SubAgentUiEntry): String = "${entry.scope.name}:${entry.name}"
 
 /** 单个子代理行：图标 + 名称/描述 + 模型标签 + 右箭头；左滑删除，点击行进入详情。 */
 @Composable
 private fun SubAgentRow(
     entry: SubAgentUiEntry,
     onDelete: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
-    val rowBackground = MaterialTheme.semanticColors.cardSurface
-
-    SwipeToDeleteRow(onDelete = onDelete, onClick = onClick) {
+    // 行背景由 SwipeToDeleteRow 提供，这里不再重复画一层，省一次整行绘制。
+    SwipeToDeleteRow(
+        onDelete = onDelete,
+        onClick = onClick,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(rowBackground)
                 .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

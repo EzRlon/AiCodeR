@@ -68,6 +68,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionToggleAction
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
@@ -414,6 +416,17 @@ fun SettingsScreen(
     }
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
+    // 三个列表的多选状态各自独立：一个页面的勾选不应带到另一个页面。
+    val skillSelection = remember { ListSelectionState() }
+    val subAgentSelection = remember { ListSelectionState() }
+    val mcpSelection = remember { ListSelectionState() }
+
+    // 离开列表页（进详情 / 编辑 / 其它分区）时退出多选：否则回来会带着上一轮的勾选。
+    LaunchedEffect(section) {
+        if (section != SettingsSection.Skills) skillSelection.exit()
+        if (section != SettingsSection.SubAgents) subAgentSelection.exit()
+        if (section != SettingsSection.Mcp) mcpSelection.exit()
+    }
 
     // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
@@ -909,6 +922,8 @@ fun SettingsScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
+                            // 列表为空时不显示多选开关：进去了也无项可勾。
+                            if (mcpEntries.isNotEmpty()) SelectionToggleAction(mcpSelection)
                         }
                         SettingsSection.Container -> {
                             IconButton(onClick = { showContainerAnnouncement = true }) {
@@ -941,15 +956,18 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.Skills -> IconButton(onClick = {
-                            showSkillAddSheet = true
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.skills_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.Skills -> {
+                            IconButton(onClick = {
+                                showSkillAddSheet = true
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.skills_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            if (skills.isNotEmpty()) SelectionToggleAction(skillSelection)
                         }
                         SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                             IconButton(onClick = {
@@ -965,17 +983,20 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.SubAgents -> IconButton(onClick = {
-                            editingSubAgent = null
-                            subAgentEditorReturn = SettingsSection.SubAgents
-                            section = SettingsSection.SubAgentEditor
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.subagent_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.SubAgents -> {
+                            IconButton(onClick = {
+                                editingSubAgent = null
+                                subAgentEditorReturn = SettingsSection.SubAgents
+                                section = SettingsSection.SubAgentEditor
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.subagent_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            if (subAgents.isNotEmpty()) SelectionToggleAction(subAgentSelection)
                         }
                         SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
                             IconButton(onClick = {
@@ -1198,6 +1219,7 @@ fun SettingsScreen(
                     multiLlmEnv = multiLlmEnv,
                     multiLlmInstalling = multiLlmInstalling,
                     multiLlmMessage = multiLlmMessage,
+                    selection = mcpSelection,
                     onInstallMultiLlm = { viewModel.installMultiLlm() },
                     onAttachMultiLlm = { viewModel.attachMultiLlm() },
                     onReload = { viewModel.reloadMcp() },
@@ -1206,15 +1228,31 @@ fun SettingsScreen(
                         editingMcp = it
                         showMcpDialog = true
                     },
-                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) }
+                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) },
+                    onBatchDelete = { targets ->
+                        targets.forEach { (name, scope) -> viewModel.deleteMcpServer(name, scope) }
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        targets.forEach { (name, scope) -> viewModel.setMcpServerEnabled(name, enabled, scope) }
+                    },
+                    onBatchReconnect = { names -> names.forEach { viewModel.reloadMcpServer(it) } }
                 )
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,
                     entries = skills,
+                    selection = skillSelection,
                     onDelete = { skillToDelete = it },
                     onOpenDetail = {
                         selectedSkill = it
                         section = SettingsSection.SkillDetail
+                    },
+                    onBatchDelete = { targets ->
+                        // 批量删除逐条走同一条仓储删除路径，不新增批量 API：
+                        // 每条都要清自己作用域下的文件与索引，合并反而容易漏。
+                        targets.forEach { viewModel.deleteSkill(it.name, it.scope) }
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        targets.forEach { viewModel.setSkillEnabled(it.name, enabled, it.scope) }
                     }
                 )
                 SettingsSection.Prompts -> {
@@ -1386,10 +1424,17 @@ fun SettingsScreen(
                     SubAgentsSection(
                         projectName = currentProjectName,
                     entries = subAgents,
+                    selection = subAgentSelection,
                     onDelete = { subAgentToDelete = it },
                     onOpenDetail = {
                         selectedSubAgent = it
                         section = SettingsSection.SubAgentDetail
+                    },
+                    onBatchDelete = { targets ->
+                        targets.forEach { viewModel.deleteSubAgent(it.name, it.scope) }
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        targets.forEach { viewModel.setSubAgentEnabled(it.name, enabled, it.scope) }
                     }
                     )
                 }

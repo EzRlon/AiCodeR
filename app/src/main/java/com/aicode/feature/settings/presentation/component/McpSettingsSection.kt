@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +44,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionButton
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.agent.domain.mcp.McpScope
@@ -57,6 +65,9 @@ import com.aicode.R
 /**
  * MCP 二级页：与提供商/默认模型一致的 iOS 分组列表。
  * 白色分组卡片内每台 server 一行，两行布局（名称+状态 / 类型+摘要），支持左滑删除。
+ *
+ * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 重连 / 删除。
+ * 多选模式下全选只作用于**当前搜索筛选结果**，与列表里看到的条目一致。
  */
 @Composable
 internal fun McpSection(
@@ -67,13 +78,18 @@ internal fun McpSection(
     multiLlmEnv: SettingsViewModel.MultiLlmEnv,
     multiLlmInstalling: Boolean,
     multiLlmMessage: String?,
+    selection: ListSelectionState,
     onInstallMultiLlm: () -> Unit,
     onAttachMultiLlm: () -> Unit,
     onReload: () -> Unit,
     onToggle: (String, Boolean, McpScope) -> Unit,
     onEdit: (McpServerEntry) -> Unit,
-    onDelete: (String, McpScope) -> Unit
+    onDelete: (String, McpScope) -> Unit,
+    onBatchDelete: (List<Pair<String, McpScope>>) -> Unit,
+    onBatchSetEnabled: (List<Pair<String, McpScope>>, Boolean) -> Unit,
+    onBatchReconnect: (List<String>) -> Unit
 ) {
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     val showMultiLlmCard = !multiLlmConfigured && multiLlmEnv != SettingsViewModel.MultiLlmEnv.UNSUPPORTED
     if (entries.isEmpty()) {
         Column(
@@ -136,67 +152,142 @@ internal fun McpSection(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        if (entries.size >= 3) {
-            ModelSearchField(
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                placeholder = stringResource(R.string.mcp_search_placeholder),
-                modifier = Modifier.padding(bottom = Spacing.xs)
+    // 多选 key 带作用域前缀：同名 server 可能同时存在于项目层与全局层。
+    fun selectionKey(entry: McpServerEntry): String = "${entry.scope.name}:${entry.server.name}"
+    val allKeys = remember(filteredEntries) { filteredEntries.map { selectionKey(it) } }
+    val keyToEntry = remember(filteredEntries) { filteredEntries.associateBy { selectionKey(it) } }
+    val selectedEntries = remember(selection.selectedKeys, keyToEntry) {
+        selection.selectedKeys.mapNotNull { keyToEntry[it] }
+    }
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == allKeys.size
+
+    // 选中项只保留当前筛选结果内的：切换搜索词后，看不见的条目不该被批量操作误伤。
+    LaunchedEffect(allKeys, selection.isActive) {
+        selection.retainOnly(allKeys.toSet())
+        if (selection.isActive && filteredEntries.isEmpty()) selection.exit()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = allSelected,
+                onToggleSelectAll = {
+                    if (allSelected) selection.clear() else selection.replaceAll(allKeys)
+                },
+                onExit = { selection.exit() },
+                actions = {
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_enabled),
+                        enabled = selection.selectedCount > 0,
+                        onClick = {
+                            onBatchSetEnabled(selectedEntries.map { it.server.name to it.scope }, true)
+                        }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_disabled),
+                        enabled = selection.selectedCount > 0,
+                        onClick = {
+                            onBatchSetEnabled(selectedEntries.map { it.server.name to it.scope }, false)
+                        }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.mcp_batch_reconnect),
+                        enabled = selection.selectedCount > 0,
+                        onClick = { onBatchReconnect(selectedEntries.map { it.server.name }) }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_delete),
+                        enabled = selection.selectedCount > 0,
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = { showBatchDeleteConfirm = true }
+                    )
+                }
             )
         }
 
-        if (showMultiLlmCard) {
-            MultiLlmCard(multiLlmEnv, multiLlmInstalling, multiLlmMessage, onInstallMultiLlm, onAttachMultiLlm)
-        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            if (entries.size >= 3) {
+                item(key = "search", contentType = "search") {
+                    ModelSearchField(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = stringResource(R.string.mcp_search_placeholder),
+                        modifier = Modifier.padding(bottom = Spacing.xs)
+                    )
+                }
+            }
 
-        if (filteredEntries.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 48.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    Icon(
-                        FeatherIcons.Search,
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                    Text(
-                        text = stringResource(R.string.mcp_search_empty),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            if (showMultiLlmCard) {
+                item(key = "multillm-card", contentType = "card") {
+                    MultiLlmCard(multiLlmEnv, multiLlmInstalling, multiLlmMessage, onInstallMultiLlm, onAttachMultiLlm)
                 }
             }
-        } else {
-            SettingsGroup {
-                filteredEntries.forEachIndexed { index, entry ->
-                    if (index > 0) {
-                        SettingsDivider()
+
+            if (filteredEntries.isEmpty()) {
+                item(key = "search-empty", contentType = "empty") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                        ) {
+                            Icon(
+                                FeatherIcons.Search,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Text(
+                                text = stringResource(R.string.mcp_search_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    McpServerRow(
-                        server = entry.server,
-                        scope = entry.scope,
-                        status = statuses.firstOrNull { it.name == entry.server.name },
-                        onClick = { onEdit(entry) },
-                        onDelete = { onDelete(entry.server.name, entry.scope) }
-                    )
+                }
+            } else {
+                itemsIndexed(
+                    items = filteredEntries,
+                    key = { _, entry -> selectionKey(entry) },
+                    contentType = { _, _ -> "mcp-row" }
+                ) { index, entry ->
+                    LazyGroupItem(index = index, lastIndex = filteredEntries.lastIndex) {
+                        McpServerRow(
+                            server = entry.server,
+                            scope = entry.scope,
+                            status = statuses.firstOrNull { it.name == entry.server.name },
+                            onClick = { onEdit(entry) },
+                            onDelete = { onDelete(entry.server.name, entry.scope) },
+                            selectionMode = selection.isActive,
+                            selected = selection.isSelected(selectionKey(entry)),
+                            onToggleSelect = { selection.toggle(selectionKey(entry)) }
+                        )
+                    }
                 }
             }
         }
+    }
+
+    if (showBatchDeleteConfirm) {
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.mcp_batch_delete_title),
+            message = stringResource(R.string.mcp_batch_delete_confirm, selectedEntries.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(selectedEntries.map { it.server.name to it.scope })
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
     }
 }
 
@@ -270,7 +361,10 @@ internal fun McpServerRow(
     scope: McpScope,
     status: McpServerStatus?,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     val isConnected = server.enabled && status?.state == McpServerStatus.State.CONNECTED
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
@@ -312,7 +406,10 @@ internal fun McpServerRow(
 
     SwipeToDeleteRow(
         onDelete = onDelete,
-        onClick = onClick
+        onClick = onClick,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect
     ) {
         Row(
             modifier = Modifier

@@ -592,6 +592,17 @@
     <string name="common_edit">Edit</string>
     <string name="common_enabled">Enabled</string>
     <string name="common_disabled">Disabled</string>
+    <string name="common_select_mode">Select</string>
+    <string name="common_selected_count">%1$d selected</string>
+    <string name="common_select_all">Select all</string>
+    <string name="common_deselect_all">Deselect all</string>
+    <string name="skills_batch_delete_title">Delete skills</string>
+    <string name="skills_batch_delete_confirm">Delete the %1$d selected skills? This cannot be undone.</string>
+    <string name="subagents_batch_delete_title">Delete subagents</string>
+    <string name="subagents_batch_delete_confirm">Delete the %1$d selected subagents? This cannot be undone.</string>
+    <string name="mcp_batch_delete_title">Delete MCP servers</string>
+    <string name="mcp_batch_delete_confirm">Delete the %1$d selected MCP servers? This cannot be undone.</string>
+    <string name="mcp_batch_reconnect">Reconnect</string>
     <string name="credential_token">Access Token / PAT</string>
     <string name="credential_auto_inject_title">Auto-inject credentials</string>
     <string name="credential_auto_inject_hint">Sync git credentials saved in the app to this remote server, effective only for repositories under the current workspace root. Does not affect your manual git usage on the server.</string>
