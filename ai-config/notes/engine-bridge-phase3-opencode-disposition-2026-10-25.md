@@ -1,6 +1,6 @@
 # 三期引擎适配 · OpenCode 批次（2026-10-25）实施台账
 
-## 交付内容（提交哈希待补）
+## 交付内容（提交 9c9c996，本地未 push）
 
 新增 OpenCode 引擎桥接，与 CodexBridge 同构。CLI 锁定 opencode-ai@1.19.0（npm latest 稳定线，1.19.x 即当前代码线；GitHub tag 已到 v2.x 但 v2 仅 dev/beta 预发布）。
 

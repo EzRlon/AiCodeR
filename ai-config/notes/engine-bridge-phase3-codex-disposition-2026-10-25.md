@@ -1,6 +1,6 @@
 # 三期引擎适配 · Codex 批次（2026-10-25）实施台账
 
-## 交付内容（未提交 → 提交后补哈希）
+## 交付内容（提交 1e66cdd，本地未 push）
 
 新增 Codex 引擎桥接，模式与 ClaudeCodeBridge 一致：每回合 headless 拉起 CLI，stdout JSON 翻译成 AgentEvent，下游落库/UI/停止/队列复用本体链路。
 

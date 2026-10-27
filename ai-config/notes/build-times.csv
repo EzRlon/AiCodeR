@@ -38,3 +38,24 @@ date,time,task,seconds,exit
 2026-10-27,10:31:02,:app:testArmsoloReleaseUnitTest :app:compileArmsoloReleaseKotlin,313,0
 2026-10-27,10:40:39,assembleArmsoloRelease --no-configuration-cache,545,0
 2026-10-27,10:52:38,:app:testArmsoloReleaseUnitTest assembleArmsoloRelease --no-configuration-cache,490,0
+2026-10-27,13:44:47,:app:compileArmsoloReleaseKotlin --no-build-cache,509,0
+2026-10-27,13:57:30,:app:testArmsoloReleaseUnitTest --tests com.aicode.core.util.SafeDeleteTest --tests com.aicode.feature.editor.domain.FileEncodingTest,36,0
+2026-10-27,14:14:15,:app:compileArmsoloReleaseKotlin,85,0
+2026-10-27,14:17:24,:app:compileArmsoloReleaseKotlin,80,0
+2026-10-27,14:30:26,:app:compileArmsoloReleaseKotlin,81,0
+2026-10-27,14:35:36,:app:testArmsoloReleaseUnitTest,186,0
+2026-10-27,16:13:02,:app:compileArmsoloReleaseKotlin,326,0
+2026-10-27,16:24:10,:app:compileArmsoloReleaseKotlin,151,0
+2026-10-27,16:40:13,:app:testArmsoloReleaseUnitTest,84,0
+2026-10-27,16:50:22,:app:compileArmsoloReleaseKotlin,88,0
+2026-10-27,17:04:45,:app:testArmsoloReleaseUnitTest,255,0
+2026-10-27,17:07:44,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.editor.domain.FileEncodingTest --tests com.aicode.core.util.ShellQuoteTest,57,0
+2026-10-27,17:21:46,:app:testArmsoloReleaseUnitTest,262,0
+2026-10-27,17:30:17,:app:compileArmsoloReleaseKotlin,121,0
+2026-10-27,17:33:01,:app:hiltJavaCompileArmsoloRelease,62,0
+2026-10-27,17:38:32,:app:testArmsoloReleaseUnitTest,189,0
+2026-10-27,17:43:50,:app:compileArmsoloReleaseKotlin,68,0
+2026-10-27,17:55:47,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.workspace.domain.remote.SyncEngineIgnoreTest,13,0
+2026-10-27,17:58:33,:app:testArmsoloReleaseUnitTest,37,0
+2026-10-27,19:10:46,:app:mergeArmsoloReleaseAssets,15,0
+2026-10-27,19:18:40,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.skill.*,61,0

@@ -1,6 +1,6 @@
 # 引擎二期收尾 · recall 进 MCP 桥（2026-10-25）实施台账
 
-## 交付内容（提交哈希待补）
+## 交付内容（提交 820b3d3，本地未 push）
 
 aicode_bridge 新增 `recall_search` 工具：CLI 引擎（Claude Code / Codex / OpenCode 通用）可跨会话全文检索历史档案（含被压缩归档的原文），复用本体 RecallTool 的 FTS4 + CJK LIKE 降级逻辑，经 PermissionBridgeServer `kind:"data"` 通道回调 App 查 Room。
 
