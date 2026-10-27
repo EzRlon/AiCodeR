@@ -49,6 +49,16 @@ class FileEncodingTest {
     }
 
     @Test
+    fun 返回的BOM是副本_改它不影响枚举常量() {
+        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+        val decoded = FileEncoding.decode(bom + "abc".toByteArray(Charsets.UTF_8))
+
+        decoded.bom!!.fill(0)
+
+        assertArrayEquals(bom, FileEncoding.UTF_8.bom)
+    }
+
+    @Test
     fun 带BOM的UTF16LE解码() {
         val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte())
         val decoded = FileEncoding.decode(bom + "中文".toByteArray(Charsets.UTF_16LE))

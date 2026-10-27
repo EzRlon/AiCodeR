@@ -463,7 +463,7 @@ class WorkspaceRepository @Inject constructor(
             val cfg = remoteSshConnection.config
             if (cfg != null) {
                 val remotePath = "${pathHomeResolver.expandHome(cfg.remoteWorkspacePath).trimEnd('/')}/$name"
-                runCatching { execRemoteExit("rm -rf ${shellQuote(remotePath)}") }
+                runCatching { execRemoteExit("rm -rf -- ${shellQuote(remotePath)}") }
                     .onFailure { FileLogger.e(TAG, "远程删除工作区失败: $remotePath", it) }
             }
             target?.let { sessionUseCase.deleteSessionsByWorkspace(it.path) }

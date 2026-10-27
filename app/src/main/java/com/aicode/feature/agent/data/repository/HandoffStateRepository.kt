@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
@@ -48,10 +49,13 @@ class HandoffStateRepository @Inject constructor(
     )
 
     /** 读取一次全部状态；解析失败按空状态继续（暂停态丢失只会让会话恢复可发送，不应阻断启动）。 */
-    suspend fun load(): State = runCatching {
+    suspend fun load(): State = try {
         val raw = context.handoffStateDataStore.data.first()[STATE_KEY]
         if (raw == null) State() else json.decodeFromString<State>(raw)
-    }.getOrElse { e ->
+    } catch (e: CancellationException) {
+        // 不能把取消当「读取失败」吞掉：那会破坏结构化并发（ViewModel 清理时仍跑完 catch 分支）。
+        throw e
+    } catch (e: Exception) {
         FileLogger.w(TAG, "读取交接状态失败，按空状态继续", e)
         State()
     }

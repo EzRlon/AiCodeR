@@ -42,7 +42,8 @@ enum class FileEncoding(val charset: Charset, val bom: ByteArray?) {
             val withBom = bytes.mapBom()
             val (enc, body) = withBom ?: (detectBomless(bytes) to bytes)
             val text = String(body, enc.charset)
-            return DecodedText(text, enc, withBom?.first?.bom)
+            // BOM 拷贝一份再交出：枚举常量里的数组是共享的可变引用，直接暴露会被调用方改坏全局状态。
+            return DecodedText(text, enc, withBom?.first?.bom?.copyOf())
         }
 
         /**

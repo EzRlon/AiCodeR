@@ -735,6 +735,9 @@ class AIAgentViewModel @Inject constructor(
     private val _expandingPath = MutableStateFlow<String?>(null)
     val expandingPath: StateFlow<String?> = _expandingPath.asStateFlow()
 
+    /** 展开等待态的兑底清除任务（每次展开重置，避免连点时协程堆积）。 */
+    private var expandMarkerTimeout: Job? = null
+
     /** 正在执行写操作（新建/重命名/删除/复制/移动）的条目路径集合；UI 在对应行与工具栏显示等待动画。 */
     private val _fileOpPaths = MutableStateFlow<Set<String>>(emptySet())
     val fileOpPaths: StateFlow<Set<String>> = _fileOpPaths.asStateFlow()
@@ -881,7 +884,8 @@ class AIAgentViewModel @Inject constructor(
         } else {
             _expandingPath.value = path
             // 兜底清除：树流可能因订阅超时（WhileSubscribed 5s）没跑完就停，标记会永久残留。
-            viewModelScope.launch {
+            expandMarkerTimeout?.cancel()
+            expandMarkerTimeout = viewModelScope.launch {
                 delay(EXPAND_MARKER_TIMEOUT_MS)
                 if (_expandingPath.value == path) _expandingPath.value = null
             }
