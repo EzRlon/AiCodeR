@@ -49,7 +49,7 @@ class ContextCompactor @Inject constructor(
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val sessionUseCase: SessionUseCase,
-    private val graphRepository: com.aicode.feature.memorygraph.data.GraphRepository
+    private val graphRepository: com.aicode.feature.memorygraph.domain.ConclusionReader
 ) {
     private companion object {
         const val TAG = "ContextCompactor"

@@ -38,6 +38,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.BatchDeleteConfirmDialog
 import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.rememberListSelection
 import com.aicode.core.ui.SelectionActionBar
 import com.aicode.core.ui.SelectionActionButton
 import com.aicode.core.ui.SwipeToDeleteRow
@@ -75,15 +76,7 @@ internal fun SubAgentsSection(
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     val allKeys = remember(entries) { entries.map { subAgentSelectionKey(it) } }
     val keyToEntry = remember(entries) { entries.associateBy { subAgentSelectionKey(it) } }
-    val selectedEntries = remember(selection.selectedKeys, keyToEntry) {
-        selection.selectedKeys.mapNotNull { keyToEntry[it] }
-    }
-
-    // 列表刷新后剔除已消失的选中项；全空了就退出多选。
-    LaunchedEffect(allKeys, selection.isActive) {
-        selection.retainOnly(allKeys.toSet())
-        if (selection.isActive && entries.isEmpty()) selection.exit()
-    }
+    val scaffold = rememberListSelection(allKeys, selection, entries.isEmpty()) { keyToEntry[it] }
 
     if (entries.isEmpty()) {
         Box(
@@ -127,27 +120,24 @@ internal fun SubAgentsSection(
 
     var projectExpanded by rememberSaveable { mutableStateOf(true) }
     var globalExpanded by rememberSaveable { mutableStateOf(true) }
-    val allSelected = selection.selectedCount > 0 && selection.selectedCount == allKeys.size
 
     Column(modifier = Modifier.fillMaxSize()) {
         if (selection.isActive) {
             SelectionActionBar(
                 selectedCount = selection.selectedCount,
-                allSelected = allSelected,
-                onToggleSelectAll = {
-                    if (allSelected) selection.clear() else selection.replaceAll(allKeys)
-                },
+                allSelected = scaffold.allSelected,
+                onToggleSelectAll = { scaffold.toggleSelectAll() },
                 onExit = { selection.exit() },
                 actions = {
                     SelectionActionButton(
                         text = stringResource(R.string.common_enabled),
                         enabled = selection.selectedCount > 0,
-                        onClick = { onBatchSetEnabled(selectedEntries, true) }
+                        onClick = { onBatchSetEnabled(scaffold.selectedEntries, true) }
                     )
                     SelectionActionButton(
                         text = stringResource(R.string.common_disabled),
                         enabled = selection.selectedCount > 0,
-                        onClick = { onBatchSetEnabled(selectedEntries, false) }
+                        onClick = { onBatchSetEnabled(scaffold.selectedEntries, false) }
                     )
                     SelectionActionButton(
                         text = stringResource(R.string.common_delete),
@@ -237,11 +227,11 @@ internal fun SubAgentsSection(
     if (showBatchDeleteConfirm) {
         BatchDeleteConfirmDialog(
             title = stringResource(R.string.subagents_batch_delete_title),
-            message = stringResource(R.string.subagents_batch_delete_confirm, selectedEntries.size),
+            message = stringResource(R.string.subagents_batch_delete_confirm, scaffold.selectedEntries.size),
             onConfirm = {
                 showBatchDeleteConfirm = false
                 selection.exit()
-                onBatchDelete(selectedEntries)
+                onBatchDelete(scaffold.selectedEntries)
             },
             onDismiss = { showBatchDeleteConfirm = false }
         )

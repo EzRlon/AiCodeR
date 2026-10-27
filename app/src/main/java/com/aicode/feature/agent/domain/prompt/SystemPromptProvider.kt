@@ -44,7 +44,7 @@ class SystemPromptProvider @Inject constructor(
     private val teamRepository: TeamRepository,
     private val taskBriefRepository: TaskBriefRepository,
     private val executionModeHolder: ExecutionModeHolder,
-    private val graphRepository: com.aicode.feature.memorygraph.data.GraphRepository
+    private val graphRepository: com.aicode.feature.memorygraph.domain.ConclusionReader
 ) {
     // 抽象独立的 Source
     interface PromptSource {

@@ -46,6 +46,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.BatchDeleteConfirmDialog
 import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.rememberListSelection
 import com.aicode.core.ui.SelectionActionBar
 import com.aicode.core.ui.SelectionActionButton
 import com.aicode.core.ui.SwipeToDeleteRow
@@ -156,45 +157,35 @@ internal fun McpSection(
     fun selectionKey(entry: McpServerEntry): String = "${entry.scope.name}:${entry.server.name}"
     val allKeys = remember(filteredEntries) { filteredEntries.map { selectionKey(it) } }
     val keyToEntry = remember(filteredEntries) { filteredEntries.associateBy { selectionKey(it) } }
-    val selectedEntries = remember(selection.selectedKeys, keyToEntry) {
-        selection.selectedKeys.mapNotNull { keyToEntry[it] }
-    }
-    val allSelected = selection.selectedCount > 0 && selection.selectedCount == allKeys.size
-
-    // 选中项只保留当前筛选结果内的：切换搜索词后，看不见的条目不该被批量操作误伤。
-    LaunchedEffect(allKeys, selection.isActive) {
-        selection.retainOnly(allKeys.toSet())
-        if (selection.isActive && filteredEntries.isEmpty()) selection.exit()
-    }
+    // 多选作用域跟搜索筛选：切换搜索词后，看不见的条目不该被批量操作误伤。
+    val scaffold = rememberListSelection(allKeys, selection, filteredEntries.isEmpty()) { keyToEntry[it] }
 
     Column(modifier = Modifier.fillMaxSize()) {
         if (selection.isActive) {
             SelectionActionBar(
                 selectedCount = selection.selectedCount,
-                allSelected = allSelected,
-                onToggleSelectAll = {
-                    if (allSelected) selection.clear() else selection.replaceAll(allKeys)
-                },
+                allSelected = scaffold.allSelected,
+                onToggleSelectAll = { scaffold.toggleSelectAll() },
                 onExit = { selection.exit() },
                 actions = {
                     SelectionActionButton(
                         text = stringResource(R.string.common_enabled),
                         enabled = selection.selectedCount > 0,
                         onClick = {
-                            onBatchSetEnabled(selectedEntries.map { it.server.name to it.scope }, true)
+                            onBatchSetEnabled(scaffold.selectedEntries.map { it.server.name to it.scope }, true)
                         }
                     )
                     SelectionActionButton(
                         text = stringResource(R.string.common_disabled),
                         enabled = selection.selectedCount > 0,
                         onClick = {
-                            onBatchSetEnabled(selectedEntries.map { it.server.name to it.scope }, false)
+                            onBatchSetEnabled(scaffold.selectedEntries.map { it.server.name to it.scope }, false)
                         }
                     )
                     SelectionActionButton(
                         text = stringResource(R.string.mcp_batch_reconnect),
                         enabled = selection.selectedCount > 0,
-                        onClick = { onBatchReconnect(selectedEntries.map { it.server.name }) }
+                        onClick = { onBatchReconnect(scaffold.selectedEntries.map { it.server.name }) }
                     )
                     SelectionActionButton(
                         text = stringResource(R.string.common_delete),
@@ -280,11 +271,11 @@ internal fun McpSection(
     if (showBatchDeleteConfirm) {
         BatchDeleteConfirmDialog(
             title = stringResource(R.string.mcp_batch_delete_title),
-            message = stringResource(R.string.mcp_batch_delete_confirm, selectedEntries.size),
+            message = stringResource(R.string.mcp_batch_delete_confirm, scaffold.selectedEntries.size),
             onConfirm = {
                 showBatchDeleteConfirm = false
                 selection.exit()
-                onBatchDelete(selectedEntries.map { it.server.name to it.scope })
+                onBatchDelete(scaffold.selectedEntries.map { it.server.name to it.scope })
             },
             onDismiss = { showBatchDeleteConfirm = false }
         )

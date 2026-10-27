@@ -20,9 +20,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -195,6 +197,48 @@ fun SelectionActionButton(
             Spacer(Modifier.width(Spacing.xs))
         }
         Text(text = text, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    }
+}
+
+/**
+ * 列表多选的页面侧脚手架：把「key 列表 → 选中项 → 全选态 → 刷新后剔除失效项」这套样板
+ * 收口成一处。MCP / 技能 / 子代理三个页面原先各写一份，改一处就要同步三处。
+ *
+ * @param keys 当前列表的稳定 key（顺序与列表一致，用于全选）
+ * @param selection 页面持有的 [ListSelectionState]
+ * @param isEmpty 当前列表是否为空（空则退出多选）
+ * @param entryOf key → 业务条目，用于把选中 key 还原成可操作对象
+ */
+@Composable
+fun <T> rememberListSelection(
+    keys: List<String>,
+    selection: ListSelectionState,
+    isEmpty: Boolean,
+    entryOf: (String) -> T?
+): ListSelectionScaffold<T> {
+    val keySet = remember(keys) { keys.toSet() }
+    val selectedEntries = remember(selection.selectedKeys, keys) {
+        selection.selectedKeys.mapNotNull(entryOf)
+    }
+    val allSelected = selection.selectedCount > 0 && selection.selectedCount == keys.size
+    // 列表刷新后剔除已消失的选中项；全空了就退出多选。
+    LaunchedEffect(keySet, selection.isActive) {
+        selection.retainOnly(keySet)
+        if (selection.isActive && isEmpty) selection.exit()
+    }
+    return ListSelectionScaffold(selection, keys, selectedEntries, allSelected)
+}
+
+/** [rememberListSelection] 的返回值：动作条与批量操作需要的那几项。 */
+class ListSelectionScaffold<T>(
+    private val selection: ListSelectionState,
+    private val allKeys: List<String>,
+    val selectedEntries: List<T>,
+    val allSelected: Boolean
+) {
+    /** 全选/取消全选（全选覆盖全部 key，含折叠起来的）。 */
+    fun toggleSelectAll() {
+        if (allSelected) selection.clear() else selection.replaceAll(allKeys)
     }
 }
 

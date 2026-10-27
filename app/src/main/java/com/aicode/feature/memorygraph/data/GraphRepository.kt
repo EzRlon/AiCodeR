@@ -37,7 +37,7 @@ class GraphRepository @Inject constructor(
     private val graphDao: GraphDao,
     private val chatSessionDao: ChatSessionDao,
     private val memoryRepository: MemoryRepository
-) {
+) : com.aicode.feature.memorygraph.domain.ConclusionReader {
 
     fun observeGraph(workspacePath: String): Flow<Pair<List<GraphNode>, List<GraphEdge>>> =
         combine(
@@ -194,7 +194,8 @@ class GraphRepository @Inject constructor(
      * 当前有效结论（会话开始注入用）：只看未失效的 MEMORY/CUSTOM 节点，
      * 按结论时间倒序取前 [limit] 条。返回「名称 + 摘要 + 出处会话」，不含正文（省 token）。
      */
-    suspend fun validConclusions(workspacePath: String, limit: Int = DEFAULT_INJECT_LIMIT): List<GraphNode> =
+    /** [com.aicode.feature.memorygraph.domain.ConclusionReader] 实现：默认值声明在接口上。 */
+    override suspend fun validConclusions(workspacePath: String, limit: Int): List<GraphNode> =
         runCatching {
             graphDao.validConclusions(workspacePath, CONCLUSION_TYPES, limit).map { it.toDomain() }
         }
@@ -262,7 +263,7 @@ class GraphRepository @Inject constructor(
      * 从压缩摘要抽取结论写入图谱（零额外模型调用：摘要已在压缩时生成，这里只解析文本）。
      * 失败静默——抽取是附加价值，绝不能让压缩本身失败。
      */
-    suspend fun extractConclusionsFromSummary(workspacePath: String, sessionId: String, summary: String) {
+    override suspend fun extractConclusionsFromSummary(workspacePath: String, sessionId: String, summary: String) {
         if (workspacePath.isBlank() || summary.isBlank()) return
         val conclusions = ConclusionParser.parse(summary)
         if (conclusions.isEmpty()) return
@@ -334,9 +335,6 @@ class GraphRepository @Inject constructor(
         const val RELATION_DERIVED_FROM = "出自"
         const val VIA_KEYWORD = "KEYWORD"
         const val VIA_WALK = "WALK"
-
-        /** 会话开始注入的结论条数上限：太多会挤占上下文，且旧结论参考价值递减。 */
-        const val DEFAULT_INJECT_LIMIT = 8
 
         /** 结论类节点类型：单一来源是 [GraphNodeType]，避免 SQL 里再硬编码一份。 */
         private val CONCLUSION_TYPES = listOf(GraphNodeType.MEMORY, GraphNodeType.CONCLUSION, GraphNodeType.CUSTOM)
