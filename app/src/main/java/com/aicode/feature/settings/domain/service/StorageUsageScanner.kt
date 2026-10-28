@@ -502,14 +502,6 @@ class StorageUsageScanner @Inject constructor(
             "du -sk ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null | " +
                 "awk '{s+=\$1} END {print s+0}'"
 
-        /** 引擎占用探测（单独一条命令、独立超时，不拖累缓存行）。 */
-        private val ENGINE_DU =
-            "du -sk ${ENGINE_PATHS.joinToString(" ")} 2>/dev/null | " +
-                "awk '{s+=\$1} END {print s+0}'"
-
-        /** 引擎占用缓存有效期：遍历成本高（约 1.1GB、数十万文件），10 分钟内复用结果。 */
-        private const val ENGINE_CACHE_TTL_MS = 10L * 60 * 1000
-
         /**
          * 三个 CLI 智能体的落盘目录：全局 npm 包 + 各自会话/凭据。
          * 全局包路径固定为 /usr/local/lib/node_modules（与 assets/aicode/lib/scenarios/codeintel.sh
@@ -523,6 +515,14 @@ class StorageUsageScanner @Inject constructor(
             "/root/.codex",
             "/root/.local/share/opencode"
         )
+
+        /** 引擎占用探测（单独一条命令、独立超时，不拖累缓存行）。 */
+        private val ENGINE_DU =
+            "du -sk ${ENGINE_PATHS.joinToString(" ")} 2>/dev/null | " +
+                "awk '{s+=\$1} END {print s+0}'"
+
+        /** 引擎占用缓存有效期：遍历成本高（约 1.1GB、数十万文件），10 分钟内复用结果。 */
+        private const val ENGINE_CACHE_TTL_MS = 10L * 60 * 1000
 
         /** 引擎明细行的副标题（目录名列表，太长会截断，只取末级名）。 */
         private val ENGINE_LABEL = ENGINE_PATHS.joinToString("  ") { it.substringAfterLast('/') }
