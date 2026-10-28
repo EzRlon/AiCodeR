@@ -720,7 +720,7 @@
     <string name="about_app_title">AiCodeR</string>
     <string name="about_github_repo">GitHub Repository</string>
     <string name="about_upstream">Upstream Project: AiCode</string>
-    <string name="about_upstream_desc">Built on the open-source project AiCode (GPL-3.0) by jieapi — core capabilities come from upstream</string>
+    <string name="about_upstream_desc">Developer: jieapi</string>
     <string name="about_license">Open Source License</string>
     <string name="about_description">AI-powered code editor running on Android · Built-in Terminal · AI Agent · MCP Protocol</string>
     <string name="about_check_update">Check for updates</string>
@@ -2886,6 +2886,8 @@
     <string name="storage_safety_keep_history">Deleting affects history</string>
     <string name="storage_safety_protected">Required at runtime</string>
     <string name="storage_engines_group">Agent engines</string>
+    <string name="storage_engines_not_installed">No engines installed</string>
+    <string name="storage_engines_unavailable">Container not ready, not scanned</string>
 
     <!-- Store install security scan -->
     <string name="store_scan_section_title">Security scan</string>

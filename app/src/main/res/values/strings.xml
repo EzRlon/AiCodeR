@@ -721,7 +721,7 @@
     <string name="about_app_title">许愿码 AiCodeR</string>
     <string name="about_github_repo">GitHub 仓库</string>
     <string name="about_upstream">上游项目 AiCode</string>
-    <string name="about_upstream_desc">本项目基于 jieapi 开发的开源项目 AiCode（GPL-3.0）增强，基础能力来自上游</string>
+    <string name="about_upstream_desc">开发者：jieapi</string>
     <string name="about_license">开源许可证</string>
     <string name="about_description">在 Android 设备上运行的 AI 驱动代码编辑器 · 内置终端 · AI Agent · MCP 协议</string>
     <string name="about_check_update">检查更新</string>
@@ -2886,6 +2886,8 @@
     <string name="storage_safety_keep_history">删后影响历史查看</string>
     <string name="storage_safety_protected">运行必需，请保留</string>
     <string name="storage_engines_group">智能体引擎</string>
+    <string name="storage_engines_not_installed">未安装任何引擎</string>
+    <string name="storage_engines_unavailable">容器未就绪，未检测</string>
 
     <!-- Store install security scan -->
     <string name="store_scan_section_title">安全扫描</string>

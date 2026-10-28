@@ -135,6 +135,15 @@ class GitViewModel @Inject constructor(
     private val _state = MutableStateFlow(GitUiState())
     val state: StateFlow<GitUiState> = _state.asStateFlow()
 
+    /**
+     * 加载在途标记。并发守卫不能复用 [GitUiState.loading]——它的初始值就是 true（首屏占位），
+     * 拿它做守卫会把 init 里的首次刷新一起拦掉，界面永远停在「正在读取仓库状态」。
+     */
+    private var loadInFlight = false
+
+    /** 在途期间被拦下的刷新请求（true=静默）；结束后补跑一次，避免切仓库/回前台的自愈刷新被静默丢掉。 */
+    private var refreshPending: Boolean? = null
+
     init { refresh() }
 
     /** 仓库快照：并发拉取 status/graph/remote（+可选 identity）的结果。不含全量分支/标签——
@@ -226,9 +235,14 @@ class GitViewModel @Inject constructor(
      *   首次进入、或当前只有未就绪提示时仍走完整 loading 路径。
      */
     fun refresh(silent: Boolean = false) {
-        // loading 也要拦：init 的首次 refresh 与本页 resume 时的 refresh 会并发跑两路快照，
-        // 每路都是一批 git 进程（discoverRepos 每个子目录一次 rev-parse），PRoot 下首屏成本翻倍。
-        if (_state.value.busy || _state.value.loading) return
+        // 拦并发：init 的首次刷新与本页 resume 时的刷新会并发跑两路快照，每路都是一批 git 进程
+        // （discoverRepos 每个子目录一次 rev-parse），PRoot 下首屏成本翻倍。
+        if (_state.value.busy) return
+        if (loadInFlight) {
+            // 排队补跑：否则切仓库（非静默）的刷新会被在途的静默刷新吞掉，界面停在旧仓库
+            refreshPending = silent && (refreshPending ?: true)
+            return
+        }
         // 容器未就绪时不执行 git 命令，直接提示用户去终端页完成初始化，避免误显示"非 Git 仓库"。
         // 走 containerHint（常驻横幅）而不是 toast：容器初始化要好几秒，用 Snackbar 会盖住底部 tab 栏且
         // 4 秒后消失、页面留在空白态，看起来像故障。
@@ -242,6 +256,7 @@ class GitViewModel @Inject constructor(
         } else {
             _state.update { it.copy(toast = null, containerHint = null) }
         }
+        loadInFlight = true
         viewModelScope.launch {
             try {
                 // 发现工作区里的 git 仓库（根 + 一层子目录），选中当前或默认仓库。
@@ -267,6 +282,12 @@ class GitViewModel @Inject constructor(
                 if (e is CancellationException) throw e
                 FileLogger.e(TAG, "刷新失败", e)
                 _state.update { it.copy(loading = false, toast = context.getString(R.string.git_toast_refresh_failed, e.message)) }
+            } finally {
+                loadInFlight = false
+                refreshPending?.let { pendingSilent ->
+                    refreshPending = null
+                    refresh(pendingSilent)
+                }
             }
         }
     }

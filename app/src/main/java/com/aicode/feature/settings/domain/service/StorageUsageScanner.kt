@@ -59,8 +59,8 @@ class StorageUsageScanner @Inject constructor(
     private val commandEngine: CommandEngine
 ) {
 
-    /** 引擎占用缓存（字节 → 计算时间）；容器命令成本高，进程内复用。 */
-    @Volatile private var engineCache: Pair<Long, Long>? = null
+    /** 引擎占用缓存（字节，null=探测失败 → 记录时间）；容器命令成本高，进程内复用。 */
+    @Volatile private var engineProbe: Pair<Long?, Long>? = null
 
     /**
      * 逐分类发射统计结果：数据库、缓存这类秒出的先算，rootfs 与工作区最后，界面可以边算边填。
@@ -229,30 +229,47 @@ class StorageUsageScanner @Inject constructor(
         }
         // 三个 CLI 引擎占用：遍历成本高（实测约 1.1GB、数十万文件），走进程内 TTL 缓存，
         // 否则每次刷新存储页（含连续删除产物触发的重扫）都会再全树遍历一遍。
-        cachedEngineBytes()?.takeIf { it > 0L && !cancelled() }?.let { engineBytes ->
+        // 即使 0（全新安装、未装任何引擎）或容器未就绪（探测返回 null）也照样占一行：
+        // 条目缺席会让用户以为功能丢了。
+        if (!cancelled()) {
+            val engineBytes = cachedEngineBytes()
+            val installed = (engineBytes ?: 0L) > 0L
             details += StorageDetail(
                 label = context.getString(R.string.storage_engines_group),
-                bytes = engineBytes,
-                note = ENGINE_LABEL,
+                bytes = engineBytes ?: 0L,
+                note = when {
+                    installed -> ENGINE_LABEL
+                    engineBytes == null -> context.getString(R.string.storage_engines_unavailable)
+                    else -> context.getString(R.string.storage_engines_not_installed)
+                },
                 indent = true,
-                safety = StorageSafety.PROTECTED
+                safety = if (installed) StorageSafety.PROTECTED else null
             )
         }
         return StorageEntry(StorageCategory.Container, total, details)
     }
 
-    /** 引擎占用（字节），进程内缓存 [ENGINE_CACHE_TTL_MS]；容器未就绪或探测失败返回 null。 */
+    /**
+     * 引擎占用（字节）；null = 探测失败（容器未就绪 / 超时 / 远端不可达）。
+     *
+     * 非 0 占用缓存 [ENGINE_CACHE_TTL_MS]；0 与失败态缓存 [ENGINE_EMPTY_TTL_MS]——du 对不存在的
+     * 路径几乎是零成本，成本在每次探测都要起一次容器（PRoot）或远端（SSH）进程，而存储页
+     * 连续删除产物会触发多轮重扫。
+     */
     private suspend fun cachedEngineBytes(): Long? {
         val now = System.currentTimeMillis()
-        engineCache?.takeIf { now - it.second < ENGINE_CACHE_TTL_MS }?.let { return it.first }
+        engineProbe?.let { (bytes, at) ->
+            val ttl = if (bytes != null && bytes > 0L) ENGINE_CACHE_TTL_MS else ENGINE_EMPTY_TTL_MS
+            if (now - at < ttl) return bytes
+        }
         val kb = runCatching {
             commandEngine.runCommandSyncIfReady(
                 command = ENGINE_DU,
                 timeoutMs = 45_000L
             )?.output?.lineSequence()?.firstOrNull()?.trim()?.toLongOrNull()
-        }.getOrNull() ?: return null
-        val bytes = kb * 1024L
-        engineCache = bytes to now
+        }.getOrNull()
+        val bytes = kb?.let { it * 1024L }
+        engineProbe = bytes to now
         return bytes
     }
 
@@ -523,6 +540,9 @@ class StorageUsageScanner @Inject constructor(
 
         /** 引擎占用缓存有效期：遍历成本高（约 1.1GB、数十万文件），10 分钟内复用结果。 */
         private const val ENGINE_CACHE_TTL_MS = 10L * 60 * 1000
+
+        /** 引擎「未安装 / 探测失败」的缓存有效期：只为省掉重复起的容器/远程进程，装完引擎最坏 60 秒后刷新即可见。 */
+        private const val ENGINE_EMPTY_TTL_MS = 60L * 1000
 
         /** 引擎明细行的副标题（目录名列表，太长会截断，只取末级名）。 */
         private val ENGINE_LABEL = ENGINE_PATHS.joinToString("  ") { it.substringAfterLast('/') }

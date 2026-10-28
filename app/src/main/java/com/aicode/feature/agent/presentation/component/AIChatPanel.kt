@@ -1488,6 +1488,8 @@ fun AIChatPanel(
     var voiceProcessing by remember { mutableStateOf(false) }
     // 点击聆听进行中（从开始持续到结果/错误到达；结果分流靠它区分点击与长按两种来源）
     var voiceTapActive by remember { mutableStateOf(false) }
+    // 主动取消标记：系统识别器在 cancel() 后可能补一次 ERROR_CLIENT，据此静默吞掉
+    var voiceCancelled by remember { mutableStateOf(false) }
     val voicePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -1511,12 +1513,18 @@ fun AIChatPanel(
         } else if (!voiceProcessing) {
             // 先立标记再启动：无识别服务时 start() 会同步回调 onError，标记随复位不残留
             voiceTapActive = true
+            voiceCancelled = false
             voiceController.start()
         }
     }
     val onVoiceResult = rememberUpdatedState<(String) -> Unit>({ text ->
         voiceProcessing = false
         voiceTapActive = false
+        if (voiceCancelled) {
+            // 主动取消后迟到的结果（系统 stopListening 已发出的、离线已排队的结果）一律丢弃
+            voiceCancelled = false
+            return@rememberUpdatedState
+        }
         val t = text.trim()
         if (t.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.chat_voice_no_speech), Toast.LENGTH_SHORT).show()
@@ -1529,9 +1537,12 @@ fun AIChatPanel(
     val onVoiceError = rememberUpdatedState<(Int) -> Unit>({ code ->
         voiceProcessing = false
         voiceTapActive = false
-        // F2/F7：系统引擎的网络/服务类失败 → 探测并自动降级：模型就绪直接切离线（提示重试），
-        // 未就绪弹引导卡片下载；其余错误维持原 Toast 文案。
-        if (voiceEngine == VoiceEngine.SYSTEM && code in SYSTEM_VOICE_FAILURE_CODES) {
+        if (voiceCancelled) {
+            // 用户主动结束的本次识别，不再提示失败
+            voiceCancelled = false
+        } else if (voiceEngine == VoiceEngine.SYSTEM && code in SYSTEM_VOICE_FAILURE_CODES) {
+            // F2/F7：系统引擎的网络/服务类失败 → 探测并自动降级：模型就绪直接切离线（提示重试），
+            // 未就绪弹引导卡片下载；其余错误维持原 Toast 文案。
             if (viewModel.onSystemVoiceFailure()) {
                 showVoiceSetupCard = true
             } else {
@@ -2184,6 +2195,7 @@ fun AIChatPanel(
                 onSend = sendMessage,
                 onVoiceHoldStart = {
                     voiceProcessing = false
+                    voiceCancelled = false
                     // 长按接管：清掉未完成的点击聆听标记，识别结果统一按长按路径直接发送
                     voiceTapActive = false
                     voiceController.start()
@@ -2194,10 +2206,17 @@ fun AIChatPanel(
                 },
                 onVoiceHoldCancel = {
                     voiceProcessing = false
+                    voiceCancelled = true
                     voiceController.cancel()
                 },
                 voiceProcessing = voiceProcessing,
                 voiceTapActive = voiceTapActive,
+                onVoiceTapCancel = {
+                    voiceProcessing = false
+                    voiceTapActive = false
+                    voiceCancelled = true
+                    voiceController.cancel()
+                },
                 enterToSend = settingsViewModel?.enterToSend?.collectAsStateWithLifecycle()?.value ?: false,
                 onStop = { viewModel.stopAgent() },
                 isBusy = isBusy,

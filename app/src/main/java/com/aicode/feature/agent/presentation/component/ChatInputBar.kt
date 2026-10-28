@@ -197,6 +197,8 @@ internal fun ChatInputBar(
     voiceProcessing: Boolean = false,
     /** 点击麦克风的应用内聆听进行中（浮层显示「正在聆听…再点一下结束」）。 */
     voiceTapActive: Boolean = false,
+    /** 点击聆听浮层上的关闭按钮：放弃本次识别、不产生结果。 */
+    onVoiceTapCancel: () -> Unit = {},
     workspaceViewModel: WorkspaceViewModel?,
     hasRunningSessions: () -> Boolean,
     onSwitchWorkspaceConfirmed: () -> Unit = {},
@@ -517,7 +519,12 @@ internal fun ChatInputBar(
             }
 
             if (voiceHoldActive || voiceProcessing || voiceTapActive) {
-                VoiceHoldOverlay(processing = voiceProcessing, tapMode = voiceTapActive)
+                VoiceHoldOverlay(
+                    processing = voiceProcessing,
+                    tapMode = voiceTapActive,
+                    // 长按说话由松手结束，无需关闭按钮；点击聆听需要显式关闭
+                    onCancel = if (voiceTapActive) onVoiceTapCancel else null
+                )
             }
 
             if (queuedRequests.isNotEmpty()) {
@@ -1278,7 +1285,12 @@ private const val VOICE_CANCEL_SLIDE_DP = 60f
 
 /** 语音浮层：长按「按住说话」与点击聆听共用；识别期间文案切换，点击模式提示再点一下结束。 */
 @Composable
-private fun VoiceHoldOverlay(processing: Boolean, tapMode: Boolean = false, modifier: Modifier = Modifier) {
+private fun VoiceHoldOverlay(
+    processing: Boolean,
+    tapMode: Boolean = false,
+    onCancel: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -1313,6 +1325,19 @@ private fun VoiceHoldOverlay(processing: Boolean, tapMode: Boolean = false, modi
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
             )
+            if (onCancel != null) {
+                IconButton(
+                    onClick = onCancel,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = FeatherIcons.X,
+                        contentDescription = stringResource(R.string.common_close),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
             Icon(
                 imageVector = FeatherIcons.Mic,
                 contentDescription = null,
