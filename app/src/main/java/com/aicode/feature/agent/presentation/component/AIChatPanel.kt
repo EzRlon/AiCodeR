@@ -1992,14 +1992,21 @@ fun AIChatPanel(
             // 动画结束后摘掉 graphicsLayer：它会把整层画进离屏图层，主题切换时内部文字不重绘
             // （标题先不可见、触摸局部重绘后才出现）。用布尔驱动而非在组合期读 alpha，
             // 避免动画每帧重组本作用域；动画值只在 graphicsLayer lambda 里读，走绘制期。
+            // 只套在需要弱化的横幅/面板上：ChatInputBar 自己已有一层 contentAlpha，
+            // 再套一层会双重淡化（0.4×0.4≈0.16）并把必须不透明的渐变蒙版一起淡掉。
             var scrollFadeActive by remember { mutableStateOf(false) }
             LaunchedEffect(listState.isScrollInProgress) {
                 if (listState.isScrollInProgress) {
                     scrollFadeActive = true
                 } else {
-                    delay(220)
+                    delay(240)
                     scrollFadeActive = false
                 }
+            }
+            val floatingFadeModifier = if (scrollFadeActive) {
+                Modifier.graphicsLayer { alpha = floatingPanelAlpha }
+            } else {
+                Modifier
             }
             Column(
                 modifier = Modifier
@@ -2007,16 +2014,8 @@ fun AIChatPanel(
                     .fillMaxWidth()
                     // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条
                     .onGloballyPositioned { if (it.size.height > 0) floatingLayerHeightPx = it.size.height }
-                    // 透明度统一放在这一层：内层各面板不再各自建图层，滚动弱化同样生效
-                    .then(
-                        if (scrollFadeActive) {
-                            Modifier.graphicsLayer { alpha = floatingPanelAlpha }
-                        } else {
-                            Modifier
-                        }
-                    )
             ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
+            Box(modifier = Modifier.fillMaxWidth().then(floatingFadeModifier)) {
                 StatusBanner(state = agentState)
             }
 
@@ -2025,6 +2024,7 @@ fun AIChatPanel(
             val lastUploadingCount = rememberLastNonNull(uploadingCount.takeIf { it > 0 })
             AnimatedVisibility(
                 visible = uploadingCount > 0,
+                modifier = floatingFadeModifier,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2035,7 +2035,8 @@ fun AIChatPanel(
             AnimatedVisibility(
                 visible = pendingQuestion != null,
                 modifier = Modifier
-                    .weight(1f, fill = false),
+                    .weight(1f, fill = false)
+                    .then(floatingFadeModifier),
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2053,6 +2054,7 @@ fun AIChatPanel(
             val planForPanel = rememberLastNonNull(planApproval)
             AnimatedVisibility(
                 visible = planApproval != null,
+                modifier = floatingFadeModifier,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2071,6 +2073,7 @@ fun AIChatPanel(
             val budgetForPanel = rememberLastNonNull(budgetApproval)
             AnimatedVisibility(
                 visible = budgetApproval != null,
+                modifier = floatingFadeModifier,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -2090,6 +2093,7 @@ fun AIChatPanel(
             val handoffForPanel = rememberLastNonNull(currentHandoff)
             AnimatedVisibility(
                 visible = currentHandoff != null,
+                modifier = floatingFadeModifier,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {

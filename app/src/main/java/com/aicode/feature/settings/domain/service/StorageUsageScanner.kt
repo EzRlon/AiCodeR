@@ -59,6 +59,9 @@ class StorageUsageScanner @Inject constructor(
     private val commandEngine: CommandEngine
 ) {
 
+    /** 引擎占用缓存（字节 → 计算时间）；容器命令成本高，进程内复用。 */
+    @Volatile private var engineCache: Pair<Long, Long>? = null
+
     /**
      * 逐分类发射统计结果：数据库、缓存这类秒出的先算，rootfs 与工作区最后，界面可以边算边填。
      *
@@ -206,16 +209,14 @@ class StorageUsageScanner @Inject constructor(
                     details += StorageDetail(label = "/$name", bytes = size, indent = true)
                 }
         }
-        // 容器内构建缓存大小探测（只读 du，路径与清理脚本一致）：给「容器数据」行提供
-        // 容器内构建缓存与三个 CLI 智能体的占用：合并成一条 du，只起一个 proot 进程、
-        // 一次超时。分开跑会让存储页每次打开都多一遍 PRoot 全树遍历（实测引擎目录合计 >1GB、
-        // 含数十万文件，PRoot 下每个 stat 都要路径翻译，成本远高于原生 du）。
+        // 容器内构建缓存：轻量 du，路径与清理脚本一致，给「容器数据」行提供可清理大小。
+        // 与引擎统计拆开：引擎目录上万文件、PRoot 下可能跑很久，合并在一条命令里超时会
+        // 把缓存行一起弄没（缓存 du 本身很快很可靠）。
         runCatching {
-            val lines = commandEngine.runCommandSyncIfReady(
-                command = CONTAINER_DU_WITH_ENGINES,
-                timeoutMs = 60_000L
-            )?.output?.lineSequence()?.map { it.trim() }?.toList().orEmpty()
-            val cacheKb = lines.getOrNull(0)?.toLongOrNull() ?: 0L
+            val cacheKb = commandEngine.runCommandSyncIfReady(
+                command = CONTAINER_CACHE_DU,
+                timeoutMs = 30_000L
+            )?.output?.lineSequence()?.firstOrNull()?.trim()?.toLongOrNull() ?: 0L
             if (cacheKb > 0) {
                 details += StorageDetail(
                     label = context.getString(R.string.storage_clean_container_caches),
@@ -225,18 +226,34 @@ class StorageUsageScanner @Inject constructor(
                     safety = StorageSafety.SAFE
                 )
             }
-            val engineKb = lines.getOrNull(1)?.toLongOrNull() ?: 0L
-            if (engineKb > 0 && !cancelled()) {
-                details += StorageDetail(
-                    label = context.getString(R.string.storage_engines_group),
-                    bytes = engineKb * 1024L,
-                    note = ENGINE_LABEL,
-                    indent = true,
-                    safety = StorageSafety.PROTECTED
-                )
-            }
+        }
+        // 三个 CLI 引擎占用：遍历成本高（实测约 1.1GB、数十万文件），走进程内 TTL 缓存，
+        // 否则每次刷新存储页（含连续删除产物触发的重扫）都会再全树遍历一遍。
+        cachedEngineBytes()?.takeIf { it > 0L && !cancelled() }?.let { engineBytes ->
+            details += StorageDetail(
+                label = context.getString(R.string.storage_engines_group),
+                bytes = engineBytes,
+                note = ENGINE_LABEL,
+                indent = true,
+                safety = StorageSafety.PROTECTED
+            )
         }
         return StorageEntry(StorageCategory.Container, total, details)
+    }
+
+    /** 引擎占用（字节），进程内缓存 [ENGINE_CACHE_TTL_MS]；容器未就绪或探测失败返回 null。 */
+    private suspend fun cachedEngineBytes(): Long? {
+        val now = System.currentTimeMillis()
+        engineCache?.takeIf { now - it.second < ENGINE_CACHE_TTL_MS }?.let { return it.first }
+        val kb = runCatching {
+            commandEngine.runCommandSyncIfReady(
+                command = ENGINE_DU,
+                timeoutMs = 45_000L
+            )?.output?.lineSequence()?.firstOrNull()?.trim()?.toLongOrNull()
+        }.getOrNull() ?: return null
+        val bytes = kb * 1024L
+        engineCache = bytes to now
+        return bytes
     }
 
     /** 容器镜像包：已下载或导入的 rootfs 压缩包，逐个文件列出。 */
@@ -480,6 +497,19 @@ class StorageUsageScanner @Inject constructor(
             "/root/.gradle/caches", "/root/.npm/_cacache", "/root/.m2/repository", "/root/.cache/pip", "/root/.cache/uv"
         )
 
+        /** 只 du 不删（容器缓存大小探测用），路径与 [CONTAINER_CACHE_SCRIPT] 严格一致。 */
+        private val CONTAINER_CACHE_DU =
+            "du -sk ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null | " +
+                "awk '{s+=\$1} END {print s+0}'"
+
+        /** 引擎占用探测（单独一条命令、独立超时，不拖累缓存行）。 */
+        private val ENGINE_DU =
+            "du -sk ${ENGINE_PATHS.joinToString(" ")} 2>/dev/null | " +
+                "awk '{s+=\$1} END {print s+0}'"
+
+        /** 引擎占用缓存有效期：遍历成本高（约 1.1GB、数十万文件），10 分钟内复用结果。 */
+        private const val ENGINE_CACHE_TTL_MS = 10L * 60 * 1000
+
         /**
          * 三个 CLI 智能体的落盘目录：全局 npm 包 + 各自会话/凭据。
          * 全局包路径固定为 /usr/local/lib/node_modules（与 assets/aicode/lib/scenarios/codeintel.sh
@@ -496,16 +526,6 @@ class StorageUsageScanner @Inject constructor(
 
         /** 引擎明细行的副标题（目录名列表，太长会截断，只取末级名）。 */
         private val ENGINE_LABEL = ENGINE_PATHS.joinToString("  ") { it.substringAfterLast('/') }
-
-        /**
-         * 容器缓存 + 引擎占用一次算完：输出两行 KB（缓存 / 引擎），只起一个 proot 进程。
-         * 路径与 [CONTAINER_CACHE_SCRIPT] 严格一致；目录不存在时自动计入 0。
-         */
-        private val CONTAINER_DU_WITH_ENGINES =
-            "du -sk ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null | " +
-                "awk '{s+=\$1} END {print s+0}'; " +
-                "du -sk ${ENGINE_PATHS.joinToString(" ")} 2>/dev/null | " +
-                "awk '{s+=\$1} END {print s+0}'"
 
         /**
          * 容器内构建缓存清理脚本：du -sk 汇总后 rm（均为可重建缓存；不碰源码/工作区/容器

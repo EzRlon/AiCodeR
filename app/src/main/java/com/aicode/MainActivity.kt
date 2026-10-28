@@ -334,20 +334,18 @@ class MainActivity : ComponentActivity() {
                 // 启动/重建时内容淡入：消除“启动图/白屏 → 界面”的硬切。
                 var contentAppeared by remember { mutableStateOf(false) }
                 LaunchedEffect(Unit) { contentAppeared = true }
-                val startupAlpha by animateFloatAsState(
-                    targetValue = if (contentAppeared) 1f else 0f,
-                    animationSpec = tween(durationMillis = 260),
-                    label = "startup-fade"
-                )
                 // 淡入结束后摘掉 graphicsLayer：它会把整个 App 子树画进一个离屏图层，
                 // 主题切换后该图层缓存不会及时失效，导致标题等文字先不可见、触摸局部重绘后才出现。
                 // 用布尔驱动而非在组合期读 alpha，避免淡入期间每帧重组整个 App；
-                // 动画值只在 graphicsLayer lambda 里读，走绘制期。
+                // 动画值只在 graphicsLayer lambda 里读，走绘制期。摘除时机由动画完成回调给出，
+                // 不用硬编码 delay——首帧重时（启动期初始化）会提前摘除、造成可见跳变。
                 var fadingIn by remember { mutableStateOf(true) }
-                LaunchedEffect(Unit) {
-                    delay(300)
-                    fadingIn = false
-                }
+                val startupAlpha by animateFloatAsState(
+                    targetValue = if (contentAppeared) 1f else 0f,
+                    animationSpec = tween(durationMillis = 260),
+                    finishedListener = { fadingIn = false },
+                    label = "startup-fade"
+                )
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()

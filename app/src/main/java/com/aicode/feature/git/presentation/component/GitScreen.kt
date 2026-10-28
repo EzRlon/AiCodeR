@@ -146,8 +146,9 @@ fun GitScreen(
 
     // 回到本页时重查一次：容器未就绪的提示是常驻状态，用户去终端初始化再返回必须自愈，
     // 否则横幅会一直挂在那里、比原来的 Snackbar 更难消失。
+    // 走静默刷新：已有数据时不把整页切回 loading 占位（每次回前台闪一次空白太打扰）。
     LifecycleResumeEffect(Unit) {
-        viewModel.refresh()
+        viewModel.refresh(silent = true)
         onPauseOrDispose { }
     }
 
