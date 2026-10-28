@@ -1,6 +1,7 @@
 package com.aicode.core.theme
 
 import android.os.Build
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -371,7 +372,14 @@ fun AIEditorTheme(
         }
     }
 
-    CompositionLocalProvider(LocalAppSemanticColors provides themeColors.semanticColors) {
+    CompositionLocalProvider(
+        LocalAppSemanticColors provides themeColors.semanticColors,
+        // Material3 的 MaterialTheme 不提供 LocalContentColor，其根默认值是 Color.Black。
+        // 一旦某层 Surface 的底色是 contentColorFor 认不出的值（Color.Transparent、语义色
+        // pageBackground 等），内部文字就会回退到这个黑色：深色主题下等于与背景同色、整段文字
+        // 看不见（侧栏 ModalDrawerSheet 传 Transparent 即是此情形）。这里按当前主题给出兜底色。
+        LocalContentColor provides themeColors.colorScheme.onBackground
+    ) {
         MaterialTheme(
             colorScheme = themeColors.colorScheme,
             typography = AppTypography,

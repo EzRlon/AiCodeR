@@ -223,6 +223,7 @@ private fun RequestingCodeContent() {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.lg),
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 0.dp
     ) {
         Row(
@@ -371,7 +372,8 @@ private fun AwaitingContent(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(Radius.lg),
-            color = MaterialTheme.semanticColors.mutedSurface.copy(alpha = 0.5f)
+            color = MaterialTheme.semanticColors.mutedSurface.copy(alpha = 0.5f),
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ) {
             Column(
                 modifier = Modifier
@@ -471,7 +473,8 @@ private fun SuccessContent(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(Radius.xl),
-            color = MaterialTheme.semanticColors.cardSurface
+            color = MaterialTheme.semanticColors.cardSurface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
             Column(
                 modifier = Modifier
@@ -518,6 +521,7 @@ private fun SuccessContent(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(Radius.lg),
                 color = MaterialTheme.semanticColors.warningContainer.copy(alpha = 0.4f),
+                contentColor = MaterialTheme.semanticColors.onWarningContainer,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
                     MaterialTheme.semanticColors.warning.copy(alpha = 0.3f)
@@ -576,7 +580,8 @@ private fun FailedContent(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.xl),
-        color = MaterialTheme.semanticColors.cardSurface
+        color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(
             modifier = Modifier

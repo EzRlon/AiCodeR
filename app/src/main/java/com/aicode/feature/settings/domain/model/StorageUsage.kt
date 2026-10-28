@@ -30,6 +30,7 @@ enum class StorageCategory(@param:StringRes val labelRes: Int) {
  * @param path 可操作产物的定位标识（`<项目名>/<相对路径>`，以内置工作区根为基准）；纯统计项为 null。
  * @param modifiedAt 最后修改/构建时间（epoch millis）；null 不显示。
  * @param isDirectory 目录行不提供「安装/打开」。
+ * @param safety 该产物的处置建议（是否过期、能否安全删除）；null 表示本行不支持勾选清理。
  */
 data class StorageDetail(
     val label: String,
@@ -39,8 +40,24 @@ data class StorageDetail(
     val indent: Boolean = false,
     val path: String? = null,
     val modifiedAt: Long? = null,
-    val isDirectory: Boolean = false
+    val isDirectory: Boolean = false,
+    val safety: StorageSafety? = null
 )
+
+/** 交付物/产物的处置建议：界面上直接告诉用户「能不能删」。 */
+enum class StorageSafety(@param:StringRes val labelRes: Int) {
+    /** 可安全删除：可重建的临时数据，删了自动重建。 */
+    SAFE(R.string.storage_safety_safe),
+
+    /** 过期可删：长期未使用，删除只影响历史回看。 */
+    STALE(R.string.storage_safety_stale),
+
+    /** 谨慎：删除会丢失历史产物（工具输出存档、识图会话、生成图片、检查点）。 */
+    KEEP_HISTORY(R.string.storage_safety_keep_history),
+
+    /** 保留：用户数据或运行必需，不可删。 */
+    PROTECTED(R.string.storage_safety_protected)
+}
 
 data class StorageEntry(
     val category: StorageCategory,

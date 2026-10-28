@@ -83,7 +83,8 @@ internal fun ThemeSelectionSheet(
                 val isSelected = mode == selected
                 Surface(
                     onClick = { onSelected(mode) },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier

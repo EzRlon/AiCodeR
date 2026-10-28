@@ -209,6 +209,7 @@ internal fun ContainerSection(
                     Surface(
                         shape = RoundedCornerShape(Radius.lg),
                         color = MaterialTheme.semanticColors.cardSurface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         shadowElevation = dragElevation,
                         modifier = Modifier
                             .fillMaxWidth()

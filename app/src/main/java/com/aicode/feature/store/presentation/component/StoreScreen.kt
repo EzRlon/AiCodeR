@@ -565,6 +565,7 @@ private fun StoreItemCard(
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.clickable(onClick = onOpen)
     ) {
         Column(
@@ -726,6 +727,7 @@ private fun TeamList(
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.semanticColors.cardSurface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onOpen(team) }

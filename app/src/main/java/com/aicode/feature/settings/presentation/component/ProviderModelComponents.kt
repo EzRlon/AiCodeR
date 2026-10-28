@@ -287,6 +287,7 @@ internal fun ProviderModelRow(
         Surface(
             onClick = onToggleSelect,
             color = MaterialTheme.semanticColors.cardSurface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth()
         ) {
             rowContent()

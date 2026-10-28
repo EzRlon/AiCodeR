@@ -137,6 +137,7 @@ import com.aicode.feature.vnc.presentation.VncOverlayWindow
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
@@ -338,10 +339,25 @@ class MainActivity : ComponentActivity() {
                     animationSpec = tween(durationMillis = 260),
                     label = "startup-fade"
                 )
+                // 淡入结束后摘掉 graphicsLayer：它会把整个 App 子树画进一个离屏图层，
+                // 主题切换后该图层缓存不会及时失效，导致标题等文字先不可见、触摸局部重绘后才出现。
+                // 用布尔驱动而非在组合期读 alpha，避免淡入期间每帧重组整个 App；
+                // 动画值只在 graphicsLayer lambda 里读，走绘制期。
+                var fadingIn by remember { mutableStateOf(true) }
+                LaunchedEffect(Unit) {
+                    delay(300)
+                    fadingIn = false
+                }
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        .graphicsLayer { alpha = startupAlpha },
+                        .then(
+                            if (fadingIn) {
+                                Modifier.graphicsLayer { alpha = startupAlpha }
+                            } else {
+                                Modifier
+                            }
+                        ),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     // 全局自定义背景图：叠加在所有页面内容之上（水印效果），透明度可调。
@@ -1217,6 +1233,7 @@ fun AppNavigation(
                     // 面板底色改由 ChatDrawerContent 自绘（宽度 = 面板宽）；sheet 多出的右缘悬出区保持透明，
                     // 让「会话/文件」标签能骑在面板右缘线上而不被 Surface 裁剪。
                     drawerContainerColor = Color.Transparent,
+                    drawerContentColor = MaterialTheme.colorScheme.onBackground,
                     drawerTonalElevation = 0.dp,
                     // 默认 windowInsets 会把 sheet 内容区压到状态栏以下，面板自绘背景盖不到状态栏后面，
                     // 顶部透出遮罩底色形成割裂带；置零让内容全高渲染，沉浸交给 ChatDrawer 自身的 systemBars inset。

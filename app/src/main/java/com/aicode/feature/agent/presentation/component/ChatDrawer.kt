@@ -56,8 +56,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,6 +68,7 @@ import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -390,6 +392,7 @@ fun ChatDrawerContent(
     // 根 Box 比面板多出「标签骑线悬出」的半宽：面板只画到 drawerWidth()，
     // 右侧多出的一条让「会话 / 文件」标签骑在面板右缘线上（中心对齐边线，图2 定稿）。
     Box(modifier = modifier.fillMaxSize()) {
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
         Column(
             modifier = Modifier
                 .width(drawerWidth())
@@ -420,6 +423,7 @@ fun ChatDrawerContent(
                     if (selectedTab == 0 && isSelectionMode) {
                         Surface(
                             color = MaterialTheme.semanticColors.cardSurface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             shape = RoundedCornerShape(Radius.mdLarge),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -649,6 +653,7 @@ fun ChatDrawerContent(
                 onSelect = { selectedTab = it },
                 modifier = Modifier.align(Alignment.TopEnd)
             )
+        }
         }
     }
 

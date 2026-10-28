@@ -19,10 +19,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -125,6 +127,9 @@ internal fun SettingsGroup(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.semanticColors.cardSurface,
+        // 显式给文字色：cardSurface 不一定等于 ColorScheme.surface，
+        // contentColorFor 认不出时会返回 Unspecified，内部未指定颜色的文字就变成黑色。
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 0.dp
     ) {
         Column(content = content)
@@ -156,7 +161,10 @@ internal fun LazyGroupItem(
             .clip(shape)
             .background(MaterialTheme.semanticColors.cardSurface)
     ) {
-        content()
+        // 卡片背景是自绘的（不经 Surface），contentColorFor 推断不出来，必须自己提供文字色。
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+            content()
+        }
         if (index != lastIndex) SettingsDivider()
     }
 }
@@ -261,7 +269,8 @@ internal fun ModelSearchField(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(50),
-        color = MaterialTheme.semanticColors.capsuleSurface
+        color = MaterialTheme.semanticColors.capsuleSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Row(
             // 行高固定：尾部控件（清除按钮的 IconButton 自带 48dp 最小触摸目标）比正文行高更高，

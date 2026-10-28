@@ -226,7 +226,11 @@ private fun ScriptCard(
         }
     }
 
-    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.semanticColors.cardSurface) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface
+    ) {
         SwipeToDeleteRow(onDelete = onDelete, onClick = onClick, deleteEnabled = !running) { row() }
     }
 }

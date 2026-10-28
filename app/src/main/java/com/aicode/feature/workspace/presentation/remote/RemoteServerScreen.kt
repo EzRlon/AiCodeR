@@ -115,6 +115,7 @@ fun RemoteServerScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -201,6 +202,7 @@ fun RemoteServerScreen(
                                     Surface(
                                         shape = RoundedCornerShape(Radius.lg),
                                         color = MaterialTheme.semanticColors.cardSurface,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
                                         shadowElevation = dragElevation,
                                         modifier = Modifier
                                             .fillMaxWidth()

@@ -776,6 +776,7 @@ class FloatBallOverlay(
             Surface(
                 shape = RoundedCornerShape(Radius.lg),
                 color = MaterialTheme.semanticColors.cardSurface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 10.dp,
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -796,6 +797,7 @@ class FloatBallOverlay(
         Surface(
             shape = RoundedCornerShape(Radius.lg),
             color = MaterialTheme.semanticColors.cardSurface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 10.dp,
             modifier = Modifier
                 .fillMaxSize()

@@ -20,6 +20,7 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
+import com.aicode.feature.settings.domain.model.StorageSafety
 import com.aicode.feature.settings.domain.model.formatStorageSize
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -206,18 +207,32 @@ class StorageUsageScanner @Inject constructor(
                 }
         }
         // 容器内构建缓存大小探测（只读 du，路径与清理脚本一致）：给「容器数据」行提供
-        // ContainerCaches 的可清理大小；扫描链路本身在 IO 协程，容器命令不占主线程
+        // 容器内构建缓存与三个 CLI 智能体的占用：合并成一条 du，只起一个 proot 进程、
+        // 一次超时。分开跑会让存储页每次打开都多一遍 PRoot 全树遍历（实测引擎目录合计 >1GB、
+        // 含数十万文件，PRoot 下每个 stat 都要路径翻译，成本远高于原生 du）。
         runCatching {
-            val kb = commandEngine.runCommandSyncIfReady(
-                command = CONTAINER_CACHE_DU,
+            val lines = commandEngine.runCommandSyncIfReady(
+                command = CONTAINER_DU_WITH_ENGINES,
                 timeoutMs = 60_000L
-            )?.output?.lineSequence()?.firstOrNull()?.trim()?.toLongOrNull() ?: 0L
-            if (kb > 0) {
+            )?.output?.lineSequence()?.map { it.trim() }?.toList().orEmpty()
+            val cacheKb = lines.getOrNull(0)?.toLongOrNull() ?: 0L
+            if (cacheKb > 0) {
                 details += StorageDetail(
                     label = context.getString(R.string.storage_clean_container_caches),
-                    bytes = kb * 1024L,
+                    bytes = cacheKb * 1024L,
                     key = StorageDetailKey.CONTAINER_CACHES,
-                    indent = true
+                    indent = true,
+                    safety = StorageSafety.SAFE
+                )
+            }
+            val engineKb = lines.getOrNull(1)?.toLongOrNull() ?: 0L
+            if (engineKb > 0 && !cancelled()) {
+                details += StorageDetail(
+                    label = context.getString(R.string.storage_engines_group),
+                    bytes = engineKb * 1024L,
+                    note = ENGINE_LABEL,
+                    indent = true,
+                    safety = StorageSafety.PROTECTED
                 )
             }
         }
@@ -326,11 +341,13 @@ class StorageUsageScanner @Inject constructor(
             result += artifactDetail(project, dir, dir.lastModified(),
                 label = context.getString(R.string.storage_artifacts_venv), isDirectory = true)
         }
-        // 聊天附件（随会话上传/生成的图片等，存于项目 .aicode/attachments）单独成行可勾选清理
+        // 聊天附件（随会话上传/生成的图片等，存于项目 .aicode/attachments）单独成行可勾选清理。
+        // 它是用户上传的原始文件、删了没有二次来源，因此标 KEEP_HISTORY 而不是「可安全删除」。
         File(project, ATTACHMENTS_RELATIVE).takeIf { it.isDirectory }?.let { dir ->
             if (dirSize(dir, cancelled) > 0) {
                 result += artifactDetail(project, dir, dir.lastModified(),
-                    label = context.getString(R.string.storage_artifacts_attachments), isDirectory = true)
+                    label = context.getString(R.string.storage_artifacts_attachments), isDirectory = true,
+                    safety = StorageSafety.KEEP_HISTORY)
             }
         }
         downloads.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
@@ -348,7 +365,8 @@ class StorageUsageScanner @Inject constructor(
         target: File,
         modifiedAt: Long,
         label: String,
-        isDirectory: Boolean = false
+        isDirectory: Boolean = false,
+        safety: StorageSafety = StorageSafety.SAFE
     ): StorageDetail {
         val rel = target.relativeTo(project).path
         return StorageDetail(
@@ -357,13 +375,14 @@ class StorageUsageScanner @Inject constructor(
             note = "${project.name} · ${formatTime(modifiedAt)} · $rel",
             indent = true,
             path = "${project.name}/$rel",
-            modifiedAt = modifiedAt,
-            isDirectory = isDirectory
+            isDirectory = isDirectory,
+            safety = safety
         )
     }
 
     /** AI 配置与产物：`filesDir/aicode`，按子目录拆开（工具输出与识图会话可清理）。 */
     private fun aiConfigEntry(cancelled: () -> Boolean): StorageEntry {
+        val staleCutoff = System.currentTimeMillis() - STALE_DAYS * DAY_MS
         val root = containerInstaller.aicodeDir
         val cleanableKeys = mapOf(
             toolOutputStore.outputDir.name to StorageDetailKey.TOOL_OUTPUT,
@@ -375,7 +394,13 @@ class StorageUsageScanner @Inject constructor(
                 StorageDetail(
                     label = it.name,
                     bytes = dirSize(it, cancelled),
-                    key = cleanableKeys[it.name]
+                    key = cleanableKeys[it.name],
+                    safety = when {
+                        // 超期（30 天未更新）的可清理产物标「已过期」，否则提示删后影响历史回看
+                        cleanableKeys[it.name] == null -> StorageSafety.PROTECTED
+                        it.lastModified() < staleCutoff -> StorageSafety.STALE
+                        else -> StorageSafety.KEEP_HISTORY
+                    }
                 )
             }
             ?.filter { it.bytes > 0 }
@@ -455,9 +480,31 @@ class StorageUsageScanner @Inject constructor(
             "/root/.gradle/caches", "/root/.npm/_cacache", "/root/.m2/repository", "/root/.cache/pip", "/root/.cache/uv"
         )
 
-        /** 只 du 不删（容器缓存大小探测用），路径与 [CONTAINER_CACHE_SCRIPT] 严格一致。 */
-        private val CONTAINER_CACHE_DU =
+        /**
+         * 三个 CLI 智能体的落盘目录：全局 npm 包 + 各自会话/凭据。
+         * 全局包路径固定为 /usr/local/lib/node_modules（与 assets/aicode/lib/scenarios/codeintel.sh
+         * 里的 CODEINTEL_NPM_ROOT 一致），其余为各引擎固定目录。
+         */
+        private val ENGINE_PATHS = listOf(
+            "/usr/local/lib/node_modules/@anthropic-ai",
+            "/usr/local/lib/node_modules/@openai",
+            "/usr/local/lib/node_modules/opencode-ai",
+            "/root/.claude",
+            "/root/.codex",
+            "/root/.local/share/opencode"
+        )
+
+        /** 引擎明细行的副标题（目录名列表，太长会截断，只取末级名）。 */
+        private val ENGINE_LABEL = ENGINE_PATHS.joinToString("  ") { it.substringAfterLast('/') }
+
+        /**
+         * 容器缓存 + 引擎占用一次算完：输出两行 KB（缓存 / 引擎），只起一个 proot 进程。
+         * 路径与 [CONTAINER_CACHE_SCRIPT] 严格一致；目录不存在时自动计入 0。
+         */
+        private val CONTAINER_DU_WITH_ENGINES =
             "du -sk ${CONTAINER_CACHE_DIRS.joinToString(" ")} 2>/dev/null | " +
+                "awk '{s+=\$1} END {print s+0}'; " +
+                "du -sk ${ENGINE_PATHS.joinToString(" ")} 2>/dev/null | " +
                 "awk '{s+=\$1} END {print s+0}'"
 
         /**
@@ -477,6 +524,10 @@ class StorageUsageScanner @Inject constructor(
 
         private const val TOP_SESSIONS = 5
         private const val TOP_SUBDIRS = 5
+
+        /** 产物超期阈值：与清理推荐引擎的 STALE_DAYS 保持一致（30 天未更新）。 */
+        private const val STALE_DAYS = 30L
+        private const val DAY_MS = 24L * 60 * 60 * 1000
 
         /** 产物扫描上限与阈值：安装包/下载文件每类最多展示条数、构建目录每项目上限、下载物最小计入大小。 */
         private const val MAX_ARTIFACT_FILES = 8

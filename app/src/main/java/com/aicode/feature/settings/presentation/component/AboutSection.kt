@@ -252,6 +252,7 @@ private fun AboutHeaderCard(appIcon: androidx.compose.ui.graphics.ImageBitmap?) 
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 0.dp
     ) {
         Row(
@@ -329,7 +330,8 @@ private fun UpdateChannelSheet(
                         onDismiss()
                         onSelect(channel)
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier

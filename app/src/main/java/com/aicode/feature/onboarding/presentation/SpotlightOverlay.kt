@@ -326,6 +326,7 @@ private fun SpotlightCard(
         modifier = modifier,
         shape = RoundedCornerShape(Radius.lg),
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = 1.dp,
         shadowElevation = 2.dp,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)

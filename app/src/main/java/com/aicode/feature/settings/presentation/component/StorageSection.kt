@@ -68,6 +68,7 @@ import com.aicode.feature.settings.domain.model.StorageCategory
 import com.aicode.feature.settings.domain.model.StorageDetail
 import com.aicode.feature.settings.domain.model.StorageDetailKey
 import com.aicode.feature.settings.domain.model.StorageEntry
+import com.aicode.feature.settings.domain.model.StorageSafety
 import com.aicode.feature.agent.presentation.component.openLocalFile
 import com.aicode.feature.settings.domain.model.formatStorageSize
 import com.aicode.feature.settings.presentation.StorageUiState
@@ -226,7 +227,10 @@ internal fun StorageSection(
             )
         }
 
-        Surface(color = MaterialTheme.semanticColors.pageBackground) {
+        Surface(
+            color = MaterialTheme.semanticColors.pageBackground,
+            contentColor = MaterialTheme.colorScheme.onBackground
+        ) {
             Button(
                 onClick = { pendingCleanup = true },
                 enabled = state.selectedBytes > 0L && !state.cleaning,
@@ -464,7 +468,8 @@ private fun RecommendedCleanupCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.lg),
-        color = MaterialTheme.semanticColors.cardSurface
+        color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -669,7 +674,8 @@ private fun OverviewCard(state: StorageUiState) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.lg),
-        color = MaterialTheme.semanticColors.cardSurface
+        color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Text(
@@ -858,6 +864,20 @@ private fun DetailRow(
                 text = it,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.semanticColors.subtleText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        detail.safety?.let { safety ->
+            Text(
+                text = stringResource(safety.labelRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = when (safety) {
+                    StorageSafety.SAFE -> MaterialTheme.semanticColors.success
+                    StorageSafety.STALE -> MaterialTheme.semanticColors.warning
+                    StorageSafety.KEEP_HISTORY -> MaterialTheme.colorScheme.onSurfaceVariant
+                    StorageSafety.PROTECTED -> MaterialTheme.semanticColors.subtleText
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

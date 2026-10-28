@@ -344,6 +344,7 @@ internal fun ChatInputBar(
 
     Surface(
         color = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = modifier.fillMaxWidth()
     ) {
         val imeInset = rememberImeBottomInset()

@@ -435,6 +435,7 @@ fun ProviderEditorScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(if (initialProvider == null) stringResource(R.string.provider_add) else stringResource(R.string.provider_edit)) },
@@ -1000,6 +1001,7 @@ fun ProviderEditorScreen(
                                     Surface(
                                         shape = shape,
                                         color = MaterialTheme.semanticColors.cardSurface,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
                                         shadowElevation = dragElevation,
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -2034,6 +2036,7 @@ private fun ProviderProxyPage(
 ) {
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.proxy_title)) },
@@ -2099,7 +2102,8 @@ private fun ProviderTypeSelectionSheet(
                         onDismiss()
                         onSelected(providerType)
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier
@@ -2187,6 +2191,7 @@ private fun ProviderKeysPage(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.provider_multi_key_manage)) },
@@ -2247,6 +2252,7 @@ private fun ProviderKeysPage(
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.semanticColors.cardSurface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             shadowElevation = dragElevation,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2550,7 +2556,8 @@ private fun ScriptPickerBottomSheet(
                 scripts.forEach { scriptName ->
                     Surface(
                         onClick = { onSelect(scriptName) },
-                        color = Color.Transparent
+                        color = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                     ) {
                         Row(
                             modifier = Modifier
@@ -2638,6 +2645,7 @@ private fun RawOutputBottomSheet(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.semanticColors.mutedSurface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 420.dp)
@@ -2711,6 +2719,7 @@ private fun DashboardTestResultBox(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.semanticColors.mutedSurface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .alpha(if (isRunning) 0.6f else 1f)

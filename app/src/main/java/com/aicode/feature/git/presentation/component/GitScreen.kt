@@ -32,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -62,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
@@ -90,6 +92,31 @@ import compose.icons.feathericons.X
 import compose.icons.feathericons.Zap
 import kotlinx.coroutines.launch
 
+/** 悬浮 tab 栏高 68dp + 底部留白 6dp：Snackbar 抬高这个量才不会盖住它。 */
+private val SnackbarBottomInset = 74.dp
+
+/**
+ * 容器未就绪提示条：常驻直到容器就绪，不自动消失、不遮挡底部 tab 栏。
+ *
+ * 配色走 warning 语义色：M3 的 Snackbar 默认用反色 Surface，浅色主题下是白底，内部文字颜色
+ * 一旦没绑主题色就变成白底白字（反馈：底栏那条「白条」看不见任何内容）。
+ */
+@Composable
+private fun ContainerNotReadyBanner(text: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Radius.mdLarge),
+        color = MaterialTheme.semanticColors.warningContainer,
+        contentColor = MaterialTheme.semanticColors.onWarningContainer
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GitScreen(
@@ -116,6 +143,13 @@ fun GitScreen(
     var showCommitDialog by remember { mutableStateOf(false) }
     var showPullConfirm by remember { mutableStateOf(false) }
     var showMasterRenameConfirm by remember { mutableStateOf(false) }
+
+    // 回到本页时重查一次：容器未就绪的提示是常驻状态，用户去终端初始化再返回必须自愈，
+    // 否则横幅会一直挂在那里、比原来的 Snackbar 更难消失。
+    LifecycleResumeEffect(Unit) {
+        viewModel.refresh()
+        onPauseOrDispose { }
+    }
 
     // 三个 tab 的滚动状态统一提升到页面层，聚合出「是否正在滚动」用于底部 tab 栏滚动弱化。
     val statusListState = rememberLazyListState()
@@ -197,11 +231,33 @@ fun GitScreen(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    // 显式绑定主题色：M3 的 Snackbar 默认取 inverseSurface/inverseOnSurface，而本项目
+                    // 自定义配色的 inverseSurface 是 onSurface（近黑），与浅色主题页面拼在一起就成了
+                    // 一条看不到内容的「白条」（反馈 2）。
+                    containerColor = MaterialTheme.semanticColors.mutedSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    actionColor = MaterialTheme.colorScheme.primary,
+                    // 底栏是悬浮 tab 栏，Snackbar 默认贴在 Scaffold 底部会把它整条盖住。
+                    modifier = Modifier.padding(bottom = SnackbarBottomInset)
+                )
+            }
+        }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
-            when {
+            // 容器未就绪常驻横幅：不随 Snackbar 超时消失，也不遮挡底部 tab 栏。
+            // 此时不能进入下面的分支：loading=false 且 notARepo=false 会让 HorizontalPager 渲染空白页。
+            val hint = state.containerHint
+            if (hint != null) {
+                ContainerNotReadyBanner(
+                    text = hint,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+                )
+            } else when {
                 state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
@@ -306,7 +362,8 @@ fun GitScreen(
         // 非仓库态不显示；仓库态在快照加载期间也常驻——否则容器冷启动跑 git 命令的几秒里
         // 底栏整个缺席，页面下部空白（深色下尤其像白屏故障）。pagerState 独立于 Pager 内容，
         // 加载中点 tab 只改页码，加载完成后直接落在对应页，无崩溃面。
-        if (!state.notARepo) {
+        // 容器未就绪时不显示 tab 栏：内容区只有提示条，tab 可点却无内容，反而误导为「功能可用」。
+        if (!state.notARepo && state.containerHint == null) {
             FloatingTabBar(
                 pagerState = pagerState,
                 items = listOf(
@@ -394,6 +451,7 @@ fun GitScreen(
 internal fun StatusMetric(label: String, count: Int, color: Color, modifier: Modifier = Modifier) {
     Surface(
         color = MaterialTheme.semanticColors.mutedSurface,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = RoundedCornerShape(Radius.md),
         modifier = modifier
     ) {
@@ -851,6 +909,7 @@ private fun CommitDialog(
                 // 底部轻量设置栏：amend 开关
                 Surface(
                     color = MaterialTheme.semanticColors.mutedSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     shape = RoundedCornerShape(Radius.md),
                     modifier = Modifier
                         .fillMaxWidth()

@@ -89,6 +89,7 @@ fun LoginKeyEditorScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -185,6 +186,7 @@ fun LoginKeyEditorScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(Radius.mdLarge),
                         color = MaterialTheme.semanticColors.cardSurface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         // 固定高度 + 内部滚动：切换显示/隐藏时私钥行数变化不会撑开页面。

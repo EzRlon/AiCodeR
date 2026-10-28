@@ -2880,6 +2880,13 @@
     <string name="storage_health_scanning_now">Storage scan in progress</string>
     <string name="storage_health_idle">Idle</string>
 
+    <!-- Storage: artifact disposal hints and engine output -->
+    <string name="storage_safety_safe">Safe to delete</string>
+    <string name="storage_safety_stale">Expired, deletable</string>
+    <string name="storage_safety_keep_history">Deleting affects history</string>
+    <string name="storage_safety_protected">Required at runtime</string>
+    <string name="storage_engines_group">Agent engines</string>
+
     <!-- Store install security scan -->
     <string name="store_scan_section_title">Security scan</string>
     <string name="store_scan_passed">Passed: no risk patterns found</string>

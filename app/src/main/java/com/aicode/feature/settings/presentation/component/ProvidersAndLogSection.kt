@@ -99,6 +99,7 @@ internal fun ProvidersSection(
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.semanticColors.cardSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     shadowElevation = dragElevation,
                     modifier = Modifier
                         .fillMaxWidth()

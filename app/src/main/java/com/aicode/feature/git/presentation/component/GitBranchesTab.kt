@@ -541,6 +541,7 @@ private fun BranchesOverview(
 ) {
     Surface(
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(Radius.lg),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -789,7 +790,8 @@ private fun RefActionSheet(
                         onDismiss()
                         action.onClick()
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier

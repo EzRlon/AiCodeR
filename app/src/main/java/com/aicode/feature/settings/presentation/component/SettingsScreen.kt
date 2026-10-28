@@ -796,6 +796,7 @@ fun SettingsScreen(
                 // 该页独立于下方共享 Scaffold：自带顶栏，内容区避开系统栏，窄窗占整屏、大屏占右栏。
                 Scaffold(
                     containerColor = settingsPageBackground(),
+                    contentColor = MaterialTheme.colorScheme.onBackground,
                     topBar = {
                         TopAppBar(
                             title = { Text(stringResource(R.string.store_title)) },
@@ -859,6 +860,7 @@ fun SettingsScreen(
             sectionStateHolder.SaveableStateProvider(stateKey) {
             Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {

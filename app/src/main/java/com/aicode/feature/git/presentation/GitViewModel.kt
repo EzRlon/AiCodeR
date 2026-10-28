@@ -84,6 +84,8 @@ class GitViewModel @Inject constructor(
         val tab: GitTab = GitTab.STATUS,
         val busy: Boolean = false,
         val toast: String? = null,
+        /** 容器未就绪的常驻提示：与 [toast] 区分——它是持续状态而非一次性反馈，容器就绪后自动消失。 */
+        val containerHint: String? = null,
         /** 是否已配置远程仓库，控制拉取/推送按钮可用性。 */
         val hasRemote: Boolean = false,
         /** 是否已配置全局署名 user.name（git config --global），控制提交按钮可用性；无署名提交会成为失败提交。 */
@@ -222,11 +224,13 @@ class GitViewModel @Inject constructor(
     fun refresh() {
         if (_state.value.busy) return
         // 容器未就绪时不执行 git 命令，直接提示用户去终端页完成初始化，避免误显示"非 Git 仓库"。
+        // 走 containerHint（常驻横幅）而不是 toast：容器初始化要好几秒，用 Snackbar 会盖住底部 tab 栏且
+        // 4 秒后消失、页面留在空白态，看起来像故障。
         repository.notReadyHint()?.let { hint ->
-            _state.update { it.copy(loading = false, toast = hint) }
+            _state.update { it.copy(loading = false, containerHint = hint) }
             return
         }
-        _state.update { it.copy(loading = true, toast = null) }
+        _state.update { it.copy(loading = true, toast = null, containerHint = null) }
         viewModelScope.launch {
             try {
                 // 发现工作区里的 git 仓库（根 + 一层子目录），选中当前或默认仓库。

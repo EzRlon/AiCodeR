@@ -129,6 +129,7 @@ private fun AddOptionCard(
             .clickable(onClick = onClick),
         shape = shape,
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 0.dp
     ) {
         Row(

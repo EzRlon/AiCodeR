@@ -328,6 +328,7 @@ internal fun StatusTab(
                 item(key = "merging-banner") {
                     Surface(
                         color = MaterialTheme.semanticColors.warning.copy(alpha = 0.12f),
+                        contentColor = MaterialTheme.semanticColors.onWarningContainer,
                         shape = RoundedCornerShape(Radius.mdLarge),
                         border = BorderStroke(1.dp, MaterialTheme.semanticColors.warning.copy(alpha = 0.35f)),
                         modifier = Modifier.fillMaxWidth().padding(top = Spacing.md)
@@ -631,6 +632,7 @@ private fun StatusOverview(status: GitStatus?, clean: Boolean) {
 
     Surface(
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(Radius.lg),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -704,6 +706,7 @@ private fun StatusOverview(status: GitStatus?, clean: Boolean) {
 private fun SyncPill(ahead: Int, behind: Int) {
     Surface(
         color = MaterialTheme.semanticColors.mutedSurface,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = RoundedCornerShape(Radius.pill)
     ) {
         Text(
@@ -772,6 +775,7 @@ private fun FileGroupRow(
     }
     Surface(
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = shape,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -1018,7 +1022,8 @@ private fun FileActionSheet(menu: FileMenu, onDismiss: () -> Unit) {
                         onDismiss()
                         action.onClick()
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier
@@ -1099,6 +1104,7 @@ private fun StashBottomSheet(
 
             Surface(
                 color = MaterialTheme.semanticColors.mutedSurface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 shape = RoundedCornerShape(Radius.mdLarge),
                 modifier = Modifier.fillMaxWidth()
             ) {

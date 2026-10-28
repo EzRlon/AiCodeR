@@ -2880,6 +2880,13 @@
     <string name="storage_health_scanning_now">存储统计进行中</string>
     <string name="storage_health_idle">空闲</string>
 
+    <!-- 存储页：交付物处置建议与引擎产物 -->
+    <string name="storage_safety_safe">可安全删除</string>
+    <string name="storage_safety_stale">已过期，可删</string>
+    <string name="storage_safety_keep_history">删后影响历史查看</string>
+    <string name="storage_safety_protected">运行必需，请保留</string>
+    <string name="storage_engines_group">智能体引擎</string>
+
     <!-- Store install security scan -->
     <string name="store_scan_section_title">安全扫描</string>
     <string name="store_scan_passed">通过：未发现风险特征</string>

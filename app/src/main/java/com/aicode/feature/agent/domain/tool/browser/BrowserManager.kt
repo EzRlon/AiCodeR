@@ -203,6 +203,11 @@ class BrowserManager @Inject constructor(
         var title: String = "",
         var loading: Boolean = false,
         var error: String? = null,
+        /**
+         * 无协议头输入的探测中标记：先试 https、失败后回退 http。探测阶段的失败不报错，
+         * 否则用户会在网页真正打开前先看到一条错误（https 被干扰时必现）。
+         */
+        var probing: Boolean = false,
         var devToolsOpen: Boolean = false,
         val consoleLogs: ArrayDeque<BrowserConsoleEntry> = ArrayDeque(),
         var pendingDialog: BrowserDialog? = null,
@@ -414,8 +419,9 @@ class BrowserManager @Inject constructor(
                 val tab = tabHolderRef() ?: return
                 if (request?.isForMainFrame == true) {
                     val msg = error?.description?.toString() ?: "未知错误"
+                    // 探测阶段（https 未果、即将回退 http）不把错误挂到界面上，但仍结束本次等待以触发回退。
                     tab.loading = false
-                    tab.error = msg
+                    if (!tab.probing) tab.error = msg
                     tab.loadDeferred?.complete(Result.failure(RuntimeException(msg)))
                     tab.loadDeferred = null
                     publishState()
@@ -1161,14 +1167,22 @@ class BrowserManager @Inject constructor(
             if (resolved != null) {
                 loadInto(tab, resolved)
             } else {
-                // 无协议头：优先 https，SSL/连接失败再回退 http（部分站点未配置 SSL）
+                // 无协议头：优先 https，SSL/连接失败再回退 http（部分站点未配置 SSL）。
+                // 探测期（probing）的失败不写到界面上，避免网页真正打开前先闪一条错误。
+                tab.probing = true
+                var httpsLoaded: String? = null
                 try {
-                    loadInto(tab, "https://$target")
+                    httpsLoaded = loadInto(tab, "https://$target")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    loadInto(tab, "http://$target")
+                    null
+                } finally {
+                    tab.probing = false
                 }
+                // https 失败后回退 http；http 也失败时异常上抛，由界面侧展示错误气泡
+                // （若这里静默，用户只会看到一个没有任何提示的空白页）。
+                httpsLoaded ?: loadInto(tab, "http://$target")
             }
         }
     }

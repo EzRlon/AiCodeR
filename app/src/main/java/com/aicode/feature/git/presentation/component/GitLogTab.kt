@@ -286,6 +286,7 @@ private fun GraphCommitRow(
     val nodeColor = laneColors.getOrElse(lane) { Color.Gray }
     Surface(
         color = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(

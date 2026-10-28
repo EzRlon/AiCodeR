@@ -513,7 +513,8 @@ private fun SummaryCard(label: String, value: String, sub: String? = null, modif
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.semanticColors.cardSurface
+        color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 12.dp)) {
             Text(

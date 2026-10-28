@@ -123,6 +123,7 @@ fun CredentialScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.git_credentials_and_identity)) },
@@ -433,6 +434,7 @@ private fun EmptyCredentialsCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.xl),
         color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 0.dp
     ) {
         Column(
