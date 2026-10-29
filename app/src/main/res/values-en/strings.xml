@@ -460,7 +460,7 @@
     <string name="engine_builtin_sub">Full tools, teams, annotation, memory, recall</string>
     <string name="engine_go_login">Sign in via browser</string>
     <string name="engine_login_hint">Sign in on the website, create an API key, then add that provider with the key under Settings → Models. The key is passed through automatically when you switch engines — no terminal login needed.</string>
-    <string name="engine_ui_language_note">This engine's terminal UI is English-only (upstream ships no UI localization); the model replies in Chinese on Chinese systems.</string>
+    <string name="engine_ui_language_note">This engine terminal UI is English-only (upstream ships no UI localization); the model replies in Chinese on Chinese systems.</string>
     <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
     <string name="cli_model_builtin_group">Engine models</string>
     <string name="engine_codex_unavailable">Codex engine is not ready. Install Codex in the container first, or switch this session back to the built-in engine.</string>
