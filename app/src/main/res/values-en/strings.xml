@@ -164,7 +164,7 @@
     <string name="dev_env_frontend_desc">Tooling-based frontend · installs Node.js + npm</string>
     <string name="dev_env_frontend_prompt">Prepare a toolchain for modern frontend development (React/Vue/TypeScript/Vite) in the current execution environment. Steps: 1) Detect the environment first - do not assume: run `cat /etc/os-release` for the distro, then `command -v apk apt-get dnf yum pacman` to find the package manager, and report the detection result verbatim (this applies to both the local container and remote SSH; never assume a distro); 2) Install Node.js and npm with the detected package manager (apk: `apk add nodejs npm`; apt: `apt-get install -y nodejs npm`; dnf/yum: `dnf install -y nodejs npm`; pacman: `pacman -Sy nodejs npm`); 3) Verify: run node -v and npm -v and report actual versions; 4) Report: component list and versions, the suggested command to scaffold a project under ~/workspace (e.g. npm create vite@latest - do not run it yet, wait for me), and how to debug pages with Web preview. If a component fails to install, explain why and give alternatives instead of skipping silently.</string>
     <string name="dev_env_android">Android app</string>
-    <string name="dev_env_android_desc">Java / Kotlin + Gradle · Android SDK is NOT bundled, you install it</string>
+    <string name="dev_env_android_desc">Java / Kotlin + Gradle · Android SDK must be installed by you</string>
     <string name="dev_env_android_prompt">Set up Android app development (Java/Kotlin plus Gradle). The Android SDK, Gradle and a JDK are not bundled and must be installed now. Steps: 1) Detect the environment first, do not assume: run cat /etc/os-release for the distro, then command -v apk apt-get dnf yum pacman to find the package manager, and report the result verbatim; 2) Install JDK 17 with the detected package manager, then verify with java -version; 3) Install Gradle, or explain using the project own wrapper instead; 4) Explain how to obtain the Android SDK (commandline-tools plus sdkmanager, licenses must be accepted); if the download is blocked, state exactly where it failed and what alternatives exist instead of skipping silently; 5) Report toolchain versions, which files a minimal buildable Android project under ~/workspace needs, and the full flow from writing code to producing an APK.</string>
     <string name="dev_env_python">Python (scripts / crawlers / services)</string>
     <string name="dev_env_python_desc">General Python · installs Python 3 + pip + venv</string>
@@ -720,7 +720,7 @@
     <string name="about_version">Version</string>
     <string name="about_app_title">AiCodeR</string>
     <string name="about_github_repo">GitHub Repository</string>
-    <string name="about_upstream">Original Author: AiCode</string>
+    <string name="about_upstream">AiCode</string>
     <string name="about_upstream_desc">Developer: jieapi</string>
     <string name="about_license">Open Source License</string>
     <string name="about_developer">Developer: EzRlon</string>

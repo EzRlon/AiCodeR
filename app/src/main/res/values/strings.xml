@@ -165,7 +165,7 @@
     <string name="dev_env_frontend_desc">工程化前端 · 安装 Node.js + npm</string>
     <string name="dev_env_frontend_prompt">请在当前执行环境里为现代前端开发（React/Vue/TypeScript/Vite）准备工具链。步骤：1) 先探测执行环境，不要凭假设：执行 `cat /etc/os-release` 看发行版，再依次 `command -v apk apt-get dnf yum pacman` 确定包管理器，把检测结果原样汇报出来（容器与远程 SSH 都要按这个流程走，不预设发行版）；2) 按探测到的包管理器安装 Node.js 与 npm（apk: `apk add nodejs npm`；apt: `apt-get install -y nodejs npm`；dnf/yum: `dnf install -y nodejs npm`；pacman: `pacman -Sy nodejs npm`）；3) 验证：运行 node -v 和 npm -v 并输出实际版本；4) 汇报：组件清单与版本、在 ~/workspace 下新建项目的建议命令（如 npm create vite@latest，先不要执行，等我说）、以及如何用 Web 预览调试页面。若某个组件装不上，说明原因与替代方案，不要静默跳过。</string>
     <string name="dev_env_android">安卓应用</string>
-    <string name="dev_env_android_desc">Java / Kotlin + Gradle · 需自行安装 Android SDK（软件未内置）</string>
+    <string name="dev_env_android_desc">Java / Kotlin + Gradle · 需自行安装 Android SDK</string>
     <string name="dev_env_android_prompt">我想在当前执行环境里搭建安卓应用开发环境（Java/Kotlin + Gradle）。注意：本软件没有内置 Android SDK、Gradle 或 JDK，需要现在装。步骤：1) 先探测执行环境，不要凭假设：执行 `cat /etc/os-release` 看发行版，再依次 `command -v apk apt-get dnf yum pacman` 确定包管理器，把检测结果原样汇报；2) 按探测到的包管理器安装 JDK 17（apk: `apk add openjdk17`；apt: `apt-get install -y openjdk-17-jdk-headless`；dnf/yum: `dnf install -y java-17-openjdk-headless`；pacman: `pacman -Sy jdk17-openjdk`），装完执行 java -version 验证；3) 安装 Gradle 或说明改用项目自带 wrapper；4) 说明 Android SDK 的获取方式（commandline-tools + sdkmanager，需要接受 licenses），若下载受阻就如实说明失败点与替代方案，不要静默跳过；5) 汇报工具链版本、在 ~/workspace 下建一个最小可编译安卓工程需要哪些文件、以及从写代码到打出 APK 的完整流程。</string>
     <string name="dev_env_python">Python（脚本 / 爬虫 / 服务）</string>
     <string name="dev_env_python_desc">通用 Python · 安装 Python 3 + pip + venv</string>
@@ -719,9 +719,9 @@
     <string name="agent_model_not_selected">未选择</string>
     <!-- About -->
     <string name="about_version">版本</string>
-    <string name="about_app_title">许愿码 AiCodeR</string>
+    <string name="about_app_title">AiCodeR</string>
     <string name="about_github_repo">GitHub 仓库</string>
-    <string name="about_upstream">原作者 AiCode</string>
+    <string name="about_upstream">AiCode</string>
     <string name="about_upstream_desc">开发者：jieapi</string>
     <string name="about_license">开源许可证</string>
     <string name="about_developer">开发者：EzRlon</string>
