@@ -237,6 +237,11 @@ class CodexBridge @Inject constructor(
             add("-c"); add("mcp_servers.aicode_bridge.command=\"node\"")
             add("-c"); add("mcp_servers.aicode_bridge.args=[\"${dataBridgeScript()}\"]")
             add("-c"); add(mcpEnvOverride(port, sessionId, token = bridgeToken, projectPath))
+            // 中文系统下让模型用中文回复（Codex CLI 界面本身没有本地化，官方 issue #30060；
+            // 能控制的只有模型输出语言，走原生 developer_instructions 扩展点，不改用户 config.toml）
+            EngineLocale.replyLanguageDirective()?.let { directive ->
+                add("-c"); add("developer_instructions=${tomlString(directive)}")
+            }
             // 用户自装 MCP 自动映射（能力全域打通批一）：与 aicode_bridge 同样用 -c 内联，不写用户配置文件
             for (server in mcpConfigRepository.getEffectiveServers()) {
                 if (!server.enabled || !com.aicode.feature.agent.domain.mcp.McpServerConfig.isValidName(server.name)) continue

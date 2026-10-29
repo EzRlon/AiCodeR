@@ -497,6 +497,10 @@ class OpenCodeBridge @Inject constructor(
         assetsMutex.withLock {
             runCatching {
                 fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
+                // 中文回复规则文件：由 OPENCODE_CONFIG_CONTENT 的 instructions 引用
+                EngineLocale.replyLanguageDirective()?.let { directive ->
+                    fileAccess.writeFile(languageRulePath(), directive, overwrite = true)
+                }
             }.onFailure { e ->
                 FileLogger.e(TAG, "写桥接资产失败", e)
                 throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
@@ -568,7 +572,15 @@ class OpenCodeBridge @Inject constructor(
         })
         if (agentsJson != null) put("agent", agentsJson)
         if (customProviderJson != null) put("provider", customProviderJson)
+        // 中文系统：用 instructions 引用 App 写入的规则文件（opencode 的 instructions 是文件路径列表，
+        // 不是文本）。写盘在 runTurnOnce 的 writeBridgeAssets 里，路径固定
+        EngineLocale.replyLanguageDirective()?.let { _ ->
+            put("instructions", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(languageRulePath()))))
+        }
     }.toString()
+
+    /** 中文回复规则的容器内路径（内容由 writeBridgeAssets 写入）。 */
+    private fun languageRulePath(): String = bridgeDir() + "/language-rule.md"
 
     /**
      * 会话选定 App 供应商且模型引用指向注入键（自定义端点）时，构造 provider 段：

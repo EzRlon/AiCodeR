@@ -461,6 +461,7 @@
     <string name="engine_builtin_sub">全套工具、专家团、标注、记忆、recall</string>
     <string name="engine_go_login">去浏览器登录</string>
     <string name="engine_login_hint">在浏览器登录后创建 API Key，回到「设置 → 模型」添加对应供应商并填入 Key，切引擎时会自动透传，无需在终端里登录。</string>
+    <string name="engine_ui_language_note">该引擎的终端界面目前只有英文（上游未提供界面本地化）；中文系统下模型回复会用中文。</string>
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
     <string name="cli_model_builtin_group">引擎模型</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>

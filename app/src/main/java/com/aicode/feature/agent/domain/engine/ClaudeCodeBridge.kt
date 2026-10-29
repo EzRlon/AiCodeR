@@ -240,6 +240,11 @@ class ClaudeCodeBridge @Inject constructor(
             }
             add("--permission-prompt-tool"); add("mcp__${MCP_SERVER_NAME}__${MCP_TOOL_NAME}")
             add("--mcp-config"); add(mcpConfigPath())
+            // 中文系统下让模型用中文回复（Claude Code 界面本身没有本地化，官方 issue #31413；
+            // settings.json 的 language 只影响回复语言且不随命令行生效，用原生 append 扩展点最直接）
+            EngineLocale.replyLanguageDirective()?.let { directive ->
+                add("--append-system-prompt"); add(directive)
+            }
             // App 智能体定义随回合生成（能力全域打通批二）；无可用定义时不传该 flag
             if (hasCliAgents) { add("--agents"); add(agentsConfigPath()) }
             if (!model.isNullOrBlank()) { add("--model"); add(model) }

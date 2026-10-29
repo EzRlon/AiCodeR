@@ -787,7 +787,8 @@ private fun CliEngineRows(
                     stringResource(R.string.agent_cli_installed, state.version) + " · " +
                         stringResource(R.string.engine_not_logged_in) + "\n" +
                         stringResource(R.string.engine_login_hint)
-                else -> stringResource(R.string.agent_cli_installed, state.version)
+                else -> stringResource(R.string.agent_cli_installed, state.version) + "\n" +
+                    stringResource(R.string.engine_ui_language_note)
             },
             onClick = {
                 // 未安装禁选（对齐旧引擎页门禁）：选中后发送才报错的死路体验不如就地安装
