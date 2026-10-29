@@ -987,7 +987,6 @@ class FloatBallOverlay(
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
                                         color = when {
-                                            msg.isVerification -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
                                             isUser -> MaterialTheme.colorScheme.primaryContainer
                                             msg.isError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
                                             else -> MaterialTheme.colorScheme.surfaceVariant
@@ -995,7 +994,7 @@ class FloatBallOverlay(
                                         modifier = Modifier.widthIn(max = bubbleMaxWidth)
                                     ) {
                                         Text(
-                                            text = if (msg.role == "TOOL") "⚙ " + msg.text else msg.text,
+                                            text = msg.text,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurface,
                                             modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)

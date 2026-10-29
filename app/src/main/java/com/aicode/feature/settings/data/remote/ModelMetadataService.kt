@@ -67,7 +67,13 @@ class ModelMetadataService @Inject constructor(
         return mergeModelMetadata(modelId, auto, custom)
     }
 
-    /** 启动时统一调用：经统一拉取器从本仓库刷新模型目录（12h 缓存，失败静默）。 */
+    /**
+     * 启动时统一调用：经统一拉取器从本仓库刷新模型目录（12h 缓存，失败静默）。
+     *
+     * 只负责把最新数据拉到磁盘缓存，**不解析**：目录约 5.9MB / 8946 个模型，解析后会常驻
+     * 一百多 MB 堆（实测 catalog.parse.ready 时堆从 76MB 涨到 152MB），而绝大多数启动根本不需要
+     * 模型元数据。解析留给首次 [resolve] 按需触发，启动路径只付一次网络/磁盘读。
+     */
     suspend fun refreshFromNetworkIfStale() {
         if (refreshAttemptedThisProcess) return
         refreshAttemptedThisProcess = true
@@ -81,14 +87,6 @@ class ModelMetadataService @Inject constructor(
                 elapsedMs = (System.nanoTime() - fetchStartedNs) / 1_000_000,
                 details = "operation=$fetchStartedNs hasContent=${result is RepoDataFetcher.FetchResult.Success || result is RepoDataFetcher.FetchResult.FallbackDiskCache}"
             )
-            val body = when (result) {
-                is RepoDataFetcher.FetchResult.Success -> result.content
-                is RepoDataFetcher.FetchResult.FallbackDiskCache -> result.content
-                else -> null
-            } ?: return@withContext
-            if (body.isBlank()) return@withContext
-            runCatching { catalogLock.withLock { parseCatalogWithDiagnostics(body, "refresh").also { cached = it } } }
-                .onFailure { FileLogger.w(TAG, "解析模型元数据失败", it) }
         }
     }
 

@@ -4,7 +4,7 @@ import android.content.Context
 import com.aicode.R
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
-import com.aicode.core.util.SafeFileDelete
+import com.aicode.core.util.SafeDelete
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.database.AgentDatabase
 import com.aicode.feature.agent.domain.container.ContainerInstaller
@@ -127,14 +127,14 @@ class StorageUsageScanner @Inject constructor(
     /**
      * 删除工作区产物（`<项目名>/<相对路径>`，来自 [scan] 的明细）。仅限内置工作区：
      * 映射到 `filesDir/projects` 下并做 canonical 前缀与项目目录校验；
-     * 递归删除走 [SafeFileDelete]（不跟随符号链接，防止越出目标子树）。返回释放的字节数。
+     * 递归删除走 [SafeDelete]（不跟随符号链接，防止越出目标子树）。返回释放的字节数。
      */
     suspend fun cleanArtifacts(paths: List<String>): Long = withContext(Dispatchers.IO) {
         val projectsRoot = File(context.filesDir, PROJECTS_DIR).canonicalFile
         paths.sumOf { rel ->
             val target = physicalOf(rel, projectsRoot) ?: return@sumOf 0L
             val size = dirSize(target)
-            if (SafeFileDelete.deleteRecursively(target)) size else 0L
+            if (SafeDelete.deleteTreeOrFalse(target)) size else 0L
         }
     }
 
@@ -466,13 +466,31 @@ class StorageUsageScanner @Inject constructor(
             bytes = dirSize(context.cacheDir, cancelled) + dirSize(context.codeCacheDir, cancelled)
         )
 
-    /** 其他数据：filesDir 里未被上述分类覆盖的部分（DataStore、背景图、字体、SSH 私钥等）加 shared_prefs。 */
+    /** 其他数据：filesDir 里未被上述分类覆盖的部分（DataStore、背景图、字体、SSH 私钥等）加 shared_prefs。
+     *
+     * 外部私有目录（`Android/data/<pkg>/files`）也在这里算：日志与 AI 会话日志优先写外部私有目录
+     * （见 FileLogger / AILogger），但此前分类里只按 logger 给的文件清单统计日志，外部目录下的其它
+     * 残留（旧备份包、导出的 APK、崩溃堆栈等）不在任何分类里——用户看到几十 GB 却扫不出原因，
+     * 这里是最大盲区。 */
     private fun otherDataEntry(cancelled: () -> Boolean): StorageEntry {
         val rest = context.filesDir.listFiles()?.filterNot { file ->
             file.name in CLASSIFIED_DIRS || file.name == ROOTFS_DIR || file.name.startsWith("${ROOTFS_DIR}_")
         }?.sumOf { dirSize(it, cancelled) } ?: 0L
         val prefs = context.filesDir.parentFile?.let { dirSize(File(it, PREFS_DIR), cancelled) } ?: 0L
-        return StorageEntry(StorageCategory.OtherData, rest + prefs)
+        return StorageEntry(StorageCategory.OtherData, rest + prefs + externalFilesEntry(cancelled))
+    }
+
+    /**
+     * 外部私有目录里未被日志分类覆盖的部分：逐个统计 `Android/data/<pkg>/files` 的子项，跳过 logs/ai-logs
+     * （它们已由 [logsEntry] 单独统计，避免重复计数）。外部目录不可用时返回 0。
+     */
+    private fun externalFilesEntry(cancelled: () -> Boolean): Long {
+        val root = context.getExternalFilesDir(null) ?: return 0L
+        if (root == context.filesDir) return 0L
+        return root.listFiles()
+            ?.filterNot { it.name == "logs" || it.name == "ai-logs" }
+            ?.sumOf { dirSize(it, cancelled) }
+            ?: 0L
     }
 
     /** 应用安装包本体（base APK 与各 split）。 */
@@ -486,13 +504,13 @@ class StorageUsageScanner @Inject constructor(
 
     // ── 工具 ────────────────────────────────────────────────────────────────
 
-    /** 删除目录下所有内容但保留目录本身，返回释放字节数。递归删除走 [SafeFileDelete]（不跟随符号链接）。 */
+    /** 删除目录下所有内容但保留目录本身，返回释放字节数。递归删除走 [SafeDelete]（不跟随符号链接）。 */
     private fun clearDirContents(dir: File): Long {
         if (!dir.isDirectory) return 0L
         var freed = 0L
         dir.listFiles()?.forEach { child ->
             val size = dirSize(child)
-            if (SafeFileDelete.deleteRecursively(child)) freed += size
+            if (SafeDelete.deleteTreeOrFalse(child)) freed += size
         }
         return freed
     }

@@ -90,6 +90,12 @@ class ClaudeCodeBridge @Inject constructor(
     private val assetsMutex = Mutex()
 
     private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
+
+    /**
+     * 容器内的工作区路径：桥接环境变量必须是容器视角路径。
+     * 调用方传的 projectPath 是宿主真实目录（仅用于 proot `-b` 绑定），直接透给容器内脚本会找不到。
+     */
+    private fun containerWorkspacePath(): String = pathHomeResolver.home().trimEnd('/') + "/workspace"
     private fun bridgeScript(): String = bridgeDir() + "/claude-permission-bridge.mjs"
     private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun mcpConfigPath(): String = bridgeDir() + "/mcp-config.json"
@@ -244,7 +250,7 @@ class ClaudeCodeBridge @Inject constructor(
             put("PERMISSION_BRIDGE_TOKEN", sessionId)
             // 本体能力桥的数据工具需要知道容器内 .aicode 根与当前项目根（容器内路径）
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
-            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+            put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代；
             // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
             transmittableAnthropicProvider(providerId)?.let { p ->
@@ -580,7 +586,7 @@ class ClaudeCodeBridge @Inject constructor(
                 put("PERMISSION_BRIDGE_SESSION", sessionId)
                 put("PERMISSION_BRIDGE_TOKEN", token)
                 put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
-                put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+                put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             }
             val config = buildJsonObject {
                 put("mcpServers", buildJsonObject {

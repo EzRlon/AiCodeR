@@ -42,6 +42,31 @@ object SafeDelete {
         return count
     }
 
+    /**
+     * 同 [deleteTree]，但返回「是否全部删干净」，供需要按字节记账的调用方（存储清理）使用。
+     * 目标不存在视为成功。
+     */
+    fun deleteTreeOrFalse(root: File): Boolean {
+        if (!Files.exists(root.toPath(), LinkOption.NOFOLLOW_LINKS)) return true
+        var ok = true
+        val pending = ArrayDeque<File>()
+        val dirs = ArrayDeque<File>()
+        pending.addLast(root)
+        while (pending.isNotEmpty()) {
+            val entry = pending.removeLast()
+            if (isRealDirectory(entry)) {
+                dirs.addLast(entry)
+                entry.listFiles()?.forEach { pending.addLast(it) }
+            } else if (!entry.delete()) {
+                ok = false
+            }
+        }
+        while (dirs.isNotEmpty()) {
+            if (!dirs.removeLast().delete()) ok = false
+        }
+        return ok
+    }
+
     private const val PROGRESS_STEP = 2000
 
     /** 是否真目录：符号链接即便指向目录也返回 false，防止删除时跟着链接下钻。 */

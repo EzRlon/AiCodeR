@@ -3,7 +3,7 @@ package com.aicode.feature.settings.domain.service
 import android.content.Context
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
-import com.aicode.core.util.SafeFileDelete
+import com.aicode.core.util.SafeDelete
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.domain.container.CommandEngine
@@ -201,7 +201,7 @@ class StorageCleanupAdvisor @Inject constructor(
             if (!dir.isDirectory) 0L else {
                 checkpointDao.deleteFileSnapshotsForSession(item.detail)
                 checkpointDao.deleteCheckpointsForSession(item.detail)
-                if (SafeFileDelete.deleteRecursively(dir)) item.bytes else 0L
+                if (SafeDelete.deleteTreeOrFalse(dir)) item.bytes else 0L
             }
         }
         CleanupRecommendationKind.ORPHAN_AI_LOG -> {
@@ -214,7 +214,7 @@ class StorageCleanupAdvisor @Inject constructor(
         CleanupRecommendationKind.ORPHAN_IMAGE -> {
             val file = File(File(context.filesDir, IMAGES_DIR), item.detail)
             if (file.parentFile?.name != IMAGES_DIR || !file.isFile) 0L
-            else if (SafeFileDelete.deleteRecursively(file)) item.bytes else 0L
+            else if (SafeDelete.deleteTreeOrFalse(file)) item.bytes else 0L
         }
     }
 
@@ -226,7 +226,7 @@ class StorageCleanupAdvisor @Inject constructor(
         dir.listFiles()?.forEach { child ->
             if (child.lastModified() < cutoff) {
                 val size = StorageUsageScanner.dirSize(child)
-                if (SafeFileDelete.deleteRecursively(child)) freed += size
+                if (SafeDelete.deleteTreeOrFalse(child)) freed += size
             }
         }
         return freed

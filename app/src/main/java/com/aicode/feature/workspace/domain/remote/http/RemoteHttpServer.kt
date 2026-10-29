@@ -2,7 +2,7 @@ package com.aicode.feature.workspace.domain.remote.http
 
 import android.content.Context
 import com.aicode.core.util.FileLogger
-import com.aicode.core.util.SafeFileDelete
+import com.aicode.core.util.SafeDelete
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
@@ -24,7 +24,7 @@ import java.nio.charset.StandardCharsets
  * 提供内嵌网页（assets/remote/index.html）与文件管理 API：
  * `/api/list`、`/api/download`、`/api/upload`、`/api/delete`、`/api/rename`、`/api/mkdir`。
  * 仅面向局域网（v1 无鉴权，同 MT 管理器）；所有路径操作经 [resolve] 限制在 [root] 子树内，
- * 删除走 [SafeFileDelete]（不跟随符号链接）。
+ * 删除走 [SafeDelete]（不跟随符号链接）。
  */
 internal class RemoteHttpServer(
     private val context: Context,
@@ -154,7 +154,7 @@ internal class RemoteHttpServer(
         val body = readJsonBody(session) ?: return jsonError(Response.Status.BAD_REQUEST, "请求体不是合法 JSON")
         val target = resolve(body.optString("path")) ?: return pathNotFound()
         if (pathOf(target) == "/") return jsonError(Response.Status.BAD_REQUEST, "不能删除根目录")
-        val ok = SafeFileDelete.deleteRecursively(target)
+        val ok = SafeDelete.deleteTreeOrFalse(target)
         return if (ok) {
             jsonOk(JSONObject().apply { put("ok", true) })
         } else {

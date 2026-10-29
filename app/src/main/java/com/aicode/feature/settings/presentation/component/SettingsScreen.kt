@@ -1318,7 +1318,11 @@ fun SettingsScreen(
                     )
                 }
                 SettingsSection.DevEnvironments -> {
-                    DevEnvironmentsSection(onLaunch = onLaunchDevEnv)
+                    DevEnvironmentsSection(
+                        containerName = containerProfiles.firstOrNull { it.id == activeProfileId }?.name.orEmpty(),
+                        containerOsId = containerOsMap[activeProfileId],
+                        onLaunch = onLaunchDevEnv
+                    )
                 }
                 SettingsSection.Scripts -> {
                     val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =

@@ -90,6 +90,12 @@ class CodexBridge @Inject constructor(
     private val assetsMutex = Mutex()
 
     private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
+
+    /**
+     * 容器内的工作区路径：CLI 参数（`-C`）与桥接环境变量都必须是容器视角路径。
+     * 调用方传的 projectPath 是宿主真实目录（仅用于 proot `-b` 绑定），直接透给容器内 CLI 会 ENOENT。
+     */
+    private fun containerWorkspacePath(): String = pathHomeResolver.home().trimEnd('/') + "/workspace"
     private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun threadsPath(): String = bridgeDir() + THREADS_FILE
 
@@ -226,7 +232,7 @@ class CodexBridge @Inject constructor(
             add("--json")
             add("--skip-git-repo-check")
             add("--sandbox"); add(sandboxMode)
-            if (!projectPath.isNullOrBlank()) { add("-C"); add(projectPath) }
+            if (!projectPath.isNullOrBlank()) { add("-C"); add(containerWorkspacePath()) }
             // MCP 无 --mcp-config flag，-c 内联覆盖挂载 aicode_bridge（0.162.1 实测会拉起 server）
             add("-c"); add("mcp_servers.aicode_bridge.command=\"node\"")
             add("-c"); add("mcp_servers.aicode_bridge.args=[\"${dataBridgeScript()}\"]")
@@ -269,8 +275,7 @@ class CodexBridge @Inject constructor(
             put("PERMISSION_BRIDGE_SESSION", sessionId)
             put("PERMISSION_BRIDGE_TOKEN", sessionId)
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
-            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
-            // App 内已配 OpenAI key 时透传给 codex（免 ChatGPT 登录）；自定义 baseUrl 一并透传支持反代；
+            put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
             transmittableOpenAIProvider(providerId)?.let { p ->
                 put("OPENAI_API_KEY", p.firstUsableApiKey)
@@ -569,7 +574,7 @@ class CodexBridge @Inject constructor(
             put("PERMISSION_BRIDGE_SESSION", sessionId)
             put("PERMISSION_BRIDGE_TOKEN", token)
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
-            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+            put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
         }
         val inner = env.entries.joinToString(",") { "\"${it.key}\"=\"${it.value.jsonPrimitive.content}\"" }
         return "mcp_servers.aicode_bridge.env={$inner}"

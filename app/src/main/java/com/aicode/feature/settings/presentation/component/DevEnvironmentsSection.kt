@@ -156,9 +156,26 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
 
 @Composable
 internal fun DevEnvironmentsSection(
+    /** 当前活动容器的显示名（如「内置 Alpine」「Debian 12」），仅用于提示词上下文。 */
+    containerName: String = "",
+    /** 已检测到的容器系统类型（`/etc/os-release` 的 ID，如 alpine/debian/ubuntu）；null = 尚未检测。 */
+    containerOsId: String? = null,
     onLaunch: (title: String, prompt: String) -> Unit
 ) {
     var pendingScenario by remember { mutableStateOf<DevEnvScenario?>(null) }
+
+    // 把「当前实际容器」作为已知信息附在任务前面，避免 AI 沿用默认假设（如一律当 Alpine 用 apk）；
+    // 仍然要求它自己复核 /etc/os-release，因为用户可能在任务开始前切换了容器。
+    // 容器从未运行过时 osId 为空，此时不说「未检测」这种吓人的话，只交代容器名并让 AI 自己探测。
+    val environmentPrefix = remember(containerName, containerOsId) {
+        buildString {
+            append("【当前执行环境】")
+            if (containerName.isNotBlank()) append("容器：").append(containerName).append("；")
+            if (containerOsId != null) append("已探测系统类型：").append(containerOsId).append("；")
+            append("请先执行 cat /etc/os-release 与 command -v apk apt-get dnf yum pacman 确认发行版与包管理器，")
+            append("再按实际情况安装，不要凭默认假设（例如假定一定是 Alpine）。\n\n")
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize()
@@ -233,7 +250,7 @@ internal fun DevEnvironmentsSection(
             confirmButton = {
                 TextButton(onClick = {
                     pendingScenario = null
-                    onLaunch(scenarioTitle, scenarioPrompt)
+                    onLaunch(scenarioTitle, environmentPrefix + scenarioPrompt)
                 }) {
                     Text(stringResource(R.string.dev_env_confirm_action))
                 }

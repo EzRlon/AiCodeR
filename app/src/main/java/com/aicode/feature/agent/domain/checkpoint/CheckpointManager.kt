@@ -66,7 +66,32 @@ class CheckpointManager @Inject constructor(
         )
         checkpointDao.insertCheckpoint(entity)
         activeCheckpointIds[sessionId] = checkpointId
+        pruneOldCheckpoints(sessionId)
         entity
+    }
+
+    /**
+     * 单会话检查点保留上限：超出后删最旧的（连同快照目录）。
+     * 历史行为是活会话检查点永不清理，长会话下每个改过的文件都存一份原文，会持续放大。
+     * 保留窗口远大于普通回滚需求（用户只会往回跳几轮），超出的旧检查点已无实际用处。
+     */
+    private suspend fun pruneOldCheckpoints(sessionId: String) {
+        runCatching {
+            val all = checkpointDao.getCheckpointsForSession(sessionId)
+            if (all.size <= MAX_CHECKPOINTS_PER_SESSION) return@runCatching
+            val stale = all.take(all.size - MAX_CHECKPOINTS_PER_SESSION)
+            val active = activeCheckpointIds[sessionId]
+            stale.forEach { cp ->
+                // 当前活动检查点不能被清（它刚在本次回合建立，且回滚要指向它）
+                if (cp.id == active) return@forEach
+                checkpointDao.deleteFileSnapshotsForCheckpoint(cp.id)
+                checkpointDao.deleteCheckpointById(cp.id)
+                File(baseCheckpointDir, "$sessionId/${cp.id}").let { dir ->
+                    if (dir.exists()) SafeDelete.deleteTree(dir)
+                }
+            }
+            FileLogger.i(TAG, "会话检查点超过上限，已删除最旧 ${stale.size} 个: $sessionId")
+        }.onFailure { FileLogger.w(TAG, "清理旧检查点失败: $sessionId", it) }
     }
 
     fun setActiveCheckpointId(sessionId: String, checkpointId: String?) {
@@ -278,5 +303,8 @@ class CheckpointManager @Inject constructor(
 
     private companion object {
         const val TAG = "CheckpointManager"
+
+        /** 单会话保留的检查点数量上限（约 60 轮对话的回滚窗口）。 */
+        const val MAX_CHECKPOINTS_PER_SESSION = 60
     }
 }

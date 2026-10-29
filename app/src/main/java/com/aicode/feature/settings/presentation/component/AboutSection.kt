@@ -281,7 +281,7 @@ private fun AboutHeaderCard(appIcon: androidx.compose.ui.graphics.ImageBitmap?) 
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = stringResource(R.string.about_description),
+                    text = stringResource(R.string.about_developer),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

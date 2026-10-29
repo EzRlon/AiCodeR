@@ -90,6 +90,10 @@ interface LlmCallRecordDao {
     @Query("DELETE FROM llm_call_records")
     suspend fun deleteAll()
 
+    /** 删除早于 [cutoffTimestamp] 的调用记录（用量统计只保留近期，避免无上限累积）。 */
+    @Query("DELETE FROM llm_call_records WHERE createdAt < :cutoffTimestamp")
+    suspend fun deleteBefore(cutoffTimestamp: Long)
+
     /**
      * 按天聚合（本地时区：把 createdAt 平移 [tzOffsetMillis] 后再按 86400000 取整切天）。
      * [tzOffsetMillis] 由调用方按当前系统时区提供（TimeZone.getDefault().getOffset(now)）。

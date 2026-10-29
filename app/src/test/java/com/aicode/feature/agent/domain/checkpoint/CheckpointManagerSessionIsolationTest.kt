@@ -272,6 +272,14 @@ class CheckpointManagerSessionIsolationTest {
             checkpoints.removeAll { it.sessionId == sessionId }
         }
 
+        override suspend fun deleteCheckpointById(checkpointId: String) {
+            checkpoints.removeAll { it.id == checkpointId }
+        }
+
+        override suspend fun deleteFileSnapshotsForCheckpoint(checkpointId: String) {
+            snapshots.removeAll { it.checkpointId == checkpointId }
+        }
+
         override suspend fun deleteFileSnapshotsForSession(sessionId: String) {
             val ids = checkpoints.filter { it.sessionId == sessionId }.map { it.id }.toSet()
             snapshots.removeAll { it.checkpointId in ids }

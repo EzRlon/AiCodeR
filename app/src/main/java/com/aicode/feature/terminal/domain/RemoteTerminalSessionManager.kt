@@ -21,8 +21,8 @@ import javax.inject.Singleton
 
 private const val TAG = "RemoteTerminalSessionManager"
 private const val TRANSCRIPT_ROWS = 2000
-private const val DEFAULT_COLUMNS = 80
-private const val DEFAULT_ROWS = 24
+private const val DEFAULT_COLUMNS = 100
+private const val DEFAULT_ROWS = 30
 
 /**
  * 远程 SSH 终端会话管理器：用 sshj shell channel 驱动 [TerminalSession]（接 [SshShellBackend]），

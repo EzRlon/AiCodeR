@@ -10,6 +10,9 @@ data class CliAgent(
     val version: String,
     val command: String,
     val websiteUrl: String,
+    /** 官方登录/取 Key 页面：未登录时「去登录」直接开系统浏览器（容器内 CLI 的回调地址在手机上不可达，
+     *  所以推荐在浏览器授权后取 API Key 配到 App 供应商，切引擎时自动透传，不必在终端里登录）。 */
+    val loginUrl: String = websiteUrl,
     /** 终端标签里实际执行的启动命令；默认裸命令，需要启动前自愈/预处理的智能体覆写。 */
     val launchCommand: String = command
 ) {
@@ -87,7 +90,8 @@ object CliAgentCatalog {
             npmPackage = "@anthropic-ai/claude-code",
             version = "2.1.296",
             command = "claude",
-            websiteUrl = "https://claude.com/product/claude-code"
+            websiteUrl = "https://claude.com/product/claude-code",
+            loginUrl = "https://console.anthropic.com/settings/keys"
         ),
         CliAgent(
             id = "codex",
@@ -96,6 +100,7 @@ object CliAgentCatalog {
             version = "0.162.1",
             command = "codex",
             websiteUrl = "https://developers.openai.com/codex",
+            loginUrl = "https://platform.openai.com/api-keys",
             launchCommand = selfHealingLaunch("codex")
         ),
         CliAgent(
@@ -104,7 +109,8 @@ object CliAgentCatalog {
             npmPackage = "opencode-ai",
             version = "1.19.0",
             command = "opencode",
-            websiteUrl = "https://opencode.ai"
+            websiteUrl = "https://opencode.ai",
+            loginUrl = "https://opencode.ai/auth"
         )
     )
 }

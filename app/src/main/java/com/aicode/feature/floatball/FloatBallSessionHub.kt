@@ -31,10 +31,9 @@ class FloatBallSessionHub @Inject constructor(
 
     /** 面板消息流的单条快照（content 已截断压平，避免悬浮窗渲染超长文本）。 */
     data class HubMessage(
-        val role: String,              // USER / ASSISTANT / TOOL
+        val role: String,              // USER / ASSISTANT
         val text: String,              // 已按 300 字符截断、换行压平
-        val isError: Boolean = false,
-        val isVerification: Boolean = false
+        val isError: Boolean = false
     )
 
     data class HubState(

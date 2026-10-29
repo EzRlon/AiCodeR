@@ -1569,15 +1569,28 @@ class AIAgentViewModel @Inject constructor(
                     running = st is AgentUIState.Streaming || st is AgentUIState.Loading
                 )
                 floatBallSessionHub.updateSessionModel(session?.providerId, session?.model)
+                // 面板只展示「用户发的」与「AI 最终回复」：工具调用/结果、压缩分隔与摘要、
+                // 后台通知都是构造过程，不往悬浮窗镜像（内容多且无阅读价值）。
                 floatBallSessionHub.updateMessages(
-                    m.messages.map { msg ->
-                        com.aicode.feature.floatball.FloatBallSessionHub.HubMessage(
-                            role = msg.role.name,
-                            text = msg.content.replace(Regex("\\s+"), " ").take(300),
-                            isError = msg.isError,
-                            isVerification = msg.isVerificationReport
-                        )
-                    }
+                    m.messages.asSequence()
+                        .filter { msg ->
+                            when (msg.role) {
+                                MessageRole.USER -> !msg.isBackgroundNotification
+                                MessageRole.ASSISTANT ->
+                                    msg.content.isNotBlank() &&
+                                        !msg.isCompactionMarker &&
+                                        !msg.isContextSummary
+                                MessageRole.TOOL -> false
+                            }
+                        }
+                        .map { msg ->
+                            com.aicode.feature.floatball.FloatBallSessionHub.HubMessage(
+                                role = msg.role.name,
+                                text = msg.content.replace(Regex("\\s+"), " ").take(300),
+                                isError = msg.isError
+                            )
+                        }
+                        .toList()
                 )
             }.collect()
         }

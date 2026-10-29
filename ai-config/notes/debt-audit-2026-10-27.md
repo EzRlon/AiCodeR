@@ -545,3 +545,15 @@
 - dev 槽 `versionCode = gitCommitCount()+1`，开发期每次装新包都会重删重写 2.3MB（正式版仅升级时一次，属预期）。
 
 **顺带核实（非本次引入）**：`assets/notes/` 287 文件 5.8MB 是 Vditor 编辑器前端资源，自 `fd1e02d`（2026-10-13）起既有，与本次无关。
+
+---
+
+## 十三、qa 审查 SendButton 手势修复补充（2026-10-28，均为预置行为，P2）
+
+审查范围：停止后发送无反应 bug 的修复（`pointerInput(Unit)` 状态过期，`ChatInputBar.kt` SendButton）。审查结论可放行；以下 3 条为改动前已存在的预置行为，记录不修：
+
+| # | 问题 | 位置 | 改法 |
+|---|---|---|---|
+| 1 | 短按手势 `waitForUpOrCancellation()` 返回 null（被父级消费，如滚动劫持）时被当作短按触发发送，滑动中误发送的理论路径 | `ChatInputBar.kt:1243-1247` | 对返回 null 直接 return |
+| 2 | 语音按住循环中指针丢失（`?: break`）时不调 finish/cancel，`voiceHoldActive` 残留 true 到下次手势，浮层可能滞留 | `ChatInputBar.kt:1264-1267` | break 前补 cancel 分支 |
+| 3 | `detectTapGestures` import 已无使用点 | `ChatInputBar.kt:21` | 删除 |

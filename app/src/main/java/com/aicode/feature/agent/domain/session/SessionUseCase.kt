@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.session
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
@@ -17,7 +18,8 @@ import javax.inject.Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val agentMessageDao: AgentMessageDao,
-    private val todoItemDao: TodoItemDao
+    private val todoItemDao: TodoItemDao,
+    private val llmCallRecordDao: LlmCallRecordDao
 ) {
     companion object {
         private const val TAG = "SessionUseCase"
@@ -29,6 +31,8 @@ class SessionUseCase @Inject constructor(
         /** 历史版本停止 emoji 前缀；UI 剥离结果文本时兼容。 */
         const val LEGACY_STOPPED_TOOL_MARKER = "\u23F9"
         const val INTERRUPTED_TOOL_TEXT = "执行被中断（应用已关闭）"
+        /** LLM 用量记录的保留天数（仅用于统计，过期即删）。 */
+        const val LLM_RECORD_RETENTION_DAYS = 90L
     }
 
     /** 冷启动收尾：上次进程被杀时若有工具正在执行，其占位行会永久显示「执行中」。 */
@@ -43,6 +47,12 @@ class SessionUseCase @Inject constructor(
             }
             if (n > 0) FileLogger.i(TAG, "冷启动收尾 $n 条残留「执行中」工具行为已中断")
         }.onFailure { FileLogger.e(TAG, "回收残留执行中工具行失败", it) }
+        // 用量记录只保留近 [LLM_RECORD_RETENTION_DAYS] 天：该表只增不删，长用下去会持续膨胀
+        // （单行小，但每次 LLM 调用都一行）。历史统计窗口取 90 天已足够看趋势。
+        runCatching {
+            val cutoff = System.currentTimeMillis() - LLM_RECORD_RETENTION_DAYS * 24L * 60 * 60 * 1000
+            llmCallRecordDao.deleteBefore(cutoff)
+        }.onFailure { FileLogger.w(TAG, "清理过期用量记录失败", it) }
     }
 
     fun newSessionEntity(

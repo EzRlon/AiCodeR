@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import io.mockk.coEvery
@@ -33,7 +34,7 @@ class SessionUseCaseWorkspaceDeletionTest {
             session("sub", "/ws/a", parentId = "root")
         )
 
-        val useCase = SessionUseCase(chatDao, messageDao, todoDao)
+        val useCase = SessionUseCase(chatDao, messageDao, todoDao, mockk(relaxed = true))
         val deleted = useCase.deleteSessionsByWorkspace("/ws/a")
 
         assertEquals(2, deleted)
@@ -49,7 +50,7 @@ class SessionUseCaseWorkspaceDeletionTest {
         val todoDao = mockk<TodoItemDao>(relaxed = true)
         coEvery { chatDao.getAllSessionsByWorkspaceOnceIncludingTrashed("/ws/empty") } returns emptyList()
 
-        val useCase = SessionUseCase(chatDao, messageDao, todoDao)
+        val useCase = SessionUseCase(chatDao, messageDao, todoDao, mockk(relaxed = true))
         val deleted = useCase.deleteSessionsByWorkspace("/ws/empty")
 
         assertEquals(0, deleted)
@@ -61,7 +62,7 @@ class SessionUseCaseWorkspaceDeletionTest {
     @Test
     fun deleteSession_marksWholeGroupDeletedInsteadOfRemovingRows() = runTest {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
-        val useCase = SessionUseCase(chatDao, mockk(relaxed = true), mockk(relaxed = true))
+        val useCase = SessionUseCase(chatDao, mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
         coEvery { chatDao.getSubSessionsByParentOnceIncludingTrashed("root") } returns listOf(
             session("sub", "/ws/a", parentId = "root")
         )
@@ -79,7 +80,7 @@ class SessionUseCaseWorkspaceDeletionTest {
     @Test
     fun restoreSession_clearsDeletedAtForWholeGroup() = runTest {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
-        val useCase = SessionUseCase(chatDao, mockk(relaxed = true), mockk(relaxed = true))
+        val useCase = SessionUseCase(chatDao, mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
         coEvery { chatDao.getSubSessionsByParentOnceIncludingTrashed("root") } returns emptyList()
 
         useCase.restoreSession("root")
@@ -93,7 +94,7 @@ class SessionUseCaseWorkspaceDeletionTest {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         val todoDao = mockk<TodoItemDao>(relaxed = true)
-        val useCase = SessionUseCase(chatDao, messageDao, todoDao)
+        val useCase = SessionUseCase(chatDao, messageDao, todoDao, mockk(relaxed = true))
         coEvery { chatDao.getSubSessionsByParentOnceIncludingTrashed("root") } returns listOf(
             session("sub", "/ws/a", parentId = "root")
         )
@@ -114,7 +115,7 @@ class SessionUseCaseWorkspaceDeletionTest {
         val chatDao = mockk<ChatSessionDao>(relaxed = true)
         val messageDao = mockk<AgentMessageDao>(relaxed = true)
         val todoDao = mockk<TodoItemDao>(relaxed = true)
-        val useCase = SessionUseCase(chatDao, messageDao, todoDao)
+        val useCase = SessionUseCase(chatDao, messageDao, todoDao, mockk(relaxed = true))
         coEvery { chatDao.getExpiredTrashed(1000L) } returns listOf(
             session("a", "/ws/a"),
             session("b", "/ws/a")

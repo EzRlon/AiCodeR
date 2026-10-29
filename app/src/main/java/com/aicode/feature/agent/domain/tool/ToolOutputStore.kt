@@ -37,6 +37,15 @@ class ToolOutputStore @Inject constructor(
         const val MAX_INLINE_CHARS = HEAD_CHARS + TAIL_CHARS
         val LARGE_TEXT_FIELDS = listOf("output", "content", "text", "stdout", "stderr", "body", "result")
         val TIMESTAMP_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
+
+        /**
+         * 工具输出存档目录的总字节上限；超过后每次写入按 mtime 淘汰最旧的文件。
+         * 历史行为是无上限追加（每次大输出一个新文件），长开发会话下会持续增长。
+         */
+        const val MAX_STORE_BYTES = 512L * 1024 * 1024
+
+        /** 存档目录文件数上限，兼底：大量小文件时按字节阈值可能很久不触发。 */
+        const val MAX_STORE_FILES = 3000
     }
 
     private val json = Json { encodeDefaults = true }
@@ -152,11 +161,38 @@ class ToolOutputStore @Inject constructor(
             val path = uniqueOutputPath(dir, toolName, callId)
             fileAccess.writeFile(path, text, overwrite = false)
             FileLogger.i(TAG, "工具输出已保存: $path (${text.length} chars)")
+            pruneIfNeeded(dir, keepPath = path)
             StoredPathResult(outputPath = path)
         } catch (e: Exception) {
             FileLogger.w(TAG, "保存工具输出失败: ${e.message}", e)
             StoredPathResult(storageError = e.message ?: "保存工具输出失败")
         }
+    }
+
+    /**
+     * 按 mtime 从旧到新删除，直到目录总量低于 [MAX_STORE_BYTES] 且文件数低于 [MAX_STORE_FILES]。
+     * [keepPath] 是本次刚写入的存档，永不淘汰——AI 本轮正要按这个路径回读它。
+     * 删除失败不抛：存档目录不可写时只告警，不影响当前回合。
+     */
+    private fun pruneIfNeeded(dir: String, keepPath: String) {
+        runCatching {
+            val files = fileAccess.listFiles(dir).filter { !it.isDirectory }
+            if (files.isEmpty()) return@runCatching
+            var total = files.sumOf { it.size }
+            var count = files.size
+            if (total <= MAX_STORE_BYTES && count <= MAX_STORE_FILES) return@runCatching
+            val dirSlash = dir.trimEnd('/')
+            for (entry in files.sortedBy { it.lastModified }) {
+                if (total <= MAX_STORE_BYTES && count <= MAX_STORE_FILES) break
+                val entryPath = "$dirSlash/${entry.name}"
+                if (entryPath == keepPath) continue
+                runCatching {
+                    fileAccess.delete(entryPath)
+                    total -= entry.size
+                    count--
+                }
+            }
+        }.onFailure { FileLogger.w(TAG, "工具输出存档清理失败: ${it.message}") }
     }
 
     private fun uniqueOutputPath(dir: String, toolName: String, callId: String): String {

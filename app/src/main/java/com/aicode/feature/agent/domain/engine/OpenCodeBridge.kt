@@ -97,6 +97,12 @@ class OpenCodeBridge @Inject constructor(
     private val assetsMutex = Mutex()
 
     private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
+
+    /**
+     * 容器内的工作区路径：CLI 参数（`--dir`）与桥接环境变量都必须是容器视角路径。
+     * 调用方传的 projectPath 是宿主真实目录（仅用于 proot `-b` 绑定），直接透给容器内 CLI 会报目录不存在。
+     */
+    private fun containerWorkspacePath(): String = pathHomeResolver.home().trimEnd('/') + "/workspace"
     private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun sessionsPath(): String = bridgeDir() + SESSIONS_FILE
 
@@ -245,7 +251,7 @@ class OpenCodeBridge @Inject constructor(
             if (autoApprove) add("--auto")
             // 思考过程事件（session.reasoning.ended）需要该开关才外发
             add("--thinking")
-            if (!projectPath.isNullOrBlank()) { add("--dir"); add(projectPath) }
+            if (!projectPath.isNullOrBlank()) { add("--dir"); add(containerWorkspacePath()) }
             if (effectiveResume) { add("-s"); add(resumeSessionId!!) }
             // 会话模型格式为 provider/model（如 openai/gpt-5.3-codex）；default/空 不传，跟随 CLI 配置
             if (!model.isNullOrBlank() && model != "default") { add("-m"); add(model) }
@@ -257,7 +263,7 @@ class OpenCodeBridge @Inject constructor(
             put("PERMISSION_BRIDGE_SESSION", sessionId)
             put("PERMISSION_BRIDGE_TOKEN", sessionId)
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
-            put("AICODE_PROJECT_ROOT", projectPath?.trimEnd('/') ?: "")
+            put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // MCP 挂载：官方优先级链合并（不整体替换用户配置；mcp 同键会被覆盖）
             // 配置内容要枚举 App 智能体定义（读容器文件），移出主线程
             put("OPENCODE_CONFIG_CONTENT", withContext(Dispatchers.IO) { configContent(sessionId, customProviderJson) })

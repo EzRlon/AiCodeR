@@ -785,7 +785,8 @@ private fun CliEngineRows(
                 state.version == null -> stringResource(R.string.agent_cli_not_installed)
                 state.authHint != null ->
                     stringResource(R.string.agent_cli_installed, state.version) + " · " +
-                        stringResource(R.string.engine_not_logged_in)
+                        stringResource(R.string.engine_not_logged_in) + "\n" +
+                        stringResource(R.string.engine_login_hint)
                 else -> stringResource(R.string.agent_cli_installed, state.version)
             },
             onClick = {
@@ -807,12 +808,15 @@ private fun CliEngineRows(
                         TextButton(onClick = { viewModel.install(state.agent) }) {
                             Text(stringResource(R.string.agent_cli_reinstall))
                         }
+                        // 未登录优先给浏览器授权入口：容器内 CLI 的登录回调在手机上不可达，
+                        // 浏览器拿 Key 配到 App 供应商后切引擎会自动透传，这是真机唯一能走通的路。
+                        if (state.authHint != null) {
+                            TextButton(onClick = { openUrl(context, state.agent.loginUrl) }) {
+                                Text(stringResource(R.string.engine_go_login))
+                            }
+                        }
                         TextButton(onClick = { viewModel.launch(state.agent) { onOpenTerminal() } }) {
-                            Text(
-                                stringResource(
-                                    if (state.authHint != null) R.string.engine_go_login else R.string.agent_cli_launch
-                                )
-                            )
+                            Text(stringResource(R.string.agent_cli_launch))
                         }
                     }
                 }

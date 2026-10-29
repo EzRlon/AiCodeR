@@ -2,6 +2,7 @@ package com.aicode.feature.agent.domain.session
 
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
@@ -19,7 +20,8 @@ class SessionUseCaseModeTest {
     private val useCase = SessionUseCase(
         mockk<ChatSessionDao>(relaxed = true),
         mockk<AgentMessageDao>(relaxed = true),
-        mockk<TodoItemDao>(relaxed = true)
+        mockk<TodoItemDao>(relaxed = true),
+        mockk<LlmCallRecordDao>(relaxed = true)
     )
 
     private fun parent(mode: AgentMode) = ChatSessionEntity(

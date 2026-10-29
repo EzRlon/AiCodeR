@@ -29,7 +29,16 @@ class MessagePersistenceUseCase @Inject constructor(
     /** agent_messages 表变更版本号：任何写路径（含 rewind 删除、压缩标记、冷启动清理）触发递增，
      *  作为 [buildHistory] 缓存的失效信号。InvalidationTracker 监听表级变更，覆盖所有 DAO 写入。 */
     private val dbVersion = java.util.concurrent.atomic.AtomicLong(0)
-    private val historyCache = HashMap<String, HistoryEntry>()
+
+    /**
+     * 上下文历史缓存（sessionId → 重建结果）。按访问顺序的 LRU：长期使用会访问很多会话，
+     * 每个条目是该会话可用于回放的完整消息列表（可能几 MB），不设上限会随会话数无界增长。
+     * 当前会话必在最近访问之列，淘汰只会冲击游离会话，下次访问重建即可。
+     */
+    private val historyCache = object : LinkedHashMap<String, HistoryEntry>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, HistoryEntry>?): Boolean =
+            size > MAX_HISTORY_CACHE_SESSIONS
+    }
 
     private class HistoryEntry(
         val version: Long,
@@ -193,6 +202,9 @@ class MessagePersistenceUseCase @Inject constructor(
         private const val MAX_IMAGE_CACHE_ENTRIES = 12
         /** 图片 base64 缓存总字节上限（base64 为原始大小的 ~4/3，48MB 约可存 36MB 原始图片）。 */
         private const val MAX_IMAGE_CACHE_BYTES = 48L * 1024 * 1024
+
+        /** 上下文历史缓存最多保留的会话数（LRU）。 */
+        private const val MAX_HISTORY_CACHE_SESSIONS = 6
 
         /** 内嵌 base64 图片 data URL（`data:image/...;base64,...`）。 */
         private val INLINE_BASE64_IMAGE = Regex("""data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+""")
