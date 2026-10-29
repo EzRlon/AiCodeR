@@ -59,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -1181,6 +1182,15 @@ internal fun SendButton(
     val iconTint = Color.White
     val arcColor = buttonColor.copy(alpha = 0.85f)
     val clampedProgress = tokenProgress.coerceIn(0f, 1f)
+    // pointerInput(Unit) 手势协程只在首次组合启动一次，直接捕获 clickable/onSend 等会拿到旧值
+    // （停止后输入文字再点发送无反应、退出会话重建节点才恢复），必须经 rememberUpdatedState 读取最新值。
+    val currentClickable by rememberUpdatedState(clickable)
+    val currentShowStop by rememberUpdatedState(showStop)
+    val currentOnSend by rememberUpdatedState(onSend)
+    val currentOnStop by rememberUpdatedState(onStop)
+    val currentOnVoiceHoldStart by rememberUpdatedState(onVoiceHoldStart)
+    val currentOnVoiceHoldFinish by rememberUpdatedState(onVoiceHoldFinish)
+    val currentOnVoiceHoldCancel by rememberUpdatedState(onVoiceHoldCancel)
     Box(
         modifier = Modifier
             .padding(Spacing.xs)
@@ -1218,8 +1228,8 @@ internal fun SendButton(
                 .clip(CircleShape)
                 .background(buttonColor)
                 .then(
-                    if (showStop) {
-                        Modifier.clickable(enabled = clickable, onClick = onStop)
+                    if (currentShowStop) {
+                        Modifier.clickable(enabled = currentClickable, onClick = currentOnStop)
                     } else {
                         // 短按 = 发送；长按 = 应用内语音「按住说话」（松手识别发送、上滑取消）。
                         Modifier.pointerInput(Unit) {
@@ -1235,11 +1245,11 @@ internal fun SendButton(
                                     longPressed = true
                                 }
                                 if (!longPressed) {
-                                    if (clickable) onSend()
+                                    if (currentClickable) currentOnSend()
                                     return@awaitEachGesture
                                 }
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onVoiceHoldStart()
+                                currentOnVoiceHoldStart()
                                 var cancelled = false
                                 var released = false
                                 while (true) {
@@ -1254,7 +1264,7 @@ internal fun SendButton(
                                     cancelled = dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx()
                                     change.consume()
                                 }
-                                if (released && !cancelled) onVoiceHoldFinish() else onVoiceHoldCancel()
+                                if (released && !cancelled) currentOnVoiceHoldFinish() else currentOnVoiceHoldCancel()
                             }
                         }
                     }

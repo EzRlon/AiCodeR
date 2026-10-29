@@ -261,6 +261,8 @@ fun SettingsScreen(
     val skillImportState by viewModel.skillImportState.collectAsStateWithLifecycle()
     val skillDeleting by viewModel.skillDeleting.collectAsStateWithLifecycle()
     val subAgents by viewModel.subAgents.collectAsStateWithLifecycle()
+    val teams by viewModel.teams.collectAsStateWithLifecycle()
+    val teamMessage by viewModel.teamMessage.collectAsStateWithLifecycle()
     val subAgentSaveState by viewModel.subAgentSaveState.collectAsStateWithLifecycle()
     val subAgentDeleting by viewModel.subAgentDeleting.collectAsStateWithLifecycle()
     val defaultModelProviderId by viewModel.defaultModelProviderId.collectAsStateWithLifecycle()
@@ -1444,9 +1446,23 @@ fun SettingsScreen(
                     }
                     )
                 }
-                SettingsSection.Teams -> TeamsSection(
-                    teams = remember(section) { viewModel.listTeams() }
-                )
+                SettingsSection.Teams -> {
+                    // 进入分区时重扫：商店刚安装的专家团无需退出设置页即可出现。
+                    LaunchedEffect(Unit) { viewModel.refreshTeams() }
+                    LaunchedEffect(teamMessage) {
+                        teamMessage?.let {
+                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                            viewModel.consumeTeamMessage()
+                        }
+                    }
+                    TeamsSection(
+                        teams = teams,
+                        onToggle = { entry, enabled ->
+                            viewModel.setTeamEnabled(entry.name, enabled, entry.scope)
+                        },
+                        onDelete = { viewModel.deleteTeam(it) }
+                    )
+                }
                 SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
                     SubAgentDetailSection(
                         entry = entry,

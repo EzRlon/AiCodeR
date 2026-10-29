@@ -2356,6 +2356,10 @@
     <string name="settings_teams_empty">No team definitions yet</string>
     <string name="settings_teams_empty_desc">Add a &lt;name&gt;.md under ~/.aicode/teams or the workspace .aicode/teams</string>
     <string name="settings_teams_hint">Format: YAML frontmatter with name/description/members; the body is the leader prompt. Summon from the team button in the chat header.</string>
+    <string name="settings_team_delete_title">Delete expert team</string>
+    <string name="settings_team_delete_confirm">Delete expert team "%1$s"? Only the team definition is removed; member experts stay.</string>
+    <string name="settings_team_deleted">Expert team deleted</string>
+    <string name="settings_team_delete_failed">Failed to delete expert team, check the logs</string>
     <string name="team_picker_title">Expert teams</string>
     <string name="team_picker_none">No team</string>
     <string name="team_picker_empty">No team definitions yet</string>

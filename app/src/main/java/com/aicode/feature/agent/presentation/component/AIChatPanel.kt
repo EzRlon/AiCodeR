@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -114,6 +115,7 @@ import com.aicode.feature.settings.data.repository.VoiceEngine
 import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
 import com.aicode.feature.settings.domain.model.modelMetadataKey
+import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import compose.icons.FeatherIcons
@@ -2126,8 +2128,12 @@ fun AIChatPanel(
             if (showTeamPicker) {
                 // 每次打开实时扫描专家团目录，用户改动定义文件后立即可见
                 val teams = remember(showTeamPicker) { viewModel.listTeams() }
+                val teamTranslations by produceState(emptyMap<String, StoreTranslation>(), showTeamPicker) {
+                    value = viewModel.teamTranslations()
+                }
                 TeamPickerSheet(
                     teams = teams,
+                    translations = teamTranslations,
                     currentTeam = teamName,
                     onSelect = { name ->
                         viewModel.setSessionTeam(name)

@@ -2356,6 +2356,10 @@
     <string name="settings_teams_empty">暂无专家团定义</string>
     <string name="settings_teams_empty_desc">在 ~/.aicode/teams 或工作区 .aicode/teams 放置 &lt;name&gt;.md 即可新增</string>
     <string name="settings_teams_hint">专家团格式：YAML frontmatter 写 name/description/members，正文为团长提示词；聊天页顶栏的专家团按钮可召唤。</string>
+    <string name="settings_team_delete_title">删除专家团</string>
+    <string name="settings_team_delete_confirm">确认删除专家团「%1$s」？仅删除该团定义，成员专家保留。</string>
+    <string name="settings_team_deleted">专家团已删除</string>
+    <string name="settings_team_delete_failed">专家团删除失败，请查看日志</string>
     <string name="team_picker_title">专家团</string>
     <string name="team_picker_none">不使用专家团</string>
     <string name="team_picker_empty">暂无专家团定义</string>

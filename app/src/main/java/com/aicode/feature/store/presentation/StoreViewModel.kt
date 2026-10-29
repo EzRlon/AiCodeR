@@ -388,14 +388,18 @@ class StoreViewModel @Inject constructor(
                         val plan = installer.planSkillInstall(item)
                         recordScan(plan.item.id, plan.scan)
                         resolveGate(PendingScanGate.Skill(plan)) {
-                            "已安装技能「${installer.commitSkillInstall(plan)}」（默认未启用，可在技能页开启）"
+                            val installed = installer.commitSkillInstall(plan)
+                            linkTranslation(item.storeTranslationKey(), "SKILL:${installed.lowercase()}")
+                            "已安装技能「$installed」（默认未启用，可在技能页开启）"
                         }
                     }
                     StoreKind.MCP -> {
                         val scan = installer.scanMcp(item)
                         recordScan(item.id, scan)
                         resolveGate(PendingScanGate.Mcp(item, scan)) {
-                            "已添加 MCP 服务器「${installer.installMcp(item)}」（默认未启用，可在 MCP 页开启）"
+                            val name = installer.installMcp(item)
+                            linkTranslation(item.storeTranslationKey(), "MCP:$name")
+                            "已添加 MCP 服务器「$name」（默认未启用，可在 MCP 页开启）"
                         }
                     }
                     StoreKind.EXPERT -> {
@@ -429,10 +433,16 @@ class StoreViewModel @Inject constructor(
             try {
                 var teamInstalled = false
                 val msg = when (gate) {
-                    is PendingScanGate.Skill ->
-                        "已安装技能「${installer.commitSkillInstall(gate.plan)}」（默认未启用，可在技能页开启）"
-                    is PendingScanGate.Mcp ->
-                        "已添加 MCP 服务器「${installer.installMcp(gate.item)}」（默认未启用，可在 MCP 页开启）"
+                    is PendingScanGate.Skill -> {
+                        val installed = installer.commitSkillInstall(gate.plan)
+                        linkTranslation(gate.plan.item.storeTranslationKey(), "SKILL:${installed.lowercase()}")
+                        "已安装技能「$installed」（默认未启用，可在技能页开启）"
+                    }
+                    is PendingScanGate.Mcp -> {
+                        val name = installer.installMcp(gate.item)
+                        linkTranslation(gate.item.storeTranslationKey(), "MCP:$name")
+                        "已添加 MCP 服务器「$name」（默认未启用，可在 MCP 页开启）"
+                    }
                     is PendingScanGate.Team -> {
                         teamInstalled = withContext(Dispatchers.IO) { commitTeam(gate.plan) }
                         if (teamInstalled) {
@@ -618,7 +628,7 @@ class StoreViewModel @Inject constructor(
     }
 
     /** 专家团安装第二阶段：把计划中的内容写盘（内置成员不覆盖已有定义）。 */
-    private fun commitTeam(plan: TeamInstallPlan): Boolean = runCatching {
+    private suspend fun commitTeam(plan: TeamInstallPlan): Boolean = runCatching {
         val teamPath = if (plan.item.online) {
             // name/成员名均来自远端不可信源（市场 JSON 经镜像），含路径分隔符即可写出目录外
             val safeTeam = safeName(plan.item.name) ?: return@runCatching false
@@ -633,10 +643,18 @@ class StoreViewModel @Inject constructor(
                 fileAccess.writeFile("~/.aicode/agents/$safeMember.md", text)
             }
         }
+        // 译文按「商店键」写入，安装后本地按文件名查：迁移一份，设置页与专家团弹窗才能显示中文
+        linkTranslation(plan.item.storeTranslationKey(), "EXPERT:${teamPath.substringAfterLast('/')}")
         true
     }.getOrElse { e ->
         FileLogger.w(TAG, "安装专家团失败", e)
         false
+    }
+
+    /** 安装完成后把商店条目的译文迁到本地条目键（失败不影响安装，界面回退原文）。 */
+    private suspend fun linkTranslation(fromKey: String, toKey: String) {
+        runCatching { translationStore.migrate(fromKey, toKey) }
+            .onFailure { FileLogger.w(TAG, "迁移条目译文失败：$fromKey → $toKey", it) }
     }
 
     /** 远端提供的名称在拼进盘上路径前统一安全化：只留字母/数字/汉字/空格/._-，剔除分隔符与首部点号。 */

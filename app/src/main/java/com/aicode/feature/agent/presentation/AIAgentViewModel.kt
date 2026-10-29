@@ -36,6 +36,8 @@ import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.settings.domain.model.ProviderType
+import com.aicode.feature.store.data.StoreTranslation
+import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
@@ -236,6 +238,7 @@ class AIAgentViewModel @Inject constructor(
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val teamRepository: TeamRepository,
+    private val storeTranslationStore: StoreTranslationStore,
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
@@ -3328,8 +3331,11 @@ class AIAgentViewModel @Inject constructor(
         _teamName.value = name
     }
 
-    /** 专家团定义列表（供选择器展示；实时扫描，用户改动文件后立即可见）。 */
+    /** 专家团定义列表（供选择器展示；实时扫描，已禁用的团不出现在这里）。 */
     fun listTeams(): List<TeamDefinitionEntry> = teamRepository.listAll()
+
+    /** 商店条目译文（专家团选择器按名称显示中文名与描述）。 */
+    suspend fun teamTranslations(): Map<String, StoreTranslation> = storeTranslationStore.all()
 
     fun resolveToolPermission(id: String, choice: PermissionChoice) {
         toolPermissionManager.resolve(id, choice)

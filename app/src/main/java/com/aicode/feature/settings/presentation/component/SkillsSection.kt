@@ -291,7 +291,8 @@ private fun SkillRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = entry.name,
+                        text = entry.name +
+                            (if (entry.nameZh.isNotBlank()) "（${entry.nameZh}）" else ""),
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -305,7 +306,8 @@ private fun SkillRow(
                     )
                 }
                 Text(
-                    text = entry.description.ifBlank { stringResource(R.string.mcp_no_description) },
+                    text = entry.descriptionZh.ifBlank { entry.description }
+                        .ifBlank { stringResource(R.string.mcp_no_description) },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

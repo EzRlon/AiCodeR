@@ -117,7 +117,8 @@ class StoreTranslationService @Inject constructor(
             entry.id to StoreTranslation(
                 nameZh = entry.nameZh.trim(),
                 descriptionZh = entry.descriptionZh.trim(),
-                sourceHash = item.storeTranslationSourceHash()
+                sourceHash = item.storeTranslationSourceHash(),
+                sourceName = item.name
             )
         }.toMap().ifEmpty { null }
     }
@@ -140,7 +141,8 @@ class StoreTranslationService @Inject constructor(
                         StoreTranslation(
                             nameZh = nameZh,
                             descriptionZh = translated[index * 2 + 1].trim(),
-                            sourceHash = item.storeTranslationSourceHash()
+                            sourceHash = item.storeTranslationSourceHash(),
+                            sourceName = item.name
                         )
                     )
                 }

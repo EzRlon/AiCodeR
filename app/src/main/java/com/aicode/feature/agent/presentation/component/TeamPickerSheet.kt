@@ -29,6 +29,8 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
+import com.aicode.feature.store.data.StoreTranslation
+import com.aicode.feature.store.data.StoreTranslationStore
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 
@@ -40,6 +42,7 @@ import compose.icons.feathericons.Check
 @Composable
 internal fun TeamPickerSheet(
     teams: List<TeamDefinitionEntry>,
+    translations: Map<String, StoreTranslation>,
     currentTeam: String?,
     onSelect: (String?) -> Unit,
     onDismiss: () -> Unit
@@ -112,6 +115,15 @@ internal fun TeamPickerSheet(
                 ) {
                     items(teams, key = { it.definition.name }) { entry ->
                         val team = entry.definition
+                        val translation = StoreTranslationStore.find(
+                            translations,
+                            "EXPERT:${team.filePath?.substringAfterLast('/').orEmpty()}",
+                            team.name,
+                            team.description
+                        )
+                        val displayName = translation?.nameZh?.takeIf { it.isNotBlank() }.orEmpty()
+                        val displayDescription =
+                            translation?.descriptionZh?.takeIf { it.isNotBlank() } ?: team.description
                         val selected = currentTeam != null && team.name.equals(currentTeam, ignoreCase = true)
                         Row(
                             modifier = Modifier
@@ -122,7 +134,9 @@ internal fun TeamPickerSheet(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = team.name + " · " + stringResource(R.string.team_members_count, team.members.size),
+                                    text = team.name +
+                                        (if (displayName.isNotEmpty()) "（$displayName）" else "") +
+                                        " · " + stringResource(R.string.team_members_count, team.members.size),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = if (selected) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurface,
@@ -130,9 +144,9 @@ internal fun TeamPickerSheet(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (team.description.isNotBlank()) {
+                                if (displayDescription.isNotBlank()) {
                                     Text(
-                                        text = team.description,
+                                        text = displayDescription,
                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                         color = MaterialTheme.semanticColors.subtleText,
                                         maxLines = 2,

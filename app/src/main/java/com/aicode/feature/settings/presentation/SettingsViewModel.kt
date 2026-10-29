@@ -19,7 +19,8 @@ import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
-import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
+import com.aicode.feature.agent.domain.team.TeamConfigRepository
+import com.aicode.feature.agent.domain.team.TeamDefinitionScope
 import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.agent.domain.team.TeamRepository
 import com.aicode.feature.agent.domain.container.ContainerProfile
@@ -57,6 +58,7 @@ import com.aicode.feature.agent.domain.subagent.AgentSaveError
 import com.aicode.feature.agent.domain.subagent.InjectPart
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.settings.data.remote.ModelApiService
+import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
 import com.aicode.feature.settings.data.remote.ContainerImageVersionProbe
 import com.aicode.feature.settings.data.remote.ModelMetadataService
@@ -287,7 +289,7 @@ private data class ModelStatsPaging(
     val total: Int
 )
 
-/** 技能列表页的 UI 状态：技能 + 来源作用域 + 启停状态。 */
+/** 技能列表页的 UI 状态：技能 + 来源作用域 + 启停状态 + 商店译文。 */
 data class SkillUiEntry(
     val name: String,
     val description: String,
@@ -295,7 +297,22 @@ data class SkillUiEntry(
     val disabled: Boolean,
     val instructions: String,
     /** 手写技能里的 `required_tools`，编辑页不展示，保存时原样写回。 */
-    val requiredTools: List<String> = emptyList()
+    val requiredTools: List<String> = emptyList(),
+    /** 商店条目的中文名与描述（技能来自在线安装时才有，为空回退原文）。 */
+    val nameZh: String = "",
+    val descriptionZh: String = ""
+)
+
+/** 专家团设置页的 UI 状态：定义 + 来源 + 启停 + 商店译文。 */
+data class TeamUiEntry(
+    val name: String,
+    val description: String,
+    val scope: TeamDefinitionScope,
+    val filePath: String?,
+    val memberCount: Int,
+    val disabled: Boolean,
+    val nameZh: String = "",
+    val descriptionZh: String = ""
 )
 
 /** 子代理列表页的 UI 状态：定义内容 + 来源作用域 + 启停状态。 */
@@ -383,6 +400,8 @@ class SettingsViewModel @Inject constructor(
     private val approvalNotificationSettingsRepository: ApprovalNotificationSettingsRepository,
     private val generalSettingsRepository: GeneralSettingsRepository,
     private val teamRepository: TeamRepository,
+    private val teamConfigRepository: TeamConfigRepository,
+    private val storeTranslationStore: StoreTranslationStore,
     private val languageSettingsRepository: LanguageSettingsRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val mcpManager: McpManager,
@@ -1683,16 +1702,25 @@ class SettingsViewModel @Inject constructor(
     /** 重新扫描技能（进入设置页 / 启停切换后调用，反映磁盘上增删改）。 */
     fun refreshSkills() {
         viewModelScope.launch {
+            val translations = storeTranslationStore.all()
             _skills.value = withContext(Dispatchers.IO) {
                 val disabled = skillRepository.disabledNames()
                 skillRepository.listAllSkills().map { entry ->
+                    val translation = StoreTranslationStore.find(
+                        translations,
+                        "SKILL:${entry.skill.name.lowercase()}",
+                        entry.skill.name,
+                        entry.skill.description
+                    )
                     SkillUiEntry(
                         name = entry.skill.name,
                         description = entry.skill.description,
                         scope = entry.scope,
                         disabled = entry.skill.name.lowercase() in disabled,
                         instructions = entry.skill.instructions,
-                        requiredTools = entry.skill.requiredTools
+                        requiredTools = entry.skill.requiredTools,
+                        nameZh = translation?.nameZh.orEmpty(),
+                        descriptionZh = translation?.descriptionZh.orEmpty()
                     )
                 }
             }
@@ -2284,8 +2312,70 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** 专家团定义列表（供「专家团」设置区展示）。 */
-    fun listTeams(): List<TeamDefinitionEntry> = teamRepository.listAll()
+    // ── 专家团（启用 / 删除）──
+
+    private val _teams = MutableStateFlow<List<TeamUiEntry>>(emptyList())
+    val teams: StateFlow<List<TeamUiEntry>> = _teams.asStateFlow()
+
+    private val _teamMessage = MutableStateFlow<String?>(null)
+    val teamMessage: StateFlow<String?> = _teamMessage.asStateFlow()
+
+    /** 重新扫描专家团（含已禁用的，设置页需要它们来重新启用）。 */
+    fun refreshTeams() {
+        viewModelScope.launch {
+            val translations = storeTranslationStore.all()
+            val entries = withContext(Dispatchers.IO) {
+                val disabled = teamConfigRepository.disabledNames()
+                teamRepository.listAll(includeDisabled = true).map { entry ->
+                    val team = entry.definition
+                    val translation = StoreTranslationStore.find(
+                        translations,
+                        "EXPERT:${team.filePath?.substringAfterLast('/').orEmpty()}",
+                        team.name,
+                        team.description
+                    )
+                    TeamUiEntry(
+                        name = team.name,
+                        description = team.description,
+                        scope = entry.scope,
+                        filePath = team.filePath,
+                        memberCount = team.members.size,
+                        disabled = team.name.lowercase() in disabled,
+                        nameZh = translation?.nameZh.orEmpty(),
+                        descriptionZh = translation?.descriptionZh.orEmpty()
+                    )
+                }
+            }
+            _teams.value = entries
+        }
+    }
+
+    /** 切换专家团的启用/禁用（禁用名单写入对应作用域的 teams.json）。 */
+    fun setTeamEnabled(name: String, enabled: Boolean, scope: TeamDefinitionScope) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { teamConfigRepository.setDisabled(name, !enabled, scope) }
+            refreshTeams()
+        }
+    }
+
+    /** 删除专家团定义文件（成员专家定义保留）：同时清掉它可能残留的禁用名单项。 */
+    fun deleteTeam(entry: TeamUiEntry) {
+        viewModelScope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                val ok = teamRepository.delete(entry.filePath)
+                if (ok) teamConfigRepository.clearDisabled(entry.name)
+                ok
+            }
+            _teamMessage.value = context.getString(
+                if (deleted) R.string.settings_team_deleted else R.string.settings_team_delete_failed
+            )
+            refreshTeams()
+        }
+    }
+
+    fun consumeTeamMessage() {
+        _teamMessage.value = null
+    }
 
     /** 自我改进模式开关：开启后系统提示词注入自我改进指令。 */
     fun setSelfImproveMode(enabled: Boolean) {
