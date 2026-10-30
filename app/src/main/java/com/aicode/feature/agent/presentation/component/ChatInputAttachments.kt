@@ -80,6 +80,7 @@ import compose.icons.feathericons.Image
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Paperclip
 import compose.icons.feathericons.X
+import compose.icons.feathericons.Bell
 import compose.icons.feathericons.Zap
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
@@ -98,7 +99,8 @@ internal fun QueuedRequestPanel(
     onRemoveQueued: (String) -> Unit,
     onMoveQueued: (Int, Int) -> Unit,
     onEditQueued: (QueuedRequest) -> Unit,
-    onInterjectQueued: (String) -> Unit
+    onInterjectQueued: (String) -> Unit,
+    onPassiveForwardQueued: (String) -> Unit = {}
 ) {
     // 按会话记忆展开状态；默认展开仅限少量条目：多条队列+仪表盘+输入卡同屏时总高
     // 超出底栏可用空间，无滚动 Column 溢出会挤压末端控制行（发送按钮被压扁，用户反馈 2026-10-18）。
@@ -257,6 +259,17 @@ internal fun QueuedRequestPanel(
                                     FeatherIcons.Zap,
                                     contentDescription = stringResource(R.string.chat_queue_interject),
                                     tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onPassiveForwardQueued(req.id) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    FeatherIcons.Bell,
+                                    contentDescription = stringResource(R.string.chat_queue_passive),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(14.dp)
                                 )
                             }

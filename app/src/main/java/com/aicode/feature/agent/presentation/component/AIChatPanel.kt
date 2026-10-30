@@ -2277,6 +2277,7 @@ fun AIChatPanel(
                 onMoveQueued = { from, to -> viewModel.moveQueuedRequest(from, to) },
                 onEditQueued = { queuedEditing = it },
                 onInterjectQueued = { viewModel.interjectQueuedRequest(it) },
+                onPassiveForwardQueued = { viewModel.passiveForwardQueuedRequest(it) },
                 dashboardState = currentDashboardState,
                 todoItems = currentTodoItems,
                 sessionId = currentSessionId.orEmpty(),

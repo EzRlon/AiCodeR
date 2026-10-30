@@ -2353,6 +2353,40 @@ class AIAgentViewModel @Inject constructor(
         )
     }
 
+    /**
+     * 待发列表「发给主 agent（不打断）」：忙碌时与 [interjectQueuedRequest] 同样搭车注入本轮；
+     * 空闲时只挂入通知中心——由下次后台任务/子代理消息搭车送达或本轮收尾兑底，不主动起新轮次。
+     */
+    fun passiveForwardQueuedRequest(id: String) {
+        val sid = _currentSessionId.value ?: return
+        val queue = _queuedRequests.value[sid] ?: return
+        val req = queue.firstOrNull { it.id == id } ?: return
+        _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
+        if (sessionJobs[sid]?.isActive == true) {
+            deliverSystemEvent(
+                sid,
+                PendingNotification(
+                    kind = AgentNotificationKind.USER_MESSAGE,
+                    sourceId = sid,
+                    title = "",
+                    outcome = NotificationOutcome.COMPLETED,
+                    message = req.request
+                )
+            )
+        } else {
+            agentNotificationCenter.enqueue(
+                sid,
+                PendingNotification(
+                    kind = AgentNotificationKind.USER_MESSAGE,
+                    sourceId = sid,
+                    title = "",
+                    outcome = NotificationOutcome.COMPLETED,
+                    message = req.request
+                )
+            )
+        }
+    }
+
     private fun processNextInQueue(sessionId: String) {
         // 暂停会话不消费队列：保留待发请求，交接后用户到新会话重新发起。
         if (sessionId in pausedHandoffSessions) return

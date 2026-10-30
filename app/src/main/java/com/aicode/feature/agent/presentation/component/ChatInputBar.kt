@@ -246,6 +246,7 @@ internal fun ChatInputBar(
     onMoveQueued: (Int, Int) -> Unit = { _, _ -> },
     onEditQueued: (QueuedRequest) -> Unit = {},
     onInterjectQueued: (String) -> Unit = {},
+    onPassiveForwardQueued: (String) -> Unit = {},
     tokenProgress: Float = 0f,
     tokenEstimated: Boolean = false,
     dashboardState: ProviderDashboardState = ProviderDashboardState.Idle,
@@ -536,7 +537,8 @@ internal fun ChatInputBar(
                     onRemoveQueued = onRemoveQueued,
                     onMoveQueued = onMoveQueued,
                     onEditQueued = onEditQueued,
-                    onInterjectQueued = onInterjectQueued
+                    onInterjectQueued = onInterjectQueued,
+                    onPassiveForwardQueued = onPassiveForwardQueued
                 )
             }
 
