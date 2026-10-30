@@ -30,7 +30,7 @@ class BrowserManager:
     # Configurable via env or constructor
     user_data_dir: Path = Path.home() / "chrome_mcp_multi_llm"
     headless: bool = False          # Keep headed so user can see/login/handle captcha
-    executable_path: str = "/usr/bin/chromium"  # system chromium installed via apk
+    executable_path: Optional[str] = None  # resolved at launch; None = auto-detect
     viewport_width: int = 1280
     viewport_height: int = 800
     x_display: str = ":1"
@@ -47,6 +47,23 @@ class BrowserManager:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
+
+    def _resolve_chromium(self) -> Optional[str]:
+        # Alpine/Debian 用 /usr/bin/chromium；Ubuntu 是 chromium-browser（snap 包装器，
+        # 容器内不可用），必须回退到 playwright 自带的 chromium。env 可强制指定。
+        import os
+        import shutil
+        env_path = os.environ.get("MULTI_LLM_CHROMIUM")
+        if env_path and Path(env_path).exists():
+            return env_path
+        for cand in ("/usr/bin/chromium", "/usr/bin/chromium-browser"):
+            if Path(cand).exists():
+                return cand
+        for name in ("chromium", "chromium-browser"):
+            found = shutil.which(name)
+            if found and "/snap/" not in found:
+                return found
+        return None
 
     async def start(self) -> Browser:
         """Launch or reuse persistent Chromium, return ready Browser."""
@@ -69,18 +86,22 @@ class BrowserManager:
                 try:
                     pw_cm = __import__("playwright.async_api", fromlist=["async_playwright"]).async_playwright()
                     self._playwright = await pw_cm.start()
-                    self._context = await self._playwright.chromium.launch_persistent_context(
-                        user_data_dir=str(self.user_data_dir),
-                        headless=self.headless,
-                        executable_path=self.executable_path,
-                        args=[
+                    chromium_path = self.executable_path or self._resolve_chromium()
+                    launch_kw: dict = {
+                        "user_data_dir": str(self.user_data_dir),
+                        "headless": self.headless,
+                        "args": [
                             "--disable-blink-features=AutomationControlled",
                             "--no-first-run",
                             "--no-default-browser-check",
                             "--disable-gpu",
                         ],
-                        viewport={"width": self.viewport_width, "height": self.viewport_height},
-                    )
+                        "viewport": {"width": self.viewport_width, "height": self.viewport_height},
+                    }
+                    if chromium_path:
+                        launch_kw["executable_path"] = chromium_path
+                    # 无系统浏览器时省略 executable_path，走 playwright 自带 chromium
+                    self._context = await self._playwright.chromium.launch_persistent_context(**launch_kw)
                     self._browser = self._context.browser
                     last_err = None
                     break

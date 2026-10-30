@@ -6,7 +6,7 @@
 # playwright manylinux 轮子手工解压（musl 无官方轮子）+ driver/node 软链到系统 node。
 # 登录：首次使用需经 VNC 登录各站点（App 的 VNC 小窗或 VNC Viewer 连 127.0.0.1:5901），
 # 浏览器 profile 持久化在 /root/chrome_mcp_multi_llm，登录一次长期有效。
-# 支持：Alpine 镜像全自动（aarch64/x86_64）；其它发行版尽力而为。
+# 支持：Alpine / Debian / Ubuntu 全自动（aarch64/x86_64）。
 scenario_name_multillm() { echo "模型顾问团（multi-llm：AI 可咨询 ChatGPT/Claude 等六个模型）"; }
 
 MULTI_LLM_HOME="$HOME/.aicode/multi-llm"
@@ -39,27 +39,30 @@ install_scenario_multillm() {
         return 0
     fi
 
-    # 1) Python ≥3.12（依赖按 3.12 实测组合 pin）。包名按发行版映射。
-    pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
-    pymajor=$(echo "$pyver" | cut -d. -f1)
-    pyminor=$(echo "$pyver" | cut -d. -f2)
-    if ! [ "${pymajor:-0}" -ge 3 ] 2>/dev/null || ! [ "${pyminor:-0}" -ge 12 ] 2>/dev/null; then
-        echo "Python 版本不满足（需 ≥3.12，当前 ${pyver:-未安装}），尝试安装..."
+    # 1) Python ≥3.10（依赖组合在 3.10–3.13 可用：3.12/3.13 为作者实测基线，
+    #    3.10/3.11 已验证轮子与依赖元数据均可解析）。包名按发行版映射。
+    multillm_pyver=""
+    multillm_py_ok() {
+        multillm_pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+        _maj=${multillm_pyver%%.*}
+        _min=${multillm_pyver#*.}
+        [ "$_maj" -eq 3 ] 2>/dev/null || return 1
+        [ "$_min" -ge 10 ] 2>/dev/null
+    }
+    if ! multillm_py_ok; then
+        echo "Python 版本不满足（需 ≥3.10，当前 ${multillm_pyver:-未安装}），尝试安装..."
         case "$PMGR" in
             apk) pkg_add python3 py3-pip >/dev/null 2>&1 ;;
             apt) pkg_add python3 python3-pip python3-venv >/dev/null 2>&1 ;;
             dnf|yum) pkg_add python3 python3-pip >/dev/null 2>&1 ;;
             pacman) pkg_add python python-pip >/dev/null 2>&1 ;;
         esac
-        pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
-        pymajor=$(echo "$pyver" | cut -d. -f1)
-        pyminor=$(echo "$pyver" | cut -d. -f2)
     fi
-    if ! [ "${pymajor:-0}" -ge 3 ] 2>/dev/null || ! [ "${pyminor:-0}" -ge 12 ] 2>/dev/null; then
-        echo "${C_RED}Python 版本不足（需 ≥3.12，当前 ${pyver:-未安装}）。${C_RESET}"
-        echo "  · 依赖按 Python 3.12 实测组合固定，低版本无法安装；"
-        echo "  · 可换用内置 Alpine 镜像，或在当前镜像里自行升级 Python 后重跑本场景。"
-        plog "multi-llm 安装中止：Python 版本不足（${pyver:-none}）"
+    if ! multillm_py_ok; then
+        echo "${C_RED}Python 版本不足（需 ≥3.10，当前 ${multillm_pyver:-未安装}）。${C_RESET}"
+        echo "  · Debian 12/13 与 Ubuntu 22.04+ 自带版本均满足；Ubuntu 20.04 仓库无可用版本；"
+        echo "  · 也可换用内置 Alpine 镜像后重跑本场景。"
+        plog "multi-llm 安装中止：Python 版本不足（${multillm_pyver:-none}）"
         return 1
     fi
     if ! command -v pip3 >/dev/null 2>&1; then
@@ -123,9 +126,11 @@ install_scenario_multillm() {
     PW_DIR="$HOME/.aicode/multi-llm-venv/wheel"
     mkdir -p "$PW_DIR" "$MULTI_LLM_SITE"
     rm -f "$PW_DIR"/playwright-*.whl
-    pip3 download --no-deps --platform "$PW_PLATFORM" --only-binary=:all: --python-version 3.12 \
+    #    manylinux 轮子跨 3.10+ 通用，--python-version 动态取当前版本，避免按 3.12 过滤
+    PW_PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+    pip3 download --no-deps --platform "$PW_PLATFORM" --only-binary=:all: --python-version "${PW_PYVER:-3.12}" \
         -i "$MULTI_PIP_INDEX" "playwright==$PLAYWRIGHT_VERSION" -d "$PW_DIR" >/dev/null 2>&1 \
-        || pip3 download --no-deps --platform "$PW_PLATFORM" --only-binary=:all: --python-version 3.12 \
+        || pip3 download --no-deps --platform "$PW_PLATFORM" --only-binary=:all: --python-version "${PW_PYVER:-3.12}" \
             "playwright==$PLAYWRIGHT_VERSION" -d "$PW_DIR" >/dev/null 2>&1
     PW_WHL=$(ls "$PW_DIR"/playwright-*.whl 2>/dev/null | head -1)
     if [ -z "$PW_WHL" ]; then
