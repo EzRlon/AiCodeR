@@ -2381,6 +2381,8 @@
     <string name="team_picker_none">不使用专家团</string>
     <string name="team_picker_empty">暂无专家团定义</string>
     <string name="team_members_count">%1$d 名成员</string>
+    <string name="team_scope_global">全局</string>
+    <string name="team_scope_project">项目</string>
     <string name="vnc_preparing_hint">正在准备 VNC 环境…</string>
     <string name="storage_artifacts_build_dir">构建目录（%1$s）</string>
     <string name="storage_artifacts_node_modules">Node 依赖目录（node_modules）</string>

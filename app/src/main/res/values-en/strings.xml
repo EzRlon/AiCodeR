@@ -2381,6 +2381,8 @@
     <string name="team_picker_none">No team</string>
     <string name="team_picker_empty">No team definitions yet</string>
     <string name="team_members_count">%1$d members</string>
+    <string name="team_scope_global">Global</string>
+    <string name="team_scope_project">Project</string>
     <string name="vnc_preparing_hint">Preparing VNC environment…</string>
     <string name="storage_artifacts_build_dir">Build directory (%1$s)</string>
     <string name="storage_artifacts_node_modules">Node dependencies (node_modules)</string>
