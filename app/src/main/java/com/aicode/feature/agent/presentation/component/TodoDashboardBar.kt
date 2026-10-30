@@ -70,6 +70,16 @@ fun TodoDashboardBar(
 
     // 按会话隔离记忆展开状态，新会话默认收起
     var isExpanded by rememberSaveable(sessionId) { mutableStateOf(false) }
+
+    // 全部条目完成且 AI 空闲时自动收起：用户查看结果的权利保留（仍可手动展开），
+    // 但不再以完成态长驻占屏；新计划任务拉起后是未全完成态，不受影响。
+    val allDone = items.isNotEmpty() && items.all { it.status == TodoStatus.COMPLETED }
+    LaunchedEffect(allDone, animateInProgress) {
+        if (allDone && !animateInProgress && isExpanded) {
+            isExpanded = false
+        }
+    }
+
     val effectiveExpanded = isExpanded && !forceCollapse
 
     LaunchedEffect(effectiveExpanded) {
