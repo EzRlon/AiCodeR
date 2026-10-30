@@ -92,6 +92,7 @@ import com.aicode.core.ui.rememberViewerDecodeSpec
 import com.aicode.core.util.ApkInstaller
 import com.aicode.feature.annotation.presentation.AnnotationViewModel
 import com.aicode.feature.annotation.presentation.component.AnnotationCanvasScreen
+import com.aicode.feature.settings.presentation.component.MultiLlmWorkbenchScreen
 import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
@@ -473,6 +474,8 @@ fun AppNavigation(
     // Activity 级别的 ViewModel——Drawer 和 AIChatPanel 共享同一个实例。
     val agentViewModel: AIAgentViewModel = hiltViewModel()
     val settingsViewModel: SettingsViewModel = hiltViewModel()
+    // Activity 级：聊天页内挂 VncOverlayWindow、模型顾问团工作台「打开 VNC 登录」共用同一实例
+    val vncOverlayViewModel: VncOverlayViewModel = hiltViewModel()
     val workspaceViewModel: WorkspaceViewModel = hiltViewModel()
 
     // ── 首次启动引导 ──
@@ -853,6 +856,10 @@ fun AppNavigation(
                 navController.navigate("rea")
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
             },
+            onNavigateToMultillm = {
+                navController.navigate("multillm")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            },
             onNavigateToPreview = {
                 openWorkbench(WorkbenchPaneKind.PREVIEW)
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
@@ -898,7 +905,6 @@ fun AppNavigation(
                     }
                 }
                 val paneOpen = expanded && paneKind != WorkbenchPaneKind.NONE
-                val vncOverlayViewModel: VncOverlayViewModel = hiltViewModel()
                 // 拖动把手时要把位移像素换算成分栏比例，所以记下容器实测宽度与左栏宽度。
                 var rowWidthPx by remember { mutableIntStateOf(0) }
                 var leftPaneWidthPx by remember { mutableIntStateOf(0) }
@@ -1009,6 +1015,17 @@ fun AppNavigation(
                         navController.navigate("chat") {
                             popUpTo("chat") { inclusive = false }
                         }
+                    }
+                )
+            }
+            composable("multillm") {
+                MultiLlmWorkbenchScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenTerminal = {
+                        navController.navigate("terminal")
+                    },
+                    onOpenVnc = {
+                        vncOverlayViewModel.show()
                     }
                 )
             }

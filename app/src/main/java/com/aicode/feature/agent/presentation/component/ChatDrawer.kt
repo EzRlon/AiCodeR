@@ -150,6 +150,7 @@ import compose.icons.feathericons.Search
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.MessageCircle
 import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Settings
 import androidx.compose.material3.DropdownMenu
@@ -335,6 +336,8 @@ fun ChatDrawerContent(
     onPurgeSession: (String) -> Unit = {},
     onEmptyTrash: () -> Unit = {},
     onNavigateToRea: (() -> Unit)? = null,
+    /** 模型顾问团工作台入口；null 则隐藏该入口。 */
+    onNavigateToMultillm: (() -> Unit)? = null,
     /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
     onNavigateToPreview: (() -> Unit)? = null,
     /** 远程管理入口：与 Web 预览同行弹出选择；null 则隐藏该选项。 */
@@ -589,6 +592,15 @@ fun ChatDrawerContent(
                         icon = FeatherIcons.Cpu,
                         title = stringResource(R.string.rea_entry_title),
                         onClick = onNavigateToRea,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToMultillm != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.MessageCircle,
+                        title = stringResource(R.string.multillm_entry_title),
+                        onClick = onNavigateToMultillm,
                         compact = true
                     )
                     SettingsDivider()
