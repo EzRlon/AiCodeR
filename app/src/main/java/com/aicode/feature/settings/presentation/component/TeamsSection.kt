@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,11 +37,11 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
+import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.team.TeamDefinitionScope
 import com.aicode.feature.settings.presentation.TeamUiEntry
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.FileText
-import compose.icons.feathericons.Trash2
 
 /**
  * 「专家团」设置区：列出全部专家团定义（内置释放到 `~/.aicode/teams` 的与项目级 `.aicode/teams` 的），
@@ -78,11 +77,14 @@ internal fun TeamsSection(
         } else {
             Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.md)) {
                 teams.forEach { entry ->
-                    TeamCard(
-                        entry = entry,
-                        onToggle = { onToggle(entry, it) },
+                    SwipeToDeleteRow(
                         onDelete = { pendingDelete = entry }
-                    )
+                    ) {
+                        TeamCard(
+                            entry = entry,
+                            onToggle = { onToggle(entry, it) }
+                        )
+                    }
                 }
             }
         }
@@ -112,12 +114,11 @@ internal fun TeamsSection(
     }
 }
 
-/** 单个专家团卡片：标题 + 操作同排，描述折叠，路径沉底。 */
+/** 单个专家团卡片（删除交互由外层 SwipeToDeleteRow 提供：左滑露出删除按钮）。 */
 @Composable
 private fun TeamCard(
     entry: TeamUiEntry,
-    onToggle: (Boolean) -> Unit,
-    onDelete: () -> Unit
+    onToggle: (Boolean) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val description = entry.descriptionZh.ifBlank { entry.description }
@@ -156,11 +157,7 @@ private fun TeamCard(
                         }
                     }
                 }
-                TeamActions(
-                    enabled = !entry.disabled,
-                    onToggle = onToggle,
-                    onDelete = onDelete
-                )
+                AppSwitch(checked = !entry.disabled, onCheckedChange = onToggle)
             }
 
             Spacer(Modifier.height(Spacing.sm))
@@ -238,26 +235,6 @@ private fun TeamCard(
                     )
                 }
             }
-        }
-    }
-}
-
-/** 行尾操作：启用开关 + 删除（与标题行对齐，不再垂直居中于整卡）。 */
-@Composable
-private fun TeamActions(
-    enabled: Boolean,
-    onToggle: (Boolean) -> Unit,
-    onDelete: () -> Unit
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        AppSwitch(checked = enabled, onCheckedChange = onToggle)
-        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-            Icon(
-                FeatherIcons.Trash2,
-                contentDescription = stringResource(R.string.common_delete),
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(16.dp)
-            )
         }
     }
 }
