@@ -3,43 +3,32 @@
 # 装好分析引擎与桥接后：设置 → MCP → 添加 → 推荐区 → 点选「REA 逆向工程」→ 保存，
 # 即可直接对 AI 说「帮我分析这个 App/APK/JS 包是怎么实现的」。
 # 说明：仅用于分析你拥有或获授权分析的软件（正当用途）。
-# 支持：Alpine 镜像全自动；Debian/Ubuntu 等镜像的 Node 版本需 ≥22.19（apt 自带偏旧，见报错指引）。
+# 支持：任意发行版（apk/apt/dnf/yum/pacman）自动检测后按需安装；Node 不足时先试仓库再装官方预编译包
+#（musl 系统不适用官方包，仅走仓库）。
 scenario_name_rea() { echo "逆向分析（REA：分析 App / APK / JS 包是怎么实现的）"; }
 
 # 受版本约束的组件（与 MCP 预设 RecommendedReaConfig 保持一致；升级需同步两处）
 REA_AGENTS_VERSION="6.5.0"
+REA_NODE_MIN="22.19.0"
 REA_JADX_JAR_NAME="jadx-headless-mcp-0.7.1-all.jar"
 REA_JADX_SHA256="6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75"
 REA_DIR="/opt/rea"
 
-# 下载助手：curl / wget 双兼容（busybox wget 只认 -T；GNU wget 同样接受 -T）。
+# 下载助手：统一走 lib/env-common.sh 的 env_download（curl / wget 双兼容）。
 rea_download() {
-    if command -v curl >/dev/null 2>&1; then
-        curl -fL --connect-timeout 20 --max-time 900 -o "$2" "$1" 2>/dev/null
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q -T 30 -O "$2" "$1" 2>/dev/null
-    else
-        return 1
-    fi
+    env_download "$1" "$2"
 }
 
 # Node ≥ 22.19（REA engines 要求 ^22.19.0）
 rea_node_ok() {
-    v=$(node -v 2>/dev/null | sed 's/^v//')
-    [ -z "$v" ] && return 1
-    major=$(echo "$v" | cut -d. -f1)
-    minor=$(echo "$v" | cut -d. -f2)
-    [ "$major" -gt 22 ] 2>/dev/null && return 0
-    [ "$major" -eq 22 ] 2>/dev/null && [ "${minor:-0}" -ge 19 ] 2>/dev/null && return 0
-    return 1
+    env_node_ok "$REA_NODE_MIN"
 }
 
 # 完整 JDK ≥17（JADX 需要 javac，且含 jdk.compiler 模块）
 rea_javac_ok() {
     v=$(javac -version 2>&1 | sed 's/^javac //')
     [ -z "$v" ] && return 1
-    major=$(echo "$v" | cut -d. -f1)
-    [ "$major" -ge 17 ] 2>/dev/null
+    env_ver_ge "$v" "17.0.0"
 }
 
 # 已安装的 rea-agents 是否为 pin 版本
@@ -64,29 +53,30 @@ install_scenario_rea() {
         pkg_add procps >/dev/null 2>&1 || plog "procps 安装失败（继续，若 ps 已兼容则无碍）"
     fi
 
-    # 2) Node ≥ 22.19（REA 运行要求）
+    # 2) Node ≥ 22.19（REA 运行要求）：先试发行版仓库，不够就装官方预编译包。
+    #    各发行版仓库版本差异大（Debian 的 nodejs 停在 20.x），统一走 env_ensure_node 探测后按需装。
     if ! rea_node_ok; then
-        echo "Node 版本不满足（需 ≥22.19，当前 $(node -v 2>/dev/null || echo 未安装)），尝试安装..."
-        case "$PMGR" in
-            apk|apt) pkg_add nodejs npm >/dev/null 2>&1 ;;
-        esac
+        echo "检测到 Node 版本不满足（需 ≥${REA_NODE_MIN}，当前 $(node -v 2>/dev/null || echo 未安装)），自动安装..."
+        env_ensure_node "$REA_NODE_MIN" >/dev/null 2>&1
     fi
     if ! rea_node_ok; then
-        echo "${C_RED}Node.js 版本不足（需 ≥22.19，当前 $(node -v 2>/dev/null || echo 未安装)）。${C_RESET}"
-        echo "  · Alpine 镜像：请在「环境安装」中装好 Node.js 场景后重跑本场景；"
-        echo "  · Debian/Ubuntu 等镜像：apt 自带 Node 偏旧，本场景目前仅保证 Alpine 镜像全自动——"
-        echo "    可换用 Alpine 容器，或在容器内自行升级 Node ≥22.19（如 nvm）后重跑本场景。"
+        echo "${C_RED}Node.js 版本仍不足（需 ≥${REA_NODE_MIN}，当前 $(node -v 2>/dev/null || echo 未安装)）。${C_RESET}"
+        echo "  · 已尝试：发行版仓库、nodejs.org / npmmirror 官方二进制包；"
+        echo "  · 可手动升级（如 nvm 或下载官方包解压到 /usr/local）后重跑本场景。"
         plog "REA 安装中止：Node 版本不足（$(node -v 2>/dev/null || echo none)）"
         return 1
     fi
     plog "Node 检查通过：$(node -v)"
 
-    # 3) 完整 JDK ≥17（JADX 引擎需要；缺失时 APK 分析不可用，JS/包分析仍可用）
+    # 3) 完整 JDK ≥17（JADX 引擎需要；缺失时 APK 分析不可用，JS/包分析仍可用）。
+    #    包名按发行版探测：Debian trixie 只有 21/25 无 17，Alpine 为 openjdkNN-jdk。
     if ! rea_javac_ok; then
         echo "安装 JDK（APK 反编译需要）..."
         case "$PMGR" in
-            apk) pkg_add openjdk17-jdk >/dev/null 2>&1 ;;
-            apt) pkg_add openjdk-17-jdk >/dev/null 2>&1 ;;
+            apk) pkg_add openjdk21-jdk openjdk17-jdk >/dev/null 2>&1 ;;
+            apt) pkg_add "$(apt_java_headless)" >/dev/null 2>&1 ;;
+            dnf|yum) pkg_add java-21-openjdk-headless java-17-openjdk-headless >/dev/null 2>&1 ;;
+            pacman) pkg_add jdk21-openjdk jdk17-openjdk >/dev/null 2>&1 ;;
         esac
     fi
     if ! rea_javac_ok; then

@@ -56,6 +56,96 @@ detect_pmgr() {
     fi
 }
 
+# ── 通用下载助手：curl / wget 双兼容（busybox wget 只认 -T，GNU wget 同样接受）。
+#    场景脚本与版本探测共用，避免各自重写一套超时参数。──
+env_download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --connect-timeout 20 --max-time 900 -o "$2" "$1" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 30 -O "$2" "$1" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# ── 语义化版本比较：$1 >= $2 返回 0（仅比较前三段数字，忽略 -rN/后缀）。
+#    各发行版仓库的包版本差异很大，场景脚本需要统一的判定口径。──
+env_ver_ge() {
+    _have=$(echo "$1" | sed 's/^v//; s/[^0-9.].*$//')
+    _need=$(echo "$2" | sed 's/^v//; s/[^0-9.].*$//')
+    [ -z "$_have" ] && return 1
+    _hm=$(echo "$_have" | cut -d. -f1); _hn=$(echo "$_have" | cut -d. -f2); _hp=$(echo "$_have" | cut -d. -f3)
+    _nm=$(echo "$_need" | cut -d. -f1); _nn=$(echo "$_need" | cut -d. -f2); _np=$(echo "$_need" | cut -d. -f3)
+    [ "${_hm:-0}" -gt "${_nm:-0}" ] 2>/dev/null && return 0
+    [ "${_hm:-0}" -lt "${_nm:-0}" ] 2>/dev/null && return 1
+    [ "${_hn:-0}" -gt "${_nn:-0}" ] 2>/dev/null && return 0
+    [ "${_hn:-0}" -lt "${_nn:-0}" ] 2>/dev/null && return 1
+    [ "${_hp:-0}" -ge "${_np:-0}" ] 2>/dev/null
+}
+
+# ── 当前 node 版本是否满足最低要求（如 22.19.0）；未装返回非 0 ──
+env_node_ok() {
+    _v=$(node -v 2>/dev/null)
+    [ -z "$_v" ] && return 1
+    env_ver_ge "$_v" "$1"
+}
+
+# ── 当前系统是否为 musl libc（Alpine）。──
+env_is_musl() {
+    ls /lib/ld-musl-*.so.1 >/dev/null 2>&1
+}
+
+# ── 确保 Node ≥ $1：先试包管理器，仍不够就装官方预编译包（不依赖发行版仓库版本）。
+#
+# 必要性：Debian/Ubuntu 仓库的 nodejs 长期停在 20.x，而 REA 等场景要求 ≥22.19；
+# Alpine 的 nodejs 虽新，但用户也可能用别的镜像。统一走「仓库 → 官方二进制」两级，
+# 而不是让用户自己换容器。安装到 /usr/local（在 PATH 中且优先于发行版自带）。
+#
+# 官方二进制是 glibc 编译的：musl（Alpine）下跑会报 fcntl64 符号缺失，故只在 glibc 系统上走这一级。
+# 返回 0=已满足，1=无法满足（调用方决定是否中止）。
+env_ensure_node() {
+    _need="$1"
+    env_node_ok "$_need" && return 0
+
+    # 一级：发行版仓库（Alpine 的 nodejs 足够新，这一级就能成）
+    case "$PMGR" in
+        apk|apt|dnf|yum|pacman) pkg_add nodejs npm >/dev/null 2>&1 ;;
+    esac
+    env_node_ok "$_need" && return 0
+
+    # 二级：官方预编译包。musl 系统跳过（glibc 二进制不可用）
+    env_is_musl && return 1
+
+    case "$(uname -m)" in
+        aarch64|arm64) _arch="arm64" ;;
+        x86_64|amd64)  _arch="x64" ;;
+        *)             return 1 ;;
+    esac
+
+    _ver="v$_need"
+    _tmp="${HOME:-/root}/.aicode/node-dist"
+    mkdir -p "$_tmp"
+    _pkg="node-$_ver-linux-$_arch"
+    for _base in \
+        "https://registry.npmmirror.com/-/binary/node" \
+        "https://nodejs.org/dist"
+    do
+        rm -f "$_tmp/node.tar.gz"
+        echo "  下载 Node $_ver（$_arch，来自 $(echo "$_base" | cut -d/ -f3)）..."
+        env_download "$_base/$_ver/$_pkg.tar.gz" "$_tmp/node.tar.gz" || continue
+        rm -rf "$_tmp/$_pkg"
+        tar -xzf "$_tmp/node.tar.gz" -C "$_tmp" 2>/dev/null || continue
+        [ -x "$_tmp/$_pkg/bin/node" ] || continue
+        # 装到 /usr/local：优先级高于发行版自带的 /usr/bin，无需卸载旧版
+        cp -R "$_tmp/$_pkg/." /usr/local/ 2>/dev/null || continue
+        rm -rf "$_tmp/$_pkg"
+        hash -r 2>/dev/null
+        env_node_ok "$_need" && return 0
+    done
+    rm -rf "$_tmp"
+    return 1
+}
+
 # ── 按包管理器安装一批包 ──
 pkg_add() {
     case "$PMGR" in

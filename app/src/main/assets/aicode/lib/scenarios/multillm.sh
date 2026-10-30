@@ -39,7 +39,7 @@ install_scenario_multillm() {
         return 0
     fi
 
-    # 1) Python ≥3.12（依赖按 3.12 实测组合 pin）
+    # 1) Python ≥3.12（依赖按 3.12 实测组合 pin）。包名按发行版映射。
     pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
     pymajor=$(echo "$pyver" | cut -d. -f1)
     pyminor=$(echo "$pyver" | cut -d. -f2)
@@ -47,19 +47,27 @@ install_scenario_multillm() {
         echo "Python 版本不满足（需 ≥3.12，当前 ${pyver:-未安装}），尝试安装..."
         case "$PMGR" in
             apk) pkg_add python3 py3-pip >/dev/null 2>&1 ;;
+            apt) pkg_add python3 python3-pip python3-venv >/dev/null 2>&1 ;;
+            dnf|yum) pkg_add python3 python3-pip >/dev/null 2>&1 ;;
+            pacman) pkg_add python python-pip >/dev/null 2>&1 ;;
         esac
         pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
         pymajor=$(echo "$pyver" | cut -d. -f1)
         pyminor=$(echo "$pyver" | cut -d. -f2)
     fi
     if ! [ "${pymajor:-0}" -ge 3 ] 2>/dev/null || ! [ "${pyminor:-0}" -ge 12 ] 2>/dev/null; then
-        echo "${C_RED}Python 版本不足（需 ≥3.12，当前 ${pyver:-未安装}）。本场景目前仅保证内置 Alpine 镜像全自动。${C_RESET}"
+        echo "${C_RED}Python 版本不足（需 ≥3.12，当前 ${pyver:-未安装}）。${C_RESET}"
+        echo "  · 依赖按 Python 3.12 实测组合固定，低版本无法安装；"
+        echo "  · 可换用内置 Alpine 镜像，或在当前镜像里自行升级 Python 后重跑本场景。"
         plog "multi-llm 安装中止：Python 版本不足（${pyver:-none}）"
         return 1
     fi
     if ! command -v pip3 >/dev/null 2>&1; then
         case "$PMGR" in
             apk) pkg_add py3-pip >/dev/null 2>&1 ;;
+            apt) pkg_add python3-pip >/dev/null 2>&1 ;;
+            dnf|yum) pkg_add python3-pip >/dev/null 2>&1 ;;
+            pacman) pkg_add python-pip >/dev/null 2>&1 ;;
         esac
     fi
     if ! command -v pip3 >/dev/null 2>&1; then
@@ -72,20 +80,36 @@ install_scenario_multillm() {
     #    按缺补装而非整批 add：已装环境下 apk add 也会异常退出（PRoot 下实测 exit 2 无明细），
     #    误判会阻断后续步骤；装后再验证二进制存在，才算真正成功。
     missing=""
-    command -v chromium >/dev/null 2>&1 || missing="$missing chromium"
+    command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || missing="$missing chromium"
     command -v Xvfb >/dev/null 2>&1 || missing="$missing xvfb"
     command -v x11vnc >/dev/null 2>&1 || missing="$missing x11vnc"
     if [ -n "$missing" ]; then
         echo "安装系统依赖（chromium / Xvfb / x11vnc，首次约百余 MB）..."
+        # 包名按发行版映射：Debian 系部分版本 chromium 只提供 chromium-browser；其余发行版同名。
+        # 按缺补装，已装的不重复。
+        _pkgs=""
+        case "$missing" in *chromium*) _pkgs="$_pkgs chromium" ;; esac
+        case "$missing" in *xvfb*)     _pkgs="$_pkgs xvfb" ;; esac
+        case "$missing" in *x11vnc*)   _pkgs="$_pkgs x11vnc" ;; esac
         case "$PMGR" in
-            apk)  pkg_add $missing >/dev/null 2>&1 ;;
-            apt)  pkg_add $missing >/dev/null 2>&1 ;;
-            *)    echo "${C_YELLOW}当前发行版暂未适配自动安装（仅保证 Alpine 镜像），请手动安装 chromium/xvfb/x11vnc 后重试。${C_RESET}" ;;
+            apt)
+                # Debian/Ubuntu 的 chromium 包名：bookworm+ 为 chromium，旧版为 chromium-browser。
+                # 统一走 pkg_add（内部已设 DEBIAN_FRONTEND=noninteractive，直接调 apt-get 会卡交互提示）。
+                pkg_add $_pkgs >/dev/null 2>&1 \
+                    || pkg_add $(echo "$_pkgs" | sed 's/ chromium/ chromium-browser/') >/dev/null 2>&1
+                ;;
+            *) pkg_add $_pkgs >/dev/null 2>&1 ;;
         esac
     fi
-    if ! command -v chromium >/dev/null 2>&1 || ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1; then
-        echo "${C_RED}系统依赖安装失败（chromium/Xvfb/x11vnc 缺失），请检查网络后重试。${C_RESET}"
-        plog "multi-llm 安装失败：系统依赖缺失"
+    # 装后验证：Debian 系部分版本只提供 chromium-browser 命令名
+    if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+        echo "${C_RED}系统依赖安装失败（chromium 缺失），请检查网络后重试。${C_RESET}"
+        plog "multi-llm 安装失败：chromium 缺失"
+        return 1
+    fi
+    if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1; then
+        echo "${C_RED}系统依赖安装失败（Xvfb/x11vnc 缺失），请检查网络后重试。${C_RESET}"
+        plog "multi-llm 安装失败：Xvfb/x11vnc 缺失"
         return 1
     fi
 
