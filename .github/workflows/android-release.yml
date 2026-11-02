@@ -108,12 +108,12 @@ jobs:
       # 发版质量门禁：跑单元测试，失败即中止，避免发出回归包。
       # 只跑 universal debug 变体：单测逻辑与 flavor 无关，跑全 flavor 6 变体是重复编译。
       - name: Run unit tests
-        run: ./gradlew :app:testUniversalDebugUnitTest
+        run: ./gradlew :app:testUniversalDebugUnitTest -Dkotlin.daemon.jvmargs=-Xmx1536m
 
       # 一次性构建全部 flavor 的 release APK（universal/armsolo/x86solo）
       # --stacktrace：构建失败时输出完整调用栈，便于在 CI 定位 OOM/内存类根因。
       - name: Build all flavor Release APKs
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease --stacktrace -Dkotlin.daemon.jvmargs=-Xmx1536m
 
       # 给三个 APK 重命名为「包名-架构-版本」格式，架构用真实 ABI 名便于用户识别：
       #   aicode-arm64-v1.0.0-rc1.apk      (armsolo)
