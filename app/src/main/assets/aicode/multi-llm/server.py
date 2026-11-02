@@ -83,6 +83,31 @@ TOOLS.append(
     )
 )
 
+TOOLS.append(
+    Tool(
+        name="open_browser",
+        description=(
+            "Open the multi-llm login browser (headed Chromium on the VNC display :1). "
+            "Call with model=<name> to open that model's site for login, or model=home for a blank page. "
+            "The browser renders into the VNC overlay, so the user can log in there."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "Model name from MODEL_REGISTRY (e.g. deepseek), or 'home' for about:blank",
+                    "default": "home",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Optional explicit URL to open (overrides model)",
+                },
+            },
+        },
+    )
+)
+
 
 # ============================================================
 # Request handlers
@@ -99,6 +124,45 @@ async def _handle_call_tool(
 ) -> CallToolResult:
     name = params.name
     arguments = params.arguments or {}
+
+    if name == "open_browser":
+        # 拉起 headed 浏览器画到 VNC 显示器（用户在浮窗里可见）。
+        # model=具体模型 → 开该模型站点（便于登录）；model=home/url=... → 开指定页。
+        try:
+            from browser_manager import browser_manager
+
+            model = (arguments.get("model") or "home").strip()
+            url = arguments.get("url")
+            if not url and model != "home":
+                cfg = MODEL_REGISTRY.get(model)
+                if cfg is None:
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=f"Unknown model: {model}")],
+                        isError=True,
+                    )
+                url = cfg.url
+            page = await browser_manager.new_page()
+            if url:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            else:
+                await page.set_content(
+                    "<body style='background:#f5f7fa;color:#111827;font-family:sans-serif;"
+                    "display:flex;align-items:center;justify-content:center;height:100vh;"
+                    "margin:0;text-align:center'>"
+                    "<div><h1 style='font-size:44px;margin:0'>multi-llm browser ready</h1>"
+                    "<p style='font-size:24px;color:#374151;margin-top:20px'>"
+                    "This is the advisor browser. Type a model URL above to sign in.</p>"
+                    "</div></body>"
+                )
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"OK: browser open at {url or 'home'}")]
+            )
+        except Exception as e:
+            logger.error("open_browser failed: %s", e)
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"open_browser failed: {e}")],
+                isError=True,
+            )
 
     if name == "ask_all":
         req = AskRequest(**arguments)

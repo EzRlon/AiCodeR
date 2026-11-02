@@ -31,6 +31,9 @@ class BrowserManager:
     user_data_dir: Path = Path.home() / "chrome_mcp_multi_llm"
     headless: bool = False          # Keep headed so user can see/login/handle captcha
     executable_path: Optional[str] = None  # resolved at launch; None = auto-detect
+    # 远端桌面按桌面浏览器比例开（1280x800，宽高比 1.6）：全屏锁横屏、浮窗默认也取
+    # 1.6 比例，scaleViewport 铺满时黑边最小。Xvfb 的尺寸启动即写死、运行中无法改
+    # （--addmode 会 BadMatch，--fb 被拒），所以必须在这里定好。
     viewport_width: int = 1280
     viewport_height: int = 800
     x_display: str = ":1"
@@ -49,19 +52,26 @@ class BrowserManager:
         return self._lock
 
     def _resolve_chromium(self) -> Optional[str]:
-        # Alpine/Debian 用 /usr/bin/chromium；Ubuntu 是 chromium-browser（snap 包装器，
-        # 容器内不可用），必须回退到 playwright 自带的 chromium。env 可强制指定。
+        # 优先级：env 强制指定 → playwright 自带缓存（chrome-linux/chrome，完整二进制）
+        # → 系统 chromium。系统包装器（Debian 的 /usr/bin/chromium 是 shell 套壳，
+        # PRoot 内启动即 SIGTRAP）不可靠，放最后并做可执行文件大小校验兜底。
         import os
         import shutil
+        import glob
         env_path = os.environ.get("MULTI_LLM_CHROMIUM")
         if env_path and Path(env_path).exists():
             return env_path
+        cache = Path.home() / ".cache" / "ms-playwright"
+        for cand in sorted(glob.glob(str(cache / "chromium-*" / "chrome-linux" / "chrome")), reverse=True):
+            if Path(cand).exists() and os.access(cand, os.X_OK):
+                return cand
         for cand in ("/usr/bin/chromium", "/usr/bin/chromium-browser"):
-            if Path(cand).exists():
+            # 套壳脚本体积极小（真二进制几十 MB），小于 1MB 视为包装器，仅在无更好选择时用
+            if Path(cand).exists() and Path(cand).stat().st_size > 1_000_000:
                 return cand
         for name in ("chromium", "chromium-browser"):
             found = shutil.which(name)
-            if found and "/snap/" not in found:
+            if found and "/snap/" not in found and Path(found).stat().st_size > 1_000_000:
                 return found
         return None
 
@@ -95,6 +105,15 @@ class BrowserManager:
                             "--no-first-run",
                             "--no-default-browser-check",
                             "--disable-gpu",
+                            # PRoot 容器以 root 运行且无 /dev/shm（mkdir 被拒）：
+                            # 缺这两个参数 Chromium 启动即 SIGTRAP/FATAL，正常 Linux 无副作用
+                            "--no-sandbox",
+                            "--disable-dev-shm-usage",
+                            # 窗口必须跟 Xvfb 桌面同尺寸：Playwright 的 viewport 只定页面视口，
+                            # 不定窗口，不同步时窗口小于桌面，VNC 里会看到下方大片黑。
+                            f"--window-size={self.viewport_width},{self.viewport_height}",
+                            "--window-position=0,0",
+                            "--start-maximized",
                         ],
                         "viewport": {"width": self.viewport_width, "height": self.viewport_height},
                     }
@@ -185,7 +204,7 @@ class BrowserManager:
                 break
             subprocess.Popen(
                 ["x11vnc", "-display", self.x_display, "-rfbport", str(self.vnc_port),
-                 "-localhost", "-forever", "-shared", "-nopw", "-quiet", "-noshm"],
+                 "-localhost", "-forever", "-shared", "-nopw", "-quiet", "-noshm", "-xrandr"],
                 start_new_session=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

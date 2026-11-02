@@ -734,9 +734,54 @@ vnc_pkgs() {
     esac
 }
 
+# ── 中文字体包名映射（Chromium 缺 CJK 字体时中文界面/网页会渲染成方框）。──
+cjk_font_pkgs() {
+    case "$PMGR" in
+        apk) echo "font-wqy-zenhei" ;;
+        apt) echo "fonts-wqy-zenhei" ;;
+        dnf|yum) echo "wqy-zenhei-fonts" ;;
+        pacman) echo "wqy-zenhei" ;;
+        *)   echo "" ;;
+    esac
+}
+
+# 是否已有可用 CJK 字体（有则秒过）；fc-list 不可用时退回看字体目录。
+cjk_font_ready() {
+    if command -v fc-list >/dev/null 2>&1; then
+        fc-list 2>/dev/null | grep -qiE "cjk|wqy|zenhei|noto sans (sc|cjk)|droid sans fallback"
+        return $?
+    fi
+    ls -d /usr/share/fonts/*/*wqy* /usr/share/fonts/*wqy* >/dev/null 2>&1
+}
+
+# ── 安装中文字体（幂等；已有则秒过）。失败仅警告不返回非零：
+#    字体缺失只影响中文显示（会成方框），不阻断环境安装。──
+install_cjk_fonts() {
+    if cjk_font_ready; then
+        plog "中文字体已就绪，跳过"
+        return 0
+    fi
+    pkgs=$(cjk_font_pkgs)
+    if [ -z "$pkgs" ]; then
+        plog "中文字体：包管理器 ${PMGR:-未识别} 无映射，跳过"
+        return 0
+    fi
+    echo "安装中文字体（$pkgs，约 15MB；否则 Chromium 中文界面会显示成方框）..."
+    if pkg_add $pkgs; then
+        command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1
+        plog "中文字体安装完成"
+    else
+        echo "${C_YELLOW}中文字体安装失败（中文可能显示成方框，可稍后重试）${C_RESET}"
+        plog "中文字体安装失败"
+    fi
+    return 0
+}
+
 # ── 安装图形/VNC 组件（幂等；已装则秒过）。失败仅警告不返回非零：
 #    图形组件缺失不影响其它环境安装与初始化标记的写入，首次触发 VNC 小窗时 App 侧还有一次懒安装兜底。──
 install_vnc_stack() {
+    # 字体有自己的判据：下面的 websockify 短路会提前返回，不能把字体检查放在它之后。
+    install_cjk_fonts
     pkgs=$(vnc_pkgs)
     if [ -z "$pkgs" ]; then
         plog "图形组件：包管理器 ${PMGR:-未识别} 无映射，跳过"

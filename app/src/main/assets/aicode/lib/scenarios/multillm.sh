@@ -116,6 +116,9 @@ install_scenario_multillm() {
         return 1
     fi
 
+    # 2.1) 中文字体：VNC 里就是 Chromium，缺 CJK 字体时中文界面/网页全是方框。
+    install_cjk_fonts
+
     # 3) playwright 轮子：musl 无官方轮子，下载 manylinux 轮子后手工解压（aarch64/x86_64）
     echo "下载 playwright 引擎（v$PLAYWRIGHT_VERSION，约 35MB）..."
     case "$(uname -m)" in
@@ -157,7 +160,38 @@ install_scenario_multillm() {
         return 1
     }
 
-    # 6) 自检 + 完成标记 + 引导
+    # 6) Chromium 本体：优先 playwright 自带缓存；缺失时从 CDN 下载
+    #    （快 4.5 倍于 googleapis；Debian 系包管理器的 chromium 是 shell 套壳，PRoot 内启动即崩，不用）
+    PW_CHROMIUM_DIR="$HOME/.cache/ms-playwright/chromium-1243"
+    if [ ! -x "$PW_CHROMIUM_DIR/chrome-linux/chrome" ]; then
+        echo "下载 Chromium（约 190MB，一次即可）..."
+        PW_DL="$HOME/.cache/ms-playwright"
+        mkdir -p "$PW_DL"
+        PW_ZIP="$PW_DL/chromium-arm64.zip"
+        PW_OK=0
+        for PW_URL in \
+            "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1243/chromium-linux-arm64.zip" \
+            "https://playwright.download.prss.microsoft.com/dbazure/download/playwright/builds/chromium/1243/chromium-linux-arm64.zip" \
+            "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.12/linux-arm64/chrome-linux-arm64.zip"
+        do
+            if curl -L --retry 3 --retry-delay 3 -C - --progress-bar "$PW_URL" -o "$PW_ZIP" \
+                && python3 -m zipfile -e "$PW_ZIP" "$PW_CHROMIUM_DIR/" >/dev/null 2>&1; then
+                PW_OK=1
+                break
+            fi
+            rm -f "$PW_ZIP"; rm -rf "$PW_CHROMIUM_DIR"
+        done
+        [ "$PW_OK" = "1" ] || {
+            echo "${C_RED}Chromium 下载失败（网络原因），可稍后重跑本场景重试。VNC 登录功能暂不可用，不影响多模型提问。${C_RESET}"
+            plog "multi-llm：chromium 下载失败（非致命）"
+        }
+        rm -f "$PW_ZIP"
+        chmod +x "$PW_CHROMIUM_DIR/chrome-linux/chrome" 2>/dev/null
+        # playwright 以 INSTALLATION_COMPLETE 标记判定可用
+        touch "$PW_CHROMIUM_DIR/INSTALLATION_COMPLETE" 2>/dev/null
+    fi
+
+    # 7) 自检 + 完成标记 + 引导
     if ! PYTHONPATH="$MULTI_LLM_SITE" python3 -c "import mcp, playwright, pydantic, greenlet" >/dev/null 2>&1; then
         echo "${C_RED}依赖自检未通过，可稍后重跑本场景重试。${C_RESET}"
         plog "multi-llm 安装失败：导入自检失败"
