@@ -23,7 +23,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +62,7 @@ import com.aicode.feature.store.presentation.StoreUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.ExternalLink
+import compose.icons.feathericons.Layers
 import compose.icons.feathericons.Search
 
 /**
@@ -80,6 +83,10 @@ internal fun StoreScreen(
     onRetryTranslation: () -> Unit = {},
     onConfirmScan: () -> Unit = {},
     onDismissScan: () -> Unit = {},
+    sources: List<com.aicode.feature.store.data.StoreSource> = emptyList(),
+    onToggleSource: (String, Boolean) -> Unit = { _, _ -> },
+    onRemoveSource: (String) -> Unit = {},
+    onAddSource: (com.aicode.feature.store.data.StoreSource) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -87,6 +94,7 @@ internal fun StoreScreen(
     // 条目详情弹层（用户反馈：希望能点开每个技能/MCP/专家团看完整介绍）
     var detailItem by remember { mutableStateOf<StoreItem?>(null) }
     var detailTeam by remember { mutableStateOf<TeamStoreItem?>(null) }
+    var showSources by remember { mutableStateOf(false) }
 
     // 一次性提示（安装结果）→ Toast
     LaunchedEffect(state.message) {
@@ -124,10 +132,17 @@ internal fun StoreScreen(
                             else -> StoreKind.EXPERT
                         }
                     )
-                }
+                },
+                modifier = Modifier.weight(1f)
             )
+            IconButton(onClick = { showSources = true }) {
+                Icon(
+                    FeatherIcons.Layers,
+                    contentDescription = stringResource(R.string.store_sources_title),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
-
         // 搜索框（技能 tab 提供；MCP 不提供搜索）：放大镜收进框内尾部（点击=搜索），
         // 输入框随容器宽度自适应对齐（验收反馈）。
         if (state.tab == StoreKind.SKILL) {
@@ -270,6 +285,15 @@ internal fun StoreScreen(
     }
 
     // ── 详情弹层：技能/MCP ──
+    if (showSources) {
+        StoreSourcesSheet(
+            sources = sources,
+            onToggle = onToggleSource,
+            onRemove = onRemoveSource,
+            onAdd = onAddSource,
+            onDismiss = { showSources = false }
+        )
+    }
     detailItem?.let { item ->
         val translation = state.translations[item.storeTranslationKey()]
         AdaptiveModalBottomSheet(onDismissRequest = { detailItem = null }) {
@@ -785,6 +809,129 @@ private fun TeamList(
                         ) {
                             Text(stringResource(R.string.store_expert_install))
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 商店源管理弹层：列出全部源，支持启停、删除非内置源、按 claudemarket 兼容协议新增。
+ * 内置源只允许启停（baseUrl 与可信标记由代码维护，防篡改）。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun StoreSourcesSheet(
+    sources: List<com.aicode.feature.store.data.StoreSource>,
+    onToggle: (String, Boolean) -> Unit,
+    onRemove: (String) -> Unit,
+    onAdd: (com.aicode.feature.store.data.StoreSource) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var adding by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+
+    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Text(
+                text = stringResource(R.string.store_sources_title),
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = stringResource(R.string.store_sources_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            sources.forEach { src ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = src.name + if (src.builtIn) {
+                                " · " + stringResource(R.string.store_sources_builtin)
+                            } else {
+                                ""
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = src.baseUrl,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (!src.trusted) {
+                            Text(
+                                text = stringResource(R.string.store_sources_untrusted),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
+                    Switch(checked = src.enabled, onCheckedChange = { onToggle(src.id, it) })
+                    if (!src.builtIn) {
+                        TextButton(onClick = { onRemove(src.id) }) {
+                            Text(stringResource(R.string.common_delete))
+                        }
+                    }
+                }
+                HorizontalDivider()
+            }
+            if (!adding) {
+                TextButton(onClick = { adding = true }) {
+                    Text(stringResource(R.string.store_sources_add))
+                }
+            } else {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.store_sources_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text(stringResource(R.string.store_sources_url)) },
+                    supportingText = { Text(stringResource(R.string.store_sources_url_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    TextButton(onClick = { adding = false; name = ""; url = "" }) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                    TextButton(
+                        onClick = {
+                            val trimmedUrl = url.trim().trimEnd('/')
+                            onAdd(
+                                com.aicode.feature.store.data.StoreSource(
+                                    id = "custom-" + trimmedUrl.hashCode().toUInt().toString(),
+                                    name = name.trim(),
+                                    baseUrl = trimmedUrl,
+                                    priority = 0,
+                                    trusted = false,
+                                    enabled = true,
+                                    builtIn = false
+                                )
+                            )
+                            adding = false; name = ""; url = ""
+                        },
+                        enabled = name.isNotBlank() && url.trim().startsWith("http")
+                    ) {
+                        Text(stringResource(R.string.common_save))
                     }
                 }
             }

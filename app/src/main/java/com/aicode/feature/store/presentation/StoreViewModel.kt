@@ -10,6 +10,10 @@ import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.store.data.StoreApiClient
 import com.aicode.feature.store.data.StoreCatalogCache
 import com.aicode.feature.store.data.StoreItem
+import com.aicode.feature.store.data.StoreSource
+import com.aicode.feature.store.data.StoreSourceConfig
+import com.aicode.feature.store.data.CmSkill
+import com.aicode.feature.store.data.CmSkillsResponse
 import com.aicode.feature.store.data.StoreKind
 import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreTranslation
@@ -32,6 +36,9 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -126,6 +133,7 @@ class StoreViewModel @Inject constructor(
     private val scanner: StoreInstallScanner,
     private val languageSettings: LanguageSettingsRepository,
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
+    private val sourceConfig: StoreSourceConfig,
     baseClient: okhttp3.OkHttpClient,
     @param:ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
@@ -139,6 +147,7 @@ class StoreViewModel @Inject constructor(
     private companion object {
         const val PAGE_SIZE = 20
         const val MCP_PAGE_SIZE = 50
+        const val MCP_SEARCH_LIMIT = 50
         const val TAG = "StoreViewModel"
         /** 在线专家团市场（wshobson/agents，MIT）：经 gh-proxy 镜像访问。 */
         const val GH_PROXY = "https://gh-proxy.com/"
@@ -158,7 +167,11 @@ class StoreViewModel @Inject constructor(
     /** 翻译任务：单 Job 串行，列表重新加载时取消旧任务重开（见 [kickTranslation]）。 */
     private var translationJob: Job? = null
 
+    /** 已配置的商店源（含启用状态）；UI 用于展示来源与设置页。 */
+    val sources: StateFlow<List<StoreSource>> = sourceConfig.sources
+
     init {
+        viewModelScope.launch { sourceConfig.load() }
         loadTab(StoreKind.SKILL)
     }
 
@@ -172,13 +185,17 @@ class StoreViewModel @Inject constructor(
         _state.update { it.copy(query = query) }
     }
 
-    /** 执行搜索（仅技能 tab；MCP 不提供搜索）。 */
+    /** 执行搜索：技能走 claudemarket 全库搜索，MCP 走官方 Registry 的 search 参数（服务端筛选）。 */
     fun search() {
         val q = _state.value.query.trim()
         if (q.isBlank()) {
             // 清空搜索回到浏览
             page = 1
             loadTab(_state.value.tab)
+            return
+        }
+        if (_state.value.tab == StoreKind.MCP) {
+            searchMcp(q)
             return
         }
         viewModelScope.launch {
@@ -233,6 +250,7 @@ class StoreViewModel @Inject constructor(
             if (nextPage) {
                 _state.update { it.copy(loadingMore = true) }
                 val target = page + 1
+                // 翻页继续走默认源（缓存结构仍按单源 DTO 存），聚合只作用于首页
                 api.listSkills(page = target, limit = PAGE_SIZE).fold(
                     onSuccess = { resp ->
                         if (_state.value.tab != StoreKind.SKILL) return@fold
@@ -271,28 +289,97 @@ class StoreViewModel @Inject constructor(
             } else {
                 _state.update { it.copy(loading = true, error = null, searching = false) }
             }
-            api.listSkills(page = 1, limit = PAGE_SIZE).fold(
+            val fresh = fetchSkillsAggregated(PAGE_SIZE)
+            if (fresh.isNotEmpty()) {
+                catalogCache.saveSkills(CmSkillsResponse(count = fresh.size, total = fresh.size, results = fresh))
+                // 守卫：切 tab / 已翻页 / 搜索中（搜索结果不能被浏览列表冲掉）
+                if (_state.value.tab != StoreKind.SKILL || page != 1 ||
+                    _state.value.searching || _state.value.query.isNotBlank()) return@launch
+                val incoming = fresh.map { it.toStoreItem().withSource(it.source) }
+                _state.update {
+                    it.copy(items = incoming, loading = false, loadingMore = false, hasMore = false)
+                }
+                refreshInstalled()
+                kickTranslation()
+            } else if (_state.value.items.isEmpty()) {
+                _state.update {
+                    it.copy(loading = false, loadingMore = false, error = "加载失败，请检查网络")
+                }
+            } else {
+                _state.update { it.copy(loading = false, loadingMore = false) }
+            }
+        }
+    }
+
+    /**
+     * 多源聚合拉取技能：所有启用源并发请求各自首页，同 slug 高优先级源胜出，
+     * 单源失败静默降级为仅其它源的结果；全部失败返回空列表。
+     * 结果保留为 [CmSkill]（缓存序列化需要），来源信息写入其 source 字段供展示层转换。
+     */
+    private suspend fun fetchSkillsAggregated(limit: Int): List<CmSkill> = coroutineScope {
+        val srcs = sourceConfig.enabledSources()
+        if (srcs.isEmpty()) return@coroutineScope emptyList()
+        val deferred = srcs.map { src ->
+            async {
+                if (src.id == "mcp-registry") return@async null
+                api.listSkills(page = 1, limit = limit, baseUrl = src.baseUrl.takeIf { src.id != "claudemarket" })
+                    .getOrNull()
+                    ?.results
+                    ?.map { r ->
+                        // 来源信息借用 CmSkill.source 字段传递（原值仅作上游出处，展示层不依赖）
+                        r.copy(source = src.id)
+                    }
+                    ?.let { src to it }
+            }
+        }
+        val pairs = deferred.awaitAll().filterNotNull()
+        if (pairs.isEmpty()) return@coroutineScope emptyList()
+        // 高优先级源先入，同 slug 保留先见者
+        val bySlug = LinkedHashMap<String, CmSkill>()
+        for ((_, skills) in pairs.sortedByDescending { it.first.priority }) {
+            for (s in skills) bySlug.putIfAbsent(s.slug, s)
+        }
+        bySlug.values.toList()
+    }
+
+    /** 按源 id 回填来源展示字段；内置/未知源回原样。 */
+    private fun StoreItem.withSource(sourceId: String): StoreItem {
+        val src = sourceConfig.sources.value.firstOrNull { it.id == sourceId } ?: return this
+        return copy(sourceId = src.id, sourceName = src.name, sourceTrusted = src.trusted)
+    }
+
+    fun toggleSource(id: String, enabled: Boolean) {
+        viewModelScope.launch { sourceConfig.setEnabled(id, enabled) }
+    }
+
+    fun removeSource(id: String) {
+        viewModelScope.launch { sourceConfig.remove(id) }
+    }
+
+    fun addSource(source: StoreSource) {
+        viewModelScope.launch { sourceConfig.add(source) }
+    }
+
+    /** MCP Registry 服务端搜索（只取一页，不接翻页）。 */
+    private fun searchMcp(q: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(searching = true, error = null, loading = true) }
+            api.listMcpServers(limit = MCP_SEARCH_LIMIT, search = q).fold(
                 onSuccess = { resp ->
-                    catalogCache.saveSkills(resp)
-                    // 守卫：切 tab / 已翻页 / 搜索中（搜索结果不能被浏览列表冲掉）
-                    if (_state.value.tab != StoreKind.SKILL || page != 1 ||
-                        _state.value.searching || _state.value.query.isNotBlank()) return@fold
-                    val incoming = resp.results.map { it.toStoreItem() }
+                    if (_state.value.tab != StoreKind.MCP) return@fold
+                    val items = resp.servers.map { it.server.toStoreItem() }.distinctBy { it.id }
+                    mcpCursor = null
+                    mcpAdvanced = true
                     _state.update {
-                        it.copy(items = incoming, loading = false, loadingMore = false, hasMore = incoming.size >= PAGE_SIZE)
+                        it.copy(items = items, loading = false, searching = false, hasMore = false)
                     }
                     refreshInstalled()
                     kickTranslation()
                 },
                 onFailure = { e ->
-                    if (_state.value.tab != StoreKind.SKILL) return@fold
-                    // 已有缓存展示时静默保持，不打断浏览；仅空列表时报错
+                    if (_state.value.tab != StoreKind.MCP) return@fold
                     _state.update {
-                        if (it.items.isEmpty()) {
-                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
-                        } else {
-                            it.copy(loading = false, loadingMore = false)
-                        }
+                        it.copy(loading = false, searching = false, error = e.message ?: "搜索失败，请检查网络")
                     }
                 }
             )

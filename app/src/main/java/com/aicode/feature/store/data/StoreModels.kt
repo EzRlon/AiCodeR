@@ -46,7 +46,13 @@ data class StoreItem(
     val remoteUrl: String? = null,
     val transportType: String = "",
     /** MCP：是否仅提供 stdio（npm/docker）包（v1 不支持一键安装）。 */
-    val stdioOnly: Boolean = false
+    val stdioOnly: Boolean = false,
+    /** 来源商店源 id；多源聚合时用于展示与安装确认。 */
+    val sourceId: String = "claudemarket",
+    /** 来源展示名。 */
+    val sourceName: String = "ClaudeMarket",
+    /** 来源是否可信；不可信源安装前需二次确认。 */
+    val sourceTrusted: Boolean = true
 )
 
 // ── claudemarket.ai DTO ────────────────────────────────────────────
