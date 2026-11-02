@@ -9,6 +9,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -18,6 +19,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -140,6 +144,7 @@ import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.ChevronUp
+import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Pause
 import compose.icons.feathericons.Play
@@ -271,6 +276,8 @@ internal fun ChatInputBar(
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showIntentPicker by remember { mutableStateOf(false) }
+    var codingIntentsExpanded by remember { mutableStateOf(true) }
+    var generalIntentsExpanded by remember { mutableStateOf(false) }
     // TextField 的 String 重载在整串替换时会保留旧 selection 下标（点快捷命令补全时光标会停在中间），
     // 这里自持 TextFieldValue：外部改值时把光标移到末尾。
     var inputFieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
@@ -600,7 +607,15 @@ internal fun ChatInputBar(
                     // 模式说明条（验收反馈）：底栏向上拓展展示当前模式规则。
                     // 默认：切到计划/自动自动展开；构建默认收起，再次点击已点亮的模式图标开关本说明。
                     var modeInfoVisible by rememberSaveable(sessionId) { mutableStateOf(currentMode != AgentMode.BUILD) }
-                    LaunchedEffect(currentMode) { modeInfoVisible = currentMode != AgentMode.BUILD }
+                    var lastMode by remember(sessionId) { mutableStateOf(currentMode) }
+                    // 切到任一模式都把它的说明条展开（含构建）；首次进入不算切换，保持默认收起。
+                    LaunchedEffect(currentMode) {
+                        if (currentMode != lastMode) {
+                            lastMode = currentMode
+                            modeInfoVisible = true
+                        }
+                    }
+                    var modeMenuVisible by remember { mutableStateOf(false) }
                     AnimatedVisibility(
                         visible = modeInfoVisible,
                         enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(tween(160)),
@@ -721,35 +736,68 @@ internal fun ChatInputBar(
                             .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
+                        // 控制行用 FlowRow：屏幕窄时自动换行，保证每个按钮都完整可见（用户反馈：
+                        // 小屏设备上思考强度按钮直接不见了）。不再用横向滑动——滑不到的按钮等于不存在。
+                        @OptIn(ExperimentalLayoutApi::class)
+                        FlowRow(
                             modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            maxItemsInEachRow = Int.MAX_VALUE
                         ) {
-                            // 模式区：三个纯图标按钮（构建 / 计划 / 自动），尺寸与右侧图标统一
-                            // （36dp 按钮 / 20dp 图标）。点击未选中图标直接切换；点击已点亮图标开关
-                            // 底部模式说明；长按（三个按钮任一）进「定时任务 / 定时 Plan」面板。
-                            AgentMode.entries.forEach { mode ->
-                                val isSelected = mode == currentMode
-                                val modeTint = when (mode) {
-                                    AgentMode.BUILD -> MaterialTheme.semanticColors.success
-                                    AgentMode.PLAN -> MaterialTheme.colorScheme.primary
-                                    AgentMode.AUTO -> MaterialTheme.colorScheme.error
-                                }
+                            // 模式区：构建 / 计划 / 自动合并成一个按钮（用户反馈：三个独立按钮占位太多）。
+                            // 点按弹模式菜单，选中即切换并自动展开说明条；再点当前模式只开关说明条；
+                            // 长按进「定时任务 / 定时 Plan」面板。
+                            Box {
                                 Icon(
-                                    imageVector = modeIcon(mode),
-                                    contentDescription = stringResource(modeLabelRes(mode)),
-                                    tint = if (isSelected) modeTint else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    imageVector = modeIcon(currentMode),
+                                    contentDescription = stringResource(modeLabelRes(currentMode)),
+                                    tint = when (currentMode) {
+                                        AgentMode.BUILD -> MaterialTheme.semanticColors.success
+                                        AgentMode.PLAN -> MaterialTheme.colorScheme.primary
+                                        AgentMode.AUTO -> MaterialTheme.colorScheme.error
+                                    },
                                     modifier = Modifier
                                         .size(36.dp)
                                         .combinedClickable(
-                                            onClick = {
-                                                if (isSelected) modeInfoVisible = !modeInfoVisible else onToggleMode(mode)
-                                            },
+                                            onClick = { modeMenuVisible = true },
                                             onLongClick = onModePillLongClick
                                         )
-                                        .semantics { this.selected = isSelected }
                                         .padding(8.dp)
                                 )
+                                DropdownMenu(
+                                    expanded = modeMenuVisible,
+                                    onDismissRequest = { modeMenuVisible = false }
+                                ) {
+                                    AgentMode.entries.forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(modeLabelRes(mode))) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = modeIcon(mode),
+                                                    contentDescription = null,
+                                                    tint = if (mode == currentMode) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            },
+                                            trailingIcon = if (mode == currentMode) {
+                                                {
+                                                    Icon(
+                                                        FeatherIcons.Check,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            } else null,
+                                            onClick = {
+                                                modeMenuVisible = false
+                                                if (mode == currentMode) modeInfoVisible = !modeInfoVisible
+                                                else onToggleMode(mode)
+                                            }
+                                        )
+                                    }
+                                }
                             }
                             Spacer(Modifier.width(Spacing.xs))
 
@@ -800,7 +848,9 @@ internal fun ChatInputBar(
                                 )
                                 DropdownMenu(
                                     expanded = showIntentPicker,
-                                    onDismissRequest = { showIntentPicker = false }
+                                    onDismissRequest = { showIntentPicker = false },
+                                    modifier = Modifier.heightIn(max = 320.dp),
+                                    scrollState = rememberScrollState(),
                                 ) {
                                     MessageIntentMenuItem(
                                         intent = null,
@@ -810,27 +860,39 @@ internal fun ChatInputBar(
                                             onIntentTypeChange(null)
                                         }
                                     )
-                                    MessageIntentGroupHeader(stringResource(R.string.intent_picker_coding))
-                                    MessageIntentCatalog.coding.forEach { item ->
-                                        MessageIntentMenuItem(
-                                            intent = item,
-                                            selected = item.key == intentType,
-                                            onClick = {
-                                                showIntentPicker = false
-                                                onIntentTypeChange(item.key)
-                                            }
-                                        )
+                                    MessageIntentGroupHeader(
+                                        text = stringResource(R.string.intent_picker_coding),
+                                        expanded = codingIntentsExpanded,
+                                        onToggle = { codingIntentsExpanded = !codingIntentsExpanded },
+                                    )
+                                    if (codingIntentsExpanded) {
+                                        MessageIntentCatalog.coding.forEach { item ->
+                                            MessageIntentMenuItem(
+                                                intent = item,
+                                                selected = item.key == intentType,
+                                                onClick = {
+                                                    showIntentPicker = false
+                                                    onIntentTypeChange(item.key)
+                                                }
+                                            )
+                                        }
                                     }
-                                    MessageIntentGroupHeader(stringResource(R.string.intent_picker_general))
-                                    MessageIntentCatalog.general.forEach { item ->
-                                        MessageIntentMenuItem(
-                                            intent = item,
-                                            selected = item.key == intentType,
-                                            onClick = {
-                                                showIntentPicker = false
-                                                onIntentTypeChange(item.key)
-                                            }
-                                        )
+                                    MessageIntentGroupHeader(
+                                        text = stringResource(R.string.intent_picker_general),
+                                        expanded = generalIntentsExpanded,
+                                        onToggle = { generalIntentsExpanded = !generalIntentsExpanded },
+                                    )
+                                    if (generalIntentsExpanded) {
+                                        MessageIntentCatalog.general.forEach { item ->
+                                            MessageIntentMenuItem(
+                                                intent = item,
+                                                selected = item.key == intentType,
+                                                onClick = {
+                                                    showIntentPicker = false
+                                                    onIntentTypeChange(item.key)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1070,6 +1132,7 @@ private fun MessageIntentMenuItem(
     onClick: () -> Unit
 ) {
     DropdownMenuItem(
+        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.xs),
         text = {
             Text(
                 text = stringResource(intent?.labelRes ?: R.string.intent_none),
@@ -1105,13 +1168,31 @@ private fun MessageIntentMenuItem(
 
 /** 消息类型菜单分组标题（左缘与菜单条目图标列对齐）。 */
 @Composable
-private fun MessageIntentGroupHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = Spacing.md, top = Spacing.sm, bottom = Spacing.xs)
-    )
+private fun MessageIntentGroupHeader(
+    text: String,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(start = Spacing.md, end = Spacing.md, top = Spacing.sm, bottom = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(14.dp)
+        )
+    }
 }
 
 /** 模式图标与说明层共用的名称/说明/图标。 */

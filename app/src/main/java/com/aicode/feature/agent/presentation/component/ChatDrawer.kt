@@ -578,6 +578,15 @@ fun ChatDrawerContent(
 
             // 底部卡片与内容列表右缘对齐（同一右边距；功能图标仅随布局移位、不翻转）。
             SettingsGroup(modifier = Modifier.padding(end = Spacing.lg)) {
+                if (onNavigateToPreview != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Monitor,
+                        title = stringResource(R.string.preview_entry_title),
+                        onClick = { showPreviewEntrySheet = true },
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
                 if (onNavigateToBrowser != null) {
                     SettingsRow(
                         icon = FeatherIcons.Globe,
@@ -601,15 +610,6 @@ fun ChatDrawerContent(
                         icon = FeatherIcons.MessageCircle,
                         title = stringResource(R.string.multillm_entry_title),
                         onClick = onNavigateToMultillm,
-                        compact = true
-                    )
-                    SettingsDivider()
-                }
-                if (onNavigateToPreview != null) {
-                    SettingsRow(
-                        icon = FeatherIcons.Monitor,
-                        title = stringResource(R.string.preview_entry_title),
-                        onClick = { showPreviewEntrySheet = true },
                         compact = true
                     )
                     SettingsDivider()
@@ -2275,7 +2275,11 @@ private fun DeliverableRow(
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             if (fileAccess != null) {
-                attachmentActionEntries(context, item.attachment, fileAccess, actionScope).forEach { entry ->
+                attachmentActionEntries(
+                    context, item.attachment, fileAccess, actionScope,
+                    // 交付物已自动导出到真机 下载/AiCodeR，不再需要手动「保存到手机」。
+                    includeSaveToPhone = false,
+                ).forEach { entry ->
                     DropdownMenuItem(
                         text = { Text(stringResource(entry.labelRes)) },
                         leadingIcon = {

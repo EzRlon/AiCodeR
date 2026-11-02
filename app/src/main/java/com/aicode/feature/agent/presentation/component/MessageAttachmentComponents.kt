@@ -325,6 +325,10 @@ internal suspend fun resolveLocalFile(attachment: AgentAttachment, fileAccess: F
     attachment.localPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isFile }?.let { return it }
     val containerPath = attachment.containerPath
     if (containerPath.isBlank()) return null
+    // 交付物已自动导出到真机 下载/AiCodeR/：优先用真机副本，MT 管理器/文件管理器
+    // 才能在真机存储里打开它（容器内路径对外部应用不可见）。
+    val exported = ExternalFileActions.findExported(attachment.fileName)
+    if (exported != null) return exported
     return runCatching { fileAccess.copyToLocal(containerPath) }.getOrNull()?.takeIf { it.isFile }
 }
 

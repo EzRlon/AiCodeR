@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.aicode.R
@@ -55,35 +56,74 @@ object ExternalFileActions {
         runCatching { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file) }.getOrNull()
 
     /** 用 MT 管理器打开（看/改文件；MT 打开后可看到其所在目录）。未安装或启动失败返回 false。 */
-    fun openWithMt(context: Context, file: File): Boolean {
-        val uri = shareableUri(context, file) ?: return false
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, "*/*")
+    fun openWithMt(context: Context, file: File, mimeType: String = "*/*"): Boolean {
+        val host = ensureHostCopy(context, file) ?: return false
+        val uri = prepareShareable(context, host)?.let { shareableUri(context, it) } ?: return false
+        val type = mimeType.ifBlank { "*/*" }
+        val view = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, type)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             .setPackage(MT_PACKAGE)
-        return runCatching { context.startActivity(intent) }.isSuccess
+        if (runCatching { context.startActivity(view) }.isSuccess) return true
+        val send = Intent(Intent.ACTION_SEND)
+            .setType(type)
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .setPackage(MT_PACKAGE)
+        return runCatching { context.startActivity(send) }.isSuccess
     }
 
-    /** 在文件管理器中查看：先试打开所在目录（resource/folder），失败回退打开文件本身。 */
-    fun viewInFileManager(context: Context, file: File) {
-        val parent = file.parentFile
-        if (parent != null) {
-            val folderUri = shareableUri(context, parent)
-            if (folderUri != null) {
-                val folderIntent = Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(folderUri, "resource/folder")
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                if (runCatching { context.startActivity(folderIntent) }.isSuccess) return
+    /**
+     * 在文件管理器中查看：先把文件落到真机存储，再用系统文件管理器的文档 URI 直接定位到它所在的文件夹
+     * （`content://com.android.externalstorage.documents/document/primary%3ADownload%2FAiCodeR`），
+     * 跳过去就是真机存储页；文档 UI 不能处理时退回用文件自身的 MIME 打开。
+     */
+    fun viewInFileManager(context: Context, file: File, mimeType: String = "*/*") {
+        val host = ensureHostCopy(context, file)
+        if (host == null) {
+            Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        host.parentFile?.let { dir ->
+            documentUri(dir)?.let { dirUri ->
+                val intent = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(dirUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                if (runCatching { context.startActivity(intent) }.isSuccess) return
             }
         }
-        val uri = shareableUri(context, file) ?: return
-        val fallback = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, "*/*")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        runCatching { context.startActivity(fallback) }.onFailure {
-            Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
+        val uri = prepareShareable(context, host)?.let { shareableUri(context, it) }
+        if (uri != null) {
+            val open = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, mimeType.ifBlank { "*/*" })
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (runCatching { context.startActivity(open) }.isSuccess) return
         }
+        Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
     }
+
+    /** 共享存储内路径的 DocumentsUI 文档 URI（primary 卷）；不在共享存储返回 null。 */
+    private fun documentUri(file: File): Uri? = runCatching {
+        val root = Environment.getExternalStorageDirectory().absolutePath.trimEnd('/')
+        val path = file.absolutePath
+        if (!path.startsWith("$root/")) return@runCatching null
+        DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            "primary:" + path.substring(root.length + 1)
+        )
+    }.getOrNull()
+
+    /** 文件是否已落在真机共享存储里（宿主文件管理器/MT 能直接看到）。 */
+    private fun isInSharedStorage(file: File): Boolean {
+        val root = runCatching { Environment.getExternalStorageDirectory().absolutePath }.getOrNull() ?: return false
+        return file.absolutePath.startsWith(root.trimEnd('/') + "/")
+    }
+
+    /**
+     * 容器内文件先落到真机 `下载/AiCodeR/`，返回宿主可见的那份副本（已在共享存储则原样返回）。
+     * MT / 文件管理器只能看见宿主文件系统，把容器路径直接交给它们等于点了没反应。
+     */
+    fun ensureHostCopy(context: Context, file: File): File? =
+        if (isInSharedStorage(file)) file else exportToSharedFile(context, file, file.name)
 
     /** 分享文件（系统分享面板）。 */
     fun shareFile(context: Context, file: File, mimeType: String = "*/*") {
@@ -109,12 +149,40 @@ object ExternalFileActions {
      * 展示路径用下载目录的实际物理名（dir.name，如 Download），与实际存放位置一致。
      */
     fun exportToShared(context: Context, file: File, displayName: String): String? = runCatching {
-        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), SAVE_DIR)
+        val target = exportToSharedFile(context, file, displayName) ?: return@runCatching null
+        MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), null, null)
+        "${sharedDir().name}/$SAVE_DIR/${target.name}"
+    }.getOrNull()
+
+    /** 共享存储里的导出目录：`下载/AiCodeR/`（真机存储，不在容器内）。 */
+    fun sharedDir(): File =
+        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), SAVE_DIR)
+
+    /**
+     * 把容器内的文件复制一份到 `下载/AiCodeR/`，返回真机上的副本 File。
+     * 交付页要求文件真正落到真机存储（而不是容器映射），MT 管理器/文件管理器才能打开。
+     * 同名且同大小视为已导出，直接返回现有副本，避免反复拷贝大文件。
+     */
+    fun exportToSharedFile(context: Context, file: File, displayName: String): File? = runCatching {
+        val dir = sharedDir()
         dir.mkdirs()
+        val existing = findExported(displayName.ifBlank { file.name.ifBlank { "file" } })
+        if (existing != null && existing.length() == file.length()) return@runCatching existing
         val target = uniqueFile(dir, displayName.ifBlank { file.name.ifBlank { "file" } })
         file.copyTo(target, overwrite = false)
         MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), null, null)
-        "${dir.name}/$SAVE_DIR/${target.name}"
+        target
+    }.getOrNull()
+
+    /** 在导出目录里找同名副本（含 `-2`/`-3` 去重后缀），取最新一份；没有则 null。 */
+    fun findExported(displayName: String): File? = runCatching {
+        val dir = sharedDir()
+        if (!dir.isDirectory) return@runCatching null
+        val stem = displayName.substringBeforeLast('.', displayName)
+        val ext = if (displayName.contains('.')) "." + displayName.substringAfterLast('.') else ""
+        dir.listFiles { f -> f.isFile && (f.name == displayName || f.name.startsWith("$stem-")) }
+            ?.filter { ext.isBlank() || it.name.endsWith(ext) }
+            ?.maxByOrNull { it.lastModified() }
     }.getOrNull()
 
     private fun uniqueFile(dir: File, name: String): File {

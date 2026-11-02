@@ -46,6 +46,8 @@ internal fun attachmentActionEntries(
     attachment: AgentAttachment,
     fileAccess: FileAccessProvider,
     scope: CoroutineScope? = null,
+    /** 交付页里文件已自动导出到真机，不再需要手动「保存到手机」。 */
+    includeSaveToPhone: Boolean = true,
 ): List<AnchorMenuEntry> {
     val actionScope = scope ?: rememberCoroutineScope()
     val clipboard = LocalClipboard.current
@@ -72,7 +74,7 @@ internal fun attachmentActionEntries(
                 AnchorMenuEntry(icon = FeatherIcons.Archive, labelRes = R.string.file_action_mt) {
                     actionScope.launch {
                         val local = prepareLocal(context, attachment, fileAccess) ?: return@launch
-                        if (!ExternalFileActions.openWithMt(context, local)) {
+                        if (!ExternalFileActions.openWithMt(context, local, attachment.mimeType)) {
                             Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -84,36 +86,38 @@ internal fun attachmentActionEntries(
             AnchorMenuEntry(icon = FeatherIcons.Folder, labelRes = R.string.file_action_filemanager) {
                 actionScope.launch {
                     val local = prepareLocal(context, attachment, fileAccess) ?: return@launch
-                    ExternalFileActions.viewInFileManager(context, local)
+                    ExternalFileActions.viewInFileManager(context, local, attachment.mimeType)
                 }
             }
         )
-        // 保存到手机（下载/AiCodeR）
-        add(
-            AnchorMenuEntry(icon = FeatherIcons.Download, labelRes = R.string.file_action_save) {
-                actionScope.launch {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                        != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        Toast.makeText(context, context.getString(R.string.file_action_need_storage), Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    val local = withContext(Dispatchers.IO) { resolveLocalFile(attachment, fileAccess) }
-                    if (local == null) {
-                        Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    val saved = withContext(Dispatchers.IO) {
-                        ExternalFileActions.exportToShared(context, local, attachment.fileName)
-                    }
-                    if (saved != null) {
-                        Toast.makeText(context, context.getString(R.string.file_action_saved, saved), Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
+        // 保存到手机（下载/AiCodeR）：交付页里文件已自动导出，按需省略
+        if (includeSaveToPhone) {
+            add(
+                AnchorMenuEntry(icon = FeatherIcons.Download, labelRes = R.string.file_action_save) {
+                    actionScope.launch {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            Toast.makeText(context, context.getString(R.string.file_action_need_storage), Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        val local = withContext(Dispatchers.IO) { resolveLocalFile(attachment, fileAccess) }
+                        if (local == null) {
+                            Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        val saved = withContext(Dispatchers.IO) {
+                            ExternalFileActions.exportToShared(context, local, attachment.fileName)
+                        }
+                        if (saved != null) {
+                            Toast.makeText(context, context.getString(R.string.file_action_saved, saved), Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.file_action_failed), Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
         // 分享
         add(
             AnchorMenuEntry(icon = FeatherIcons.Share2, labelRes = R.string.file_action_share) {

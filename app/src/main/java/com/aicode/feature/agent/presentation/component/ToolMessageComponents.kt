@@ -187,6 +187,7 @@ internal fun ToolMessageBody(
                 ToolArgumentMetadata(
                     hint = toolArgHint(message.toolArgs),
                     path = extractFilePathArg(message.toolArgs),
+                    member = taskMemberName(message.toolArgs, message.toolName),
                     hasArgs = hasToolArgs(message.toolArgs)
                 )
             }
@@ -214,6 +215,8 @@ internal fun ToolMessageBody(
     } else {
         argumentMetadata?.path
     }
+    // 专家团成员名（task 派发）：行首直接给成员名，不再是笼统的 task
+    val memberName = argumentMetadata?.member
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -265,6 +268,29 @@ internal fun ToolMessageBody(
                         style = monoLabel,
                         maxLines = 1
                     )
+                } else if (memberName != null) {
+                    // 专家团成员（task 派发）：行首直接给成员名，不再是笼统的 task
+                    Text(
+                        text = memberName,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!argHint.isNullOrBlank()) {
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = argHint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                 } else {
                     Text(
                         text = toolLabel,
@@ -448,7 +474,13 @@ private data class ToolMessageMetadata(
     val hasResult: Boolean
 )
 
-private data class ToolArgumentMetadata(val hint: String?, val path: String?, val hasArgs: Boolean)
+private data class ToolArgumentMetadata(
+    val hint: String?,
+    val path: String?,
+    /** 专家团成员名（task 派发时的 agent/description），非 task 调用为 null。 */
+    val member: String?,
+    val hasArgs: Boolean
+)
 
 private data class ToolMessageDetails(
     val args: String?,
@@ -1175,4 +1207,19 @@ private fun extractFilePathArg(argsJson: String?): String? {
             (obj[key] as? JsonPrimitive)?.contentOrNull
         }
     }.getOrNull()
+}
+
+/**
+ * 专家团成员名：只有 task（派子代理/专家团成员）才解析。
+ * 派发时 agent 字段是成员名（如 backend-architect），没有时退回 description；
+ * 都没有则不加名字标识，避免把普通任务调用也标注成成员。
+ */
+private fun taskMemberName(argsJson: String?, toolName: String?): String? {
+    if (toolName != "task" || argsJson.isNullOrBlank()) return null
+    return runCatching {
+        val obj = Json.parseToJsonElement(argsJson).jsonObject
+        listOf("agent", "description").firstNotNullOfOrNull { key ->
+            (obj[key] as? JsonPrimitive)?.contentOrNull
+        }
+    }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
 }

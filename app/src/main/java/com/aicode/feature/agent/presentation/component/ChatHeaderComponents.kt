@@ -1,6 +1,8 @@
 package com.aicode.feature.agent.presentation.component
 
 import android.content.ClipData
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
@@ -33,10 +35,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,21 +124,7 @@ internal fun ChatHeader(
                     Spacer(modifier = Modifier.width(Spacing.sm))
                 }
                 VncHeaderIconButton()
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .combinedClickable(
-                            onClick = onNewChat,
-                            onLongClick = onNewChatLongClick
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        FeatherIcons.Plus,
-                        contentDescription = stringResource(R.string.chat_new_session),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                // 顶栏按钮顺序（左→右）：专家团、记忆图谱、Git、终端。
+                // 顶栏按钮顺序（左→右）：专家团、记忆图谱、Git、终端、新建会话。
                 // 「智能体」按钮已随引擎切换一期移除（引擎入口收编进模型选择弹窗；管理页本体保留）。
                 onOpenTeams?.let { openTeams ->
                     WorkbenchIconButton(
@@ -161,6 +152,20 @@ internal fun ChatHeader(
                     active = terminalActive,
                     onClick = onNavigateToTerminal
                 )
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                            onClick = onNewChat,
+                            onLongClick = onNewChatLongClick
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        FeatherIcons.Plus,
+                        contentDescription = stringResource(R.string.chat_new_session),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             // 远程模式：左边 SSH 连接状态，右边 token 累计统计
             if (connectionState != null) {
@@ -222,7 +227,11 @@ private fun WorkbenchIconButton(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VncHeaderIconButton() {
-    val viewModel: VncOverlayViewModel = hiltViewModel()
+    val context = LocalContext.current
+    val owner = remember(context) { context.findActivityOwner() }
+    val viewModel: VncOverlayViewModel = hiltViewModel(
+        viewModelStoreOwner = owner ?: checkNotNull(LocalViewModelStoreOwner.current)
+    )
     val supported by viewModel.supported.collectAsStateWithLifecycle(initialValue = true)
     if (!supported) return
     val window by viewModel.window.collectAsStateWithLifecycle()
@@ -261,6 +270,13 @@ private fun VncHeaderIconButton() {
             )
         }
     }
+}
+
+/** 顶栏按钮与浮窗渲染必须共用 Activity 级实例，否则点击只改页面级 VM，窗外永远不出现。 */
+private tailrec fun Context.findActivityOwner(): ViewModelStoreOwner? = when (this) {
+    is ViewModelStoreOwner -> this
+    is ContextWrapper -> baseContext.findActivityOwner()
+    else -> null
 }
 
 @Composable
