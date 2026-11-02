@@ -6,16 +6,28 @@
 <title>VNC</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
-  #screen { width: 100%; height: 100%; }
+  /* 容器尺寸必须用 100vw/100vh，不能靠百分比：#screen 的百分比高度依赖 html/body 的
+     百分比链，而 Android WebView 里这条链会解析成 0（实测 screen=393x0 而 window=392x832），
+     结果容器高 0、缩放后画面不可见，只剩黑屏（帧数据本身是好的）。 */
+  #screen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; }
   #status {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    display: flex; align-items: center; justify-content: center;
     color: #94a3b8; font: 14px/1.6 sans-serif; text-align: center; pointer-events: none;
+  }
+  /* 隐藏但可编辑：Android WebView 只对可编辑且可聚焦的元素弹输入法，
+     display:none / visibility:hidden 都拿不到焦点，所以用 1px + 近透明。 */
+  #kbdinput {
+    position: fixed; left: 0; bottom: 0; width: 1px; height: 1px;
+    padding: 0; margin: 0; border: 0; resize: none; outline: none;
+    opacity: 0.01; color: transparent; background: transparent;
   }
 </style>
 </head>
 <body>
 <div id="screen"></div>
 <div id="status"></div>
+<textarea id="kbdinput" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-hidden="true"></textarea>
 <script type="module">
 import RFB from './core/rfb.js';
 
@@ -26,6 +38,66 @@ const TEXT = zh
 
 const statusEl = document.getElementById('status');
 let rfb = null;
+let vncConnected = false;
+
+// Android WebView 里布局视口高度不可信：html/body 的百分比高度和 100vh 都解析成 0
+// （实测 screen=393x0 而 window.innerHeight=832），容器没有高度就缩放不出画面。
+// 因此不再依赖任何 CSS 视口单位，直接用 window 尺寸写死像素，并周期性对账防止被覆盖。
+const PAGE_BUILD = 'v12';
+function fitScreen() {
+  const w = window.innerWidth + 'px';
+  const h = window.innerHeight + 'px';
+  // #status 与 #screen 同因：100vh 在这里解析成 0，flex 居中的提示文字会落到顶部。
+  for (const id of ['screen', 'status']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (el.style.width !== w) el.style.width = w;
+    if (el.style.height !== h) el.style.height = h;
+  }
+}
+fitScreen();
+window.addEventListener('resize', fitScreen);
+setInterval(fitScreen, 1000);
+
+// 触摸拖动 → 鼠标事件：页面里只监听 mouse*，而 WebView 下触摸拖动不会持续产生 mousemove，
+// 导致远端光标轨迹断断续续。这里按触摸位置合成对应的 mouse* 事件派发到 canvas。
+// 同时点画面时聚焦隐藏 textarea，软键盘才会弹出。
+function bindInput(screenEl, kbd) {
+  const sendMouse = (type, t) => {
+    const cv = screenEl.querySelector('canvas');
+    if (!cv || !t) return;
+    cv.dispatchEvent(new MouseEvent(type, {
+      bubbles: true, cancelable: true, view: window, detail: 1,
+      clientX: t.clientX, clientY: t.clientY,
+      screenX: t.screenX, screenY: t.screenY,
+      button: 0, buttons: type === 'mouseup' ? 0 : 1,
+    }));
+  };
+  screenEl.addEventListener('touchstart', (e) => {
+    if (kbd) { try { kbd.focus(); } catch (err) {} }
+    // Android WebView 不会因为页面内 focus() 就自动弹键盘，需原生侧主动请求一次输入法。
+    const b = (typeof bridge === 'function') ? bridge() : null;
+    if (b && b.onVncWantKeyboard) { try { b.onVncWantKeyboard(); } catch (err) {} }
+    sendMouse('mousedown', e.touches[0]);
+  }, { passive: true });
+  screenEl.addEventListener('touchmove', (e) => {
+    sendMouse('mousemove', e.touches[0]);
+    e.preventDefault();
+  }, { passive: false });
+  screenEl.addEventListener('touchend', (e) => {
+    sendMouse('mouseup', (e.changedTouches && e.changedTouches[0]) || null);
+  }, { passive: true });
+}
+
+// 保持 textarea 为空，只当按键来源；并阻止它自己的默认行为（换行/退格/切换焦点）。
+function bindKeyboardSink(kbd) {
+  if (!kbd) return;
+  kbd.value = '';
+  kbd.addEventListener('input', () => { kbd.value = ''; });
+  kbd.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'Backspace') e.preventDefault();
+  }, true);
+}
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -39,15 +111,52 @@ window.vncTryConnect = function () {
   setStatus(TEXT.connecting);
   try {
     rfb = new RFB(document.getElementById('screen'), 'ws://127.0.0.1:6080', { shared: true });
+    // noVNC 把 keydown/keyup 挂在 canvas 上，而 Android WebView 里 canvas 不可编辑、
+    // 点它不会唤起输入法。把键盘目标换成隐藏的可编辑 textarea，点画面时聚焦它，
+    // 软键盘就会弹出，按键也仍走 noVNC 原有逻辑转发到远端。
+    const kbdSink = document.getElementById('kbdinput');
+    if (rfb._keyboard && kbdSink) rfb._keyboard._target = kbdSink;
+    bindKeyboardSink(kbdSink);
+    bindInput(document.getElementById('screen'), kbdSink);
+    // 自适应窗口：canvas 是 720x1280，浮窗尺寸远小于它，不缩放就只能露出左上角一片。
+    // scaleViewport 会把整幅画面缩放到窗口内（noVNC 会自动把点击坐标换算回远端坐标，不影响定位准确度）。
+    // resizeSession 仍关闭：Xvfb 尺寸启动即写死，请求会被服务端拒绝。
     rfb.scaleViewport = true;
     rfb.resizeSession = false;
+    rfb.clipViewport = false;
+    rfb.dragViewport = false;
     rfb.background = '#000000';
+    // 握手卡死自救：RFB 只靠 connect/disconnect 事件推进，若连接停在半途
+    // （rfb 非空、既不 connect 也不 disconnect），重试逻辑永远不会触发，画面永久黑屏。
+    // 超时后主动 disconnect()，由下面的 disconnect 处理统一走重试。
+    const stallTimer = setTimeout(() => {
+      if (!vncConnected && rfb) {
+        try { rfb.disconnect(); } catch (err) { rfb = null; setTimeout(() => window.vncTryConnect(), 2000); }
+      }
+    }, 6000);
     rfb.addEventListener('connect', () => {
+      clearTimeout(stallTimer);
+      vncConnected = true;
       setStatus('');
       const b = bridge();
       if (b) b.onVncStatus('connected');
+      // 画面自检：连上不等于画出来了（canvas 尺寸为 0 或首帧未到都会呈现黑屏），把三个尺寸
+      // 一起回报，便于在 App 日志里直接分辨是布局塌陷还是帧没到。
+      setTimeout(() => {
+        const c = document.querySelector('canvas');
+        const s = document.getElementById('screen');
+        const r = s ? s.getBoundingClientRect() : null;
+        const bb = bridge();
+        if (bb && bb.onVncDiag) {
+          bb.onVncDiag('[' + PAGE_BUILD + '] canvas=' + (c ? c.width + 'x' + c.height : 'none')
+            + ' screen=' + (r ? Math.round(r.width) + 'x' + Math.round(r.height) : 'none')
+            + ' window=' + window.innerWidth + 'x' + window.innerHeight);
+        }
+      }, 1500);
     });
     rfb.addEventListener('disconnect', () => {
+      clearTimeout(stallTimer);
+      vncConnected = false;
       rfb = null;
       const b = bridge();
       if (b) b.onVncStatus('disconnected');
@@ -74,6 +183,45 @@ window.vncPasteFromAndroid = function () {
     // 远端剪贴板同步失败不影响画面。
   }
 };
+
+// 原生输入框把字符送到这里：逐个字符发给远端（noVNC 内部按 keysym 映射）。
+window.vncSendText = function (text) {
+  if (!rfb || !text) return;
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    try { rfb.sendKey(code, null, true); rfb.sendKey(code, null, false); } catch (err) {}
+  }
+};
+
+// 原生侧直接送一个 X keysym 的按下/抬起：删除、回车、方向键、修饰键、Ctrl 组合都走这条。
+// 修饰键按住不放时由原生侧维护状态，这里只负责转发，不做去重。
+window.vncSendKeysym = function (code, down) {
+  if (!rfb || !code) return;
+  try { rfb.sendKey(code, null, !!down); } catch (err) {}
+};
+
+// 鼠标按键模式：0=左键 2=右键。noVNC 的触控只会产生左键，
+// 虚拟机式键鼠需要能切换左右键，所以触点按下时按此模式改写 button/buttons。
+let mouseButton = 0;
+window.vncSetMouseButton = function (b) {
+  mouseButton = (b === 2) ? 2 : 0;
+};
+
+// 把 noVNC 的鼠标事件改写成当前按键模式：拦在 canvas 上，按下时把 button/buttons 换成 mouseButton。
+// 只在按下阶段改写，移动/抬起沿用同一按键，保证远端看到完整的按下-抬起对。
+let pendingMouseButton = 0;
+window.addEventListener('mousedown', function (e) {
+  if (mouseButton === 0) return;
+  pendingMouseButton = e.button;
+  Object.defineProperty(e, 'button', { value: mouseButton });
+  Object.defineProperty(e, 'buttons', { value: 1 << mouseButton });
+}, true);
+window.addEventListener('mouseup', function (e) {
+  if (mouseButton === 0) return;
+  Object.defineProperty(e, 'button', { value: mouseButton });
+  Object.defineProperty(e, 'buttons', { value: 0 });
+  pendingMouseButton = 0;
+}, true);
 
 setStatus(TEXT.connecting);
 window.vncTryConnect();

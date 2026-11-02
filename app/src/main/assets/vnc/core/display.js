@@ -60,6 +60,8 @@ export default class Display {
         // ===== PROPERTIES =====
 
         this._scale = 1.0;
+        this._scaleX = 1.0;
+        this._scaleY = 1.0;
         this._clipViewport = false;
     }
 
@@ -168,22 +170,22 @@ export default class Display {
             this.flip();
 
             // Update the visible size of the target canvas
-            this._rescale(this._scale);
+            this._rescale(this._scaleX, this._scaleY);
         }
     }
 
     absX(x) {
-        if (this._scale === 0) {
+        if (this._scaleX === 0) {
             return 0;
         }
-        return toSigned32bit(x / this._scale + this._viewportLoc.x);
+        return toSigned32bit(x / this._scaleX + this._viewportLoc.x);
     }
 
     absY(y) {
-        if (this._scale === 0) {
+        if (this._scaleY === 0) {
             return 0;
         }
-        return toSigned32bit(y / this._scale + this._viewportLoc.y);
+        return toSigned32bit(y / this._scaleY + this._viewportLoc.y);
     }
 
     resize(width, height) {
@@ -412,31 +414,26 @@ export default class Display {
     }
 
     autoscale(containerWidth, containerHeight) {
-        let scaleRatio;
-
+        // 铺满容器：横纵各自缩放。等比缩放会在窗口与远端宽高比不一致时留黑边，
+        // 这里按用户要求拉伸填满，坐标换算随之改用 _scaleX/_scaleY。
         if (containerWidth === 0 || containerHeight === 0) {
-            scaleRatio = 0;
-
-        } else {
-
-            const vp = this._viewportLoc;
-            const targetAspectRatio = containerWidth / containerHeight;
-            const fbAspectRatio = vp.w / vp.h;
-
-            if (fbAspectRatio >= targetAspectRatio) {
-                scaleRatio = containerWidth / vp.w;
-            } else {
-                scaleRatio = containerHeight / vp.h;
-            }
+            this._rescale(0);
+            return;
         }
 
-        this._rescale(scaleRatio);
+        const vp = this._viewportLoc;
+        this._rescale(containerWidth / vp.w, containerHeight / vp.h);
     }
 
     // ===== PRIVATE METHODS =====
 
-    _rescale(factor) {
+    _rescale(factor, factorY) {
+        if (factorY === undefined) {
+            factorY = factor;
+        }
         this._scale = factor;
+        this._scaleX = factor;
+        this._scaleY = factorY;
         const vp = this._viewportLoc;
 
         // NB(directxman12): If you set the width directly, or set the
@@ -444,7 +441,7 @@ export default class Display {
         //                   However, if you set the style width to a string
         //                   ('NNNpx'), the canvas is scaled without clearing.
         const width = factor * vp.w + 'px';
-        const height = factor * vp.h + 'px';
+        const height = factorY * vp.h + 'px';
 
         if ((this._target.style.width !== width) ||
             (this._target.style.height !== height)) {

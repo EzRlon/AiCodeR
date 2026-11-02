@@ -1,11 +1,23 @@
 package com.aicode.feature.vnc.presentation
 
+import android.app.Activity
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,8 +28,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -27,8 +45,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,11 +60,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
@@ -54,9 +88,36 @@ import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Lock
 import compose.icons.feathericons.Maximize2
 import compose.icons.feathericons.Minimize2
+import compose.icons.feathericons.MousePointer
+import compose.icons.feathericons.Command
 import compose.icons.feathericons.Monitor
+import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Smartphone
 import compose.icons.feathericons.X
 import kotlin.math.roundToInt
+
+/** X keysym 值：原生侧把 Android 按键转成这些码发给远端（noVNC 的 sendKey 只认 keysym）。 */
+private const val XK_SPACE = 0x20
+private const val XK_BACKSPACE = 0xFF08
+private const val XK_TAB = 0xFF09
+private const val XK_RETURN = 0xFF0D
+private const val XK_ESCAPE = 0xFF1B
+private const val XK_HOME = 0xFF50
+private const val XK_LEFT = 0xFF51
+private const val XK_UP = 0xFF52
+private const val XK_RIGHT = 0xFF53
+private const val XK_DOWN = 0xFF54
+private const val XK_PAGE_UP = 0xFF55
+private const val XK_PAGE_DOWN = 0xFF56
+private const val XK_END = 0xFF57
+private const val XK_SHIFT = 0xFFE1
+private const val XK_CTRL = 0xFFE3
+private const val XK_ALT = 0xFFE9
+private const val XK_A = 'a'.code
+private const val XK_C = 'c'.code
+private const val XK_V = 'v'.code
+private const val XK_X = 'x'.code
+private const val XK_DELETE = 0xFFFF
 
 /**
  * 对话页 VNC 悬浮小窗（应用内自由小窗）：置顶于聊天内容，可拖动、拖角缩放、
@@ -69,6 +130,49 @@ internal fun VncOverlayWindow(
     modifier: Modifier = Modifier,
 ) {
     val window by viewModel.window.collectAsStateWithLifecycle()
+
+    // 全屏时把状态栏/导航栏一并隐藏，纵向空间全给画面；退出全屏恢复。
+    // 用 BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE：从边缘下拖仍能临时唤出系统栏，不会被锁死。
+    val view = LocalView.current
+    DisposableEffect(window.visible, window.fullscreen) {
+        val windowRef = (view.context as? Activity)?.window
+        if (windowRef == null) return@DisposableEffect onDispose { }
+        val controller = WindowCompat.getInsetsController(windowRef, view)
+        if (window.visible && window.fullscreen) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { controller.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+
+    // 旋转控制：远端桌面是横屏 1280x800，全屏时竖屏只能看到中间一条窄带，
+    // 所以 AUTO 在全屏下直接锁横屏；用户可用标题栏按钮锁定竖屏或跟随系统。
+    val activity = LocalContext.current as? Activity
+    LaunchedEffect(window.visible, window.fullscreen, window.rotation) {
+        val target = when {
+            // 方向只作用于全屏：浮窗状态下改 requestedOrientation 会把整个宿主界面一起转过去。
+            !window.visible || !window.fullscreen -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            window.rotation == VncOverlayViewModel.VncRotation.LANDSCAPE ->
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            window.rotation == VncOverlayViewModel.VncRotation.PORTRAIT ->
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            // 全屏默认横屏：与远端桌面同向，画面才能铺满（用户反馈：最大化后仍是竖屏）。
+            else -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        if (activity != null && activity.requestedOrientation != target) {
+            activity.requestedOrientation = target
+        }
+    }
+    // 离开该界面时恢复系统旋转，避免把宿主 Activity 一直锁在某个方向。
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
     if (!window.visible) return
 
     val serviceState by viewModel.serviceState.collectAsStateWithLifecycle()
@@ -83,6 +187,7 @@ internal fun VncOverlayWindow(
                 serviceState = serviceState,
                 connected = connected,
                 fullscreen = true,
+                // 全屏已隐藏系统栏（沉浸式），再加内边距会白白缩一圈、画面变小。
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (window.minimized) {
@@ -116,8 +221,9 @@ private fun FloatingVncWindow(
     parentWidth: Dp,
     parentHeight: Dp,
 ) {
+    // 默认尺寸按远端桌面 1280x800（宽高比 1.6）取横屏比例，scaleViewport 铺满时黑边最小。
     val defaultWidth = (parentWidth - 24.dp).coerceAtMost(420.dp)
-    val defaultHeight = parentHeight * 0.42f
+    val defaultHeight = (defaultWidth / 1.6f).coerceAtLeast(180.dp)
     LaunchedEffect(parentWidth, parentHeight) {
         viewModel.ensureGeometry(
             defaultXDp = (parentWidth - defaultWidth - 12.dp).value,
@@ -164,6 +270,8 @@ private fun VncWindowSurface(
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(if (fullscreen) 0.dp else Radius.lg)
+    val mouseButton by viewModel.mouseButton.collectAsStateWithLifecycle()
+    var specialKeys by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .shadow(if (fullscreen) 0.dp else 8.dp, shape)
@@ -177,15 +285,39 @@ private fun VncWindowSurface(
             serviceState = serviceState,
             connected = connected,
             fullscreen = fullscreen,
+            specialKeys = specialKeys,
+            onKeyboardClick = {
+                specialKeys = !specialKeys
+                if (specialKeys) viewModel.requestKeyboard()
+            },
         )
+        if (specialKeys && connected) {
+            VncSpecialKeyBar(onKey = viewModel::sendKeysym)
+        }
         Box(modifier = Modifier.weight(1f)) {
             VncWebViewPanel(
                 serviceState = serviceState,
                 pasteRequests = viewModel.pasteRequests.collectAsStateWithLifecycle().value,
                 reconnectRequests = viewModel.reconnectRequests.collectAsStateWithLifecycle().value,
                 onConnectedChange = viewModel::setConnected,
+                onKeyboardRequest = viewModel::requestKeyboard,
+                onPageReady = { channel ->
+                    // 页面每次重载都要回填按键与鼠标按键模式通道。
+                    viewModel.sendKeysToPage = { text -> channel.sendKeys(text) }
+                    viewModel.sendKeysymToPage = { code, down -> channel.sendKeysym(code, down) }
+                    viewModel.sendMouseButtonMode = { b -> channel.setMouseButton(b) }
+                    viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
+                },
+                mouseButton = mouseButton,
                 modifier = Modifier.fillMaxSize(),
             )
+            // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
+            // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
+            VncKeyboardSink(
+                viewModel = viewModel,
+                modifier = Modifier.align(Alignment.BottomStart),
+            )
+            // 键盘拉起按钮已收进标题栏（VncTitleBar 里锁定按钮左侧），不再做悬浮按钮。
             if (!fullscreen && !window.pinned) {
                 ResizeCornerHandle(
                     onResize = { dx, dy -> viewModel.resizeBy(dx, dy) },
@@ -243,6 +375,8 @@ private fun VncTitleBar(
     serviceState: VncServiceState,
     connected: Boolean,
     fullscreen: Boolean,
+    specialKeys: Boolean,
+    onKeyboardClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -281,16 +415,35 @@ private fun VncTitleBar(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        // 旋转是（全屏）画面专属控制，浮窗状态下不展示，避免误以为它会立刻转屏。
+        if (fullscreen) {
+            VncTitleAction(
+                icon = when (window.rotation) {
+                    VncOverlayViewModel.VncRotation.AUTO -> FeatherIcons.RefreshCw
+                    VncOverlayViewModel.VncRotation.LANDSCAPE -> FeatherIcons.Monitor
+                    VncOverlayViewModel.VncRotation.PORTRAIT -> FeatherIcons.Smartphone
+                },
+                contentDescription = when (window.rotation) {
+                    VncOverlayViewModel.VncRotation.AUTO -> R.string.vnc_rotation_auto
+                    VncOverlayViewModel.VncRotation.LANDSCAPE -> R.string.vnc_rotation_landscape
+                    VncOverlayViewModel.VncRotation.PORTRAIT -> R.string.vnc_rotation_portrait
+                },
+                active = window.rotation != VncOverlayViewModel.VncRotation.AUTO,
+                onClick = viewModel::cycleRotation,
+            )
+        }
+        // 键盘按钮同时拉起输入法与特殊键条：手机输入法给不出 Esc/Tab/方向键。
+        VncTitleAction(
+            icon = FeatherIcons.Command,
+            contentDescription = R.string.vnc_show_keyboard,
+            active = specialKeys,
+            onClick = onKeyboardClick,
+        )
         VncTitleAction(
             icon = FeatherIcons.Lock,
             contentDescription = if (window.pinned) R.string.vnc_unpin else R.string.vnc_pin,
             active = window.pinned,
             onClick = { viewModel.setPinned(!window.pinned) },
-        )
-        VncTitleAction(
-            icon = FeatherIcons.Clipboard,
-            contentDescription = R.string.vnc_paste,
-            onClick = viewModel::requestPaste,
         )
         VncTitleAction(
             icon = FeatherIcons.ChevronDown,
@@ -416,4 +569,202 @@ private fun statusTextRes(serviceState: VncServiceState, connected: Boolean): In
     serviceState is VncServiceState.Preparing -> R.string.vnc_status_preparing
     connected -> R.string.vnc_status_ready
     else -> R.string.vnc_status_connecting
+}
+
+/**
+ * 原生输入框：承接系统软键盘。
+ *
+ * WebView 里的隐藏 input 在 Android 上拿不到真正的输入连接（showSoftInput 会返回 true
+ * 但键盘不弹），所以用一个 1dp 透明的原生 EditText 承接键盘，把字符交给页面转发到远端。
+ * 必须用原生 EditText（Compose 的 BasicTextField 在 1dp 尺寸下拿不到真实焦点）。
+ */
+@Composable
+private fun VncKeyboardSink(
+    viewModel: VncOverlayViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val editText = remember {
+        // 用子类拦截物理键/软键盘的特殊键：noVNC 的键盘监听绑定在 canvas 上，
+        // 重定向到 textarea 不生效，删除/回车/空格等只能由原生侧转成 keysym 直发。
+        object : EditText(context) {
+            private val heldModifiers = mutableSetOf<Int>()
+
+            private fun sendCombo(code: Int) {
+                viewModel.sendKeysym(code, true)
+                viewModel.sendKeysym(code, false)
+            }
+
+            override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+                when (keyCode) {
+                    // 修饰键：记录按住状态，靠按下/抬起转发给远端，后续字母键才能带上修饰。
+                    KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT ->
+                        return trackModifier(keyCode, event, XK_SHIFT)
+                    KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT ->
+                        return trackModifier(keyCode, event, XK_CTRL)
+                    KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT ->
+                        return trackModifier(keyCode, event, XK_ALT)
+                    // Ctrl+A/C/X/V：全选/复制/剪切/粘贴。粘贴前先把 Android 剪贴板同步到远端。
+                    KeyEvent.KEYCODE_A -> if (XK_CTRL in heldModifiers) { sendCombo(XK_A); return true }
+                    KeyEvent.KEYCODE_C -> if (XK_CTRL in heldModifiers) { sendCombo(XK_C); return true }
+                    KeyEvent.KEYCODE_X -> if (XK_CTRL in heldModifiers) { sendCombo(XK_X); return true }
+                    KeyEvent.KEYCODE_V -> if (XK_CTRL in heldModifiers) {
+                        // 先把 Android 剪贴板同步到远端，再送 Ctrl+V，远端应用才能粘贴到最新内容。
+                        viewModel.requestPaste()
+                        sendCombo(XK_V)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DEL -> { sendCombo(XK_BACKSPACE); return true }
+                    KeyEvent.KEYCODE_FORWARD_DEL -> { sendCombo(XK_DELETE); return true }
+                    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { sendCombo(XK_RETURN); return true }
+                    // 空格在空字段里不会触发文本变化，直接拦下发 keysym；非空时走文本路径，避免破坏输入法组字。
+                    KeyEvent.KEYCODE_SPACE -> if (text.isNullOrEmpty()) { sendCombo(XK_SPACE); return true }
+                    KeyEvent.KEYCODE_TAB -> { sendCombo(XK_TAB); return true }
+                    KeyEvent.KEYCODE_ESCAPE -> { sendCombo(XK_ESCAPE); return true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { sendCombo(XK_LEFT); return true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { sendCombo(XK_RIGHT); return true }
+                    KeyEvent.KEYCODE_DPAD_UP -> { sendCombo(XK_UP); return true }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> { sendCombo(XK_DOWN); return true }
+                    KeyEvent.KEYCODE_MOVE_HOME -> { sendCombo(XK_HOME); return true }
+                    KeyEvent.KEYCODE_MOVE_END -> { sendCombo(XK_END); return true }
+                    KeyEvent.KEYCODE_PAGE_UP -> { sendCombo(XK_PAGE_UP); return true }
+                    KeyEvent.KEYCODE_PAGE_DOWN -> { sendCombo(XK_PAGE_DOWN); return true }
+                }
+                return super.onKeyDown(keyCode, event)
+            }
+
+            override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT ->
+                        return trackModifier(keyCode, event, XK_SHIFT)
+                    KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT ->
+                        return trackModifier(keyCode, event, XK_CTRL)
+                    KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT ->
+                        return trackModifier(keyCode, event, XK_ALT)
+                }
+                return super.onKeyUp(keyCode, event)
+            }
+
+            /** 修饰键按下/抬起：转发 keysym 并维护本地按住集合，返回 true 表示已消费。 */
+            private fun trackModifier(keyCode: Int, event: KeyEvent?, code: Int): Boolean {
+                val down = event?.repeatCount == 0 && event.action == KeyEvent.ACTION_DOWN
+                if (down) {
+                    if (heldModifiers.add(code)) viewModel.sendKeysym(code, true)
+                } else {
+                    if (heldModifiers.remove(code)) viewModel.sendKeysym(code, false)
+                }
+                return true
+            }
+        }.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setTextColor(android.graphics.Color.TRANSPARENT)
+            background = null
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setSingleLine()
+            // 关掉 IME 的「完成」动作，回车才会以普通按键事件进来而不是被 IME 消耗掉。
+            imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION or EditorInfo.IME_ACTION_NONE
+        }
+    }
+
+    // 收到键盘请求时聚焦并唤起系统键盘（输入指针位置由远端当前焦点决定）。
+    LaunchedEffect(viewModel) {
+        viewModel.keyboardRequests.collect {
+            editText.requestFocus()
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
+            keyboard?.show()
+        }
+    }
+
+    AndroidView(
+        factory = { editText },
+        modifier = modifier.size(1.dp),
+        update = { view ->
+            view.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) {
+                    val text = s?.toString().orEmpty()
+                    if (text.isNotEmpty()) {
+                        viewModel.sendKeys(text)
+                        s?.clear()
+                    }
+                }
+            })
+        },
+    )
+}
+
+/**
+ * 特殊键条：手机输入法给不出 Esc/Tab/方向键。Ctrl/Alt/Shift 是粘滞的，按下后作用在下一次键位点击上，
+ * 发完自动释放，避免忘记松开把后续输入全变成组合键。
+ */
+@Composable
+private fun VncSpecialKeyBar(
+    onKey: (Int, Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var active by remember { mutableStateOf(emptyList<Int>()) }
+    val modifiers = listOf("Ctrl" to XK_CTRL, "Alt" to XK_ALT, "Shift" to XK_SHIFT)
+    val keys = listOf(
+        "Esc" to XK_ESCAPE,
+        "Tab" to XK_TAB,
+        "Home" to XK_HOME,
+        "End" to XK_END,
+        "←" to XK_LEFT,
+        "↑" to XK_UP,
+        "↓" to XK_DOWN,
+        "→" to XK_RIGHT,
+    )
+
+    fun tap(code: Int) {
+        active.forEach { onKey(it, true) }
+        onKey(code, true)
+        onKey(code, false)
+        active.asReversed().forEach { onKey(it, false) }
+        active = emptyList()
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.semanticColors.cardSurface)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        modifiers.forEach { (label, code) ->
+            SpecialKeyChip(
+                label = label,
+                active = active.contains(code),
+                onClick = { active = if (active.contains(code)) active - code else active + code },
+            )
+        }
+        keys.forEach { (label, code) ->
+            SpecialKeyChip(label = label, active = false, onClick = { tap(code) })
+        }
+    }
+}
+
+@Composable
+private fun SpecialKeyChip(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .clip(RoundedCornerShape(Radius.sm))
+            .background(
+                if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+    )
 }

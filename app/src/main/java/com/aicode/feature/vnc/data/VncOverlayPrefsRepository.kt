@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
@@ -18,13 +19,14 @@ private val Context.vncOverlayDataStore by preferencesDataStore(
     corruptionHandler = preferencesCorruptionHandler
 )
 
-/** VNC 悬浮小窗的记忆状态：位置 / 尺寸 / 钉住，以及上次手动收起时间（自动弹出冷却用）。 */
+/** VNC 悬浮小窗的记忆状态：位置 / 尺寸 / 钉住 / 画面旋转，以及上次手动收起时间（自动弹出冷却用）。 */
 data class VncOverlayPrefs(
     val offsetX: Float,
     val offsetY: Float,
     val widthDp: Float,
     val heightDp: Float,
     val pinned: Boolean,
+    val rotation: Int,
     val dismissedAtMs: Long,
 )
 
@@ -38,6 +40,7 @@ class VncOverlayPrefsRepository @Inject constructor(
         val WIDTH_DP = floatPreferencesKey("vnc_width_dp")
         val HEIGHT_DP = floatPreferencesKey("vnc_height_dp")
         val PINNED = booleanPreferencesKey("vnc_pinned")
+        val ROTATION = intPreferencesKey("vnc_rotation")
         val DISMISSED_AT = longPreferencesKey("vnc_dismissed_at")
     }
 
@@ -48,6 +51,7 @@ class VncOverlayPrefsRepository @Inject constructor(
             widthDp = p[Keys.WIDTH_DP] ?: 0f,
             heightDp = p[Keys.HEIGHT_DP] ?: 0f,
             pinned = p[Keys.PINNED] ?: false,
+            rotation = p[Keys.ROTATION] ?: 0,
             dismissedAtMs = p[Keys.DISMISSED_AT] ?: 0L
         )
     }
@@ -63,6 +67,10 @@ class VncOverlayPrefsRepository @Inject constructor(
 
     suspend fun savePinned(pinned: Boolean) {
         context.vncOverlayDataStore.edit { it[Keys.PINNED] = pinned }
+    }
+
+    suspend fun saveRotation(rotation: Int) {
+        context.vncOverlayDataStore.edit { it[Keys.ROTATION] = rotation }
     }
 
     suspend fun saveDismissedAt(atMs: Long) {

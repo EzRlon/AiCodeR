@@ -6,7 +6,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.view.inputmethod.InputMethodManager
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -35,11 +39,22 @@ internal fun VncWebViewPanel(
     pasteRequests: Int,
     reconnectRequests: Int,
     onConnectedChange: (Boolean) -> Unit,
+    onKeyboardRequest: () -> Unit = {},
+    onPageReady: (VncInputChannel) -> Unit = {},
+    mouseButton: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val appContext = LocalContext.current.applicationContext
     val holder = remember(appContext) {
-        VncWebViewHolder(appContext, onConnectedChange)
+        VncWebViewHolder(appContext, onConnectedChange, onKeyboardRequest)
+    }
+    // 页面就绪后把输入通道交给外层回填；这里不主动调用，避免在组合期发 evaluateJavascript。
+    LaunchedEffect(Unit) {
+        onPageReady(VncInputChannel(holder))
+    }
+    // 鼠标按键模式变化同步到页面（标题栏按钮切换后触点按下按新按键上报）。
+    LaunchedEffect(mouseButton) {
+        if (mouseButton != 0) holder.setMouseButton(mouseButton)
     }
     LaunchedEffect(serviceState) {
         if (serviceState is VncServiceState.Ready) holder.tryConnect()
@@ -62,18 +77,49 @@ private const val BRIDGE_NAME = "VncBridge"
 /** 资产虚拟域：只有这个 host 的请求放行，其余一律阻断。 */
 private const val ASSET_HOST = "appassets.androidplatform.net"
 
+private const val PANEL_TAG = "VncWebViewPanel"
 private const val VNC_PAGE_URL = "https://appassets.androidplatform.net/assets/vnc/index.html"
 
-private class VncWebViewHolder(
+/**
+ * 页面就绪后交给外层的输入通道：字符、单个 keysym、鼠标按键模式都从这里走。
+ * 外层（VncOverlayWindow）用它回填 [VncOverlayViewModel] 的回调。
+ */
+internal class VncInputChannel(private val holder: VncWebViewHolder) {
+    fun sendKeys(text: String) = holder.sendKeys(text)
+    fun sendKeysym(code: Int, down: Boolean) = holder.sendKeysym(code, down)
+    fun setMouseButton(button: Int) = holder.setMouseButton(button)
+}
+
+internal class VncWebViewHolder(
     context: Context,
     onConnectedChange: (Boolean) -> Unit,
+    onKeyboardRequest: () -> Unit = {},
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var destroyed = false
-    private val jsBridge = VncJsBridge(context, mainHandler, onConnectedChange)
+    private val jsBridge = VncJsBridge(context, mainHandler, onConnectedChange, onKeyboardRequest)
     val webView: WebView = buildWebView(context)
 
-    @SuppressLint("SetJavaScriptEnabled")
+    /** 把字符发给页面，由页面转成按键事件发往远端。 */
+    fun sendKeys(text: String) {
+        if (destroyed) return
+        val escaped = org.json.JSONObject.quote(text)
+        webView.evaluateJavascript("window.vncSendText && window.vncSendText($escaped)", null)
+    }
+
+    /** 发送单个 X keysym 的按下/抬起（删除、回车、方向键、修饰键、Ctrl 组合等特殊键）。 */
+    fun sendKeysym(code: Int, down: Boolean) {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncSendKeysym && window.vncSendKeysym($code,$down)", null)
+    }
+
+    /** 切换鼠标按键模式（0=左键 2=右键），触点按下时按此按键上报。 */
+    fun setMouseButton(button: Int) {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncSetMouseButton && window.vncSetMouseButton($button)", null)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun buildWebView(context: Context): WebView {
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
@@ -88,6 +134,21 @@ private class VncWebViewHolder(
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             settings.mediaPlaybackRequiresUserGesture = false
             addJavascriptInterface(jsBridge, BRIDGE_NAME)
+            // 触摸模式下自行可获焦：页面里那个用于唤起输入法的隐藏 textarea 需要 WebView 先有焦点。
+            isFocusable = true
+            isFocusableInTouchMode = true
+            jsBridge.webView = this
+            // 按下时先把焦点抢到 WebView，否则页面里的隐藏输入框拿不到真焦点（软键盘不弹）。
+            setOnTouchListener { v, _ ->
+                if (!v.hasFocus()) v.requestFocusFromTouch()
+                false
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                    FileLogger.i(PANEL_TAG, "console[${msg.messageLevel()}]: ${msg.message()} @${msg.sourceId()}:${msg.lineNumber()}")
+                    return true
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(
                     view: WebView,
@@ -95,13 +156,38 @@ private class VncWebViewHolder(
                 ): WebResourceResponse? {
                     val url = request.url
                     // 非本 App 资产一律拒绝：返回空响应而不是 null（null 会走网络加载）。
-                    if (url.host != ASSET_HOST) return blockedResponse()
-                    return assetLoader.shouldInterceptRequest(url)
+                    if (url.host != ASSET_HOST) {
+                        FileLogger.w(PANEL_TAG, "拦截非资产请求: $url")
+                        return blockedResponse()
+                    }
+                    val resp = assetLoader.shouldInterceptRequest(url)
+                    if (resp == null) FileLogger.w(PANEL_TAG, "资产未命中: $url")
+                    return resp
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     // 禁止页面导航到任何其它地址（包括被注入内容试图跳转）。
                     return request.url.host != ASSET_HOST
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    FileLogger.i(PANEL_TAG, "页面加载完成: $url")
+                }
+
+                override fun onReceivedError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError,
+                ) {
+                    FileLogger.e(PANEL_TAG, "资源加载失败: ${request.url} code=${error.errorCode} ${error.description}")
+                }
+
+                override fun onReceivedHttpError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    errorResponse: WebResourceResponse,
+                ) {
+                    FileLogger.w(PANEL_TAG, "HTTP 错误: ${request.url} status=${errorResponse.statusCode}")
                 }
             }
             loadUrl(VNC_PAGE_URL)
@@ -140,6 +226,7 @@ private class VncJsBridge(
     context: Context,
     private val mainHandler: Handler,
     private val onConnectedChange: (Boolean) -> Unit,
+    private val onKeyboardRequest: () -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val clipboard =
@@ -157,8 +244,27 @@ private class VncJsBridge(
         clipboardReadArmed = true
     }
 
+    /** 由持有方在 WebView 创建后回填；输入法相关回调需要它。 */
+    @Volatile
+    var webView: WebView? = null
+
+    /** 页面点画面并聚焦隐藏输入框后回调：Android 侧必须主动取焦并请求输入法，否则 WebView 不弹软键盘。 */
+    @JavascriptInterface
+    fun onVncWantKeyboard() {
+        FileLogger.i(TAG, "页面请求输入法")
+        // 改由原生输入框承接：WebView 内部隐藏 input 拿不到真正的输入连接
+        // （showSoftInput 返回 true 但键盘不弹），所以交给 Compose 侧的真实输入框。
+        mainHandler.post { onKeyboardRequest() }
+    }
+
+    @JavascriptInterface
+    fun onVncDiag(msg: String) {
+        FileLogger.i(TAG, "画面自检: $msg")
+    }
+
     @JavascriptInterface
     fun onVncStatus(status: String) {
+        FileLogger.i(TAG, "页面连接状态: $status")
         val connected = status == "connected"
         mainHandler.post { onConnectedChange(connected) }
     }
