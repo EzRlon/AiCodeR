@@ -152,6 +152,7 @@
     <string name="settings_dev_keys">密钥管理</string>
     <string name="settings_dev_env">开发环境</string>
     <string name="dev_env_intro">选择你想开发什么，确认后会新建会话并自动把搭建任务发给 AI：它会先检测当前容器的发行版与包管理器（apk / apt / dnf / pacman），再按实际情况安装工具链、跑验证命令并汇报版本。安装过程在会话里可中断、可追问。</string>
+    <string name="dev_env_installed">已安装</string>
     <string name="dev_env_confirm_body">将新建一个会话，并自动发送搭建任务给 AI 执行。开始后你可以随时在会话里补充要求。</string>
     <string name="dev_env_confirm_action">新建会话并搭建</string>
     <string name="dev_env_launch_rejected">会话暂时无法接收新任务（可能已暂停），请回聊天页查看</string>
@@ -419,7 +420,7 @@
     <string name="permission_notification_reject">拒绝</string>
 
     <!-- 截图标注账本 -->
-    <string name="annotation_hub_entry">标注中心</string>
+    <string name="annotation_hub_entry">写反馈</string>
     <string name="annotation_type_bug">bug</string>
     <string name="annotation_type_to_change">要改</string>
     <string name="annotation_type_dont">不要</string>
@@ -470,7 +471,6 @@
     <!-- 记忆图谱 v2 -->
     <string name="memory_graph_tab_graph">图谱</string>
     <string name="graph_search_hint">搜索节点（名称/摘要）</string>
-    <string name="graph_add_node">新建节点</string>
     <string name="graph_empty">暂无图谱节点；工作线索与记忆会自动同步进来</string>
     <string name="graph_type_session">会话</string>
     <string name="graph_type_memory">记忆</string>
@@ -486,8 +486,6 @@
     <string name="graph_timeline_title">AI 学到的结论</string>
     <string name="graph_no_relations">暂无关系</string>
     <string name="graph_delete_node">删除节点</string>
-    <string name="graph_node_name_hint">节点名称（必填）</string>
-    <string name="graph_node_summary_hint">摘要（可选）</string>
 
     <!-- 编队消息投递 -->
     <string name="team_delivery_expired">编队投递提醒：发给「%1$s」的消息超时未%2$s（已自动重投过）。请检查目标会话状态，或改用 task 工具重新派发/追问。</string>
@@ -502,7 +500,7 @@
 
     <!-- Web 预览 -->
     <string name="preview_title">Web 预览</string>
-    <string name="preview_entry_title">Web</string>
+    <string name="preview_entry_title">Webx</string>
     <string name="preview_port_hint">输入端口，如 8080</string>
     <string name="preview_open">打开</string>
     <string name="preview_reload">刷新页面</string>
@@ -1530,19 +1528,11 @@
     <string name="mcp_recommended_section">推荐</string>
     <string name="mcp_recommended_rea_title">REA 逆向工程</string>
     <string name="mcp_recommended_rea_desc">分析 App / APK / JS 包是怎么实现的（需先在「环境安装」装好「逆向分析」）</string>
-    <string name="mcp_multillm_title">multi-llm · 模型顾问团</string>
-    <string name="mcp_multillm_desc">把 ChatGPT / Claude / Gemini / Grok / 通义千问 / DeepSeek 网页版反代成 MCP 工具，AI 可直接咨询其他模型。安装需下载约 150MB（chromium 与 Python 依赖）；首次使用需在 VNC 小窗登录各网站（登录一次长期有效）。</string>
-    <string name="mcp_multillm_install">一键安装</string>
-    <string name="mcp_multillm_attach">接入 MCP</string>
-    <string name="mcp_multillm_installing">安装中…</string>
-    <string name="mcp_multillm_install_failed">模型顾问团安装未完成，可稍后重试（终端执行 aicode → 模型顾问团）</string>
-    <string name="mcp_multillm_attached">模型顾问团已接入下方 MCP 列表</string>
-    <string name="mcp_multillm_running_elsewhere">检测到安装正在进行中，请稍候再试</string>
     <string name="mcp_recommended_context7_desc">免安装免登录，提供最新库/框架文档检索</string>
     <string name="mcp_recommended_footer">点击进入添加流程并预填配置</string>
     <string name="mcp_tools_whitelist_note">白名单模式：仅名单内 %1$d 个工具会被启用（预设自带；此处可单独禁用）</string>
-    <string name="rea_entry_title">逆向分析</string>
-    <string name="multillm_entry_title">模型顾问团</string>
+    <string name="rea_entry_title">分析台</string>
+    <string name="multillm_entry_title">顾问团</string>
     <string name="rea_workbench_title">逆向分析（REA）</string>
     <string name="rea_env_label">运行环境</string>
     <string name="rea_mcp_label">MCP 接入</string>
@@ -1586,7 +1576,7 @@
     <string name="rea_task_class">带我反编译一个类，逐行讲清楚核心逻辑在做什么</string>
     <string name="rea_task_string">帮我追踪某个字符串 / URL 在代码里的来源与用途（交叉引用）</string>
     <string name="rea_task_js">帮我分析一个 JS 应用的入口与主要模块划分</string>
-    <string name="multillm_workbench_title">模型顾问团</string>
+    <string name="multillm_workbench_title">顾问团</string>
     <string name="multillm_login_banner">顾问团服务端已在容器内常驻；首次使用各模型网站需在弹出的浏览器里登录一次（profile 持久保存，之后免登录）</string>
     <string name="multillm_install_button">安装模型顾问团环境</string>
     <string name="multillm_installing">正在安装（首次需下载浏览器与依赖，约几分钟）…</string>
@@ -2788,6 +2778,12 @@
     <string name="vnc_minimize">最小化为悬浮球</string>
     <string name="vnc_fullscreen">全屏</string>
     <string name="vnc_exit_fullscreen">退出全屏</string>
+    <string name="vnc_rotation_auto">画面旋转：跟随系统（全屏自动横屏）</string>
+    <string name="vnc_rotation_landscape">画面旋转：锁定横屏</string>
+    <string name="vnc_rotation_portrait">画面旋转：锁定竖屏</string>
+    <string name="vnc_show_keyboard">显示键盘</string>
+    <string name="vnc_mouse_left">鼠标左键模式（点按切换为右键）</string>
+    <string name="vnc_mouse_right">鼠标右键模式（点按切换回左键）</string>
     <string name="vnc_close">关闭小窗</string>
     <string name="vnc_retry">重试</string>
     <string name="vnc_minimized_ball">VNC 小窗（已最小化，点按恢复）</string>
@@ -2826,10 +2822,7 @@
     <string name="memory_graph_stat_running">进行中 %1$d</string>
     <string name="memory_graph_stat_tokens">累计 token %1$s</string>
     <string name="memory_graph_stat_tokens_short">🔥 %1$s token</string>
-    <string name="memory_graph_filter_all">全部</string>
     <string name="memory_graph_filter_running">进行中</string>
-    <string name="memory_graph_filter_goal">有目标</string>
-    <string name="memory_graph_filter_today">今日活跃</string>
     <string name="memory_graph_refresh">刷新</string>
     <string name="memory_graph_messages_short">%1$d 条消息</string>
     <string name="memory_graph_detail_meta">%1$d 条消息 · 最后活动 %2$s</string>
@@ -2926,4 +2919,38 @@
     <string name="store_scan_confirm_warn">我已知晓风险，继续安装</string>
     <string name="store_scan_confirm_block">我确认仍要安装</string>
     <string name="store_scan_cancel">取消</string>
+
+    <!-- 世界书（Lorebook） -->
+    <string name="lorebook_title">世界书</string>
+    <string name="lorebook_new">新建条目</string>
+    <string name="lorebook_edit">编辑条目</string>
+    <string name="lorebook_empty">还没有世界书条目。</string>
+    <string name="lorebook_empty_hint">每条一个 Markdown 文件，放在 %1$s。文件开头用 frontmatter 写 keywords 声明触发词；不写则视为常驻条目。</string>
+    <string name="lorebook_always_on">常驻（无条件注入）</string>
+    <string name="lorebook_name">条目名</string>
+    <string name="lorebook_keywords">触发词</string>
+    <string name="lorebook_keywords_hint">逗号分隔；当前输入命中任一即注入。留空表示常驻。</string>
+    <string name="lorebook_priority">优先级</string>
+    <string name="lorebook_enabled">启用</string>
+    <string name="lorebook_content">正文</string>
+
+    <!-- 知识库（Knowledge Base，项目笔记管理） -->
+    <string name="kb_title">知识库</string>
+    <string name="kb_new">新建文档</string>
+    <string name="kb_edit">编辑文档</string>
+    <string name="kb_empty">知识库还没有文档。</string>
+    <string name="kb_empty_hint">文档存放在 %1$s，每篇一个 Markdown 文件。注入提示词的只是文件名与首个标题组成的索引，正文由 AI 按需读取。</string>
+    <string name="kb_name">文档名</string>
+    <string name="kb_content">正文</string>
+    <string name="kb_title_hint">首个 “# 标题” 会作为索引标题展示给 AI。</string>
+
+    <!-- 商店多源 -->
+    <string name="store_sources_title">商店源</string>
+    <string name="store_sources_hint">启用多个源时并列拉取，同一条目取优先级高的源。第三方源内容未经审核，安装前会要求确认。</string>
+    <string name="store_sources_builtin">内置</string>
+    <string name="store_sources_untrusted">第三方源 · 安装需确认</string>
+    <string name="store_sources_add">添加源…</string>
+    <string name="store_sources_name">源名称</string>
+    <string name="store_sources_url">接口地址</string>
+    <string name="store_sources_url_hint">需兼容 claudemarket 接口（/api/skills 等端点）</string>
 </resources>

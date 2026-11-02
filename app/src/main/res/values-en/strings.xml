@@ -151,6 +151,7 @@
     <string name="settings_dev_keys">Key Management</string>
     <string name="settings_dev_env">Dev Environments</string>
     <string name="dev_env_intro">Pick what you want to build. After confirmation a new session is created and the setup task is sent to the AI automatically: it first detects the container distro and package manager (apk / apt / dnf / pacman), then installs the toolchain accordingly, runs verification commands and reports versions. You can interrupt or follow up in the session at any time.</string>
+    <string name="dev_env_installed">Installed</string>
     <string name="dev_env_confirm_body">A new session will be created and the setup task sent to the AI automatically. You can add requirements in the session at any time.</string>
     <string name="dev_env_confirm_action">New session and set up</string>
     <string name="dev_env_launch_rejected">Session cannot accept new tasks right now (possibly paused). Check the chat page</string>
@@ -418,7 +419,7 @@
     <string name="permission_notification_reject">Reject</string>
 
     <!-- Screenshot annotation ledger -->
-    <string name="annotation_hub_entry">Annotation Hub</string>
+    <string name="annotation_hub_entry">Feedback</string>
     <string name="annotation_type_bug">Bug</string>
     <string name="annotation_type_to_change">To change</string>
     <string name="annotation_type_dont">Don\'t</string>
@@ -469,7 +470,6 @@
     <!-- Memory graph v2 -->
     <string name="memory_graph_tab_graph">Graph</string>
     <string name="graph_search_hint">Search nodes (name/summary)</string>
-    <string name="graph_add_node">Add node</string>
     <string name="graph_empty">No graph nodes yet; work threads and memories sync in automatically</string>
     <string name="graph_type_session">Thread</string>
     <string name="graph_type_memory">Memory</string>
@@ -485,8 +485,6 @@
     <string name="graph_timeline_title">Conclusions AI learned</string>
     <string name="graph_no_relations">No relations yet</string>
     <string name="graph_delete_node">Delete node</string>
-    <string name="graph_node_name_hint">Node name (required)</string>
-    <string name="graph_node_summary_hint">Summary (optional)</string>
 
     <!-- Team message delivery -->
     <string name="team_delivery_expired">Team delivery notice: the message to "%1$s" was not %2$s in time (auto-retried). Check the target session, or redispatch via the task tool.</string>
@@ -501,7 +499,7 @@
 
     <!-- Web preview -->
     <string name="preview_title">Web preview</string>
-    <string name="preview_entry_title">Web</string>
+    <string name="preview_entry_title">Webx</string>
     <string name="preview_port_hint">Port, e.g. 8080</string>
     <string name="preview_open">Open</string>
     <string name="preview_reload">Reload</string>
@@ -1540,8 +1538,8 @@
     <string name="mcp_recommended_context7_desc">No install or sign-in — latest library/framework docs lookup</string>
     <string name="mcp_recommended_footer">Opens the add flow with the config prefilled</string>
     <string name="mcp_tools_whitelist_note">Whitelist mode: only %1$d listed tools are enabled (preset-managed; tools can be disabled here)</string>
-    <string name="rea_entry_title">REA</string>
-    <string name="multillm_entry_title">Model Advisors</string>
+    <string name="rea_entry_title">Analyzer</string>
+    <string name="multillm_entry_title">Advisors</string>
     <string name="rea_workbench_title">REA Reverse Engineering</string>
     <string name="rea_env_label">Environment</string>
     <string name="rea_mcp_label">MCP</string>
@@ -1571,7 +1569,7 @@
     <string name="rea_task_class">Decompile a class with me and explain the core logic line by line</string>
     <string name="rea_task_string">Trace where a given string / URL comes from and how it is used (cross references)</string>
     <string name="rea_task_js">Analyze the entry point and main modules of a JS application</string>
-    <string name="multillm_workbench_title">Model Advisors</string>
+    <string name="multillm_workbench_title">Advisors</string>
     <string name="multillm_login_banner">The advisor server runs persistently in the container; first use requires signing in to each model site once in the popped-up browser (profile persists, no login afterwards)</string>
     <string name="multillm_install_button">Install Model Advisors environment</string>
     <string name="multillm_installing">Installing (first run downloads browser and dependencies, a few minutes)…</string>
@@ -2788,6 +2786,12 @@
     <string name="vnc_minimize">Minimize to floating ball</string>
     <string name="vnc_fullscreen">Fullscreen</string>
     <string name="vnc_exit_fullscreen">Exit fullscreen</string>
+    <string name="vnc_rotation_auto">Rotation: follow system (landscape when fullscreen)</string>
+    <string name="vnc_rotation_landscape">Rotation: lock landscape</string>
+    <string name="vnc_rotation_portrait">Rotation: lock portrait</string>
+    <string name="vnc_show_keyboard">Show keyboard</string>
+    <string name="vnc_mouse_left">Mouse left button (tap to switch to right)</string>
+    <string name="vnc_mouse_right">Mouse right button (tap to switch back to left)</string>
     <string name="vnc_close">Close window</string>
     <string name="vnc_retry">Retry</string>
     <string name="vnc_minimized_ball">VNC window (minimized, tap to restore)</string>
@@ -2826,10 +2830,7 @@
     <string name="memory_graph_stat_running">%1$d running</string>
     <string name="memory_graph_stat_tokens">Total tokens %1$s</string>
     <string name="memory_graph_stat_tokens_short">🔥 %1$s tokens</string>
-    <string name="memory_graph_filter_all">All</string>
     <string name="memory_graph_filter_running">Running</string>
-    <string name="memory_graph_filter_goal">With goal</string>
-    <string name="memory_graph_filter_today">Today</string>
     <string name="memory_graph_refresh">Refresh</string>
     <string name="memory_graph_messages_short">%1$d messages</string>
     <string name="memory_graph_detail_meta">%1$d messages · last active %2$s</string>
@@ -2926,4 +2927,38 @@
     <string name="store_scan_confirm_warn">I understand the risk, install anyway</string>
     <string name="store_scan_confirm_block">I confirm, install anyway</string>
     <string name="store_scan_cancel">Cancel</string>
+
+    <!-- Lorebook -->
+    <string name="lorebook_title">Lorebook</string>
+    <string name="lorebook_new">New entry</string>
+    <string name="lorebook_edit">Edit entry</string>
+    <string name="lorebook_empty">No lorebook entries yet.</string>
+    <string name="lorebook_empty_hint">One Markdown file per entry, stored in %1$s. Declare trigger words as keywords in frontmatter; omit them for an always-on entry.</string>
+    <string name="lorebook_always_on">Always on (injected unconditionally)</string>
+    <string name="lorebook_name">Entry name</string>
+    <string name="lorebook_keywords">Triggers</string>
+    <string name="lorebook_keywords_hint">Comma separated; injected when the current input matches any. Leave empty for always-on.</string>
+    <string name="lorebook_priority">Priority</string>
+    <string name="lorebook_enabled">Enabled</string>
+    <string name="lorebook_content">Content</string>
+
+    <!-- Knowledge Base (project notes management) -->
+    <string name="kb_title">Knowledge Base</string>
+    <string name="kb_new">New document</string>
+    <string name="kb_edit">Edit document</string>
+    <string name="kb_empty">No documents yet.</string>
+    <string name="kb_empty_hint">Documents live in %1$s, one Markdown file each. Only the filename and first heading are injected as an index; the AI reads the full text on demand.</string>
+    <string name="kb_name">Document name</string>
+    <string name="kb_content">Content</string>
+    <string name="kb_title_hint">The first “# heading” is used as the index title shown to the AI.</string>
+
+    <!-- Store sources -->
+    <string name="store_sources_title">Store sources</string>
+    <string name="store_sources_hint">Enabled sources are fetched in parallel; duplicates resolve to the higher-priority source. Third-party content is unreviewed and requires confirmation before install.</string>
+    <string name="store_sources_builtin">built-in</string>
+    <string name="store_sources_untrusted">Third-party · confirm before install</string>
+    <string name="store_sources_add">Add source…</string>
+    <string name="store_sources_name">Name</string>
+    <string name="store_sources_url">API base URL</string>
+    <string name="store_sources_url_hint">Must be claudemarket-compatible (/api/skills endpoints)</string>
 </resources>
