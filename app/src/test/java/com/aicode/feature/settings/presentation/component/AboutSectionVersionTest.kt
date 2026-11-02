@@ -108,37 +108,37 @@ class AboutSectionVersionTest {
         assertEquals(0, compareVersions("1.7", "1.7.0"))
     }
 
-    // ---- isUpToDate ----
+    // ---- isUpToDate 语义：compareVersions(latest, current) <= 0 ----
 
     @Test
     fun sameVersion_isUpToDate() {
-        assertTrue(isUpToDate("1.7.0", "1.7.0"))
-        assertTrue(isUpToDate("1.7.0-rc1", "1.7.0-rc1"))
+        assertTrue(compareVersions("1.7.0", "1.7.0") <= 0)
+        assertTrue(compareVersions("1.7.0-rc1", "1.7.0-rc1") <= 0)
     }
 
     @Test
     fun currentIsRc_latestIsRelease_needsUpdate() {
-        assertFalse(isUpToDate("1.7.0", "1.7.0-rc1"))
+        assertFalse(compareVersions("1.7.0", "1.7.0-rc1") <= 0)
     }
 
     @Test
     fun currentIsDevBuild_latestIsRc_needsUpdate() {
-        assertFalse(isUpToDate("1.7.0-rc1", "1.7.0-dev.2+g04bc2fa"))
+        assertFalse(compareVersions("1.7.0-rc1", "1.7.0-dev.2+g04bc2fa") <= 0)
     }
 
     @Test
     fun currentIsOlder_needsUpdate() {
-        assertFalse(isUpToDate("1.7.0", "1.6.0"))
+        assertFalse(compareVersions("1.7.0", "1.6.0") <= 0)
     }
 
     @Test
     fun currentIsNewer_isUpToDate() {
-        assertTrue(isUpToDate("1.7.0", "1.8.0-dev"))
+        assertTrue(compareVersions("1.7.0", "1.8.0-dev") <= 0)
     }
 
     @Test
     fun latestEqualsCurrentWithBuildHash_isUpToDate() {
         // 1.7.0 == 1.7.0+g04bc2fa (build hash stripped)
-        assertTrue(isUpToDate("1.7.0", "1.7.0+g04bc2fa"))
+        assertTrue(compareVersions("1.7.0", "1.7.0+g04bc2fa") <= 0)
     }
 }
