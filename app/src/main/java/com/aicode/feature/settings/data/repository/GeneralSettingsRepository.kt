@@ -59,6 +59,7 @@ class GeneralSettingsRepository @Inject constructor(
         val HANDOFF_AUTO_ENABLED_KEY = booleanPreferencesKey("handoff_auto_enabled")
         val HANDOFF_AUTO_PERCENT_KEY = intPreferencesKey("handoff_auto_percent")
         val FLOAT_BALL_ENABLED_KEY = booleanPreferencesKey("float_ball_enabled")
+        val VNC_AUTO_POPUP_ENABLED_KEY = booleanPreferencesKey("vnc_auto_popup_enabled")
         /** 记忆图谱结论抽取开关；默认开启（复用压缩摘要零额外调用，自动沉淀定案与坑），用户可关。 */
         val GRAPH_EXTRACT_ENABLED_KEY = booleanPreferencesKey("graph_extract_enabled")
         /** 旧版默认关时代的用户显式关闭标记：仅在用户主动关过时存在，用于识别「真正想关」。 */
@@ -247,6 +248,14 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[FLOAT_BALL_ENABLED_KEY] = enabled }
     }
 
+    /** VNC 浮窗自动弹出开关；默认关闭（用户抱怨未主动开启时浮窗自己跳出来，改为显式启用）。 */
+    val vncAutoPopupEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[VNC_AUTO_POPUP_ENABLED_KEY] ?: false }
+
+    suspend fun setVncAutoPopupEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[VNC_AUTO_POPUP_ENABLED_KEY] = enabled }
+    }
+
     /** 记忆图谱结论抽取开关；默认开启，老用户曾显式关闭的保持关闭（尊重历史选择）。 */
     val graphExtractEnabledFlow: Flow<Boolean> =
         context.generalDataStore.data.map { prefs ->
@@ -400,6 +409,8 @@ class GeneralSettingsRepository @Inject constructor(
 
     /** 备份快照：悬浮球开关。 */
     suspend fun floatBallEnabledSnapshot(): Boolean = floatBallEnabledFlow.first()
+
+    suspend fun vncAutoPopupEnabled(): Boolean = vncAutoPopupEnabledFlow.first()
 
     suspend fun restoreFloatBallEnabled(enabled: Boolean) = setFloatBallEnabled(enabled)
 

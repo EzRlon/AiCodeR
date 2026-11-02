@@ -160,6 +160,9 @@ internal class VncWebViewHolder(
                         FileLogger.w(PANEL_TAG, "拦截非资产请求: $url")
                         return blockedResponse()
                     }
+                    // 虚拟域下只有 /assets/ 由 assetLoader 托管；favicon 等其余路径返回空响应，
+                    // 返回 null 会让 WebView 走真实网络请求，报 ERR_CONNECTION_CLOSED(-6)。
+                    if (!url.path.orEmpty().startsWith("/assets/")) return blockedResponse()
                     val resp = assetLoader.shouldInterceptRequest(url)
                     if (resp == null) FileLogger.w(PANEL_TAG, "资产未命中: $url")
                     return resp

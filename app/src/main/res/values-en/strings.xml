@@ -2361,6 +2361,8 @@
     <string name="handoff_continue_anyway">Continue anyway (not recommended)</string>
     <string name="session_handoff_title_prefix">(handoff) </string>
     <string name="settings_float_ball">Float ball</string>
+    <string name="settings_vnc_auto_popup">VNC auto popup</string>
+    <string name="settings_vnc_auto_popup_desc">Automatically open the VNC overlay when a container graphics service is running; off by default, open the overlay manually</string>
     <string name="settings_float_ball_desc">Cross-app task ball: progress, quick send, one-tap back to session (no screen reading, no input simulation)</string>
     <string name="settings_float_ball_no_permission">Requires "Display over other apps" permission; tap to grant</string>
     <string name="float_ball_notification_title">AiCodeR float ball</string>

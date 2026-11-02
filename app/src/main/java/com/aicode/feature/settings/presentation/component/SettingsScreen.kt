@@ -299,6 +299,7 @@ fun SettingsScreen(
     val handoffAutoEnabled by viewModel.handoffAutoEnabled.collectAsStateWithLifecycle()
     val handoffAutoPercent by viewModel.handoffAutoPercent.collectAsStateWithLifecycle()
     val floatBallEnabled by viewModel.floatBallEnabled.collectAsStateWithLifecycle()
+    val vncAutoPopupEnabled by viewModel.vncAutoPopupEnabled.collectAsStateWithLifecycle()
     val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
     val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -1171,6 +1172,8 @@ fun SettingsScreen(
                     onSetHandoffAutoPercent = { viewModel.setHandoffAutoPercent(it) },
                     floatBallEnabled = floatBallEnabled,
                     onToggleFloatBallEnabled = { viewModel.setFloatBallEnabled(it) },
+                    vncAutoPopupEnabled = vncAutoPopupEnabled,
+                    onToggleVncAutoPopup = { viewModel.setVncAutoPopupEnabled(it) },
                     voiceEngine = voiceEngine,
                     voiceModelState = voiceModelState,
                     onSelectVoiceEngine = { viewModel.setVoiceEngine(it) },

@@ -36,6 +36,7 @@ class VncOverlayViewModel @Inject constructor(
     private val prefsRepository: VncOverlayPrefsRepository,
     private val mcpManager: com.aicode.feature.agent.domain.mcp.McpManager,
     private val mcpConfigRepository: com.aicode.feature.agent.domain.mcp.McpConfigRepository,
+    private val generalSettingsRepository: com.aicode.feature.settings.data.repository.GeneralSettingsRepository,
 ) : ViewModel() {
 
     /** 画面旋转方式：跟随系统；或锁定横屏 / 竖屏。全屏时 AUTO 取「自动横屏」。 */
@@ -116,6 +117,11 @@ class VncOverlayViewModel @Inject constructor(
                     continue
                 }
                 if (System.currentTimeMillis() < autoPopupBlockedUntilMs) continue
+                // 自动弹出默认关闭（设置里显式启用后才有此行为）；关闭时空转到最大间隔，不再探测。
+                if (!generalSettingsRepository.vncAutoPopupEnabled()) {
+                    interval = PROBE_MAX_INTERVAL_MS
+                    continue
+                }
                 val running = try {
                     serviceController.probeRunning()
                 } catch (e: CancellationException) {

@@ -414,15 +414,15 @@ export default class Display {
     }
 
     autoscale(containerWidth, containerHeight) {
-        // 铺满容器：横纵各自缩放。等比缩放会在窗口与远端宽高比不一致时留黑边，
-        // 这里按用户要求拉伸填满，坐标换算随之改用 _scaleX/_scaleY。
+        // 等比缩放：按比例缩到最大；窗口与远端宽高比不一致时留黑边（不畸变）。
+        // 拉伸填满会在横屏时画面变形（用户反馈），远端分辨率匹配后恰好铺满。
         if (containerWidth === 0 || containerHeight === 0) {
             this._rescale(0);
             return;
         }
 
         const vp = this._viewportLoc;
-        this._rescale(containerWidth / vp.w, containerHeight / vp.h);
+        this._rescale(Math.min(containerWidth / vp.w, containerHeight / vp.h));
     }
 
     // ===== PRIVATE METHODS =====

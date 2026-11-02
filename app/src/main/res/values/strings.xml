@@ -2353,6 +2353,8 @@
     <string name="handoff_continue_anyway">仍要继续（不推荐）</string>
     <string name="session_handoff_title_prefix">（接手）</string>
     <string name="settings_float_ball">悬浮球</string>
+    <string name="settings_vnc_auto_popup">VNC 浮窗自动弹出</string>
+    <string name="settings_vnc_auto_popup_desc">检测到容器图形服务运行时自动弹出 VNC 浮窗；默认关闭，仅手动打开浮窗</string>
     <string name="settings_float_ball_desc">跨应用显示任务小球：查看进度、快速发送、一键回会话（不读屏、不模拟操作）</string>
     <string name="settings_float_ball_no_permission">需要「显示在其他应用上层」权限；点此授权后即可开启</string>
     <string name="float_ball_notification_title">许愿码悬浮球</string>

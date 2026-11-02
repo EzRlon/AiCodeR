@@ -682,6 +682,9 @@ class SettingsViewModel @Inject constructor(
     private val _floatBallEnabled = MutableStateFlow(false)
     val floatBallEnabled: StateFlow<Boolean> = _floatBallEnabled.asStateFlow()
 
+    private val _vncAutoPopupEnabled = MutableStateFlow(false)
+    val vncAutoPopupEnabled: StateFlow<Boolean> = _vncAutoPopupEnabled.asStateFlow()
+
     private val _startupSessionMode = MutableStateFlow(StartupSessionMode.NEW_SESSION)
     val startupSessionMode: StateFlow<StartupSessionMode> = _startupSessionMode.asStateFlow()
 
@@ -1151,6 +1154,12 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.floatBallEnabledFlow.collectLatest {
                     _floatBallEnabled.value = it
+                }
+            }
+
+            launch {
+                generalSettingsRepository.vncAutoPopupEnabledFlow.collectLatest {
+                    _vncAutoPopupEnabled.value = it
                 }
             }
 
@@ -2344,6 +2353,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             generalSettingsRepository.setFloatBallEnabled(enabled)
             com.aicode.feature.terminal.domain.TerminalKeepaliveService.syncFloatBall(context, enabled)
+        }
+    }
+
+    fun setVncAutoPopupEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            generalSettingsRepository.setVncAutoPopupEnabled(enabled)
         }
     }
 
