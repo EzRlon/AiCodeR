@@ -196,12 +196,6 @@ class MemoryGraphViewModel @Inject constructor(
         _graphHits.value = null
     }
 
-    fun addGraphNode(workspacePath: String, name: String, summary: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { graphRepository.addCustomNode(workspacePath, name, summary) }
-        }
-    }
-
     fun deleteGraphNode(id: String) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { graphRepository.deleteNode(id) }

@@ -51,6 +51,19 @@ interface GraphDao {
     )
     suspend fun validConclusions(workspacePath: String, types: List<String>, limit: Int): List<GraphNodeEntity>
 
+    /** 当前有效的、name 带指定前缀的结论节点——团队结论注入用（前缀见 GraphRepository.TEAM_NAME_PREFIX）。 */
+    @Query(
+        "SELECT * FROM graph_nodes WHERE (workspacePath = :workspacePath OR workspacePath = '') " +
+            "AND type IN (:types) AND invalidAt IS NULL AND name LIKE :namePrefix || '%' " +
+            "ORDER BY validFrom DESC, updatedAt DESC LIMIT :limit"
+    )
+    suspend fun validConclusionsByNamePrefix(
+        workspacePath: String,
+        types: List<String>,
+        namePrefix: String,
+        limit: Int
+    ): List<GraphNodeEntity>
+
     /** 工作区内发生过 memory 工具调用的（会话, 参数）对——图谱同步用它替代逐会话全量读消息（optimizer P0）。 */
     @Query(
         "SELECT m.sessionId AS sessionId, m.toolArgs AS toolArgs FROM agent_messages m " +

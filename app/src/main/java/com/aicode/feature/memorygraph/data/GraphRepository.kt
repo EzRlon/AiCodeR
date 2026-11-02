@@ -202,6 +202,22 @@ class GraphRepository @Inject constructor(
             .onFailure { FileLogger.w(TAG, "读有效结论失败: ${it.message}") }
             .getOrDefault(emptyList())
 
+    /** 团队结论：name 带 [团队:名字· 前缀的有效结论（前缀在抽取时写入，见 extractConclusionsFromSummary）。 */
+    override suspend fun validTeamConclusions(
+        workspacePath: String,
+        teamName: String,
+        limit: Int
+    ): List<GraphNode> = runCatching {
+        graphDao.validConclusionsByNamePrefix(
+            workspacePath,
+            CONCLUSION_TYPES,
+            TEAM_NAME_PREFIX + teamName + "·",
+            limit
+        ).map { it.toDomain() }
+    }
+        .onFailure { FileLogger.w(TAG, "读团队结论失败: ${it.message}") }
+        .getOrDefault(emptyList())
+
     /**
      * 标记结论失效（被新结论取代）：不删除、不覆盖，只写 invalidAt。
      * 这样 AI 默认查不到旧结论，人仍能在页面上回溯「以前是怎么定的、什么时候改的」。
@@ -261,19 +277,30 @@ class GraphRepository @Inject constructor(
 
     /**
      * 从压缩摘要抽取结论写入图谱（零额外模型调用：摘要已在压缩时生成，这里只解析文本）。
+     * [teamName] 非空时（绑团会话）结论 label 加团队前缀，供团长指令按团队过滤注入。
      * 失败静默——抽取是附加价值，绝不能让压缩本身失败。
      */
-    override suspend fun extractConclusionsFromSummary(workspacePath: String, sessionId: String, summary: String) {
+    override suspend fun extractConclusionsFromSummary(
+        workspacePath: String,
+        sessionId: String,
+        summary: String,
+        teamName: String?
+    ) {
         if (workspacePath.isBlank() || summary.isBlank()) return
         val conclusions = ConclusionParser.parse(summary)
         if (conclusions.isEmpty()) return
         conclusions.forEach { conclusion ->
             runCatching {
+                // 团队会话的结论名加前缀：sourceRefId 即 name（幂等键），团队结论与同名普通结论互不覆盖；
+                // 注入时按前缀过滤（见 validTeamConclusions）。
+                val named = teamName?.takeIf { it.isNotBlank() }
+                    ?.let { conclusion.copy(name = TEAM_NAME_PREFIX + it + "·" + conclusion.name) }
+                    ?: conclusion
                 recordConclusion(
                     workspacePath = workspacePath,
-                    name = conclusion.name,
-                    summary = conclusion.text,
-                    label = conclusion.label,
+                    name = named.name,
+                    summary = named.text,
+                    label = named.label,
                     sourceSessionId = sessionId
                 )
             }.onFailure { FileLogger.w(TAG, "写结论节点失败「${conclusion.name}」: ${it.message}") }
@@ -338,5 +365,8 @@ class GraphRepository @Inject constructor(
 
         /** 结论类节点类型：单一来源是 [GraphNodeType]，避免 SQL 里再硬编码一份。 */
         private val CONCLUSION_TYPES = listOf(GraphNodeType.MEMORY, GraphNodeType.CONCLUSION, GraphNodeType.CUSTOM)
+
+        /** 团队结论的 name 前缀：抽取时写入（幂等键随之隔离），注入时按此过滤（见 validTeamConclusions）。 */
+        const val TEAM_NAME_PREFIX = "[团队:"
     }
 }

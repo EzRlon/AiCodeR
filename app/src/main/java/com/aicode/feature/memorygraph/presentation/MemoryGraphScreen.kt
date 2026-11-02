@@ -49,7 +49,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
-import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import com.aicode.R
 import com.aicode.core.theme.Spacing
@@ -77,7 +76,6 @@ private fun ConclusionsSection(
     val graph by viewModel.graph.collectAsStateWithLifecycle()
     val extractEnabled by viewModel.extractEnabled.collectAsStateWithLifecycle()
     var detailNode by remember { mutableStateOf<GraphNode?>(null) }
-    var showAddDialog by remember { mutableStateOf(false) }
     var showOutdated by rememberSaveable { mutableStateOf(false) }
 
     val (nodes, edges) = graph ?: (emptyList<GraphNode>() to emptyList())
@@ -89,7 +87,7 @@ private fun ConclusionsSection(
     val totalCount = allConclusions.size
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 抽取开关提示（默认关，首次进入用一句人话解释）
+        // 抽取开关提示：默认开；仅当用户显式关闭时提示如何重开（不再主动推销）。
         if (!extractEnabled) {
             Surface(
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
@@ -146,10 +144,6 @@ private fun ConclusionsSection(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.height(Spacing.md))
-                    TextButton(onClick = { showAddDialog = true }) {
-                        Text(stringResource(R.string.graph_add_node))
-                    }
                 }
             }
         } else {
@@ -241,15 +235,6 @@ private fun ConclusionsSection(
         )
     }
 
-    if (showAddDialog) {
-        AddGraphNodeDialog(
-            onConfirm = { name, summary ->
-                viewModel.addGraphNode(workspacePath, name, summary)
-                showAddDialog = false
-            },
-            onDismiss = { showAddDialog = false }
-        )
-    }
 }
 
 /** 相对时间：今天显示时分，本年显示月日，跨年显示年月日。 */
@@ -279,7 +264,6 @@ private fun GraphSection(
     val hits by viewModel.graphHits.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
     var detailNode by remember { mutableStateOf<GraphNode?>(null) }
-    var showAddDialog by remember { mutableStateOf(false) }
 
     val (nodes, edges) = graph ?: (emptyList<GraphNode>() to emptyList())
     val shown: List<GraphNode> = hits?.map { it.node } ?: nodes
@@ -303,15 +287,6 @@ private fun GraphSection(
                 singleLine = true,
                 modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.width(Spacing.sm))
-            IconButton(onClick = { showAddDialog = true }, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    FeatherIcons.Plus,
-                    contentDescription = stringResource(R.string.graph_add_node),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
         }
 
         if (shown.isEmpty()) {
@@ -380,15 +355,6 @@ private fun GraphSection(
         )
     }
 
-    if (showAddDialog) {
-        AddGraphNodeDialog(
-            onConfirm = { name, summary ->
-                viewModel.addGraphNode(workspacePath, name, summary)
-                showAddDialog = false
-            },
-            onDismiss = { showAddDialog = false }
-        )
-    }
 }
 
 @Composable
@@ -466,44 +432,6 @@ private fun GraphNodeDetailDialog(
     )
 }
 
-@Composable
-private fun AddGraphNodeDialog(
-    onConfirm: (name: String, summary: String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var name by remember { mutableStateOf("") }
-    var summary by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.graph_add_node)) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.graph_node_name_hint)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(Spacing.sm))
-                OutlinedTextField(
-                    value = summary,
-                    onValueChange = { summary = it },
-                    label = { Text(stringResource(R.string.graph_node_summary_hint)) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(name, summary) }, enabled = name.isNotBlank()) {
-                Text(stringResource(R.string.common_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
-        }
-    )
-}
 
 /**
  * 记忆图谱 v2：工作线索泳道。
@@ -525,7 +453,7 @@ fun MemoryGraphScreen(
     onBack: () -> Unit,
     viewModel: MemoryGraphViewModel = hiltViewModel(),
 ) {
-    var filter by rememberSaveable { mutableStateOf("conclusions") } // conclusions / all / running / goal / today / graph
+    var filter by rememberSaveable { mutableStateOf("conclusions") } // conclusions / all / graph
     var expandedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val activity by viewModel.activity.collectAsStateWithLifecycle()
     val detail by viewModel.detail.collectAsStateWithLifecycle()
@@ -540,18 +468,7 @@ fun MemoryGraphScreen(
 
     val roots = sessions.filter { it.parentId == null }
         .sortedByDescending { activity[it.id]?.lastActiveAt ?: it.updatedAt }
-    val visibleRoots = roots.filter { session ->
-        when (filter) {
-            "running" -> isRunning(session.id) ||
-                subSessionsByParent[session.id].orEmpty().any { isRunning(it.id) }
-            "goal" -> !session.goal.isNullOrBlank()
-            "today" -> {
-                val last = activity[session.id]?.lastActiveAt ?: session.updatedAt
-                DateUtils.isToday(last)
-            }
-            else -> true
-        }
-    }
+    val visibleRoots = roots
 
     val totalTokens = sessions.sumOf { it.totalInputTokens + it.totalOutputTokens }
     val runningCount = roots.count { isRunning(it.id) }
@@ -643,22 +560,7 @@ fun MemoryGraphScreen(
             FilterChip(
                 selected = filter == "all",
                 onClick = { filter = "all" },
-                label = { Text(stringResource(R.string.memory_graph_filter_all)) },
-            )
-            FilterChip(
-                selected = filter == "running",
-                onClick = { filter = "running" },
-                label = { Text(stringResource(R.string.memory_graph_filter_running)) },
-            )
-            FilterChip(
-                selected = filter == "goal",
-                onClick = { filter = "goal" },
-                label = { Text(stringResource(R.string.memory_graph_filter_goal)) },
-            )
-            FilterChip(
-                selected = filter == "today",
-                onClick = { filter = "today" },
-                label = { Text(stringResource(R.string.memory_graph_filter_today)) },
+                label = { Text(stringResource(R.string.memory_graph_session)) },
             )
             FilterChip(
                 selected = filter == "graph",
@@ -787,6 +689,21 @@ private fun SessionLaneCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                // 进行中的线索蓝色圆点旁再加一个文字标签，不用靠颜色区分（无障碍友好）。
+                if (running) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.memory_graph_filter_running),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(Spacing.xs))
+                }
                 Text(
                     text = session.mode.name,
                     style = MaterialTheme.typography.labelSmall,
