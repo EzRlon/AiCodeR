@@ -402,7 +402,8 @@ private fun TerminalSurface(
     AndroidView(
         modifier = Modifier
             .fillMaxSize()
-            .background(bgColor),
+            .background(bgColor)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         factory = { ctx ->
             val view = TerminalView(ctx, null)
             view.setBackgroundColor(preset.background)
