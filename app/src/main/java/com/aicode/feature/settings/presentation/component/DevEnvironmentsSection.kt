@@ -60,8 +60,30 @@ internal data class DevEnvScenario(
     val nameRes: Int,
     val descRes: Int,
     /** 发给 AI 的完整搭建任务提示词。 */
-    val promptRes: Int
+    val promptRes: Int,
+    /** 判断该环境是否已装好的探测命令（在容器内 sh 里执行，退出码 0 = 已装）；null = 无法探测。 */
+    val probeCmd: String? = null
 )
+
+/**
+ * 已安装探测：把各场景的探测命令拼成一段 sh 一次跑完（每场景一行 `id=0/1`），
+ * 避免逐个起进程。只有场景目录自己知道怎么判断「装好了」，所以探测命令定义在目录条目上。
+ */
+internal object DevEnvProbe {
+    fun buildScript(): String = devEnvGroups
+        .flatMap { it.scenarios }
+        .filter { it.probeCmd != null }
+        .joinToString("\n") { s ->
+            "if ${s.probeCmd} 2>/dev/null; then echo ${s.id}=1; else echo ${s.id}=0; fi"
+        }
+
+    fun parse(output: String): Set<String> = output
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.endsWith("=1") }
+        .map { it.removeSuffix("=1") }
+        .toSet()
+}
 
 /** 场景目录。顺序即展示顺序，按开发形态分组（group 是组标题资源）。 */
 private data class DevEnvGroup(val titleRes: Int, val scenarios: List<DevEnvScenario>)
@@ -75,21 +97,24 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 icon = FeatherIcons.Globe,
                 nameRes = R.string.dev_env_static_web,
                 descRes = R.string.dev_env_static_web_desc,
-                promptRes = R.string.dev_env_static_web_prompt
+                promptRes = R.string.dev_env_static_web_prompt,
+                probeCmd = "command -v python3 >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "frontend",
                 icon = FeatherIcons.Code,
                 nameRes = R.string.dev_env_frontend,
                 descRes = R.string.dev_env_frontend_desc,
-                promptRes = R.string.dev_env_frontend_prompt
+                promptRes = R.string.dev_env_frontend_prompt,
+                probeCmd = "command -v node >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "android",
                 icon = FeatherIcons.Smartphone,
                 nameRes = R.string.dev_env_android,
                 descRes = R.string.dev_env_android_desc,
-                promptRes = R.string.dev_env_android_prompt
+                promptRes = R.string.dev_env_android_prompt,
+                probeCmd = "command -v gradle >/dev/null 2>&1 || ls -d /opt/gradle-* >/dev/null 2>&1 || [ -n \"\$ANDROID_HOME\" ]"
             )
         )
     ),
@@ -101,42 +126,48 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 icon = FeatherIcons.Terminal,
                 nameRes = R.string.dev_env_python,
                 descRes = R.string.dev_env_python_desc,
-                promptRes = R.string.dev_env_python_prompt
+                promptRes = R.string.dev_env_python_prompt,
+                probeCmd = "command -v python3 >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "node",
                 icon = FeatherIcons.Server,
                 nameRes = R.string.dev_env_node,
                 descRes = R.string.dev_env_node_desc,
-                promptRes = R.string.dev_env_node_prompt
+                promptRes = R.string.dev_env_node_prompt,
+                probeCmd = "command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "java",
                 icon = FeatherIcons.Box,
                 nameRes = R.string.dev_env_java,
                 descRes = R.string.dev_env_java_desc,
-                promptRes = R.string.dev_env_java_prompt
+                promptRes = R.string.dev_env_java_prompt,
+                probeCmd = "command -v javac >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "go",
                 icon = FeatherIcons.Zap,
                 nameRes = R.string.dev_env_go,
                 descRes = R.string.dev_env_go_desc,
-                promptRes = R.string.dev_env_go_prompt
+                promptRes = R.string.dev_env_go_prompt,
+                probeCmd = "command -v go >/dev/null 2>&1 || [ -x /usr/local/go/bin/go ]"
             ),
             DevEnvScenario(
                 id = "rust",
                 icon = FeatherIcons.Cpu,
                 nameRes = R.string.dev_env_rust,
                 descRes = R.string.dev_env_rust_desc,
-                promptRes = R.string.dev_env_rust_prompt
+                promptRes = R.string.dev_env_rust_prompt,
+                probeCmd = "command -v cargo >/dev/null 2>&1 || [ -x /root/.cargo/bin/cargo ]"
             ),
             DevEnvScenario(
                 id = "cpp",
                 icon = FeatherIcons.HardDrive,
                 nameRes = R.string.dev_env_cpp,
                 descRes = R.string.dev_env_cpp_desc,
-                promptRes = R.string.dev_env_cpp_prompt
+                promptRes = R.string.dev_env_cpp_prompt,
+                probeCmd = "command -v g++ >/dev/null 2>&1"
             )
         )
     ),
@@ -148,7 +179,8 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 icon = FeatherIcons.PieChart,
                 nameRes = R.string.dev_env_datasci,
                 descRes = R.string.dev_env_datasci_desc,
-                promptRes = R.string.dev_env_datasci_prompt
+                promptRes = R.string.dev_env_datasci_prompt,
+                probeCmd = "python3 -c \"import numpy, pandas\" >/dev/null 2>&1"
             )
         )
     )
@@ -160,6 +192,8 @@ internal fun DevEnvironmentsSection(
     containerName: String = "",
     /** 已检测到的容器系统类型（`/etc/os-release` 的 ID，如 alpine/debian/ubuntu）；null = 尚未检测。 */
     containerOsId: String? = null,
+    /** 已安装的场景 id 集合（容器内探测 toolchain 得出），空集合 = 尚未探测或都未安装。 */
+    installedIds: Set<String> = emptySet(),
     onLaunch: (title: String, prompt: String) -> Unit
 ) {
     var pendingScenario by remember { mutableStateOf<DevEnvScenario?>(null) }
@@ -220,7 +254,11 @@ internal fun DevEnvironmentsSection(
                     )
                 }
                 items(group.scenarios, key = { it.id }) { scenario ->
-                    DevEnvCard(scenario = scenario, onClick = { pendingScenario = scenario })
+                    DevEnvCard(
+                        scenario = scenario,
+                        installed = scenario.id in installedIds,
+                        onClick = { pendingScenario = scenario }
+                    )
                 }
             }
         }
@@ -265,7 +303,11 @@ internal fun DevEnvironmentsSection(
 }
 
 @Composable
-private fun DevEnvCard(scenario: DevEnvScenario, onClick: () -> Unit) {
+private fun DevEnvCard(
+    scenario: DevEnvScenario,
+    installed: Boolean,
+    onClick: () -> Unit
+) {
     Surface(
         shape = RoundedCornerShape(Radius.mdLarge),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -297,6 +339,17 @@ private fun DevEnvCard(scenario: DevEnvScenario, onClick: () -> Unit) {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                if (installed) {
+                    Spacer(Modifier.height(4.dp))
+                    Surface(shape = RoundedCornerShape(Radius.pill), color = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(
+                            text = stringResource(R.string.dev_env_installed),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = stringResource(scenario.descRes),

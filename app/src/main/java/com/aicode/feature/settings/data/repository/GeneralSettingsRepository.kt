@@ -59,8 +59,10 @@ class GeneralSettingsRepository @Inject constructor(
         val HANDOFF_AUTO_ENABLED_KEY = booleanPreferencesKey("handoff_auto_enabled")
         val HANDOFF_AUTO_PERCENT_KEY = intPreferencesKey("handoff_auto_percent")
         val FLOAT_BALL_ENABLED_KEY = booleanPreferencesKey("float_ball_enabled")
-        /** 记忆图谱结论抽取开关；默认关闭（抽取会把对话内容发给模型，属数据外发且耗 token）。 */
+        /** 记忆图谱结论抽取开关；默认开启（复用压缩摘要零额外调用，自动沉淀定案与坑），用户可关。 */
         val GRAPH_EXTRACT_ENABLED_KEY = booleanPreferencesKey("graph_extract_enabled")
+        /** 旧版默认关时代的用户显式关闭标记：仅在用户主动关过时存在，用于识别「真正想关」。 */
+        val GRAPH_EXTRACT_OPTED_OUT_KEY = booleanPreferencesKey("graph_extract_opted_out")
         /** 记忆图谱页的首次引导是否已展示（默认关时提示用户可开启）。 */
         val GRAPH_EXTRACT_INTRO_SHOWN_KEY = booleanPreferencesKey("graph_extract_intro_shown")
         /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
@@ -245,12 +247,21 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[FLOAT_BALL_ENABLED_KEY] = enabled }
     }
 
-    /** 记忆图谱结论抽取开关；默认关闭。 */
+    /** 记忆图谱结论抽取开关；默认开启，老用户曾显式关闭的保持关闭（尊重历史选择）。 */
     val graphExtractEnabledFlow: Flow<Boolean> =
-        context.generalDataStore.data.map { it[GRAPH_EXTRACT_ENABLED_KEY] ?: false }
+        context.generalDataStore.data.map { prefs ->
+            when {
+                prefs[GRAPH_EXTRACT_OPTED_OUT_KEY] == true -> false
+                else -> prefs[GRAPH_EXTRACT_ENABLED_KEY] ?: true
+            }
+        }
 
     suspend fun setGraphExtractEnabled(enabled: Boolean) {
-        context.generalDataStore.edit { it[GRAPH_EXTRACT_ENABLED_KEY] = enabled }
+        context.generalDataStore.edit { prefs ->
+            prefs[GRAPH_EXTRACT_ENABLED_KEY] = enabled
+            // 默认值翻转后的兼容：显式关 = 永久意愿（写 opt-out 标记，升级不会再被默认值带回来）；显式开 = 清标记。
+            if (!enabled) prefs[GRAPH_EXTRACT_OPTED_OUT_KEY] = true else prefs.remove(GRAPH_EXTRACT_OPTED_OUT_KEY)
+        }
     }
 
     /** 抽取是否开启（回合结束/压缩前的快路径判断，单次冷读）。 */

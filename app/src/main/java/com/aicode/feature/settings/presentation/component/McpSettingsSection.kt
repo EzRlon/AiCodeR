@@ -75,13 +75,7 @@ internal fun McpSection(
     entries: List<McpServerEntry>,
     statuses: List<McpServerStatus>,
     reloading: Boolean,
-    multiLlmConfigured: Boolean,
-    multiLlmEnv: SettingsViewModel.MultiLlmEnv,
-    multiLlmInstalling: Boolean,
-    multiLlmMessage: String?,
     selection: ListSelectionState,
-    onInstallMultiLlm: () -> Unit,
-    onAttachMultiLlm: () -> Unit,
     onReload: () -> Unit,
     onToggle: (String, Boolean, McpScope) -> Unit,
     onEdit: (McpServerEntry) -> Unit,
@@ -91,7 +85,6 @@ internal fun McpSection(
     onBatchReconnect: (List<String>) -> Unit
 ) {
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
-    val showMultiLlmCard = !multiLlmConfigured && multiLlmEnv != SettingsViewModel.MultiLlmEnv.UNSUPPORTED
     if (entries.isEmpty()) {
         Column(
             modifier = Modifier
@@ -101,9 +94,6 @@ internal fun McpSection(
                 .padding(top = Spacing.sm),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            if (showMultiLlmCard) {
-                MultiLlmCard(multiLlmEnv, multiLlmInstalling, multiLlmMessage, onInstallMultiLlm, onAttachMultiLlm)
-            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -213,12 +203,6 @@ internal fun McpSection(
                 }
             }
 
-            if (showMultiLlmCard) {
-                item(key = "multillm-card", contentType = "card") {
-                    MultiLlmCard(multiLlmEnv, multiLlmInstalling, multiLlmMessage, onInstallMultiLlm, onAttachMultiLlm)
-                }
-            }
-
             if (filteredEntries.isEmpty()) {
                 item(key = "search-empty", contentType = "empty") {
                     Box(
@@ -279,67 +263,6 @@ internal fun McpSection(
             },
             onDismiss = { showBatchDeleteConfirm = false }
         )
-    }
-}
-
-/** 内置「模型顾问团」安装/接入卡片：列表里还没有 multi-llm 条目且本地容器模式时显示。 */
-@Composable
-private fun MultiLlmCard(
-    env: SettingsViewModel.MultiLlmEnv,
-    installing: Boolean,
-    message: String?,
-    onInstall: () -> Unit,
-    onAttach: () -> Unit
-) {
-    SettingsGroup {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.lg, vertical = Spacing.md)
-        ) {
-            Text(
-                text = stringResource(R.string.mcp_multillm_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.mcp_multillm_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            message?.let {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = { if (env == SettingsViewModel.MultiLlmEnv.READY) onAttach() else onInstall() },
-                enabled = !installing,
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                if (installing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.mcp_multillm_installing))
-                } else {
-                    Text(
-                        stringResource(
-                            if (env == SettingsViewModel.MultiLlmEnv.READY) R.string.mcp_multillm_attach
-                            else R.string.mcp_multillm_install
-                        )
-                    )
-                }
-            }
-        }
     }
 }
 

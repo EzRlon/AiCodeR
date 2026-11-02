@@ -171,6 +171,8 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     PromptEditor(R.string.prompts_title),
     Memory(R.string.settings_memory),
     MemoryEditor(R.string.settings_memory),
+    Lorebook(R.string.lorebook_title),
+    KnowledgeBase(R.string.kb_title),
     Scripts(R.string.settings_scripts),
     ScriptEditor(R.string.settings_scripts),
     SkillDetail(R.string.settings_skills),
@@ -214,6 +216,8 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
     SettingsSection.MemoryEditor,
+    SettingsSection.Lorebook,
+    SettingsSection.KnowledgeBase,
     SettingsSection.ScheduledTaskEditor,
     SettingsSection.PromptDetail,
     SettingsSection.SkillDetail,
@@ -250,10 +254,6 @@ fun SettingsScreen(
     val mcpAuthState by viewModel.mcpAuthState.collectAsStateWithLifecycle()
     val mcpImportState by viewModel.mcpImportState.collectAsStateWithLifecycle()
     val mcpEntries by viewModel.mcpEntries.collectAsStateWithLifecycle()
-    val multiLlmEnv by viewModel.multiLlmEnv.collectAsStateWithLifecycle()
-    val multiLlmConfigured by viewModel.multiLlmConfigured.collectAsStateWithLifecycle()
-    val multiLlmInstalling by viewModel.multiLlmInstalling.collectAsStateWithLifecycle()
-    val multiLlmMessage by viewModel.multiLlmMessage.collectAsStateWithLifecycle()
     val mcpStatuses by viewModel.mcpStatuses.collectAsStateWithLifecycle()
     val mcpReloading by viewModel.mcpReloading.collectAsStateWithLifecycle()
     val skills by viewModel.skills.collectAsStateWithLifecycle()
@@ -355,10 +355,6 @@ fun SettingsScreen(
 
     var section by remember { mutableStateOf(SettingsSection.Menu) }
     var logReturnSection by remember { mutableStateOf(SettingsSection.Menu) }
-    // 进入 MCP 页时刷新一次 multi-llm 环境探测（安装完成回到本页也能立即看到最新状态）
-    LaunchedEffect(section) {
-        if (section == SettingsSection.Mcp) viewModel.refreshMultiLlmEnv()
-    }
     var editingProvider by remember { mutableStateOf<AIProviderConfig?>(null) }
     var showAddProviderSheet by remember { mutableStateOf(false) }
     var providerPresetPrefill by remember { mutableStateOf<ProviderPreset?>(null) }
@@ -713,6 +709,21 @@ fun SettingsScreen(
                 )
             }
 
+            current == SettingsSection.Lorebook -> {
+                LorebookScreen(
+                    projectRoot = viewModel.currentProjectRoot(),
+                    // 从主设置菜单进来，返回也回主设置菜单，不能写死回记忆（用户反馈）。
+                    onBack = { section = SettingsSection.Menu },
+                )
+            }
+
+            current == SettingsSection.KnowledgeBase -> {
+                KnowledgeBaseScreen(
+                    projectRoot = viewModel.currentProjectRoot(),
+                    onBack = { section = SettingsSection.Menu },
+                )
+            }
+
             current == SettingsSection.MemoryEditor -> {
                 val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
                     androidx.hilt.navigation.compose.hiltViewModel()
@@ -832,7 +843,11 @@ fun SettingsScreen(
                             onConsumeMessage = { storeViewModel.consumeMessage() },
                             onRetryTranslation = { storeViewModel.retryTranslation() },
                             onConfirmScan = { storeViewModel.confirmPendingScan() },
-                            onDismissScan = { storeViewModel.dismissPendingScan() }
+                            onDismissScan = { storeViewModel.dismissPendingScan() },
+                            sources = storeViewModel.sources.collectAsStateWithLifecycle().value,
+                            onToggleSource = { id, enabled -> storeViewModel.toggleSource(id, enabled) },
+                            onRemoveSource = { storeViewModel.removeSource(it) },
+                            onAddSource = { storeViewModel.addSource(it) }
                         )
                     }
                 }
@@ -1219,13 +1234,7 @@ fun SettingsScreen(
                     entries = mcpEntries,
                     statuses = mcpStatuses,
                     reloading = mcpReloading,
-                    multiLlmConfigured = multiLlmConfigured,
-                    multiLlmEnv = multiLlmEnv,
-                    multiLlmInstalling = multiLlmInstalling,
-                    multiLlmMessage = multiLlmMessage,
                     selection = mcpSelection,
-                    onInstallMultiLlm = { viewModel.installMultiLlm() },
-                    onAttachMultiLlm = { viewModel.attachMultiLlm() },
                     onReload = { viewModel.reloadMcp() },
                     onToggle = { name, enabled, scope -> viewModel.setMcpServerEnabled(name, enabled, scope) },
                     onEdit = {
@@ -1320,9 +1329,12 @@ fun SettingsScreen(
                     )
                 }
                 SettingsSection.DevEnvironments -> {
+                    val devEnvInstalled by viewModel.devEnvInstalled.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { viewModel.refreshDevEnvInstalled() }
                     DevEnvironmentsSection(
                         containerName = containerProfiles.firstOrNull { it.id == activeProfileId }?.name.orEmpty(),
                         containerOsId = containerOsMap[activeProfileId],
+                        installedIds = devEnvInstalled,
                         onLaunch = onLaunchDevEnv
                     )
                 }
@@ -1399,6 +1411,8 @@ fun SettingsScreen(
                 }
                 SettingsSection.ScriptEditor -> Unit // 已在上方 early return 处理
                 SettingsSection.MemoryEditor -> Unit // 已在上方 early return 处理
+                SettingsSection.Lorebook -> Unit // 已在上方 early return 处理
+                SettingsSection.KnowledgeBase -> Unit // 已在上方 early return 处理
                 SettingsSection.ScheduledTasks -> {
                     val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
                         androidx.hilt.navigation.compose.hiltViewModel()
@@ -2182,6 +2196,18 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.BookOpen,
                 title = stringResource(SettingsSection.Memory.titleRes),
                 onClick = { onOpen(SettingsSection.Memory) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Book,
+                title = stringResource(SettingsSection.Lorebook.titleRes),
+                onClick = { onOpen(SettingsSection.Lorebook) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.FileText,
+                title = stringResource(SettingsSection.KnowledgeBase.titleRes),
+                onClick = { onOpen(SettingsSection.KnowledgeBase) }
             )
             SettingsDivider()
             SettingsRow(
