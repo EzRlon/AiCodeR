@@ -384,13 +384,19 @@ class FloatBallOverlay(
         val min = minOf(distLeft, distRight, distTop, distBottom)
         var x = params.x
         var y = params.y
-        when (min) {
-            distLeft -> { x = 0; y = (params.y).coerceIn(0, screenHeight - peekHeight) }
-            distRight -> { x = screenWidth - peekWidth; y = (params.y).coerceIn(0, screenHeight - peekHeight) }
-            distTop -> { y = 0; x = (params.x).coerceIn(0, screenWidth - peekWidth) }
-            else -> { y = screenHeight - peekHeight; x = (params.x).coerceIn(0, screenWidth - peekWidth) }
+        // 待机胶囊的朝向跟随停靠边：贴左/右用竖条，贴上/下用横条，否则贴上下边时会露出一条竖向残影。
+        val (peekW, peekH) = if (min == distLeft || min == distRight) {
+            peekWidth to peekHeight
+        } else {
+            peekHeight to peekWidth
         }
-        animateWindow(peekWidth, peekHeight, x, y)
+        when (min) {
+            distLeft -> { x = 0; y = (params.y).coerceIn(0, screenHeight - peekH) }
+            distRight -> { x = screenWidth - peekW; y = (params.y).coerceIn(0, screenHeight - peekH) }
+            distTop -> { y = 0; x = (params.x).coerceIn(0, screenWidth - peekW) }
+            else -> { y = screenHeight - peekH; x = (params.x).coerceIn(0, screenWidth - peekW) }
+        }
+        animateWindow(peekW, peekH, x, y)
     }
 
     /** peek 点击：动画展开为全球（在贴边位置原地长大），随后由调用方开面板。 */
@@ -430,7 +436,8 @@ class FloatBallOverlay(
         val maxW = screenWidth - margin * 2
         val maxH = screenHeight - dp(24)
         val panelWidth = dp(prefs.getInt(PANEL_KEY_W, 320)).coerceIn(dp(240), minOf(dp(520), maxW))
-        val panelHeight = dp(prefs.getInt(PANEL_KEY_H, 460)).coerceIn(dp(300), maxH)
+        // 横屏/矮屏上 maxH 可能小于最小值 300dp，coerceIn(min>max) 会直接抛异常，先把下限压到可用高度内
+        val panelHeight = dp(prefs.getInt(PANEL_KEY_H, 460)).coerceIn(minOf(dp(300), maxH), maxH)
         val cx = ballX + r
         val onLeft = cx < screenWidth / 2
         val anchorX = (if (onLeft) margin else screenWidth - panelWidth - margin)
