@@ -37,7 +37,7 @@ CSV="$ROOT/ai-config/notes/build-times.csv"
 
 cd "$ROOT"
 start=$(date +%s)
-JAVA_HOME=/usr/lib/jvm/java-17-openjdk ANDROID_HOME=/root/android/sdk \
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64 ANDROID_HOME=/root/android/sdk \
 LD_PRELOAD=/root/tmp/fix_remove.so ./gradlew "$@"
 status=$?
 end=$(date +%s)

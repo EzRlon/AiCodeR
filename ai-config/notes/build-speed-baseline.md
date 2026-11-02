@@ -54,3 +54,32 @@
 - qa 定义收敛：`.aicode/agents/qa.md`（diff + 一跳邻居，上下文 ≤30 文件/8000 行）；仓库副本 `ai-config/agents/qa.md` 已同步。
 - 审查并行化：AGENTS.md 审查路由 + `ai-config/notes/qa-discipline.md`（qa 只读审查可与主线程构建并行；大批次拆 2 分片）。
 - `.gitignore`：排除 tools/detekt/detekt-cli.jar（84MB）。
+
+## Release 内存挤压与两阶段打包（2026-10-31）
+
+**现象**：单条 `assembleArmsoloRelease` 全量打包时，Kotlin daemon（RSS ~2.6G）与 Gradle daemon（RSS ~3.9G）同时驻留，R8 阶段三者叠加，11.6G 容器一度只剩 470MB available，宿主 App 被 OOM 挤崩（`CursorWindowAllocationException error -1` = ENOMEM）。
+
+**定案**：不在堆参数上再压（`kotlin.daemon.jvmargs` 给 1536m 会在 SettingsScreen 巨型 composable inline 阶段抛 `GC overhead limit exceeded`，Gradle 误报为「Not enough memory to run compilation」——**2560m 是实测下限**）。改用**两阶段错峰**：
+
+```sh
+sh tools/build-release-safe.sh
+```
+
+1. `compileArmsoloReleaseKotlin`（KSP/Hilt/Room 生成同步骤）
+2. `gradlew --stop` —— 停全部 daemon，释放 ~2.6G
+3. `assembleArmsoloRelease` —— R8 独享内存；Kotlin 已 up-to-date，此步主要是 R8+merge
+4. 收尾再 `--stop`
+
+代价：多一次 daemon 启动（~1 分钟）；收益：R8 阶段内存余量翻倍，宿主 App 不再被挤崩。构建锁沿用 `tools/build-with-lock.sh`。产物复制到仓库根 `aicoder-armsolo-release.apk`（.gitignore 已覆盖 `*.apk`）。
+
+**配套本机参数**（容器 `~/.gradle/gradle.properties`，不入仓库——仓库 `gradle.properties` 基准是 GitHub Actions 16G runner，不能按手机容器调）：
+
+```properties
+org.gradle.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC
+kotlin.compiler.execution.strategy=daemon
+kotlin.daemon.jvmargs=-Xmx2560m -XX:MaxMetaspaceSize=640m
+org.gradle.workers.max=2
+org.gradle.parallel=false
+```
+
+**判断「真在编译还是真卡死」**：`ps` 的 %CPU 是瞬时值，`Ssl` 睡眠态是正常等锁，不要据此杀进程。看累计 CPU 时间：`awk '{print $14+$15}' /proc/<pid>/stat`，间隔 30s 两次，增长即在干活。
