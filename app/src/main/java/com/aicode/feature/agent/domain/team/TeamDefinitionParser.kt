@@ -12,6 +12,9 @@ object TeamDefinitionParser {
     private const val TAG = "TeamDefinitionParser"
     private const val MAX_DESC_CHARS = 500
 
+    /** 团队名禁用字符：· 是结论前缀分隔符；% _ 是 SQLite LIKE 通配符（大小写不敏感就不堵了，极罕见）。 */
+    private val INVALID_NAME_CHARS = Regex("[·%_]")
+
     /** 正文为空视为非法定义（专家团必须有团长提示词），返回 null。定义文件经 [provider] 以容器路径读取。 */
     fun parse(provider: FileAccessProvider, filePath: String): TeamDefinition? {
         val text = runCatching { provider.readFile(filePath) }.getOrElse {
@@ -24,13 +27,16 @@ object TeamDefinitionParser {
         if (prompt.isEmpty()) return null
 
         val fileName = filePath.substringAfterLast('/')
-        val name = frontmatter["name"]?.toString()?.trim()?.takeIf { it.isNotBlank() }
+        // 名字会进结论幂等键前缀「[团队:名·」，拒绝前缀通配符与分隔符，防跨团队串扰（见 validTeamConclusions）。
+        val name = frontmatter["name"]?.toString()?.trim()?.takeIf { it.isNotBlank() && !it.contains(INVALID_NAME_CHARS) }
             ?: fileName.substringBeforeLast('.')
 
         return TeamDefinition(
             name = name,
             description = (frontmatter["description"]?.toString() ?: "").take(MAX_DESC_CHARS),
             members = stringList(frontmatter["members"]),
+            lifecycle = stringList(frontmatter["lifecycle"]),
+            gates = stringList(frontmatter["gates"]),
             prompt = prompt,
             filePath = filePath
         )

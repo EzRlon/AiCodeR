@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentContext
+import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.skill.SkillRepository
@@ -44,17 +45,18 @@ class SystemPromptProvider @Inject constructor(
     private val teamRepository: TeamRepository,
     private val taskBriefRepository: TaskBriefRepository,
     private val executionModeHolder: ExecutionModeHolder,
-    private val graphRepository: com.aicode.feature.memorygraph.domain.ConclusionReader
+    private val graphRepository: com.aicode.feature.memorygraph.domain.ConclusionReader,
+    private val mcpManager: com.aicode.feature.agent.domain.mcp.McpManager
 ) {
     // 抽象独立的 Source
     interface PromptSource {
-        fun build(ctx: AgentContext): String?
+        suspend fun build(ctx: AgentContext): String?
     }
 
     private inner class StaticRuleSource : PromptSource {
         // 每次都重新读盘：未编辑时字符串一致，KV Cache 照常命中；编辑后立即生效，无需重启。
         // 技能/记忆等运行期内容由末尾的 99-runtime-context.md 片段用 {{AICODE_*}} 变量承载。
-        override fun build(ctx: AgentContext): String = promptFragmentCatalog.renderStatic(ctx.projectRoot)
+        override suspend fun build(ctx: AgentContext): String = promptFragmentCatalog.renderStatic(ctx.projectRoot)
     }
 
     private inner class ActiveSkillsSource : PromptSource {
@@ -62,7 +64,7 @@ class SystemPromptProvider @Inject constructor(
         // 新开会话 / 切换工作区 / 重启 App 时缓存自然失效重建。空内容用 "" 占位以区分"未缓存"。
         private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
 
-        override fun build(ctx: AgentContext): String? {
+        override suspend fun build(ctx: AgentContext): String? {
             val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
             val cached = cachedByKey[key]
             if (cached != null) return cached.ifEmpty { null }
@@ -88,7 +90,7 @@ class SystemPromptProvider @Inject constructor(
     private inner class SubAgentBaseSource : PromptSource {
         @Volatile private var cached: String? = null
 
-        override fun build(ctx: AgentContext): String =
+        override suspend fun build(ctx: AgentContext): String =
             cached ?: resolvePrompt(SUBAGENT_BASE_FILE)
                 .replace(LEADING_COMMENT, "")
                 .trim()
@@ -102,7 +104,7 @@ class SystemPromptProvider @Inject constructor(
     private inner class TaskBriefListSource : PromptSource {
         private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
 
-        override fun build(ctx: AgentContext): String? {
+        override suspend fun build(ctx: AgentContext): String? {
             val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
             val cached = cachedByKey[key]
             if (cached != null) return cached.ifEmpty { null }
@@ -130,7 +132,7 @@ class SystemPromptProvider @Inject constructor(
     private inner class SubAgentListSource : PromptSource {
         private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
 
-        override fun build(ctx: AgentContext): String? {
+        override suspend fun build(ctx: AgentContext): String? {
             // key 里带 mode：能力摘要随模式变化（PLAN 下写/命令不可用），切换模式必须重建缓存；
             // 带 definitionsVersion：会话中途在设置页新建/改定义要立即生效，不必等新会话。
             val key = SourceCacheKey(
@@ -170,19 +172,71 @@ class SystemPromptProvider @Inject constructor(
         }
     }
 
-    /** 专家团团长指令：会话召唤了专家团时注入（团长提示词 + 成员名单）；子代理路径不注入。 */
+    /** 专家团团长指令：会话召唤了专家团时注入（团长提示词 + 成员名单 + 团队结论）；子代理路径不注入。 */
     private inner class TeamLeaderSource : PromptSource {
-        override fun build(ctx: AgentContext): String {
+        override suspend fun build(ctx: AgentContext): String {
             val team = teamRepository.resolve(ctx.teamName) ?: return ""
             val memberLines = team.members.joinToString("\n") { memberName ->
                 val desc = agentDefinitionRepository.findIncludingDisabled(memberName)?.description.orEmpty()
                 if (desc.isNotBlank()) "- $memberName: $desc" else "- $memberName"
+            }
+            // 团队结论：该团队此前会话沉淀的定案与坑（label 带团队前缀），帮团长不重踩。
+            val teamConclusions = if (ctx.projectRoot.isNotBlank()) {
+                runCatching {
+                    graphRepository.validTeamConclusions(ctx.projectRoot, team.name)
+                }.onFailure { FileLogger.w(TAG, "读团队结论失败: ${it.message}") }
+                    .getOrDefault(emptyList())
+            } else {
+                emptyList()
             }
             return buildString {
                 append("## 专家团：").append(team.name).append('\n')
                 append(team.prompt)
                 if (memberLines.isNotBlank()) {
                     append("\n\n你的成员（用 task 工具按 agent 名派发）：\n").append(memberLines)
+                }
+                // 团队结论：该团队此前会话沉淀的定案与坑，帮团长不重踩；无则不注入。
+                if (teamConclusions.isNotEmpty()) {
+                    append("\n\n## 本团队此前沉淀的结论\n")
+                    val prefix = "[团队:" + team.name + "·"
+                    teamConclusions.forEach { conclusion ->
+                        append("- ").append(conclusion.name.removePrefix(prefix))
+                        if (conclusion.summary.isNotBlank()) {
+                            append("：").append(conclusion.summary.replace('\n', ' '))
+                        }
+                        append('\n')
+                    }
+                    append("以上是已验证的定案与踩坑记录，分派前先对照，不要重新排查已知问题。\n")
+                }
+                // 生命周期：定义了就按节点顺序引导分派；未定义退化为通用纪律（现状行为）。
+                if (team.lifecycle.isNotEmpty()) {
+                    append("\n\n## 生命周期（按序推进）\n")
+                    team.lifecycle.forEachIndexed { index, node ->
+                        append("${index + 1}. ").append(node).append('\n')
+                    }
+                    append("按节点顺序推进，每节点完成再进下一节点；用户可随时要求跳过或调整顺序。\n")
+                }
+                // 门禁：定义了就替换通用验收纪律（更具体者优先），并保留系统级门禁说明。
+                if (team.gates.isNotEmpty()) {
+                    append("\n\n## 本团验收门禁\n")
+                    team.gates.forEach { gate ->
+                        append("- ").append(gate).append('\n')
+                    }
+                    append("- 系统仍会校验 qa 完成情况，未验证交付会收到门禁提醒。\n")
+                } else {
+                    append("\n\n## 验收纪律\n")
+                    append("- 涉及代码改动的实现类子代理交付后，先用 task(agent=\"qa\") 派发独立验证（给出改动文件与验证标准）再向用户报告完成；")
+                    append("系统会校验本会话是否有已完成的 qa，未验证的交付会随完成通知收到门禁提醒。\n")
+                    append("- 只读调研类子代理（Explore）的结论可直接采用，无需再派 qa。\n")
+                    append("- 单文件小修、纯问答、配置查询等轻任务无需走验证门禁。")
+                }
+                // 模型顾问团（可选评审增强）：已接入时提示两个评审时机；未装则不提，避免困惑。
+                if (mcpManager.getServerTools("multi-llm").isNotEmpty()) {
+                    append("\n\n## 模型顾问团（可选评审）\n")
+                    append("- 方案定稿前可用 mcp__multi-llm__ask_all 征询多模型意见，分歧点连同你的判断一起呈给用户拍板；")
+                    append("重要方案定稿后用 mcp__workflow-orchestrator__archive_review 存档结论（verdict/source/summary）。\n")
+                    append("- qa 报告通过但你存疑时，可 ask_claude 或 ask_grok 要一次二次意见，再决定是否重派。\n")
+                    append("- 顾问意见仅供参考，决策权在你和用户，不做多模型投票。\n")
                 }
             }
         }
@@ -237,12 +291,12 @@ class SystemPromptProvider @Inject constructor(
     }
 
     private inner class WorkspaceSource : PromptSource {
-        override fun build(ctx: AgentContext): String =
+        override suspend fun build(ctx: AgentContext): String =
             if (ctx.projectRoot.isNotBlank()) "~/workspace" else "（未选择工作区）"
     }
 
     private inner class EnvironmentSource : PromptSource {
-        override fun build(ctx: AgentContext): String =
+        override suspend fun build(ctx: AgentContext): String =
             when (executionModeHolder.currentMode()) {
                 ExecutionMode.LOCAL_PROOT ->
                     if (executionModeHolder.isSelfImproveMode()) "自我改进模式"
@@ -253,7 +307,7 @@ class SystemPromptProvider @Inject constructor(
 
     /** 自我改进模式指令：仅开关开启时注入（主会话路径；子代理不参与自我改进）。 */
     private inner class SelfImproveInstructionsSource : PromptSource {
-        override fun build(ctx: AgentContext): String =
+        override suspend fun build(ctx: AgentContext): String =
             if (executionModeHolder.isSelfImproveMode()) SELF_IMPROVE_INSTRUCTIONS else ""
     }
 
@@ -307,6 +361,8 @@ class SystemPromptProvider @Inject constructor(
             cachedByKey[key]?.let { return it.ifEmpty { null } }
             val nodes = try {
                 graphRepository.validConclusions(ctx.projectRoot)
+                    // 团队结论有专属注入通道（TeamLeaderSource），通用段滤掉避免重复展示。
+                    .filter { !it.name.startsWith("[团队:") }
             } catch (e: Exception) {
                 FileLogger.w(TAG, "读图谱结论失败: ${e.message}", e)
                 return null
@@ -344,6 +400,30 @@ class SystemPromptProvider @Inject constructor(
     private val projectRuleSource = ProjectRuleSource()
     private val workspaceSource = WorkspaceSource()
     private val projectNotesSource = ProjectNotesSource()
+
+    /**
+     * 世界书源：按触发词召回设定条目。
+     *
+     * 不像项目笔记那样做会话级缓存——召回结果取决于本轮用户输入，缓存会漏掉后续提问命中的条目。
+     * 条目文件本身在 [LorebookStore.load] 里每次读盘，但目录很小（典型几十条），开销可接受。
+     */
+    private inner class LorebookSource : PromptSource {
+        override suspend fun build(ctx: AgentContext): String? {
+            if (ctx.projectRoot.isBlank()) return null
+            val entries = try {
+                LorebookStore.load(ctx.projectRoot)
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "加载世界书失败: ${e.message}", e)
+                return null
+            }
+            if (entries.isEmpty()) return null
+            val haystack = ctx.history.lastOrNull { it is AgentMessage.UserMessage }
+                ?.let { (it as AgentMessage.UserMessage).content }
+                .orEmpty()
+            return LorebookStore.render(LorebookStore.recall(entries, haystack))
+        }
+    }
+    private val lorebookSource = LorebookSource()
     private val environmentSource = EnvironmentSource()
     private val selfImproveInstructionsSource = SelfImproveInstructionsSource()
     private val teamLeaderSource = TeamLeaderSource()
@@ -373,6 +453,7 @@ class SystemPromptProvider @Inject constructor(
         val environmentContent = environmentSource.build(agentContext)
         val selfImproveContent = selfImproveInstructionsSource.build(agentContext)
         val conclusionsContent = conclusionsSource.build(agentContext)
+        val lorebookContent = lorebookSource.build(agentContext)
 
         // 2. 变量就地展开：`{{AICODE_*}}` 替换为纯数据；未写变量的片段原样保留。
         val staticContent = renderVariables(
@@ -391,7 +472,8 @@ class SystemPromptProvider @Inject constructor(
             goal = renderGoalBlock(agentContext),
             taskBriefs = taskBriefListSource.build(agentContext),
             projectNotes = projectNotesSource.build(agentContext),
-            conclusions = conclusionsContent
+            conclusions = conclusionsContent,
+            lorebook = lorebookContent
         )
 
         // 4. 压缩空清单展开留下的多余空行；稳定基线在前、动态内容集中在末尾片段，均利于 KV Cache。
@@ -427,6 +509,8 @@ class SystemPromptProvider @Inject constructor(
             workspaceSource.build(ctx),
             environmentSource.build(ctx),
             currentDate(),
+            projectNotes = projectNotesSource.build(ctx),
+            lorebook = lorebookSource.build(ctx),
             selfImprove = selfImproveInstructionsSource.build(ctx),
             modelContext = modelContextText(ctx),
             goal = renderGoalBlock(ctx)
@@ -439,7 +523,7 @@ class SystemPromptProvider @Inject constructor(
      * 按子代理定义组装提示词：只注入 [AgentDefinition.inject] 列出的片段，再接 agent 自己的提示词。
      * 不注入可用子代理清单（子代理不能嵌套派发）。定义正文里的 `{{AICODE_*}}` 变量同样会展开。
      */
-    private fun buildForSubAgent(
+    private suspend fun buildForSubAgent(
         definition: AgentDefinition,
         agentContext: AgentContext
     ): String = buildString {
@@ -466,6 +550,8 @@ class SystemPromptProvider @Inject constructor(
                 workspaceSource.build(agentContext),
                 environmentSource.build(agentContext),
                 currentDate(),
+                projectNotes = projectNotesSource.build(agentContext),
+                lorebook = lorebookSource.build(agentContext),
                 modelContext = modelContextText(agentContext)
             )
         )
@@ -527,7 +613,8 @@ class SystemPromptProvider @Inject constructor(
         goal: String? = null,
         taskBriefs: String? = null,
         projectNotes: String? = null,
-        conclusions: String? = null
+        conclusions: String? = null,
+        lorebook: String? = null
     ): String {
         var out = text
         out = out.replace(SKILLS_VAR, skills.orEmpty())
@@ -537,6 +624,7 @@ class SystemPromptProvider @Inject constructor(
         out = out.replace(TASK_BRIEFS_VAR, taskBriefs.orEmpty())
         out = out.replace(PROJECT_NOTES_VAR, projectNotes.orEmpty())
         out = out.replace(CONCLUSIONS_VAR, conclusions.orEmpty())
+        out = out.replace(LOREBOOK_VAR, lorebook.orEmpty())
         out = out.replace(PROJECT_RULES_GLOBAL_VAR, projectRulesGlobal.orEmpty())
         out = out.replace(PROJECT_RULES_PROJECT_VAR, projectRulesProject.orEmpty())
         out = out.replace(PROJECT_RULES_VAR, projectRulesProject.orEmpty())
@@ -605,15 +693,15 @@ class SystemPromptProvider @Inject constructor(
     }
 
     /**
-     * 项目知识库索引（3.3）：`<项目>/.aicode/notes` 下各 md 文件的一级标题清单。
+     * 项目知识库（3.3）：`<项目>/.aicode/notes` 下各 md 文件。
      *
-     * 只注入「文件名 + 首行标题」而不注入正文：知识库的价值是「知道去哪里查」，
-     * 全文注入会把上下文吃满。会话级缓存，不扰动 KV Cache。
+     * 之前只注入「文件名 + 首行标题」的索引，模型几乎不会主动去读文件，
+     * 知识库等于没工作；改为直接注入正文，用总字数上限把上下文成本封住。
      */
     private inner class ProjectNotesSource : PromptSource {
         private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
 
-        override fun build(ctx: AgentContext): String? {
+        override suspend fun build(ctx: AgentContext): String? {
             if (ctx.projectRoot.isBlank()) return null
             val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
             cachedByKey[key]?.let { return it.ifEmpty { null } }
@@ -634,19 +722,27 @@ class SystemPromptProvider @Inject constructor(
             if (!dir.isDirectory) return ""
             val files = dir.listFiles { f -> f.isFile && f.extension.equals("md", ignoreCase = true) }
                 ?: return ""
-            val lines = ArrayList<String>()
+            val sb = StringBuilder()
+            var remaining = MAX_NOTES_TOTAL_CHARS
             for (file in files.sortedBy { it.name }.take(MAX_NOTES_LISTED)) {
-                val name = file.name.removeSuffix(".md")
-                val title = try {
-                    file.useLines { seq ->
-                        seq.firstOrNull { it.startsWith("# ") }?.removePrefix("# ")?.trim()
-                    }
+                if (remaining <= 0) break
+                val body = try {
+                    file.readText().trim()
                 } catch (e: Exception) {
-                    null
+                    continue
                 }
-                lines.add(if (title.isNullOrBlank()) "- " + name else "- " + name + " - " + title)
+                if (body.isEmpty()) continue
+                val chunk = if (body.length > MAX_NOTES_PER_FILE_CHARS) {
+                    body.take(MAX_NOTES_PER_FILE_CHARS) + "\n\n（笔记过长已截断，需要完整内容按文件名读取原文件）"
+                } else {
+                    body
+                }
+                val injected = chunk.take(remaining)
+                remaining -= injected.length
+                if (sb.isNotEmpty()) sb.append("\n\n")
+                sb.append("### ").append(file.name.removeSuffix(".md")).append('\n').append(injected)
             }
-            return lines.joinToString("\n")
+            return sb.toString().trim()
         }
     }
 
@@ -657,6 +753,10 @@ class SystemPromptProvider @Inject constructor(
         const val SUBAGENT_BASE_FILE = "agent/subagent-base.md"
         const val SUBAGENT_CONTEXT_FILE = "agent/subagent-context.md"
         const val MAX_NOTES_LISTED = 30
+        /** 单篇笔记最多注入的字符数：超过截断，避免个别长文档吃满配额。 */
+        const val MAX_NOTES_PER_FILE_CHARS = 4_000
+        /** 知识库注入总字数上限：把上下文成本封住，超过后后面的笔记不再注入。 */
+        const val MAX_NOTES_TOTAL_CHARS = 12_000
         const val MAX_AGENTS_CHARS = 32_000
 
         /** 项目知识库目录（相对项目根）：领域笔记/决策/踩坑记录的沉淀位置。 */
@@ -673,6 +773,9 @@ class SystemPromptProvider @Inject constructor(
         const val SUBAGENTS_VAR = "{{AICODE_SUBAGENTS}}"
         const val TASK_BRIEFS_VAR = "{{AICODE_TASK_BRIEFS}}"
         const val PROJECT_NOTES_VAR = "{{AICODE_PROJECT_NOTES}}"
+
+        /** 世界书：按触发词召回的设定条目。 */
+        const val LOREBOOK_VAR = "{{AICODE_LOREBOOK}}"
         /** 已有结论（记忆图谱读回路）：当前工作区未失效的结论清单。 */
         const val CONCLUSIONS_VAR = "{{AICODE_CONCLUSIONS}}"
         const val PROJECT_RULES_VAR = "{{AICODE_PROJECT_RULES}}"

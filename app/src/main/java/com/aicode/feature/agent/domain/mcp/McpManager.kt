@@ -193,6 +193,11 @@ class McpManager @Inject constructor(
         }
     }
 
+    /** 取已连接的 MCP 客户端；未连接返回 null（调用方自行降级）。 */
+    fun getConnectedClient(serverName: String): McpClient? {
+        return synchronized(activeClients) { activeClients[serverName] }
+    }
+
     /**
      * 仅重连单个 server（保存/启用开关/编辑刷新用），其他 server 的连接与已注册工具不受影响。
      * 配置中不存在该 name 时静默返回。

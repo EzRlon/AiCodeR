@@ -973,7 +973,7 @@ fun AppNavigation(
                             )
                         }
                     }
-                    VncOverlayWindow(viewModel = vncOverlayViewModel)
+                    // VNC 浮窗已提到根层（全屏时需要盖住侧栏），见 navBody 之后的调用点。
 
                     if (paneOpen && leftPaneWidthPx > 0) {
                         VerticalSplitHandle(
@@ -1199,8 +1199,12 @@ fun AppNavigation(
         // 侧栏只在聊天页展开：设置页自己就是「菜单 + 详情」两栏，外面再套一层会话侧栏就成了三栏。
         // 宽度走补间而不是直接增删，否则右侧区域宽度突变，切页时会明显闪一下；
         // 时长与页面过渡取同一个值，两段动画同时收尾。
+        val vncWindowState by vncOverlayViewModel.window.collectAsStateWithLifecycle()
+        val vncFullscreen = vncWindowState.visible && vncWindowState.fullscreen
+        // 全屏时侧栏让位：否则横屏下侧栏吃掉一大块横向空间，画面只剩一条竖带。
+        val sidebarTarget = if (currentRoute == "chat" && !vncFullscreen) drawerWidth() else 0.dp
         val sidebarWidth by animateDpAsState(
-            targetValue = if (currentRoute == "chat") drawerWidth() else 0.dp,
+            targetValue = sidebarTarget,
             animationSpec = tween(durationMillis = PAGE_MOTION_MS),
             label = "sidebar-width"
         )
@@ -1262,6 +1266,11 @@ fun AppNavigation(
             navBody()
         }
     }
+
+    // VNC 浮窗：挂在根 Box 而不是 navBody 内。全屏态要盖住侧栏和底部输入框，
+    // 留在 navBody 里就只能铺满内容区，侧栏依然占着横向空间（横屏下画面被挤成竖条）。
+    // 非全屏时它仍是一个跟随拖动的小窗，行为与之前一致。
+    VncOverlayWindow(viewModel = vncOverlayViewModel)
 
     // 标注中心统一画布（全局宿主）：一块画布 + 一条工具架，未定格时透明穿透可圈画真实界面，
     // 定格后底图精画，保存入账本；不再有「跳旧界面」的第二套标注编辑器。

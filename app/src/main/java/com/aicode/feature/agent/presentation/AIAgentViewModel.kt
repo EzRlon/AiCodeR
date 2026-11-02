@@ -156,6 +156,9 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
+import android.media.MediaScannerConnection
+import com.aicode.core.util.ExternalFileActions
+import com.aicode.feature.agent.presentation.component.resolveLocalFile
 import java.io.OutputStream
 import java.util.Calendar
 import java.util.UUID
@@ -238,6 +241,7 @@ class AIAgentViewModel @Inject constructor(
     private val agentNotificationCenter: AgentNotificationCenter,
     private val agentDefinitionRepository: AgentDefinitionRepository,
     private val teamRepository: TeamRepository,
+    private val workflowGateStore: com.aicode.feature.agent.domain.workflow.WorkflowGateStore,
     private val storeTranslationStore: StoreTranslationStore,
     private val todoItemDao: TodoItemDao,
     val fileAccess: FileAccessProvider,
@@ -1299,6 +1303,20 @@ class AIAgentViewModel @Inject constructor(
                 }
             }
         }.onFailure { FileLogger.w(TAG, "读取消息附件失败", it) }
+        // 把交付物复制一份到真机存储 下载/AiCodeR/（不是容器映射）：交付页展示与
+        // 「MT 管理器打开」「文件管理器中查看」都用这份真机副本，长按菜单才能真正跳转。
+        withContext(Dispatchers.IO) {
+            byPath.values.forEach { item ->
+                runCatching {
+                    val local = resolveLocalFile(item.attachment, fileAccess) ?: return@runCatching
+                    val name = item.attachment.fileName.ifBlank { local.name }
+                    val existing = ExternalFileActions.findExported(name)
+                    if (existing == null || existing.length() != local.length()) {
+                        ExternalFileActions.exportToSharedFile(context, local, name)
+                    }
+                }.onFailure { FileLogger.w(TAG, "导出交付物到真机失败: ${item.attachment.fileName}", it) }
+            }
+        }
         return byPath.values.sortedByDescending { it.timestamp }
     }
 
@@ -1524,6 +1542,9 @@ class AIAgentViewModel @Inject constructor(
 
         /** 意图纠正判定阈值（bigram Jaccard）：0.8 只抓「几乎原样重发」，宁漏不误。 */
         const val CORRECTION_SIMILARITY = 0.8
+
+        /** 纠正检测只需回溯最近几条消息，避免长会话全量载入。 */
+        const val CORRECTION_SCAN_LIMIT = 10
 
         /** 命令特征：命中即把 execute_command 失败归为「编译失败」而非普通任务失败。 */
         val BUILD_COMMAND_HINTS = listOf("gradlew", "gradle ", "make", "cargo build", "npm run build", "tsc", "javac")
@@ -1934,6 +1955,8 @@ class AIAgentViewModel @Inject constructor(
      */
     private fun clearSessionRuntimeState(sessionId: String) {
         subAgentEventBus.release(sessionId)
+        // 门禁状态按父会话键控：父会话被删时清掉；传子会话 id 时 Map.remove 不命中，无副作用。
+        workflowGateStore.clear(sessionId)
         // 先清队列再取消 job：cancel 可能在调用栈内同步跑 finally → flushPendingNotifications，
         // 队列已空则直接返回，不会为已删除会话再起一轮。
         agentNotificationCenter.clear(sessionId)
@@ -1976,7 +1999,10 @@ class AIAgentViewModel @Inject constructor(
      */
     private suspend fun recordIntentCorrectionIfAny(sessionId: String, request: String) {
         runCatching {
-            val messages = withContext(Dispatchers.IO) { agentMessageDao.getMessagesBySessionOnce(sessionId) }
+            // 只需最近几条：全量载入长会话会撑爆 CursorWindow（2MB 窗口上限）
+            val messages = withContext(Dispatchers.IO) {
+                agentMessageDao.getMessagesBySessionPaged(sessionId, CORRECTION_SCAN_LIMIT).first()
+            }
             val previousUser = messages.lastOrNull {
                 it.role == MessageRole.USER.name && it.content.isNotBlank() && it.content.trim() != request.trim()
             } ?: return@runCatching
@@ -2064,11 +2090,39 @@ class AIAgentViewModel @Inject constructor(
                 } else {
                     NotificationOutcome.COMPLETED
                 },
-                detail = event.detail.takeIf { it.isNotBlank() && event.type == SubAgentEventType.FAILED },
+                detail = event.detail.takeIf { it.isNotBlank() && event.type == SubAgentEventType.FAILED }
+                    ?: gateDetailFor(event),
                 resultExcerpt = digest?.excerpt,
                 changedFiles = digest?.changedFiles.orEmpty()
             )
         }
+    }
+
+    /**
+     * 验收门禁：绑了专家团的父会话里，qa 子代理完成即解锁；其它只读子代理仅豁免自身；
+     * 实现类子代理（有写文件能力，或无定义文件的默认子代理）完成而门禁未解锁时，在完成
+     * 通知的 detail 里随带验收要求（必达，不死锁流程，重派提醒上限见 WorkflowGateStore）。
+     * 未绑团返回 null，行为与改动前一致。
+     */
+    private suspend fun gateDetailFor(event: SubAgentEvent): String? {
+        // 廉价判定前置：未绑团的会话（绝大多数）不触达 DB 读与 agents 目录扫描。
+        if (event.type != SubAgentEventType.COMPLETED) return null
+        val subSession = sessionUseCase.getSessionById(event.subSessionId) ?: return null
+        // 门禁只挂在绑了专家团的父会话下的子代理上；未绑团行为与改动前完全一致。
+        val parentId = subSession.parentId ?: return null
+        if (sessionUseCase.getSessionById(parentId)?.teamName?.isNotBlank() != true) return null
+        val subAgentType = subSession.subagentType ?: return null
+        // 默认子代理（subagentType="subagent"）没有定义文件，视为实现类（通用代理含写工具）。
+        val definition = agentDefinitionRepository.findIncludingDisabled(subAgentType)
+        val hasWriteTool = definition?.allowsTool("writeFile") != false
+        if (hasWriteTool) {
+            return workflowGateStore.reminderFor(parentId, event.subSessionId)
+        }
+        // 只读定义（qa/Explore/optimizer…）完成只豁免自身；解锁信号只认 qa。
+        if (subAgentType == "qa") {
+            workflowGateStore.markVerifiedByQa(parentId, event.subSessionId)
+        }
+        return null
     }
 
     /**

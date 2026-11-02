@@ -18,7 +18,7 @@ enum class NotificationOutcome { COMPLETED, FAILED, STOPPED }
  * 一条待送给 AI 的异步完成通知（后台终端命令 / 子代理）。
  *
  * @property sourceId 终端 tabId 或子代理会话 id，AI 据此调 terminal(read) / task(read) 取完整结果。
- * @property detail 结束原因补充：子代理失败时的错误信息、被终止时的说明；正常完成时为 null。
+ * @property detail 结束原因补充：子代理失败时的错误信息；正常完成时为验收门禁提示（绑团会话，见 WorkflowGateStore），否则为 null。
  * @property message [AgentNotificationKind.AGENT_MESSAGE] / [AgentNotificationKind.USER_MESSAGE] 的消息正文。
  * @property fromParent [AgentNotificationKind.AGENT_MESSAGE] 的方向：true 表示发送方是主会话（收件人为子代理），
  *   false 表示发送方是子代理（收件人为主会话）。供 Formatter 生成对应的回复提示。

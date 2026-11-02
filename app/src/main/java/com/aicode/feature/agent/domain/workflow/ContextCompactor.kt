@@ -256,11 +256,12 @@ class ContextCompactor @Inject constructor(
             if (sessionId != null) {
                 runCatching {
                     if (generalSettingsRepository.graphExtractEnabled()) {
-                        val workspacePath = sessionUseCase.getSessionById(sessionId)?.workspacePath.orEmpty()
+                        val session = sessionUseCase.getSessionById(sessionId)
                         graphRepository.extractConclusionsFromSummary(
-                            workspacePath = workspacePath,
+                            workspacePath = session?.workspacePath.orEmpty(),
                             sessionId = sessionId,
-                            summary = summary
+                            summary = summary,
+                            teamName = session?.teamName?.takeIf { it.isNotBlank() }
                         )
                     }
                 }.onFailure { FileLogger.w(TAG, "压缩后抽取结论失败（不影响压缩）", it) }
