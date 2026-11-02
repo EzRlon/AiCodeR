@@ -11,6 +11,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -2205,6 +2206,7 @@ private fun deliverableGroupTitle(key: String): String = stringResource(
     }
 )
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DeliverableRow(
     item: AIAgentViewModel.DeliverableItem,
@@ -2251,7 +2253,10 @@ private fun DeliverableRow(
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        // 名称超宽时自动跑马灯滚动（可拖动），完整展示文件名。
+                        .basicMarquee()
                 )
                 Icon(
                     FeatherIcons.MoreHorizontal,
