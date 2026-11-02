@@ -482,11 +482,6 @@ internal fun parseVersionTag(tag: String): String? {
  * 语义化版本比较：判断最新版本 [latest] 是否严格大于当前版本 [current]。
  * 若 latest 不大于 current（即最新版本已安装或当前属于开发/测试版），返回 true 表示已是最新。
  */
-internal fun isUpToDate(latest: String, current: String): Boolean {
-    val cmp = compareVersions(latest, current)
-    return cmp <= 0
-}
-
 /**
  * 语义化版本号比较器（SemVer 兼容）：
  * 返回 >0 表示 v1 > v2，<0 表示 v1 < v2，0 表示相等。

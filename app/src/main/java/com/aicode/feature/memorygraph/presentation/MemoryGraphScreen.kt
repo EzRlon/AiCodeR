@@ -862,14 +862,6 @@ private fun SessionLaneCard(
 }
 
 @Composable
-private fun StatBadge(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
 /** token 数缩写：1234 → 1.2k，1234567 → 1.2M。 */
 internal fun formatTokens(tokens: Int): String = when {
     tokens >= 1_000_000 -> "%.1fM".format(java.util.Locale.US, tokens / 1_000_000f)
