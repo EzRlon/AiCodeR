@@ -3,8 +3,6 @@ package com.aicode.feature.memorygraph.presentation
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,24 +14,30 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,9 +53,15 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.Clock
+import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Share2
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.FloatingTabBar
+import com.aicode.core.ui.FloatingTabItem
+import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.domain.model.GoalStatus
@@ -149,7 +159,7 @@ private fun ConclusionsSection(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+                contentPadding = PaddingValues(start = Spacing.md, end = Spacing.md, top = Spacing.sm, bottom = 84.dp),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 items(conclusions, key = { it.id }) { node ->
@@ -300,7 +310,7 @@ private fun GraphSection(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
+                contentPadding = PaddingValues(start = Spacing.md, end = Spacing.md, top = Spacing.sm, bottom = 84.dp),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 items(shown, key = { it.id }) { node ->
@@ -442,6 +452,10 @@ private fun GraphNodeDetailDialog(
  * 点击卡片内联展开详情（目标全文 + 最后消息摘要 + 检查点数 + 打开会话）。
  * 数据由 [MemoryGraphViewModel] 聚合（IO 线程）：消息活动、待办进度、检查点、最后消息摘要。
  */
+/** 记忆图谱底部页签数：结论时间线 / 会话 / 图谱（与 Git 本地仓库同款底部页签）。 */
+private const val MEMORY_GRAPH_TAB_COUNT = 3
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MemoryGraphScreen(
     workspacePath: String,
@@ -453,7 +467,6 @@ fun MemoryGraphScreen(
     onBack: () -> Unit,
     viewModel: MemoryGraphViewModel = hiltViewModel(),
 ) {
-    var filter by rememberSaveable { mutableStateOf("conclusions") } // conclusions / all / graph
     var expandedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val activity by viewModel.activity.collectAsStateWithLifecycle()
     val detail by viewModel.detail.collectAsStateWithLifecycle()
@@ -473,51 +486,51 @@ fun MemoryGraphScreen(
     val totalTokens = sessions.sumOf { it.totalInputTokens + it.totalOutputTokens }
     val runningCount = roots.count { isRunning(it.id) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // ── 头部 ──
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    FeatherIcons.ArrowLeft,
-                    contentDescription = stringResource(R.string.memory_graph_title),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.memory_graph_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = workspacePath.substringAfterLast('/').ifBlank { workspacePath },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            IconButton(onClick = { viewModel.refresh() }, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    FeatherIcons.RefreshCw,
-                    contentDescription = stringResource(R.string.memory_graph_refresh),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
+    // ── Git 本地仓库同款布局：Scaffold 顶栏 + 三页 Pager + 悬浮底部页签（验收反馈：与 Git 仓库页设计对齐）──
+    val pagerState = rememberPagerState(initialPage = 0) { MEMORY_GRAPH_TAB_COUNT }
+    // 三个 tab 的滚动状态：仅页面内容滚动时弱化底栏（与 Git 仓库页同一推导）。
+    // 不含 pagerState.isScrollInProgress：点页签切页时 pager 也在滚，若纳入会把底栏淡到 0.35（验收反馈的「点击后变透明」）。
+    val sessionsListState = rememberLazyListState()
+    val tabsScrolling by remember {
+        derivedStateOf { sessionsListState.isScrollInProgress }
+    }
+
+    Scaffold(
+        containerColor = settingsPageBackground(),
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.memory_graph_title)) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = settingsPageBackground(),
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            FeatherIcons.ArrowLeft,
+                            contentDescription = stringResource(R.string.common_back),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { viewModel.refresh() }) {
+                        Icon(
+                            FeatherIcons.RefreshCw,
+                            contentDescription = stringResource(R.string.memory_graph_refresh),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            )
         }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
 
         // ── 统计条 ──
         Row(
@@ -543,59 +556,34 @@ fun MemoryGraphScreen(
             )
         }
 
-        // ── 筛选 ──
-        // 反馈 3：横向滚动避免窄屏把最后的 chip 挤成竖排文字；chip 文字一律单行
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-        ) {
-            FilterChip(
-                selected = filter == "conclusions",
-                onClick = { filter = "conclusions" },
-                label = { Text(stringResource(R.string.graph_timeline_title)) },
-            )
-            FilterChip(
-                selected = filter == "all",
-                onClick = { filter = "all" },
-                label = { Text(stringResource(R.string.memory_graph_session)) },
-            )
-            FilterChip(
-                selected = filter == "graph",
-                onClick = { filter = "graph" },
-                label = { Text(stringResource(R.string.memory_graph_tab_graph)) },
-            )
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-        // ── 默认页：结论时间线（AI 学到的结论）；「图谱」页签是节点/边关系视图 ──
-        if (filter == "conclusions") {
-            ConclusionsSection(
-                workspacePath = workspacePath,
-                viewModel = viewModel,
-                onOpenSession = onOpenSession
-            )
-        } else if (filter == "graph") {
-            GraphSection(
-                workspacePath = workspacePath,
-                viewModel = viewModel
-            )
-        } else if (visibleRoots.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = stringResource(R.string.memory_graph_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.sm),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
+        // ── 三页（与 Git 本地仓库同款）：结论时间线 / 会话 / 图谱，底部悬浮页签切换 ──
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) { page ->
+                    when (page) {
+                        0 -> ConclusionsSection(
+                            workspacePath = workspacePath,
+                            viewModel = viewModel,
+                            onOpenSession = onOpenSession
+                        )
+                        1 -> if (visibleRoots.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = stringResource(R.string.memory_graph_empty),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                state = sessionsListState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = Spacing.md, end = Spacing.md, top = Spacing.sm, bottom = 84.dp),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            ) {
                 visibleRoots.forEach { session ->
                     val stat = activity[session.id]
                     val subs = subSessionsByParent[session.id].orEmpty()
@@ -629,7 +617,28 @@ fun MemoryGraphScreen(
                         )
                     }
                 }
+                            }
+                        }
+                        else -> GraphSection(
+                            workspacePath = workspacePath,
+                            viewModel = viewModel
+                        )
+                    }
+                }
             }
+
+            // 悬浮底部页签：与 Git 本地仓库同款组件，页面内容从其下穿过被渐变遮罩。
+            FloatingTabBar(
+                pagerState = pagerState,
+                items = listOf(
+                    FloatingTabItem(FeatherIcons.Clock, stringResource(R.string.graph_timeline_title)),
+                    FloatingTabItem(FeatherIcons.MessageSquare, stringResource(R.string.memory_graph_session)),
+                    FloatingTabItem(FeatherIcons.Share2, stringResource(R.string.memory_graph_tab_graph))
+                ),
+                maskColor = settingsPageBackground(),
+                isScrolling = tabsScrolling,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 }

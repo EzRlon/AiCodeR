@@ -42,6 +42,7 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -73,6 +74,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -170,6 +172,9 @@ private val INPUT_BAR_MASK_HEIGHT = 110.dp
 /** 输入框高度上下限：超过上限后文本在框内滚动，右上角露出「展开」按钮。与 TextField 的 heightIn 一致。 */
 private val INPUT_FIELD_MIN_HEIGHT = 44.dp
 private val INPUT_FIELD_MAX_HEIGHT = 140.dp
+
+/** 模式说明条自动收起延时：切模式/进入非构建会话自动展开后，展示多久自动收起（用户不应长久固定显示）。 */
+private const val MODE_INFO_AUTO_COLLAPSE_MS = 6_000L
 
 /**
  * 小于该字符数时直接判定「未超出」：三行高以内装不下这么多字（含宽字符也不超），
@@ -395,12 +400,15 @@ internal fun ChatInputBar(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .graphicsLayer { alpha = contentAlpha }
+                    // 只在弱化进行中挂层：常驻 graphicsLayer 离屏缓存不随主题切换刷新，
+                    // 整条卡片（含上方面板）会停在旧配色直到触摸（同 AIChatPanel 横幅修复）。
+                    .then(if (contentAlpha < 1f) Modifier.graphicsLayer { alpha = contentAlpha } else Modifier)
                     // 顶部预留进度环的外扩空间：本 Column 经 graphicsLayer 图层渲染，
                     // 绘制在图层 bounds 外会被裁掉，卡片上方无兄弟节点时环顶边会缺失。
                     .padding(top = 6.dp)
                     .padding(horizontal = Spacing.lg)
-                    .padding(bottom = Spacing.md)
+                    // 底部只留极窄间隙：空闲高度极限压缩（用户反馈），卡片圆角本身已提供视觉呼吸。
+                    .padding(bottom = Spacing.xs)
                     .padding(bottom = imeInset)
             ) {
             if (filteredCommands.isNotEmpty()) {
@@ -615,6 +623,12 @@ internal fun ChatInputBar(
                             modeInfoVisible = true
                         }
                     }
+                    // 自动展开的说明条展示数秒后自动收起（验收反馈：不应长久固定占用底栏高度）。
+                    // 键随模式/会话重启：切模式重开计时；用户中途手动点开（无模式变化）不受影响。
+                    LaunchedEffect(currentMode, sessionId) {
+                        delay(MODE_INFO_AUTO_COLLAPSE_MS)
+                        modeInfoVisible = false
+                    }
                     var modeMenuVisible by remember { mutableStateOf(false) }
                     AnimatedVisibility(
                         visible = modeInfoVisible,
@@ -676,42 +690,53 @@ internal fun ChatInputBar(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.Top
                     ) {
-                        TextField(
-                            value = inputFieldValue,
-                            onValueChange = { new ->
-                                inputFieldValue = new
-                                onValueChange(new.text)
-                            },
+                        // BasicTextField 而非 TextField：M3 TextField 内部强制 56dp 地板，
+                        // 空闲高度压不下去；这里自己控制地板 44dp，行为（键盘/光标/多行滚动）不变。
+                        Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .heightIn(min = INPUT_FIELD_MIN_HEIGHT, max = INPUT_FIELD_MAX_HEIGHT)
                                 .onSizeChanged { inputFieldWidthPx = it.width },
-                            placeholder = {
-                                Text(
-                                    stringResource(if (isBusy) R.string.chat_queue_hint else R.string.chat_input_placeholder),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            },
-                            enabled = true,
-                            keyboardOptions = if (enterToSend) {
-                                KeyboardOptions(imeAction = ImeAction.Send)
-                            } else {
-                                KeyboardOptions(imeAction = ImeAction.Default)
-                            },
-                            keyboardActions = if (enterToSend) {
-                                KeyboardActions(onSend = { onSend() })
-                            } else {
-                                KeyboardActions.Default
-                            },
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                disabledContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                                disabledIndicatorColor = Color.Transparent
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            BasicTextField(
+                                value = inputFieldValue,
+                                onValueChange = { new ->
+                                    inputFieldValue = new
+                                    onValueChange(new.text)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = INPUT_FIELD_CONTENT_PADDING),
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                keyboardOptions = if (enterToSend) {
+                                    KeyboardOptions(imeAction = ImeAction.Send)
+                                } else {
+                                    KeyboardOptions(imeAction = ImeAction.Default)
+                                },
+                                keyboardActions = if (enterToSend) {
+                                    KeyboardActions(onSend = { onSend() })
+                                } else {
+                                    KeyboardActions.Default
+                                },
+                                decorationBox = { inner ->
+                                    if (inputFieldValue.text.isEmpty()) {
+                                        Text(
+                                            stringResource(if (isBusy) R.string.chat_queue_hint else R.string.chat_input_placeholder),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                    inner()
+                                }
                             )
-                        )
+                        }
 
                         if (inputOverflows) {
                             IconButton(
@@ -732,8 +757,8 @@ internal fun ChatInputBar(
                         modifier = Modifier
                             .fillMaxWidth()
                             // 控制行高度保底：上层 Column 总高溢出时防测量挤压（发送按钮变形，用户反馈）。
-                            .heightIn(min = 44.dp)
-                            .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
+                            .heightIn(min = 40.dp)
+                            .padding(horizontal = Spacing.xs, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 控制行用 FlowRow：屏幕窄时自动换行，保证每个按钮都完整可见（用户反馈：
@@ -1465,7 +1490,8 @@ internal fun ToolPermissionPanel(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs)
-            .graphicsLayer { alpha = panelAlpha },
+            // 只在弱化进行中挂层：常驻离屏图层不随主题切换刷新（同输入栏修复）。
+            .then(if (panelAlpha < 1f) Modifier.graphicsLayer { alpha = panelAlpha } else Modifier),
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(Radius.md),
         border = androidx.compose.foundation.BorderStroke(

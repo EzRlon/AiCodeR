@@ -1,6 +1,8 @@
 package com.aicode.feature.agent.presentation
 
 import android.app.PendingIntent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
@@ -107,6 +109,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import com.aicode.feature.backup.domain.BackupManager
+import com.aicode.feature.agent.domain.command.HandoffCommandHandler
 import com.aicode.feature.agent.domain.command.SlashCommand
 import com.aicode.feature.agent.domain.command.SlashCommandContext
 import com.aicode.feature.agent.domain.command.SlashCommandRegistry
@@ -219,6 +222,7 @@ class AIAgentViewModel @Inject constructor(
     private val budgetApprovalManager: BudgetApprovalManager,
     private val terminalSessionManager: TerminalSessionManager,
     private val slashCommandRegistry: SlashCommandRegistry,
+    private val handoffCommandHandler: HandoffCommandHandler,
     private val fileMentionRepository: FileMentionRepository,
     private val checkpointManager: CheckpointManager,
     private val fileVersionRegistry: com.aicode.feature.agent.domain.tool.FileVersionRegistry,
@@ -1551,6 +1555,9 @@ class AIAgentViewModel @Inject constructor(
 
         /** 50% 软提醒的会话级上限：两次提醒后不再打扰。 */
         const val MAX_HANDOFF_REMINDERS = 2
+
+        /** 「准备交接」自然语言短语：直触快照交接（与 /handoff 同一命令）。 */
+        const val HANDOFF_PHRASE = "准备交接"
         const val AGENT_COMPLETE_CHANNEL = "agent_complete"
         const val AGENT_COMPLETE_NOTIFICATION_ID = 100
         /** wakeLock 超时保险：构建、装依赖类工具动辄十几分钟，给足 60 分钟；任务正常结束会主动释放。 */
@@ -2519,9 +2526,19 @@ class AIAgentViewModel @Inject constructor(
             recordIntentCorrectionIfAny(sessionId, request)
         }
         // 硬阈值暂停兜底：排队消费/直调等所有执行入口在此统一拒绝（队列保留不丢）。
-        // 唯一放行 /compress：暂停的会话往往正是最需要压缩的，压缩成功后自动解除暂停。
-        if (sessionId in pausedHandoffSessions && !request.trim().startsWith("/compress")) {
+        // 放行 /compress：暂停的会话往往正是最需要压缩的，压缩成功后自动解除暂停。
+        // 放行 /handoff 与「准备交接」：暂停的会话用户常需要直接快照交接走人。
+        if (sessionId in pausedHandoffSessions &&
+            !request.trim().startsWith("/compress") &&
+            !request.trim().startsWith("/handoff") &&
+            request.trim() != HANDOFF_PHRASE
+        ) {
             _handoffPrompt.value = HandoffPrompt(sessionId, pausedHandoffSessions.getValue(sessionId), paused = true)
+            return@launch
+        }
+        // 「准备交接」：自然语言短语直触快照交接（与 /handoff 同一命令），不进入模型回合。
+        if (request.trim() == HANDOFF_PHRASE) {
+            runResolvedCommand(ResolvedCommand.Action(handoffCommandHandler, ""), request, sessionId)
             return@launch
         }
         // 命令分流：命中斜杠命令（内置命令或技能）时，不走 agent workflow，直接执行命令操作
@@ -2624,7 +2641,42 @@ class AIAgentViewModel @Inject constructor(
                 agentDefinition = agentDefinition
             )
 
-            val allTools = toolRegistry.getAvailableTools()
+            val allTools = toolRegistry.getAvailableTools().let { list ->
+                // 自定义子代理的允许工具清单是显式声明的，如实放行，不做 MCP 准入门。
+                if (agentDefinition != null) return@let list
+                // MCP 按需准入（用户反馈：MCP schema 是每轮 token 大户）：只带「本会话历史里用过」
+                // 或「本轮请求点名（服务器名或工具名）」的服务器的全量工具进轮，其余服务器本轮不注入。
+                // 粘性激活：历史里出现过该服务器的调用即持续放行，保证「继续」类跟进轮不丢工具。
+                val serverNames = mcpManager.statuses.value.map { it.name }
+                if (serverNames.isEmpty()) {
+                    list
+                } else {
+                    val requestText = (request + "\n" + modelRequest).lowercase()
+                    val historyText = history.joinToString("\n") { msg ->
+                        when (msg) {
+                            is AgentMessage.UserMessage -> msg.content
+                            is AgentMessage.AssistantMessage -> msg.content
+                            else -> ""
+                        }
+                    }
+                    val toolsByServer = list.filter { it.name.startsWith("mcp__") }.groupBy { tool ->
+                        serverNames.firstOrNull { tool.name.startsWith("mcp__${it}__") }
+                    }
+                    val active = serverNames.filterTo(mutableSetOf()) { server ->
+                        val mentioned = requestText.contains(server.lowercase()) ||
+                            toolsByServer[server].orEmpty().any { tool ->
+                                val suffix = tool.name.removePrefix("mcp__${server}__")
+                                suffix.isNotBlank() && requestText.contains(suffix.lowercase())
+                            }
+                        mentioned || historyText.contains("mcp__${server}__")
+                    }
+                    if (active.size == serverNames.size) list
+                    else list.filterNot { tool ->
+                        val server = serverNames.firstOrNull { tool.name.startsWith("mcp__${it}__") }
+                        server != null && server !in active
+                    }
+                }
+            }
             val isSub = sessionEntity?.parentId != null
             val goalActive = sessionDomain?.goalStatus == GoalStatus.ACTIVE
             goalActiveAtTurn = goalActive
@@ -3167,7 +3219,10 @@ class AIAgentViewModel @Inject constructor(
      * 失败返回 false（调用方决定面板如何恢复）。
      */
     private suspend fun handoffToNewSession(oldSessionId: String, closePromptOnSuccess: Boolean): Boolean = runCatching {
-        val summary = agentWorkflow.buildHandoffSummary(oldSessionId)
+        // 快照优先：零模型调用、毫秒级；拼不出来（历史为空等）才退回全量压缩链兕底。
+        val summary = runCatching { agentWorkflow.buildInstantHandoffDoc(oldSessionId) }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: agentWorkflow.buildHandoffSummary(oldSessionId)
         check(!summary.isNullOrBlank()) { "接手摘要生成失败" }
         val old = sessionUseCase.getSessionById(oldSessionId)
         checkNotNull(old) { "原会话不存在" }
@@ -3225,13 +3280,15 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
-    /** 暂停态：把接手摘要复制到剪贴板，作为「一键可复制」的交接内容。 */
+    /** 暂停态：把接手摘要复制到剪贴板，作为「一键可复制」的交接内容。快照优先，秒出；无快照才走压缩链。 */
     fun copyHandoffContent() {
         val prompt = _handoffPrompt.value ?: return
         if (prompt.generating || prompt.preparingCopy) return
         _handoffPrompt.value = prompt.copy(preparingCopy = true)
         viewModelScope.launch {
-            val summary = runCatching { agentWorkflow.buildHandoffSummary(prompt.sessionId) }.getOrNull()
+            val summary = runCatching { agentWorkflow.buildInstantHandoffDoc(prompt.sessionId) }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: runCatching { agentWorkflow.buildHandoffSummary(prompt.sessionId) }.getOrNull()
             val current = _handoffPrompt.value
             if (current?.sessionId == prompt.sessionId) {
                 _handoffPrompt.value = current.copy(preparingCopy = false)
@@ -4002,6 +4059,38 @@ class AIAgentViewModel @Inject constructor(
             ) ?: 0.0
         }
         UsageSummary(summary.calls, summary.inputTokens, summary.outputTokens, summary.cachedInputTokens, cost)
+    }
+
+    /** /handoff 与「准备交接」——即时拼装接手快照（零模型调用），复制到剪贴板并在会话内展示。 */
+    override fun prepareHandoffSnapshot() {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch {
+            val copied = copyInstantHandoffToClipboard(sid)
+            if (!copied) {
+                // 快照拼不出来（如历史为空）：退回全量压缩链兕底，与确认交接同一素材
+                runCatching { agentWorkflow.buildHandoffSummary(sid) }.getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { summary ->
+                        copyTextToClipboard(summary)
+                        Toast.makeText(context, R.string.handoff_copy_done, Toast.LENGTH_SHORT).show()
+                    }
+                    ?: Toast.makeText(context, R.string.handoff_copy_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 快照交接：即时拼装接手材料并复制剪贴板；拼不出来返回 false，由调用方兕底。 */
+    private suspend fun copyInstantHandoffToClipboard(sessionId: String): Boolean {
+        val doc = runCatching { agentWorkflow.buildInstantHandoffDoc(sessionId) }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: return false
+        copyTextToClipboard(doc)
+        Toast.makeText(context, R.string.handoff_copy_done, Toast.LENGTH_SHORT).show()
+        return true
+    }
+
+    private fun copyTextToClipboard(text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("AiCode handoff", text))
     }
 
     /** /compress —— 手动触发当前会话的上下文压缩。 */

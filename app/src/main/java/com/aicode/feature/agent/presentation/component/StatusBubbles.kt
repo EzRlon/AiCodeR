@@ -671,6 +671,7 @@ internal fun ReasoningBubble(
                     cache = cache,
                     compact = true,
                     lazyScroll = true,
+                    autoFollow = live,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = ReasoningWindowMaxHeight)

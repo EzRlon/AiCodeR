@@ -67,7 +67,9 @@ fun Modifier.pressScale(
         ),
         label = label
     )
-    graphicsLayer {
+    // 只在缩放进行中挂层：常驻 graphicsLayer 的离屏缓存在主题切换后不刷新，
+    // 侧栏等调用点会停在旧配色（与输入栏/AIChatPanel 同型修复）。
+    if (scale == 1f) Modifier else Modifier.graphicsLayer {
         scaleX = scale
         scaleY = scale
     }

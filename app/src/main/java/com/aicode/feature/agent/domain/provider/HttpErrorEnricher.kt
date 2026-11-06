@@ -29,12 +29,31 @@ fun Throwable.enrichWithHttpErrorBody(): Throwable {
     if (this !is HttpException) return this
     val raw = extractRawErrorBody()
     val detail = extractHttpErrorDetail(raw)
-    val composed = if (detail.isBlank()) {
-        message() ?: "HTTP ${code()}"
-    } else {
-        "HTTP ${code()}: $detail"
+    val meaning = httpStatusMeaning(code())
+    val composed = buildString {
+        append("HTTP ").append(code())
+        if (meaning != null) append("（").append(meaning).append("）")
+        if (detail.isNotBlank()) append(": ").append(detail)
     }
     return EnrichedHttpException(composed, code(), raw, this)
+}
+
+/** 常见上游 HTTP 状态码的中文含义，用户看到状态码时能直接知道是什么问题。 */
+internal fun httpStatusMeaning(code: Int): String? = when (code) {
+    400 -> "请求格式错误（参数、模型名或请求体不合法）"
+    401 -> "未授权（API Key 缺失、无效或过期）"
+    402 -> "额度不足（账户余额或配额耗尽）"
+    403 -> "无权限（Key 无权访问该模型或资源）"
+    404 -> "资源不存在（模型名或请求路径错误）"
+    408 -> "请求超时"
+    413 -> "请求体过大（上下文或负载超限）"
+    422 -> "请求参数无法处理"
+    429 -> "限流或额度耗尽（请稍后重试）"
+    500 -> "服务端内部错误"
+    502 -> "上游网关错误"
+    503 -> "服务暂时不可用（过载或维护）"
+    504 -> "网关超时"
+    else -> null
 }
 
 /**

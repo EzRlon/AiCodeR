@@ -1,12 +1,15 @@
 package com.aicode.feature.agent.presentation.component
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +24,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -58,6 +62,7 @@ import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownAnimations
 import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
+import kotlinx.coroutines.delay
 import com.mikepenz.markdown.model.rememberMarkdownState
 import com.mikepenz.markdown.model.State as MarkdownParseState
 import dev.snipme.highlights.Highlights
@@ -134,7 +139,9 @@ internal fun MarkdownContent(
     loading: (@Composable () -> Unit)? = null,
     /** 长文本虚拟化渲染：正文改用 LazyColumn 逐块渲染（调用方需配合 heightIn 等有限高度约束
      *  才能触发懒加载），避免超大 md 一次性全量组合/测量造成的卡顿。 */
-    lazyScroll: Boolean = false
+    lazyScroll: Boolean = false,
+    /** 流式跟底：内容增长时内层 LazyColumn 自动滚到最新（用户上滑即停，滑回底部恢复）。 */
+    autoFollow: Boolean = false
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val semantic = MaterialTheme.semanticColors
@@ -254,10 +261,12 @@ internal fun MarkdownContent(
                 state: MarkdownParseState.Success,
                 components: MarkdownComponents,
                 modifier: Modifier
-            ) -> Unit = remember(lazyScroll) {
+            ) -> Unit = remember(lazyScroll, autoFollow) {
                 if (lazyScroll) {
                     { state, components, m ->
-                        LazyColumn(modifier = m) {
+                        val listState = rememberLazyListState()
+                        if (autoFollow) StreamingAutoFollow(listState, state)
+                        LazyColumn(state = listState, modifier = m) {
                             items(
                                 items = state.node.children,
                                 key = { node -> node.startOffset },
@@ -349,6 +358,34 @@ internal fun MarkdownContent(
                 modifier = modifier
             )
         }
+    }
+}
+
+/**
+ * 流式内容贴底跟随：内容增长（state 变化）时滚到列表可滚的最底；用户在窗口内上滑即暂停跟随，
+ * 松手时已在底部（或滑回底部）则恢复。scrollToItem(…, Int.MAX_VALUE) 与外层聊天列表同一惯用法：
+ * offset 会被 clamp 到 maxScroll，无需手算最后一项高度。
+ */
+@Composable
+private fun StreamingAutoFollow(listState: LazyListState, state: MarkdownParseState.Success) {
+    var follow by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> follow = false
+                is DragInteraction.Stop, is DragInteraction.Cancel -> {
+                    delay(150)
+                    follow = !listState.canScrollForward
+                }
+            }
+        }
+    }
+    LaunchedEffect(state) {
+        if (!follow) return@LaunchedEffect
+        // 等一帧让新内容完成布局再滚，否则用上一帧的 layoutInfo 会永远慢一步
+        withFrameNanos { }
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last >= 0) listState.scrollToItem(last, Int.MAX_VALUE)
     }
 }
 

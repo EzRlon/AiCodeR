@@ -382,14 +382,17 @@ internal fun AgentMessageItem(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (message.role == MessageRole.TOOL) {
-                            // 工具行自带 1px 细线与状态图标；这里只负责入场动画（只改 draw 层，不动布局）
+                            // 工具行自带 1px 细线与状态图标；这里只负责入场动画（只改 draw 层，不动布局）。
+                            // 只在入场动画进行中挂层：常驻离屏图层不随主题切换刷新（同输入栏修复）。
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .graphicsLayer {
-                                        alpha = entryProgress
-                                        translationY = (1f - entryProgress) * MESSAGE_ENTRY_RISE.toPx()
-                                    }
+                                    .then(
+                                        if (entryProgress < 1f) Modifier.graphicsLayer {
+                                            alpha = entryProgress
+                                            translationY = (1f - entryProgress) * MESSAGE_ENTRY_RISE.toPx()
+                                        } else Modifier
+                                    )
                             ) {
                                 ToolMessageBody(
                                     message = message,

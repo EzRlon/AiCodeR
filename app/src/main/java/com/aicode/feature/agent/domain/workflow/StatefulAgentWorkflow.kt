@@ -9,6 +9,8 @@ import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
+import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
+import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.notification.AgentEventInjector
 import com.aicode.feature.agent.domain.notification.AgentNotificationCenter
@@ -133,6 +135,8 @@ class StatefulAgentWorkflow @Inject constructor(
         const val VERIFICATION_CONVERSATION_MESSAGES = 30
         const val VERIFICATION_MESSAGE_MAX_CHARS = 1_500
         const val VERIFICATION_CONVERSATION_MAX_CHARS = 12_000
+        /** 快照交接的原文尾窗上限（字符）：控制在 ~1 万 token 内，接手会话首屏可承受。 */
+        const val INSTANT_HANDOFF_TAIL_LIMIT = 24_000
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"
         const val MODE_REMINDER_AUTO_FILE = "agent/auto-mode.md"
@@ -165,6 +169,8 @@ class StatefulAgentWorkflow @Inject constructor(
         )
         /** 压缩失败熔断：连续失败次数达到该值后暂停尝试。 */
         const val COMPACTION_FAILURES_TO_TRIP = 3
+        /** 同会话连续溢出恢复上限：达到后直接报错并提示快照交接，不再反复压缩空转（用户反馈的嵌套陷阱）。 */
+        const val MAX_OVERFLOW_RECOVERIES = 3
         /** 熔断后暂停的 LLM 调用轮数，期满恢复尝试。 */
         const val COMPACTION_PAUSE_ROUNDS = 10
         /** 压缩后工作集恢复：至多重读的最近编辑文件数与总字符预算（头部截断，均分给剩余文件）。 */
@@ -182,6 +188,13 @@ class StatefulAgentWorkflow @Inject constructor(
      * 会白白丢掉一段前缀缓存。进程内缓存，重启后首轮再注入一次（无害）。
      */
     private val lastInjectedMode = java.util.concurrent.ConcurrentHashMap<String, AgentMode>()
+
+    /**
+     * 每会话连续溢出恢复次数（跨用户轮累计，正常完成一轮清零）：
+     * 大会话在小窗口模型上会出现「每轮都溢出→每轮都全量压缩」的循环（用户感知为反复压缩/嵌套陷阱），
+     * 据此逐级升级：第 2 次起丢工作集回注，达到上限直接报错并指向 /handoff 快照交接。
+     */
+    private val overflowRecoveryStreak = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /** 不可变状态树 */
     data class AgentSessionState(
@@ -431,6 +444,59 @@ class StatefulAgentWorkflow @Inject constructor(
         contextCompactor.buildHandoffSummary(history, provider, sessionId = null)
     }.getOrNull()
 
+    override suspend fun buildInstantHandoffDoc(sessionId: String): String? = runCatching {
+        val history = messagePersistenceUseCase.buildHistory(sessionId, "__handoff__")
+        if (history.isEmpty()) return@runCatching null
+
+        // 找最近一次压缩的结构化摘要：CONTEXT_COMPACTION_MARKER 用户消息后紧跟的助手消息，
+        // 或旧格式带前缀的独立摘要消息（与 ContextCompactor.extractPreviousSummary 同一识别规则）
+        var summaryEnd = -1
+        var summaryText = ""
+        for (index in history.indices.reversed()) {
+            val current = history[index]
+            val next = history.getOrNull(index + 1)
+            if (current is AgentMessage.UserMessage && current.content == CONTEXT_COMPACTION_MARKER && next is AgentMessage.AssistantMessage) {
+                summaryEnd = index + 1
+                summaryText = next.content.removePrefix(CONTEXT_SUMMARY_LEGACY_PREFIX).trimStart()
+                break
+            }
+            if (current is AgentMessage.AssistantMessage && current.content.startsWith(CONTEXT_SUMMARY_LEGACY_PREFIX)) {
+                summaryEnd = index
+                summaryText = current.content.removePrefix(CONTEXT_SUMMARY_LEGACY_PREFIX).trimStart()
+                break
+            }
+        }
+
+        // 摘要之后的全部原文；从未压缩过则取全部历史的投影，两者都从尾部截断到上限
+        val tailStart = if (summaryEnd >= 0) summaryEnd + 1 else 0
+        val tail = if (tailStart < history.size) {
+            history.subList(tailStart, history.size).joinToString("\n\n") { CompactionText.project(it) }.trim()
+        } else ""
+        val tailCapped = if (tail.length > INSTANT_HANDOFF_TAIL_LIMIT) tail.takeLast(INSTANT_HANDOFF_TAIL_LIMIT) else tail
+        if (summaryText.isBlank() && tailCapped.isBlank()) return@runCatching null
+
+        buildString {
+            append("<handoff>\n")
+            append("你是接手者。以下材料来自上一会话在交接时点的原样快照（未经模型改写）。请通读后向用户简短确认接手，然后继续未完成的工作。\n\n")
+            if (summaryText.isNotBlank()) {
+                append("## 最近一次压缩后的结构化摘要（权威基线）\n")
+                append(summaryText).append("\n\n")
+            }
+            if (tailCapped.isNotBlank()) {
+                if (summaryText.isNotBlank()) {
+                    append("## 摘要之后的最新进展（原文节选）\n")
+                } else {
+                    append("## 最近进展（原文节选，本会话从未压缩）\n")
+                }
+                append(tailCapped).append("\n\n")
+            }
+            append("## 交接说明\n")
+            append("- 快照在交接时点原样截取，未做压缩改写；")
+            append(if (summaryText.isNotBlank()) "含最近一次压缩摘要与其后的全部原文。" else "本会话从未压缩，仅含最近的原文窗口；如需更早细节请向用户索取。")
+            append("\n</handoff>")
+        }
+    }.getOrNull()
+
     /** 核心 Reducer，接收旧状态与 Action，返回新状态以及触发的副作用列表 (纯函数) */
     private fun reduce(
         state: AgentSessionState,
@@ -660,7 +726,15 @@ class StatefulAgentWorkflow @Inject constructor(
         var baselineUsage = if (currentContext.lastInputTokens > 0 && lastAssistantIndex >= 0) {
             (currentContext.history[lastAssistantIndex] as AgentMessage.AssistantMessage).inputTokens
         } else 0
-        var overflowRecoveryAttempted = false
+        // 连续溢出恢复（跨轮升级，见 overflowRecoveryStreak 字段注释）：正常完成一轮即清零。
+        val overflowSessionId = currentContext.sessionId
+        fun overflowRecoveryStreakNow(): Int = overflowSessionId?.let { overflowRecoveryStreak[it] } ?: 0
+        fun noteOverflowRecovery() {
+            overflowSessionId?.let { overflowRecoveryStreak[it] = (overflowRecoveryStreak[it] ?: 0) + 1 }
+        }
+        fun clearOverflowStreak() {
+            overflowSessionId?.let { overflowRecoveryStreak.remove(it) }
+        }
         // 单次任务 token 预算：本轮（一次用户请求）内全部 LLM 调用的 input+output 累计，
         // 触达预算时挂起询问用户；放行后本轮不再提示（budgetExempted），避免反复打断。
         var taskTokensUsed = 0
@@ -760,14 +834,16 @@ class StatefulAgentWorkflow @Inject constructor(
                             val (persistedImages, attachments) =
                                 if (aiResponse.images.isNotEmpty()) persistModelImages(aiResponse.images) else emptyList<AgentImage>() to emptyList()
                             callCompleted = true
-                            // 将本轮 reasoning 附加到 AIResponse，以便 reduce 时存入 AssistantMessage 并在下一轮回传
-                            if (aiResponse.stopReason == "model_context_window_exceeded" && !overflowRecoveryAttempted) {
-                                overflowRecoveryAttempted = true
+                            if (aiResponse.stopReason == "model_context_window_exceeded" && overflowRecoveryStreakNow() < MAX_OVERFLOW_RECOVERIES) {
+                                noteOverflowRecovery()
+                                // 连续第 2 次起跳过工作集回注：回注会把刚压缩完的上下文重新吹胖，
+                                // 是「每轮都溢出→每轮都全量压缩」循环的主因。
+                                val skipWorkingSetRestore = overflowRecoveryStreakNow() >= 2
                                 val recovery = contextCompactor.compactIfNeeded(state.messages, compactionProvider,
                                     currentContext.sessionId, force = true, windowProvider = aiProvider,
                                     systemPrompt = systemPrompt, tools = currentTools, currentInputTokens = predictedInput) { send(it) }
                                 if (recovery.compacted) {
-                                    val restore = currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
+                                    val restore = if (skipWorkingSetRestore) null else currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
                                         ?.takeIf { restoreFitsBudget(systemPrompt, recovery.messages, it, currentTools, inputBudget) }
                                     val restored = if (restore != null) recovery.messages + restore else recovery.messages
                                     if (restore != null) {
@@ -782,6 +858,7 @@ class StatefulAgentWorkflow @Inject constructor(
                             }
                             baselineEstimate = requestEstimate
                             baselineUsage = aiResponse.inputTokens
+                            clearOverflowStreak()
                             send(AgentEvent.ContextUsage(
                                 if (baselineUsage > 0) baselineUsage else requestEstimate, inputBudget, baselineUsage <= 0
                             ))
@@ -837,13 +914,15 @@ class StatefulAgentWorkflow @Inject constructor(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            if (!overflowRecoveryAttempted && stream.text.isEmpty() && stream.reasoning.isEmpty() && isContextOverflow(e)) {
-                                overflowRecoveryAttempted = true
+                            if (stream.text.isEmpty() && stream.reasoning.isEmpty() && isContextOverflow(e) && overflowRecoveryStreakNow() < MAX_OVERFLOW_RECOVERIES) {
+                                noteOverflowRecovery()
+                                // 连续第 2 次起跳过工作集回注（同 stop_reason 溢出路径）。
+                                val skipWorkingSetRestore = overflowRecoveryStreakNow() >= 2
                                 val recovery = contextCompactor.compactIfNeeded(state.messages, compactionProvider,
                                     currentContext.sessionId, force = true, windowProvider = aiProvider,
                                     systemPrompt = systemPrompt, tools = currentTools, currentInputTokens = predictedInput) { send(it) }
                                 if (recovery.compacted) {
-                                    val restore = currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
+                                    val restore = if (skipWorkingSetRestore) null else currentContext.sessionId?.let { buildWorkingSetRestoreMessage(it) }
                                         ?.takeIf { restoreFitsBudget(systemPrompt, recovery.messages, it, currentTools, inputBudget) }
                                     val restored = if (restore != null) recovery.messages + restore else recovery.messages
                                     if (restore != null) {
@@ -867,7 +946,11 @@ class StatefulAgentWorkflow @Inject constructor(
                             }
                             // 多 Key 的自动切换与重发已在 adapter 内完成（见 AIProvider.keySwitcher）；
                             // 走到这里说明不是 Key 问题、或候选 Key 已全部失败，直接上报原始错误。
-                            val errorText = "LLM 调用失败: ${e.message}"
+                            // 溢出多次仍放不下：给用户明确的出路（快照交接），避免无限压缩空转。
+                            val overflowAdvice = if (isContextOverflow(e)) {
+                                "；上下文多次溢出且压缩后仍放不下，请用「准备交接」或 /handoff 快照交接开启新会话"
+                            } else ""
+                            val errorText = "LLM 调用失败: ${e.message}$overflowAdvice"
                             actionQueue.addLast(AgentAction.LlmError(errorText))
                             callError = e.message ?: e.javaClass.simpleName
                         } finally {

@@ -483,7 +483,7 @@
     <string name="graph_conclusion_jump_source">去来源会话</string>
     <string name="graph_extract_off_hint">结论抽取已关闭：AI 不会自动记下结论。开启后 AI 每次压缩上下文时自动记住定案与坑（约几十 token）。</string>
     <string name="graph_extract_enable">开启</string>
-    <string name="graph_timeline_title">AI 学到的结论</string>
+    <string name="graph_timeline_title">结论</string>
     <string name="graph_no_relations">暂无关系</string>
     <string name="graph_delete_node">删除节点</string>
 
@@ -680,7 +680,7 @@
     <string name="chat_attachment_preview">预览 %1$s</string>
     <string name="chat_attachment_open">打开 %1$s</string>
 
-    <!-- 文件操作菜单（附件卡片 / 测试包 / 存储产物共用） -->
+    <!-- 文件操作菜单（附件卡片 / 交付物页共用） -->
     <string name="file_action_open">打开</string>
     <string name="file_action_install">安装</string>
     <string name="file_action_mt">用 MT 管理器打开</string>
@@ -1094,6 +1094,7 @@
     <string name="chat_goal_clear">清除目标</string>
     <string name="chat_error_title">请求失败</string>
     <string name="slash_command_compress_desc">手动触发当前会话的上下文压缩</string>
+    <string name="slash_command_handoff_desc">即时生成交接快照并复制到剪贴板，供新会话接手（不跑压缩）</string>
     <string name="slash_command_init_desc">分析当前工作区代码库，生成或改进项目规则 AGENTS.md</string>
     <string name="slash_command_usage_desc">查看今日与累计的调用次数、token 用量与预估费用</string>
     <string name="slash_command_goal_desc">设定会话持续目标，AI 自主循环推进至达成或预算耗尽</string>

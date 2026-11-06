@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 构建附件操作菜单条目（聊天文件卡片 / 测试包页共用）：
+ * 构建附件操作菜单条目（聊天文件卡片 / 交付物页共用）：
  * 打开或安装（APK）、用 MT 管理器打开（已安装时）、在文件管理器中查看、
  * 保存到手机（下载/AiCodeR）、分享、复制路径。
  *

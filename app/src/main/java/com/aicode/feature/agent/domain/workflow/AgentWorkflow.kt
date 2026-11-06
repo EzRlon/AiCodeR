@@ -134,6 +134,13 @@ interface AgentWorkflow {
     suspend fun buildHandoffSummary(sessionId: String): String?
 
     /**
+     * 快照交接：即时拼装「接手材料」——最近一次压缩的结构化摘要（若有）+ 其后的最新原文
+     * （从未压缩过则取最近原文窗口）。零模型调用、毫秒级返回，文本原样不做改写；
+     * 历史为空或拼不出有效内容返回 null。
+     */
+    suspend fun buildInstantHandoffDoc(sessionId: String): String?
+
+    /**
      * 为新建会话生成标题（供首条用户消息后异步调用）。
      * 默认跟随当前聊天模型；若配置了标题总结专用模型且可用则用之。
      * 生成失败或取不到标题时返回 null（调用方保留临时标题）。

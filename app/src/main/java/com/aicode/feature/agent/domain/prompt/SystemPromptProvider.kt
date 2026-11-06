@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.prompt
 import android.content.Context
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.ContainerInstaller
+import com.aicode.feature.agent.domain.memory.Memory
 import com.aicode.feature.agent.domain.memory.MemoryRepository
 import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.model.AgentContext
@@ -74,7 +75,9 @@ class SystemPromptProvider @Inject constructor(
                 return null
             }
 
-            val list = skills.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "（无描述）" } }" }
+            // 与子代理清单同一瘦身纪律：描述只取首行并截断——几十个技能的长描述每轮重发是 token 大头，
+            // 首行足以判断是否适用，细节正文由 /技能名 触发时才注入。
+            val list = skills.joinToString("\n") { "- ${it.name}: ${oneLineSummary(it.description)}" }
             val content = list
             cachedByKey[key] = content
             trimIfNeeded()
@@ -156,9 +159,11 @@ class SystemPromptProvider @Inject constructor(
 
             // 每行除「名称: 用途」外再标注读/写/命令能力，避免主代理把写任务派给只读子代理。
             // 按当前会话模式计算：PLAN 下子代理继承只读，能力要如实显示，否则主代理会照摘要派错活。
+            // 描述只取首行并截断：几十个子代理的完整描述每轮重发是 token 大头；
+            // 名称是派发键，首行足以选对人，需要细节再读定义文件。
             val list = entries.joinToString("\n") { entry ->
                 val definition = entry.definition
-                "- ${definition.name}: ${definition.description.ifBlank { "（无描述）" }}" +
+                "- ${definition.name}: ${definition.oneLineDescription()}" +
                     "｜${definition.capabilitySummary(ctx.mode)}"
             }
             val content = list
@@ -170,6 +175,8 @@ class SystemPromptProvider @Inject constructor(
         private fun trimIfNeeded() {
             if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
         }
+
+        private fun AgentDefinition.oneLineDescription(): String = oneLineSummary(description)
     }
 
     /** 专家团团长指令：会话召唤了专家团时注入（团长提示词 + 成员名单 + 团队结论）；子代理路径不注入。 */
@@ -328,12 +335,18 @@ class SystemPromptProvider @Inject constructor(
             val memories = try { memoryRepository.listMemories(ctx.projectRoot) } catch (e: Exception) {
                 return MemoryLists(null, null)
             }
+            // 记忆条目多时只列前 20 条，其余略去（正文按需 read）：
+            // 每轮重发全部记忆摘要会随积累线性膨胀（用户反馈的 token 大户之一）。
+            fun summarize(items: List<Memory>) =
+                items.take(MAX_MEMORY_LISTED)
+                    .joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "无" } }" }
+                    .let { if (items.size > MAX_MEMORY_LISTED) it + "\n- （其余 ${items.size - MAX_MEMORY_LISTED} 条略，正文按需读取）" else it }
             val global = memories.filter { it.scope == MemoryScope.GLOBAL }
                 .takeIf { it.isNotEmpty() }
-                ?.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "无" } }" }
+                ?.let { summarize(it) }
             val project = memories.filter { it.scope == MemoryScope.PROJECT }
                 .takeIf { it.isNotEmpty() }
-                ?.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "无" } }" }
+                ?.let { summarize(it) }
             val result = MemoryLists(global, project)
             cachedByKey[key] = result
             trimIfNeeded()
@@ -718,29 +731,28 @@ class SystemPromptProvider @Inject constructor(
 
         private fun projectNotesIndex(projectRoot: String): String {
             // 与记忆/技能同一套做法：直接读容器内目录（项目根在容器里就是工作区挂载点）。
+            // 只注入索引（篇名 + 首行摘要），全文按需读原文件：每轮重发全文是纯浪费（用户反馈的 token 大头）。
             val dir = File(projectRoot.trimEnd('/') + PROJECT_NOTES_DIR)
             if (!dir.isDirectory) return ""
             val files = dir.listFiles { f -> f.isFile && f.extension.equals("md", ignoreCase = true) }
                 ?: return ""
-            val sb = StringBuilder()
-            var remaining = MAX_NOTES_TOTAL_CHARS
+            val sb = StringBuilder("（按需阅读：以下是项目知识库索引，需要某篇的完整内容时按文件名读原文件）\n")
             for (file in files.sortedBy { it.name }.take(MAX_NOTES_LISTED)) {
-                if (remaining <= 0) break
-                val body = try {
+                val summary = try {
                     file.readText().trim()
                 } catch (e: Exception) {
                     continue
                 }
-                if (body.isEmpty()) continue
-                val chunk = if (body.length > MAX_NOTES_PER_FILE_CHARS) {
-                    body.take(MAX_NOTES_PER_FILE_CHARS) + "\n\n（笔记过长已截断，需要完整内容按文件名读取原文件）"
-                } else {
-                    body
-                }
-                val injected = chunk.take(remaining)
-                remaining -= injected.length
-                if (sb.isNotEmpty()) sb.append("\n\n")
-                sb.append("### ").append(file.name.removeSuffix(".md")).append('\n').append(injected)
+                if (summary.isEmpty()) continue
+                // 首行做摘要：跳过空行与标题行，取首个有信息量的行，超长截断
+                val firstLine = summary.lineSequence()
+                    .map { it.trim().trimStart('#', ' ', '-', '*', '》') }
+                    .firstOrNull { it.isNotBlank() }
+                    ?.take(MAX_NOTE_SUMMARY_CHARS)
+                    ?: ""
+                sb.append("- ").append(file.name.removeSuffix(".md"))
+                if (firstLine.isNotBlank()) sb.append("：").append(firstLine)
+                sb.append('\n')
             }
             return sb.toString().trim()
         }
@@ -753,10 +765,19 @@ class SystemPromptProvider @Inject constructor(
         const val SUBAGENT_BASE_FILE = "agent/subagent-base.md"
         const val SUBAGENT_CONTEXT_FILE = "agent/subagent-context.md"
         const val MAX_NOTES_LISTED = 30
-        /** 单篇笔记最多注入的字符数：超过截断，避免个别长文档吃满配额。 */
-        const val MAX_NOTES_PER_FILE_CHARS = 4_000
-        /** 知识库注入总字数上限：把上下文成本封住，超过后后面的笔记不再注入。 */
-        const val MAX_NOTES_TOTAL_CHARS = 12_000
+        /** 索引里每篇笔记的摘要行长度上限（字符）。 */
+        const val MAX_NOTE_SUMMARY_CHARS = 80
+        /** 清单条目描述的单行截断上限（字符）：子代理/技能长描述每轮重发是 token 大头，首行足以选对。 */
+        const val MAX_LIST_DESC_CHARS = 80
+        /** 记忆清单每组最多列出的条目数，其余略去（正文按需 read）。 */
+        const val MAX_MEMORY_LISTED = 20
+
+        /** 清单条目的单行摘要：取首个非空行并截断，细节正文按需读原文。 */
+        private fun oneLineSummary(text: String): String {
+            val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+            if (firstLine.isBlank()) return "（无描述）"
+            return if (firstLine.length > MAX_LIST_DESC_CHARS) firstLine.take(MAX_LIST_DESC_CHARS) + "…" else firstLine
+        }
         const val MAX_AGENTS_CHARS = 32_000
 
         /** 项目知识库目录（相对项目根）：领域笔记/决策/踩坑记录的沉淀位置。 */
