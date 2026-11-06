@@ -333,10 +333,13 @@ private fun CliModelPage(
             listOf("default", "openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-5")
         else -> listOf("sonnet", "opus", "haiku")
     }
-    // 供应商类型口径与桥的透传一致：Claude=Anthropic 型，Codex=OpenAI 型，OpenCode=两者；
-    // useFullUrl（完整 endpoint）三桥都无法安全还原 base，只透 Key 会打到官方端点，全部排除
+    // 供应商类型口径与桥的透传一致：Claude=Anthropic 型直透 + OpenAI 型全量（host 命中厂商端点表走直连，
+    // 未命中走本地 OpenAI→Anthropic 转换网关）；Codex=OpenAI 型，OpenCode=两者；
+    // useFullUrl 在 Anthropic/OpenCode 直透路径无法安全还原 base 排除，转换器路径可原样转发故放行
     val matchingProviders = when (engine) {
-        AgentEngines.CLAUDE_CODE -> providers.filter { it.type == ProviderType.ANTHROPIC && !it.useFullUrl }
+        AgentEngines.CLAUDE_CODE -> providers.filter {
+            it.type == ProviderType.ANTHROPIC && !it.useFullUrl || it.type == ProviderType.OPENAI
+        }
         AgentEngines.CODEX -> providers.filter { it.type == ProviderType.OPENAI && !it.useFullUrl }
         else -> providers.filter { (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC) && !it.useFullUrl }
     }
@@ -376,7 +379,9 @@ private fun CliModelPage(
                         .filter { it.isNotBlank() }
                         .distinct()
                     if (models.isEmpty()) return@forEach
-                    add(Row(label = provider.name))
+                    // CC 引擎下 OpenAI 型全部走自动适配（端点表直连或本地转换网关），标注区分
+                    val adapted = engine == AgentEngines.CLAUDE_CODE && provider.type == ProviderType.OPENAI
+                    add(Row(label = if (adapted) provider.name + "（自动适配）" else provider.name))
                     models.forEach { model ->
                         // OpenCode 的模型串带 provider 前缀（与桥内 provider 注入同源）；Claude/Codex 用裸模型名
                         val ref = if (engine == AgentEngines.OPENCODE) {

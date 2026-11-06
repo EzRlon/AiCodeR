@@ -100,6 +100,26 @@ class ClaudeCodeBridge @Inject constructor(
     private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun mcpConfigPath(): String = bridgeDir() + "/mcp-config.json"
 
+    private fun ccKeyBase(providerId: String): String = providerId.replace(Regex("[^\\w.-]"), "_")
+
+    /** 挂给 claude `--settings` 的私有设置（当前只有 apiKeyHelper）。 */
+    private fun ccSettingsFile(): String = bridgeDir() + "/cc-settings.json"
+
+    private fun ccKeyFile(providerId: String): String =
+        bridgeDir() + "/cc-key-" + ccKeyBase(providerId) + ".key"
+
+    /** 密钥经 claude 的 apiKeyHelper 从私有文件读（每回合重写，容器 rootfs 重置自愈）；写失败返回 null（回退 env 透传）。 */
+    private suspend fun writeCcKeySettings(providerId: String, keyContent: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val keyFile = ccKeyFile(providerId)
+                fileAccess.writeFile(keyFile, keyContent, overwrite = true)
+                val settingsPath = ccSettingsFile()
+                fileAccess.writeFile(settingsPath, """{"apiKeyHelper":"cat '$keyFile'"}""", overwrite = true)
+                settingsPath
+            }.onFailure { e -> FileLogger.w(TAG, "写引擎密钥文件失败: ${e.message}") }.getOrNull()
+        }
+
     /** App 智能体定义生成给 claude `--agents` 的文件（App 管理区，不写用户 .claude/agents）。 */
     private fun agentsConfigPath(): String = bridgeDir() + "/agents.json"
 
@@ -131,7 +151,7 @@ class ClaudeCodeBridge @Inject constructor(
      */
     suspend fun authHint(providerId: String? = null): String? {
         if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
-        if (transmittableAnthropicProvider(providerId) != null) return null
+        if (resolveCcProvider(providerId) != null) return null
         cachedAuthHint?.let { cached ->
             if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
         }
@@ -152,19 +172,30 @@ class ClaudeCodeBridge @Inject constructor(
         }.getOrNull() ?: return null // 容器未就绪等场景不拦截，交给可用性/流中错误链路
         if (probe.output.contains("present")) return null
         return "Claude Code 尚未登录：请二选一——① 在终端执行 aicode（或直接运行 claude）完成一次交互式登录；" +
-            "② 在 设置 → 模型 添加 Anthropic 类型的提供商并填入 API Key，切引擎时会自动透传给 claude。" +
+            "② 在 设置 → 模型 添加 Anthropic 类型的提供商（OpenAI 类型也支持：厂商端点直连或本地协议转换）并填入 API Key（经私有文件注入，不进环境变量），切引擎时会自动透传给 claude。" +
             "若你已在容器内自行配置 ANTHROPIC_API_KEY，可忽略本提示。"
     }
 
-    /** App 内已配置可用 Key 的 Anthropic 提供商（用于透传；无则 null，claude 走自身 oauth）。
-     *  [providerId] 非空时优先解析该供应商（会话选定的 App 供应商模型），不可用再回退首个可用。 */
-    private suspend fun transmittableAnthropicProvider(providerId: String? = null): com.aicode.feature.settings.domain.model.AIProviderConfig? =
+    /** CC 引擎第三方直连解析三态：Anthropic 型直透（route=null, viaConverter=false）；OpenAI 型 host 命中
+     *  厂商端点表（route≠null）自动换算；OpenAI 型未命中走本地协议转换网关（viaConverter=true）。 */
+    private class CcResolution(
+        val provider: com.aicode.feature.settings.domain.model.AIProviderConfig,
+        val route: VendorAnthropicRoute?,
+        val viaConverter: Boolean,
+    )
+
+    private suspend fun resolveCcProvider(providerId: String? = null): CcResolution? =
         runCatching {
             val all = aiProviderRepository.getAllProviders().first()
-            providerId?.let { id ->
-                all.firstOrNull { it.id == id && it.type == ProviderType.ANTHROPIC && it.isEnabled && it.hasUsableApiKey }
-            } ?: all.firstOrNull {
-                it.type == ProviderType.ANTHROPIC && it.isEnabled && it.hasUsableApiKey
+            fun usable(p: com.aicode.feature.settings.domain.model.AIProviderConfig) =
+                p.isEnabled && p.hasUsableApiKey && !p.useFullUrl
+            val match = providerId?.let { id ->
+                all.firstOrNull { it.id == id && (usable(it) || (it.type == ProviderType.OPENAI && it.isEnabled && it.hasUsableApiKey)) }
+            } ?: all.firstOrNull { it.type == ProviderType.ANTHROPIC && usable(it) }
+                ?: all.firstOrNull { it.type == ProviderType.OPENAI && it.isEnabled && it.hasUsableApiKey }
+            match?.let { p ->
+                if (p.type == ProviderType.ANTHROPIC) CcResolution(p, null, false)
+                else CcResolution(p, EngineVendorCompat.routeForHost(p.baseUrl), true)
             }
         }.getOrNull()
 
@@ -226,6 +257,27 @@ class ClaudeCodeBridge @Inject constructor(
         writeBridgeAssets(port, sessionId, token = bridgeToken, projectPath = projectPath)
         val hasCliAgents = writeCliAgentsConfig()
 
+        // 供应商解析前置：settings（apiKeyHelper）与 env（BaseUrl/档位映射）两处共用
+        val ccProvider = resolveCcProvider(providerId)
+        var ccSettingsPath: String? = null
+        var converterBase: String? = null
+        if (ccProvider != null) {
+            val p = ccProvider.provider
+            if (ccProvider.viaConverter) {
+                // 本地 OpenAI→Anthropic 协议转换网关：上游 Key 注册在 App 侧，不经过 claude 环境；
+                // claude 需要非空 Key 才不走登录，写占位（网关忽略其认证头）
+                runCatching {
+                    val port = OpenAiCompatGateway.ensureStarted()
+                    val key = ccKeyBase(p.id)
+                    OpenAiCompatGateway.registerUpstream(key, p.baseUrl, p.firstUsableApiKey, p.useFullUrl)
+                    converterBase = OpenAiCompatGateway.converterBaseUrl(key, port)
+                }.onFailure { e -> FileLogger.w(TAG, "启动协议转换网关失败: ${e.message}") }
+                ccSettingsPath = writeCcKeySettings(p.id, "cc-openai-compat")
+            } else {
+                ccSettingsPath = writeCcKeySettings(p.id, p.firstUsableApiKey)
+            }
+        }
+
         val args = buildList {
             add("-p")
             add("--output-format"); add("stream-json")
@@ -240,6 +292,10 @@ class ClaudeCodeBridge @Inject constructor(
             }
             add("--permission-prompt-tool"); add("mcp__${MCP_SERVER_NAME}__${MCP_TOOL_NAME}")
             add("--mcp-config"); add(mcpConfigPath())
+            // 密钥不进环境变量：claude 的每个 Bash 子进程都继承 env，模型一句 env 就能把 key 打进
+            // 会话记录（cccodroid 实测踩坑）。apiKeyHelper 输出同时放 x-api-key 与 Bearer 两种头，
+            // 官方与第三方（Bearer）全部覆盖
+            ccSettingsPath?.let { add("--settings"); add(it) }
             // 中文系统下让模型用中文回复（Claude Code 界面本身没有本地化，官方 issue #31413；
             // settings.json 的 language 只影响回复语言且不随命令行生效，用原生 append 扩展点最直接）
             EngineLocale.replyLanguageDirective()?.let { directive ->
@@ -256,21 +312,44 @@ class ClaudeCodeBridge @Inject constructor(
             // 本体能力桥的数据工具需要知道容器内 .aicode 根与当前项目根（容器内路径）
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
-            // App 内已配 Anthropic key 时透传给 claude（免 oauth 登录）；自定义 baseUrl 一并透传支持反代；
-            // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
-            transmittableAnthropicProvider(providerId)?.let { p ->
-                put("ANTHROPIC_API_KEY", p.firstUsableApiKey) // 多 Key 模式恒取首把可用 Key，与 App 内轮换调度不同步（见 P2-6）
-                // useFullUrl 的 baseUrl 是完整 endpoint（含路径），无法安全还原 base，只透 key 不透 URL
-                if (!p.useFullUrl) {
-                    val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
-                    if (base.isNotEmpty() && !base.contains("api.anthropic.com")) {
-                        put("ANTHROPIC_BASE_URL", base)
+            // 供应商凭据经 apiKeyHelper 从私有文件读（不进 env）；env 只透 BaseUrl/档位映射/厂商变量。
+            // 密钥文件写入失败的回合回退 env 透传保功能（转换器路径 env 里无真 Key，回退仅用于直透/厂商路由）
+            ccProvider?.let { cc ->
+                val p = cc.provider
+                if (ccSettingsPath == null && !cc.viaConverter) {
+                    put("ANTHROPIC_API_KEY", p.firstUsableApiKey) // 多 Key 模式恒取首把可用 Key，与 App 内轮换调度不同步（见 P2-6）
+                }
+                val base = when {
+                    cc.route != null -> cc.route.baseUrl
+                    cc.viaConverter -> converterBase
+                    else -> p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
+                }
+                if (!base.isNullOrEmpty() && !base.contains("api.anthropic.com")) {
+                    put("ANTHROPIC_BASE_URL", base)
+                }
+                // 第三方端点不认 claude-* 档位别名，不映射的话子代理的 haiku 档请求直接 400；
+                // 厂商路由用表内档位，转换器路径无 fastModel 概念，全部档位映射到同一模型
+                val main = model?.takeIf { it.isNotBlank() }
+                    ?: cc.route?.defaultModel
+                    ?: p.selectedModel.takeIf { it.isNotBlank() }
+                    ?: p.models.firstOrNull { it.isNotBlank() }
+                val fast = cc.route?.fastModel ?: main
+                if (cc.route != null || cc.viaConverter) {
+                    if (main != null) {
+                        put("ANTHROPIC_MODEL", main)
+                        put("ANTHROPIC_DEFAULT_OPUS_MODEL", main)
+                        put("ANTHROPIC_DEFAULT_SONNET_MODEL", main)
                     }
+                    fast?.let { f ->
+                        put("ANTHROPIC_DEFAULT_HAIKU_MODEL", f)
+                        put("ANTHROPIC_SMALL_FAST_MODEL", f)
+                    }
+                    cc.route?.extraEnv?.forEach { (k, v) -> put(k, v) }
                 }
             }
         }
 
-        FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath authViaKey=${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
+        FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath auth=helper:${ccSettingsPath != null} envFallback:${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
         // 进程孵化阻塞，移出主线程（发版 optimizer P1-1）
         val process = withContext(Dispatchers.IO) {
             containerEngine.startStdioProcess("claude", args, projectPath, extraEnv, resolveRuntimeProfile())
