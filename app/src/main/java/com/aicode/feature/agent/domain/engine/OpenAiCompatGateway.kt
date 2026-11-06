@@ -235,7 +235,8 @@ object OpenAiCompatGateway {
     /** Anthropic /v1/messages 请求体 → OpenAI chat/completions 请求体。 */
     internal fun buildOpenAiRequest(a: JsonObject): JsonObject = buildJsonObject {
         put("model", a["model"]?.jsonPrimitive?.contentOrNull ?: "")
-        a["max_tokens"]?.jsonPrimitive?.contentOrNull?.let { put("max_tokens", it) }
+        // max_tokens 是数值，原样透传；转字符串会被严格 OpenAI 端点按类型错误拒绝
+        a["max_tokens"]?.let { put("max_tokens", it) }
         a["temperature"]?.let { put("temperature", it) }
         a["top_p"]?.let { put("top_p", it) }
         a["stream"]?.let { put("stream", it) }

@@ -2653,9 +2653,12 @@ class AIAgentViewModel @Inject constructor(
                 } else {
                     val requestText = (request + "\n" + modelRequest).lowercase()
                     val historyText = history.joinToString("\n") { msg ->
+                        // 拼入工具调用/工具结果名：MCP 粘性准入（历史出现过调用即持续放行）依赖它
                         when (msg) {
                             is AgentMessage.UserMessage -> msg.content
-                            is AgentMessage.AssistantMessage -> msg.content
+                            is AgentMessage.AssistantMessage ->
+                                msg.content + "\n" + msg.toolCalls.joinToString("\n") { it.name }
+                            is AgentMessage.ToolResultMessage -> "${msg.toolName}\n${msg.result}"
                             else -> ""
                         }
                     }

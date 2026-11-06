@@ -195,7 +195,11 @@ class ClaudeCodeBridge @Inject constructor(
                 ?: all.firstOrNull { it.type == ProviderType.OPENAI && it.isEnabled && it.hasUsableApiKey }
             match?.let { p ->
                 if (p.type == ProviderType.ANTHROPIC) CcResolution(p, null, false)
-                else CcResolution(p, EngineVendorCompat.routeForHost(p.baseUrl), true)
+                else {
+                    // 命中厂商端点表→直连（真 Key），未命中才走本地协议转换网关
+                    val route = EngineVendorCompat.routeForHost(p.baseUrl)
+                    CcResolution(p, route, route == null)
+                }
             }
         }.getOrNull()
 
@@ -258,7 +262,7 @@ class ClaudeCodeBridge @Inject constructor(
         val hasCliAgents = writeCliAgentsConfig()
 
         // 供应商解析前置：settings（apiKeyHelper）与 env（BaseUrl/档位映射）两处共用
-        val ccProvider = resolveCcProvider(providerId)
+        var ccProvider = resolveCcProvider(providerId)
         var ccSettingsPath: String? = null
         var converterBase: String? = null
         if (ccProvider != null) {
@@ -266,13 +270,19 @@ class ClaudeCodeBridge @Inject constructor(
             if (ccProvider.viaConverter) {
                 // 本地 OpenAI→Anthropic 协议转换网关：上游 Key 注册在 App 侧，不经过 claude 环境；
                 // claude 需要非空 Key 才不走登录，写占位（网关忽略其认证头）
-                runCatching {
+                val started = runCatching {
                     val port = OpenAiCompatGateway.ensureStarted()
                     val key = ccKeyBase(p.id)
                     OpenAiCompatGateway.registerUpstream(key, p.baseUrl, p.firstUsableApiKey, p.useFullUrl)
                     converterBase = OpenAiCompatGateway.converterBaseUrl(key, port)
-                }.onFailure { e -> FileLogger.w(TAG, "启动协议转换网关失败: ${e.message}") }
-                ccSettingsPath = writeCcKeySettings(p.id, "cc-openai-compat")
+                }.onFailure { e -> FileLogger.w(TAG, "启动协议转换网关失败: ${e.message}") }.isSuccess && converterBase != null
+                if (started) {
+                    ccSettingsPath = writeCcKeySettings(p.id, "cc-openai-compat")
+                } else {
+                    // 网关不可用：本轮不注入（占位 Key+OpenAI 模型名直连官方只会 401/400），交给上层报错
+                    FileLogger.w(TAG, "转换网关不可用，本轮跳过供应商注入: ${p.id}")
+                    ccProvider = null
+                }
             } else {
                 ccSettingsPath = writeCcKeySettings(p.id, p.firstUsableApiKey)
             }
