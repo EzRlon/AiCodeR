@@ -424,7 +424,9 @@ object AgentModule {
         messageParentTool: MessageParentTool,
         browserTool: BrowserTool,
         fixLedgerTool: com.aicode.feature.fixledger.domain.tool.FixLedgerTool,
-        taskLedgerTool: com.aicode.feature.agent.domain.tool.ledger.TaskLedgerTool
+        taskLedgerTool: com.aicode.feature.agent.domain.tool.ledger.TaskLedgerTool,
+        knowledgeSearchTool: com.aicode.feature.agent.domain.tool.knowledge.KnowledgeSearchTool,
+        knowledgeSaveTool: com.aicode.feature.agent.domain.tool.knowledge.KnowledgeSaveTool
     ): ToolRegistry {
         return ToolRegistry().apply {
             register("readFile", readFileTool)
@@ -456,6 +458,8 @@ object AgentModule {
             register("browser", browserTool)
             register("fixledger", fixLedgerTool)
             register("taskLedger", taskLedgerTool)
+            register("kb_search", knowledgeSearchTool)
+            register("kb_save", knowledgeSaveTool)
         }
     }
 

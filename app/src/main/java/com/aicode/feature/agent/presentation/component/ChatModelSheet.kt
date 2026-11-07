@@ -50,6 +50,7 @@ import com.aicode.feature.agent.domain.engine.CliModelRef
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ModelMetadata
+import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import com.aicode.feature.settings.presentation.component.ModelSelectionContent
@@ -109,7 +110,12 @@ internal fun ModelIconButton(
     cliModel: String? = null,
     /** CLI 引擎会话选定的 App 供应商（供应商模型用）；null = 引擎自带模型。 */
     cliProviderId: String? = null,
-    onSelectCliModel: (providerId: String?, model: String) -> Unit = { _, _ -> }
+    onSelectCliModel: (providerId: String?, model: String) -> Unit = { _, _ -> },
+    /** 会话引擎切换回调；null = 隐藏引擎切换入口。 */
+    onSetEngine: ((String?) -> Boolean)? = null,
+    /** 思考强度：从控制行收纳至此（控制行为发送按钮居中腾位）。 */
+    reasoningEffort: ReasoningEffort? = null,
+    onReasoningEffortChange: ((ReasoningEffort) -> Unit)? = null
 ) {
     var showSheet by remember { mutableStateOf(false) }
     val effectiveShowSheet = showSheet || forceOpenSheet
@@ -153,7 +159,10 @@ internal fun ModelIconButton(
             onDismiss = {
                 showSheet = false
                 onSheetDismiss?.invoke()
-            }
+            },
+            onSetEngine = onSetEngine,
+            reasoningEffort = reasoningEffort,
+            onReasoningEffortChange = onReasoningEffortChange
         )
     }
 }
@@ -249,7 +258,7 @@ internal fun ReasoningEffortSelector(
     }
 }
 
-private fun ReasoningEffort.labelRes(): Int = when (this) {
+internal fun ReasoningEffort.labelRes(): Int = when (this) {
     ReasoningEffort.NONE -> com.aicode.R.string.chat_reasoning_effort_none
     ReasoningEffort.MINIMAL -> com.aicode.R.string.chat_reasoning_effort_minimal
     ReasoningEffort.LOW -> com.aicode.R.string.chat_reasoning_effort_low
@@ -257,6 +266,48 @@ private fun ReasoningEffort.labelRes(): Int = when (this) {
     ReasoningEffort.HIGH -> com.aicode.R.string.chat_reasoning_effort_high
     ReasoningEffort.XHIGH -> com.aicode.R.string.chat_reasoning_effort_xhigh
     ReasoningEffort.MAX -> com.aicode.R.string.chat_reasoning_effort_max
+}
+
+/** 思考强度选择区（模型弹窗内直列选项，不再嵌套弹层）。 */
+@Composable
+private fun ReasoningEffortSection(
+    effort: ReasoningEffort,
+    availableEfforts: List<ReasoningEffort>,
+    onChange: (ReasoningEffort) -> Unit
+) {
+    Column {
+        Text(
+            text = stringResource(R.string.chat_reasoning_effort),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.size(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            availableEfforts.forEach { candidate ->
+                val selected = candidate == effort
+                Text(
+                    text = stringResource(candidate.labelRes()),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier
+                        .background(
+                            if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            RoundedCornerShape(50)
+                        )
+                        .clickable { onChange(candidate) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -274,7 +325,10 @@ internal fun ModelSheet(
     modelMetadata: Map<String, ModelMetadata>,
     onSelectModel: (String, String) -> Unit,
     onSelectCliModel: (providerId: String?, model: String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSetEngine: ((String?) -> Boolean)? = null,
+    reasoningEffort: ReasoningEffort? = null,
+    onReasoningEffortChange: ((ReasoningEffort) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -290,6 +344,23 @@ internal fun ModelSheet(
                 .padding(bottom = Spacing.lg),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
+            // 引擎切换：会话维度，下一回合生效（回合进行中拒绝并提示）
+            if (onSetEngine != null) {
+                EngineSwitcherRow(currentEngine = engine, onSetEngine = onSetEngine)
+            }
+            // 思考强度：从控制行收纳至此（内置引擎会话）
+            if (engine == null && reasoningEffort != null && onReasoningEffortChange != null) {
+                val activeProvider = providers.firstOrNull { it.id == currentProviderId }
+                val availableEfforts = activeProvider?.let { p ->
+                    modelMetadata[modelMetadataKey(p.id, p.effectiveModel)]?.reasoningEffortOptions
+                        ?.let { ReasoningEffort.fromValues(it) }
+                }.orEmpty().ifEmpty { ReasoningEffort.entries }
+                ReasoningEffortSection(
+                    effort = reasoningEffort,
+                    availableEfforts = availableEfforts,
+                    onChange = onReasoningEffortChange
+                )
+            }
             if (engine != null) {
                 // CLI 会话：模型页 = 引擎自有模型 + App 供应商模型（同类型供应商）
                 CliModelPage(

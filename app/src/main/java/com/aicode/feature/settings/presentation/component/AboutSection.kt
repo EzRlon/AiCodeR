@@ -43,6 +43,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -278,6 +279,7 @@ private fun AboutHeaderCard(appIcon: androidx.compose.ui.graphics.ImageBitmap?) 
                     text = stringResource(R.string.about_app_title),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.5.sp,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(

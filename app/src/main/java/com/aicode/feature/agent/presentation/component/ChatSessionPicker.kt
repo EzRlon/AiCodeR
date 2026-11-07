@@ -130,7 +130,7 @@ fun ChatSessionRow(
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "CC",
+                            text = engineBadgeLabel(session.engine).orEmpty(),
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                             color = MaterialTheme.colorScheme.tertiary
                         )

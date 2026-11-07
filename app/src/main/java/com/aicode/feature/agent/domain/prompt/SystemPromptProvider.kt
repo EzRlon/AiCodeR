@@ -708,8 +708,8 @@ class SystemPromptProvider @Inject constructor(
     /**
      * 项目知识库（3.3）：`<项目>/.aicode/notes` 下各 md 文件。
      *
-     * 之前只注入「文件名 + 首行标题」的索引，模型几乎不会主动去读文件，
-     * 知识库等于没工作；改为直接注入正文，用总字数上限把上下文成本封住。
+     * 只注入「文件名 + 首行摘要」索引，全文按需读原文件：每轮重发全文是 token 大头（用户反馈）。
+     * 索引构建实现在 CliKnowledgeInjection.notesIndex（与 CLI 引擎桥同源）。
      */
     private inner class ProjectNotesSource : PromptSource {
         private val cachedByKey = ConcurrentHashMap<SourceCacheKey, String>()
@@ -719,7 +719,7 @@ class SystemPromptProvider @Inject constructor(
             val key = SourceCacheKey(ctx.sessionId, ctx.projectRoot)
             cachedByKey[key]?.let { return it.ifEmpty { null } }
             val content = try {
-                projectNotesIndex(ctx.projectRoot)
+                com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection.notesIndex(ctx.projectRoot)
             } catch (e: Exception) {
                 FileLogger.w(TAG, "扫描项目知识库失败: ${e.message}", e)
                 return null
@@ -727,34 +727,6 @@ class SystemPromptProvider @Inject constructor(
             cachedByKey[key] = content
             if (cachedByKey.size > SOURCE_CACHE_LIMIT) cachedByKey.clear()
             return content.ifEmpty { null }
-        }
-
-        private fun projectNotesIndex(projectRoot: String): String {
-            // 与记忆/技能同一套做法：直接读容器内目录（项目根在容器里就是工作区挂载点）。
-            // 只注入索引（篇名 + 首行摘要），全文按需读原文件：每轮重发全文是纯浪费（用户反馈的 token 大头）。
-            val dir = File(projectRoot.trimEnd('/') + PROJECT_NOTES_DIR)
-            if (!dir.isDirectory) return ""
-            val files = dir.listFiles { f -> f.isFile && f.extension.equals("md", ignoreCase = true) }
-                ?: return ""
-            val sb = StringBuilder("（按需阅读：以下是项目知识库索引，需要某篇的完整内容时按文件名读原文件）\n")
-            for (file in files.sortedBy { it.name }.take(MAX_NOTES_LISTED)) {
-                val summary = try {
-                    file.readText().trim()
-                } catch (e: Exception) {
-                    continue
-                }
-                if (summary.isEmpty()) continue
-                // 首行做摘要：跳过空行与标题行，取首个有信息量的行，超长截断
-                val firstLine = summary.lineSequence()
-                    .map { it.trim().trimStart('#', ' ', '-', '*', '》') }
-                    .firstOrNull { it.isNotBlank() }
-                    ?.take(MAX_NOTE_SUMMARY_CHARS)
-                    ?: ""
-                sb.append("- ").append(file.name.removeSuffix(".md"))
-                if (firstLine.isNotBlank()) sb.append("：").append(firstLine)
-                sb.append('\n')
-            }
-            return sb.toString().trim()
         }
     }
 
@@ -764,10 +736,6 @@ class SystemPromptProvider @Inject constructor(
         const val CLAUDE_FILE = "CLAUDE.md"
         const val SUBAGENT_BASE_FILE = "agent/subagent-base.md"
         const val SUBAGENT_CONTEXT_FILE = "agent/subagent-context.md"
-        const val MAX_NOTES_LISTED = 30
-        /** 索引里每篇笔记的摘要行长度上限（字符）。 */
-        const val MAX_NOTE_SUMMARY_CHARS = 80
-        /** 清单条目描述的单行截断上限（字符）：子代理/技能长描述每轮重发是 token 大头，首行足以选对。 */
         const val MAX_LIST_DESC_CHARS = 80
         /** 记忆清单每组最多列出的条目数，其余略去（正文按需 read）。 */
         const val MAX_MEMORY_LISTED = 20
@@ -780,8 +748,6 @@ class SystemPromptProvider @Inject constructor(
         }
         const val MAX_AGENTS_CHARS = 32_000
 
-        /** 项目知识库目录（相对项目根）：领域笔记/决策/踩坑记录的沉淀位置。 */
-        const val PROJECT_NOTES_DIR = "/.aicode/notes"
         /** 会话级缓存 key 数量上限：超过后整体清空，仅防长期累积；正常会话数远小于此。 */
         const val SOURCE_CACHE_LIMIT = 32
         val LEADING_COMMENT = Regex("(?s)^\\s*<!--.*?-->\\s*")

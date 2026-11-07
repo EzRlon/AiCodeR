@@ -24,7 +24,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,6 +75,14 @@ import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
 import kotlinx.coroutines.launch
 
+/** 顶栏顶部余量：状态栏 inset 的 35% + 4dp——向状态栏靠近但不贴死，同时避开挖孔区。 */
+@Composable
+private fun statusBarComfortPadding(): Dp {
+    val density = LocalDensity.current
+    val inset = WindowInsets.statusBars.getTop(density)
+    return with(density) { (inset * 0.35f).toDp() + 4.dp }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatHeader(
@@ -101,7 +111,7 @@ internal fun ChatHeader(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .statusBarsPadding()
+                .padding(top = statusBarComfortPadding())
         ) {
             Row(
                 modifier = Modifier
@@ -118,6 +128,7 @@ internal fun ChatHeader(
                         Icon(
                             FeatherIcons.Menu,
                             contentDescription = stringResource(R.string.chat_open_sidebar),
+                            modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
@@ -164,6 +175,7 @@ internal fun ChatHeader(
                     Icon(
                         FeatherIcons.Plus,
                         contentDescription = stringResource(R.string.chat_new_session),
+                        modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -213,6 +225,7 @@ private fun WorkbenchIconButton(
             Icon(
                 icon,
                 contentDescription = contentDescription,
+                modifier = Modifier.size(20.dp),
                 tint = if (active) {
                     MaterialTheme.colorScheme.primary
                 } else {
@@ -247,7 +260,7 @@ private fun VncHeaderIconButton() {
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(28.dp)
                 .then(
                     if (overlayOpen) {
                         Modifier
@@ -262,6 +275,7 @@ private fun VncHeaderIconButton() {
             Icon(
                 FeatherIcons.Monitor,
                 contentDescription = stringResource(R.string.vnc_toggle_window),
+                modifier = Modifier.size(20.dp),
                 tint = if (overlayOpen) {
                     MaterialTheme.colorScheme.primary
                 } else {

@@ -283,7 +283,7 @@ class BackupManagerImpl @Inject constructor(
                 if (pw != null) {
                     "备份文件已损坏，或口令与备份文件不匹配"
                 } else {
-                    "不是有效的许愿码备份文件；如果这是加密备份，请输入导出口令"
+                    "不是有效的AiCodeR备份文件；如果这是加密备份，请输入导出口令"
                 },
                 e
             )
@@ -608,7 +608,7 @@ class BackupManagerImpl @Inject constructor(
             }
             val meta = metadata ?: run {
                 FileLogger.e(TAG, "导入失败：tar 中缺少 metadata.json")
-                error("不是有效的许愿码备份文件：缺少 metadata.json")
+                error("不是有效的AiCodeR备份文件：缺少 metadata.json")
             }
             FileLogger.i(TAG, "文件段还原完成，开始还原 DB 段")
             // 第二阶段：DB 段同事务，中途失败整体回滚，不会留下「一半会话已入库」。

@@ -170,7 +170,7 @@ import kotlinx.coroutines.withTimeout
 private val INPUT_BAR_MASK_HEIGHT = 110.dp
 
 /** 输入框高度上下限：超过上限后文本在框内滚动，右上角露出「展开」按钮。与 TextField 的 heightIn 一致。 */
-private val INPUT_FIELD_MIN_HEIGHT = 44.dp
+private val INPUT_FIELD_MIN_HEIGHT = 40.dp
 private val INPUT_FIELD_MAX_HEIGHT = 140.dp
 
 /** 模式说明条自动收起延时：切模式/进入非构建会话自动展开后，展示多久自动收起（用户不应长久固定显示）。 */
@@ -200,8 +200,8 @@ internal fun ChatInputBar(
     isBusy: Boolean,
     /** 长按发送键开始应用内语音识别（微信式「按住说话」）。 */
     onVoiceHoldStart: () -> Unit = {},
-    /** 松手：结束收音并等待识别结果。 */
-    onVoiceHoldFinish: () -> Unit = {},
+    /** 松手：结束收音并等待识别结果；原地松手=识别后直接发送，滑到「转文字」=结果填回输入框。 */
+    onVoiceHoldFinish: (transcribe: Boolean) -> Unit = {},
     /** 上滑取消：放弃本次语音。 */
     onVoiceHoldCancel: () -> Unit = {},
     /** 识别处理中（浮层显示「正在识别…」）。 */
@@ -219,6 +219,8 @@ internal fun ChatInputBar(
     onSelectModel: (String, String) -> Unit,
     /** 当前会话引擎（引擎切换）；null = 本体内置。 */
     sessionEngine: String? = null,
+    /** 会话引擎切换（对当前会话生效，下一回合起用新引擎）；返回 false = 回合进行中拒绝。 */
+    onSetSessionEngine: ((String?) -> Boolean)? = null,
     /** CLI 引擎会话的模型名（取自会话 model，供图标与勾选显示）。 */
     sessionCliModel: String? = null,
     /** CLI 引擎会话选定的 App 供应商（供应商模型用）。 */
@@ -304,6 +306,8 @@ internal fun ChatInputBar(
     // ── 语音「按住说话」：长按发送键录音，松手识别并发送；上滑取消。──
     val voiceContext = LocalContext.current
     var voiceHoldActive by remember { mutableStateOf(false) }
+    // 长按语音的手势分支，实时驱动浮层分支提示（微信式）；传对象引用给 SendButton 写、浮层读
+    val voiceDragTarget = remember { mutableStateOf(VoiceDragTarget.SEND) }
     val recordPermissionLauncher = rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -407,8 +411,8 @@ internal fun ChatInputBar(
                     // 绘制在图层 bounds 外会被裁掉，卡片上方无兄弟节点时环顶边会缺失。
                     .padding(top = 6.dp)
                     .padding(horizontal = Spacing.lg)
-                    // 底部只留极窄间隙：空闲高度极限压缩（用户反馈），卡片圆角本身已提供视觉呼吸。
-                    .padding(bottom = Spacing.xs)
+                    // 底部留窄间隙：空闲高度尽量压缩（用户反馈），但需盖住圆角屏底部弧形区。
+                    .padding(bottom = Spacing.sm)
                     .padding(bottom = imeInset)
             ) {
             if (filteredCommands.isNotEmpty()) {
@@ -538,7 +542,8 @@ internal fun ChatInputBar(
             if (voiceHoldActive || voiceProcessing || voiceTapActive) {
                 VoiceHoldOverlay(
                     processing = voiceProcessing,
-                    tapMode = voiceTapActive,
+                    tapMode = voiceTapActive && !voiceHoldActive,
+                    dragTarget = voiceDragTarget,
                     // 长按说话由松手结束，无需关闭按钮；点击聆听需要显式关闭
                     onCancel = if (voiceTapActive) onVoiceTapCancel else null
                 )
@@ -707,7 +712,11 @@ internal fun ChatInputBar(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = INPUT_FIELD_CONTENT_PADDING),
+                                    // 右侧给内嵌麦克风让位（36dp 按钮 + 4dp 间隙），不影响输入与光标
+                                    .padding(
+                                        start = INPUT_FIELD_CONTENT_PADDING,
+                                        end = INPUT_FIELD_CONTENT_PADDING + 40.dp
+                                    ),
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                                     color = MaterialTheme.colorScheme.onSurface
                                 ),
@@ -726,16 +735,49 @@ internal fun ChatInputBar(
                                     if (inputFieldValue.text.isEmpty()) {
                                         Text(
                                             stringResource(if (isBusy) R.string.chat_queue_hint else R.string.chat_input_placeholder),
-                                            style = MaterialTheme.typography.bodyLarge,
+                                            style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.fillMaxWidth()
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(end = 40.dp)
                                         )
                                     }
                                     inner()
                                 }
                             )
+                            // 内嵌麦克风：点击进入聆听模式；激活时亮起变色（primaryContainer 圆形底，
+                            // 各主题下与输入框底色对比都足够）；尺寸与控制行按钮统一（36dp + 20dp 图标）
+                            val voiceActive = voiceTapActive || voiceHoldActive
+                            IconButton(
+                                onClick = onVoiceInput,
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 2.dp)
+                                    .size(36.dp)
+                                    .then(
+                                        if (voiceActive) {
+                                            Modifier.background(
+                                                MaterialTheme.colorScheme.primaryContainer,
+                                                CircleShape
+                                            )
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                            ) {
+                                Icon(
+                                    FeatherIcons.Mic,
+                                    contentDescription = stringResource(R.string.chat_voice_input),
+                                    tint = if (voiceActive) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
 
                         if (inputOverflows) {
@@ -838,18 +880,10 @@ internal fun ChatInputBar(
                                 forceOpenSheet = forceOpenModelSheet,
                                 onSelectSuccessInOnboarding = onSelectModelInOnboarding,
                                 onSheetDismiss = onModelSheetDismiss,
+                                onSetEngine = onSetSessionEngine,
                                 modifier = Modifier.onboardingTarget(OnboardingStep.OPEN_MODEL_PICKER)
                             )
 
-                            if (workspaceViewModel != null) {
-                                WorkspaceIconButton(
-                                    viewModel = workspaceViewModel,
-                                    hasRunningSessions = hasRunningSessions,
-                                    onSwitchConfirmed = onSwitchWorkspaceConfirmed,
-                                    modifier = Modifier.size(36.dp),
-                                    iconSize = 20.dp
-                                )
-                            }
 
                             // 元数据未命中时（如中转站改了模型名）退回全部档位由用户自选：
                             // 这类模型可能强制开启推理，隐藏按钮会导致无法调档。
@@ -859,13 +893,7 @@ internal fun ChatInputBar(
                                         ?.let { ReasoningEffort.fromValues(it) }
                                 }.orEmpty().ifEmpty { ReasoningEffort.entries }
                             }
-                            ReasoningEffortSelector(
-                                effort = reasoningEffort,
-                                availableEfforts = availableEfforts,
-                                onChange = onReasoningEffortChange,
-                                enabled = !isBusy
-                            )
-
+                            // 思考强度：从控制行收纳进意图菜单（为发送按钮居中腾位）
                             Box {
                                 IntentIconButton(
                                     intentType = intentType,
@@ -877,6 +905,35 @@ internal fun ChatInputBar(
                                     modifier = Modifier.heightIn(max = 320.dp),
                                     scrollState = rememberScrollState(),
                                 ) {
+                                    // 思考强度：从控制行收纳至此
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        availableEfforts.forEach { candidate ->
+                                            val selected = candidate == reasoningEffort
+                                            Text(
+                                                text = stringResource(candidate.labelRes()),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = if (selected) {
+                                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                modifier = Modifier
+                                                    .background(
+                                                        if (selected) {
+                                                            MaterialTheme.colorScheme.primaryContainer
+                                                        } else {
+                                                            MaterialTheme.colorScheme.surfaceVariant
+                                                        },
+                                                        RoundedCornerShape(50)
+                                                    )
+                                                    .clickable { if (!isBusy) onReasoningEffortChange(candidate) }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                            )
+                                        }
+                                    }
                                     MessageIntentMenuItem(
                                         intent = null,
                                         selected = intentType == null,
@@ -923,18 +980,6 @@ internal fun ChatInputBar(
                             }
                         }
                         // 工作中也可用：附件/语音输入随消息排队发送（AIChatPanel 统一队列链路）。
-                        UploadIconButton(
-                            enabled = true,
-                            icon = FeatherIcons.Plus,
-                            contentDescription = stringResource(R.string.chat_add_attachment),
-                            onClick = { showAttachmentSheet = true }
-                        )
-                        UploadIconButton(
-                            enabled = true,
-                            icon = FeatherIcons.Mic,
-                            contentDescription = stringResource(R.string.chat_voice_input),
-                            onClick = onVoiceInput
-                        )
                         SendButton(
                             canSend = canSend,
                             hasContent = hasContent,
@@ -953,10 +998,10 @@ internal fun ChatInputBar(
                                     recordPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                                 }
                             },
-                            onVoiceHoldFinish = {
+                            onVoiceHoldFinish = { transcribe ->
                                 if (voiceHoldActive) {
                                     voiceHoldActive = false
-                                    onVoiceHoldFinish()
+                                    onVoiceHoldFinish(transcribe)
                                 }
                             },
                             onVoiceHoldCancel = {
@@ -964,8 +1009,29 @@ internal fun ChatInputBar(
                                     voiceHoldActive = false
                                     onVoiceHoldCancel()
                                 }
-                            }
+                            },
+                            dragTarget = voiceDragTarget
                         )
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                        if (workspaceViewModel != null) {
+                            WorkspaceIconButton(
+                                viewModel = workspaceViewModel,
+                                hasRunningSessions = hasRunningSessions,
+                                onSwitchConfirmed = onSwitchWorkspaceConfirmed,
+                                modifier = Modifier.size(36.dp),
+                                iconSize = 20.dp
+                            )
+                        }
+                    UploadIconButton(
+                        enabled = true,
+                        icon = FeatherIcons.Plus,
+                        contentDescription = stringResource(R.string.chat_add_attachment),
+                        onClick = { showAttachmentSheet = true }
+                    )
+                        }
                     }
                 }
 
@@ -1270,7 +1336,10 @@ internal fun SendButton(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onVoiceHoldStart: () -> Unit = {},
-    onVoiceHoldFinish: () -> Unit = {},
+    /** 松手：结束收音并等待识别结果；原地松手=识别后直接发送，滑到「转文字」=结果填回输入框。 */
+    onVoiceHoldFinish: (transcribe: Boolean) -> Unit = {},
+    /** 实时手势分支，驱动语音浮层的分支高亮。 */
+    dragTarget: androidx.compose.runtime.MutableState<VoiceDragTarget>? = null,
     onVoiceHoldCancel: () -> Unit = {}
 ) {
     // AI 工作中：输入框为空显示停止按钮；有内容显示橙色发送（消息排队发送）；空闲时常规蓝色发送。
@@ -1358,7 +1427,7 @@ internal fun SendButton(
                                 }
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 currentOnVoiceHoldStart()
-                                var cancelled = false
+                                var target = VoiceDragTarget.SEND
                                 var released = false
                                 while (true) {
                                     val event = awaitPointerEvent()
@@ -1369,10 +1438,25 @@ internal fun SendButton(
                                         break
                                     }
                                     val dy = change.position.y - down.position.y
-                                    cancelled = dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx()
+                                    val dx = change.position.x - down.position.x
+                                    // 微信式三分支：上滑取消；下滑入分支区后按水平偏移分取消/转文字；回中=发送。
+                                    // 实时写入 dragTarget 供语音浮层高亮当前分支。
+                                    target = when {
+                                        dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx() -> VoiceDragTarget.CANCEL
+                                        dy > VOICE_BRANCH_SLIDE_DP.dp.toPx() && dx < -VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.CANCEL
+                                        dy > VOICE_BRANCH_SLIDE_DP.dp.toPx() && dx > VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.TRANSCRIBE
+                                        else -> VoiceDragTarget.SEND
+                                    }
+                                    dragTarget?.value = target
                                     change.consume()
                                 }
-                                if (released && !cancelled) currentOnVoiceHoldFinish() else currentOnVoiceHoldCancel()
+                                if (released && target != VoiceDragTarget.CANCEL) {
+                                    // 与微信一致：松手执行（发送/转文字）再振一下，与长按开始的振动区分阶段。
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    currentOnVoiceHoldFinish(target == VoiceDragTarget.TRANSCRIBE)
+                                } else {
+                                    currentOnVoiceHoldCancel()
+                                }
                             }
                         }
                     }
@@ -1401,11 +1485,21 @@ internal fun SendButton(
 /** 长按语音：手指向上滑动超过该距离视为取消（松手不发送）。 */
 private const val VOICE_CANCEL_SLIDE_DP = 60f
 
+/** 长按语音：下滑超过该距离进入底部分支区（取消/转文字）。 */
+private const val VOICE_BRANCH_SLIDE_DP = 60f
+
+/** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
+private const val VOICE_BRANCH_DX_DP = 50f
+
+/** 长按语音的手势分支：SEND=原地松手发送；CANCEL=取消丢弃；TRANSCRIBE=识别结果填回输入框不发送。 */
+internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
+
 /** 语音浮层：长按「按住说话」与点击聆听共用；识别期间文案切换，点击模式提示再点一下结束。 */
 @Composable
 private fun VoiceHoldOverlay(
     processing: Boolean,
     tapMode: Boolean = false,
+    dragTarget: androidx.compose.runtime.State<VoiceDragTarget>? = null,
     onCancel: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -1436,6 +1530,8 @@ private fun VoiceHoldOverlay(
                     when {
                         processing -> R.string.chat_voice_processing
                         tapMode -> R.string.chat_voice_listening_hint
+                        dragTarget?.value == VoiceDragTarget.CANCEL -> R.string.chat_voice_release_cancel
+                        dragTarget?.value == VoiceDragTarget.TRANSCRIBE -> R.string.chat_voice_release_transcribe
                         else -> R.string.chat_voice_release_send
                     }
                 ),
@@ -1462,6 +1558,44 @@ private fun VoiceHoldOverlay(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp)
             )
+        }
+        // 微信式分支提示：手指滑入对应区域时高亮（长按模式才显示）
+        if (!processing && !tapMode && dragTarget != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.md)
+                    .padding(bottom = Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                listOf(
+                    VoiceDragTarget.CANCEL to stringResource(R.string.chat_voice_branch_cancel),
+                    VoiceDragTarget.TRANSCRIBE to stringResource(R.string.chat_voice_branch_transcribe)
+                ).forEach { (target, label) ->
+                    val active = dragTarget.value == target
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (active) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                if (active) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                RoundedCornerShape(Radius.sm)
+                            )
+                            .padding(vertical = 8.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
         }
     }
 }

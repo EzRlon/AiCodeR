@@ -13,6 +13,8 @@ import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.PathHomeResolver
+import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -231,7 +233,7 @@ class OpenCodeBridge @Inject constructor(
     ): Flow<AgentEvent> = flow {
         val bridgeToken = permissionBridgeServer.newToken()
         val port = permissionBridgeServer.ensureStarted(token = bridgeToken, sessionId = sessionId)
-        writeBridgeAssets(port, sessionId, token = bridgeToken, projectPath = projectPath)
+        writeBridgeAssets(port, sessionId, token = bridgeToken, projectPath = projectPath, userMessage = userRequest)
 
         // 会话选定 App 供应商：自定义端点时需注入 provider 段（模型引用串指向注入键），官方端点只透 Key
         val selectedProvider = resolveProvider(providerId)
@@ -493,13 +495,20 @@ class OpenCodeBridge @Inject constructor(
     // ── 桥接资产 ──────────────────────────────────────────────────
 
     /** 每回合确保 aicode_bridge 脚本就位（与 ClaudeCodeBridge/CodexBridge 共用同一 mjs 源）。 */
-    private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?) =
+    private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?, userMessage: String?) =
         assetsMutex.withLock {
             runCatching {
                 fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
                 // 中文回复规则文件：由 OPENCODE_CONFIG_CONTENT 的 instructions 引用
                 EngineLocale.replyLanguageDirective()?.let { directive ->
                     fileAccess.writeFile(languageRulePath(), directive, overwrite = true)
+                }
+                // 知识注入块（知识库索引 + 世界书命中，与内置引擎/另两桥同源）；无内容时删旧文件防陈旧注入
+                val knowledge = CliKnowledgeInjection.build(projectPath ?: "", userMessage.orEmpty())
+                if (knowledge != null) {
+                    fileAccess.writeFile(knowledgeContextPath(), knowledge, overwrite = true)
+                } else {
+                    File(knowledgeContextPath()).delete()
                 }
             }.onFailure { e ->
                 FileLogger.e(TAG, "写桥接资产失败", e)
@@ -572,12 +581,19 @@ class OpenCodeBridge @Inject constructor(
         })
         if (agentsJson != null) put("agent", agentsJson)
         if (customProviderJson != null) put("provider", customProviderJson)
-        // 中文系统：用 instructions 引用 App 写入的规则文件（opencode 的 instructions 是文件路径列表，
-        // 不是文本）。写盘在 runTurnOnce 的 writeBridgeAssets 里，路径固定
-        EngineLocale.replyLanguageDirective()?.let { _ ->
-            put("instructions", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(languageRulePath()))))
+        // instructions 引用 App 写入的规则文件（opencode 的 instructions 是文件路径列表，不是文本）；
+        // 语言指令存在时带上，知识块文件由 writeBridgeAssets 写入（无内容时已删，按存在性判断）
+        val instructionFiles = buildList {
+            if (EngineLocale.replyLanguageDirective() != null) add(languageRulePath())
+            if (File(knowledgeContextPath()).isFile) add(knowledgeContextPath())
+        }
+        if (instructionFiles.isNotEmpty()) {
+            put("instructions", kotlinx.serialization.json.JsonArray(instructionFiles.map { JsonPrimitive(it) }))
         }
     }.toString()
+
+    /** 知识注入块的容器内路径（内容由 writeBridgeAssets 每回合写入/清理）。 */
+    private fun knowledgeContextPath(): String = bridgeDir() + "/knowledge-context.md"
 
     /** 中文回复规则的容器内路径（内容由 writeBridgeAssets 写入）。 */
     private fun languageRulePath(): String = bridgeDir() + "/language-rule.md"

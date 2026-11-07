@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">许愿码</string>
+    <string name="app_name">AiCodeR</string>
     <string name="chat_context_usage_estimated">预计占可用输入预算 %1$d%%</string>
     <string name="agent_input_budget_exceeded">上下文超过当前模型的可用输入预算，请缩短输入或减少工具定义。</string>
 
@@ -460,6 +460,10 @@
     <string name="engine_bridge_unavailable">Claude Code 引擎未就绪：请先在容器中安装 Claude Code（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_builtin">内置引擎</string>
     <string name="engine_builtin_sub">全套工具、专家团、标注、记忆、recall</string>
+    <string name="engine_pick_title">切换引擎（对当前会话生效）</string>
+    <string name="engine_switch_running">回合进行中，停止后可切换</string>
+    <string name="queue_interject_toast">已注入，将随本轮生效</string>
+    <string name="queue_passive_toast">已转交主 agent（不打断当前工作）</string>
     <string name="engine_go_login">去浏览器登录</string>
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
     <string name="cli_model_builtin_group">引擎模型</string>
@@ -606,7 +610,7 @@
     <string name="credential_auto_inject_title">自动注入凭证</string>
     <string name="credential_auto_inject_hint">把应用中保存的 git 凭据同步到远程服务器，仅对当前工作区根目录下的仓库生效，不影响你在服务器上手动使用 git</string>
     <string name="credential_auto_inject_prompt_title">自动注入 git 凭证？</string>
-    <string name="credential_auto_inject_prompt_body">是否让许愿码把应用中保存的 git 凭据同步到该远程服务器？仅对当前工作区根目录下的仓库生效，不会改动服务器的全局 git 配置。</string>
+    <string name="credential_auto_inject_prompt_body">是否让AiCodeR把应用中保存的 git 凭据同步到该远程服务器？仅对当前工作区根目录下的仓库生效，不会改动服务器的全局 git 配置。</string>
     <string name="credential_auto_inject_enable">开启</string>
     <string name="common_rename">重命名</string>
     <string name="common_hide">隐藏</string>
@@ -721,7 +725,7 @@
     <string name="about_upstream">AiCode</string>
     <string name="about_upstream_desc">开发者：jieapi</string>
     <string name="about_license">开源许可证</string>
-    <string name="about_developer">开发者：EzRlon</string>
+    <string name="about_developer">AiCodeR · 开发者：EzRlon</string>
     <string name="about_check_update">检查更新</string>
     <string name="about_checking_update">正在向 GitHub 查询最新版本…</string>
     <string name="about_up_to_date">已经是最新版本</string>
@@ -1204,7 +1208,7 @@
     <!-- Credential List -->
     <string name="credential_empty_hint">尚未添加凭据，点右上角 + 添加</string>
     <string name="credential_empty_title">暂无 Git 凭据</string>
-    <string name="credential_empty_desc">配置凭据后，许愿码可在推送或拉取代码仓库时自动完成身份认证</string>
+    <string name="credential_empty_desc">配置凭据后，AiCodeR可在推送或拉取代码仓库时自动完成身份认证</string>
 
     <!-- Credential Add / Quick Login -->
     <string name="credential_add_sheet_title">添加凭据</string>
@@ -2285,7 +2289,11 @@
     <string name="chat_session_id_copied">已复制会话 ID</string>
     <string name="log_delete_file">删除此日志文件</string>
     <string name="log_clear_all">清空全部日志</string>
-    <string name="chat_voice_release_send">松手转文字 · 上滑取消</string>
+    <string name="chat_voice_release_send">松开发送</string>
+    <string name="chat_voice_release_cancel">松手取消</string>
+    <string name="chat_voice_release_transcribe">松开 转文字</string>
+    <string name="chat_voice_branch_cancel">取消</string>
+    <string name="chat_voice_branch_transcribe">滑到这里 转文字</string>
     <string name="chat_voice_processing">正在识别…</string>
     <string name="chat_voice_listening_hint">正在聆听…再点一下结束</string>
     <string name="chat_voice_no_speech">没有听清，请重试</string>
@@ -2358,7 +2366,7 @@
     <string name="settings_vnc_auto_popup_desc">检测到容器图形服务运行时自动弹出 VNC 浮窗；默认关闭，仅手动打开浮窗</string>
     <string name="settings_float_ball_desc">跨应用显示任务小球：查看进度、快速发送、一键回会话（不读屏、不模拟操作）</string>
     <string name="settings_float_ball_no_permission">需要「显示在其他应用上层」权限；点此授权后即可开启</string>
-    <string name="float_ball_notification_title">许愿码悬浮球</string>
+    <string name="float_ball_notification_title">AiCodeR悬浮球</string>
     <string name="float_ball_notification_text">跨应用任务指挥已开启</string>
     <string name="handoff_prompt_action">交接开新会话</string>
     <string name="handoff_prompt_dismiss">暂不</string>
@@ -2616,7 +2624,7 @@
     <string name="crash_restart">重启应用</string>
     <string name="crash_exit">退出应用</string>
     <string name="crash_log_hint">完整日志文件位置：%1$s</string>
-    <string name="crash_report_title">许愿码崩溃报告</string>
+    <string name="crash_report_title">AiCodeR崩溃报告</string>
     <string name="crash_report_time">时间：%1$s</string>
     <string name="crash_report_version">版本：%1$s</string>
     <string name="crash_report_device">设备：%1$s</string>

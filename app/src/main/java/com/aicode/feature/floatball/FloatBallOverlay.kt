@@ -1000,11 +1000,25 @@ class FloatBallOverlay(
                                         },
                                         modifier = Modifier.widthIn(max = bubbleMaxWidth)
                                     ) {
+                                        // 折叠态超 6 行收起；remember 存在 item 组合内，条目滚出视口销毁后
+                                        // 自动回到折叠——「划走后一段时间自动折叠」用这个机制天然满足。
+                                        val foldable = msg.text.length > 160 || msg.text.count { it == '\n' } >= 6
+                                        var expanded by remember(msg.text) { mutableStateOf(false) }
                                         Text(
                                             text = msg.text,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                                            maxLines = if (!foldable || expanded) Int.MAX_VALUE else 6,
+                                            overflow = if (!foldable || expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
+                                            modifier = Modifier
+                                                .then(
+                                                    if (foldable) {
+                                                        Modifier.clickable { expanded = !expanded }
+                                                    } else {
+                                                        Modifier
+                                                    }
+                                                )
+                                                .padding(horizontal = 9.dp, vertical = 6.dp)
                                         )
                                     }
                                 }

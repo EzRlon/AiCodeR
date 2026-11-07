@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
+import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -392,9 +393,14 @@ class ClaudeCodeBridge @Inject constructor(
             // 官方与第三方（Bearer）全部覆盖
             ccSettingsPath?.let { add("--settings"); add(it) }
             // 中文系统下让模型用中文回复（Claude Code 界面本身没有本地化，官方 issue #31413；
-            // settings.json 的 language 只影响回复语言且不随命令行生效，用原生 append 扩展点最直接）
-            EngineLocale.replyLanguageDirective()?.let { directive ->
-                add("--append-system-prompt"); add(directive)
+            // settings.json 的 language 只影响回复语言且不随命令行生效，用原生 append 扩展点最直接）。
+            // 同时注入知识块：项目知识库索引 + 世界书命中（与内置引擎同源），并附使用引导
+            val systemExtras = listOfNotNull(
+                EngineLocale.replyLanguageDirective(),
+                CliKnowledgeInjection.build(projectPath ?: "", userRequest ?: "")
+            )
+            if (systemExtras.isNotEmpty()) {
+                add("--append-system-prompt"); add(systemExtras.joinToString("\n\n"))
             }
             // App 智能体定义随回合生成（能力全域打通批二）；无可用定义时不传该 flag
             if (hasCliAgents) { add("--agents"); add(agentsConfigPath()) }

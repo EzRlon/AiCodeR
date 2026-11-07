@@ -2402,6 +2402,11 @@ class AIAgentViewModel @Inject constructor(
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
+        android.widget.Toast.makeText(
+            context,
+            R.string.queue_interject_toast,
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
         deliverSystemEvent(
             sid,
             PendingNotification(
@@ -2423,6 +2428,11 @@ class AIAgentViewModel @Inject constructor(
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
+        android.widget.Toast.makeText(
+            context,
+            R.string.queue_passive_toast,
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
         if (sessionJobs[sid]?.isActive == true) {
             deliverSystemEvent(
                 sid,
@@ -3233,7 +3243,8 @@ class AIAgentViewModel @Inject constructor(
             workspacePath = old.workspacePath,
             providerId = old.providerId,
             model = old.model,
-            reasoningEffort = old.reasoningEffort
+            reasoningEffort = old.reasoningEffort,
+            engine = old.engine
         ).copy(
             title = handoffTitle(old.title),
             // 交接不丢现场：目标、模式、专家团一并带到新会话（goal 自主循环/专家团协作不因交接中断）。

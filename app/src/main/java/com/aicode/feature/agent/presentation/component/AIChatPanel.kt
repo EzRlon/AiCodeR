@@ -1488,6 +1488,11 @@ fun AIChatPanel(
         viewModel.maybeAutoDownloadVoiceModel()
     }
     var voiceProcessing by remember { mutableStateOf(false) }
+    // 微信式「松开发送」：长按原地松手时置 true，识别结果到达后直接发送而非进草稿。
+    // 不用 by 委托：需要在 sendRef 间接调用与 onVoiceHoldFinish 两处读写
+    val pendingAutoSend = remember { mutableStateOf(false) }
+    // 供 onVoiceResult（定义在前）间接调用 sendMessage：自动发送复用完整发送链路（队列/清草稿/贴底）
+    val sendRef = remember { mutableStateOf<(() -> Unit)?>(null) }
     // 点击聆听进行中（从开始持续到结果/错误到达；结果分流靠它区分点击与长按两种来源）
     var voiceTapActive by remember { mutableStateOf(false) }
     // 主动取消标记：系统识别器在 cancel() 后可能补一次 ERROR_CLIENT，据此静默吞掉
@@ -1530,6 +1535,12 @@ fun AIChatPanel(
         val t = text.trim()
         if (t.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.chat_voice_no_speech), Toast.LENGTH_SHORT).show()
+        } else if (pendingAutoSend.value) {
+            // 微信式「松开发送」：识别结果直接发出，不再进草稿确认阶段。
+            // sendMessage 定义在本块之后，经 sendRef 间接调用避免局部变量前向引用
+            pendingAutoSend.value = false
+            viewModel.updateInputDraft(t)
+            sendRef.value?.invoke()
         } else {
             // 识别文本一率先进输入框草稿、不直接发送：可编辑、删除（撤销）或直接发送——
             // 等价于「未发出语音」的可撤销确认阶段（AI 只接收文字，没有语音消息载体）。
@@ -1607,6 +1618,7 @@ fun AIChatPanel(
             }
         }
     }
+    sendRef.value = sendMessage
 
     // 切换会话 / 打开搜索命中：优先定位到目标消息，否则贴底并恢复跟随。
     LaunchedEffect(currentSessionId, messagesReady, pendingScroll, chatItems) {
@@ -2206,7 +2218,9 @@ fun AIChatPanel(
                     voiceTapActive = false
                     voiceController.start()
                 },
-                onVoiceHoldFinish = {
+                onVoiceHoldFinish = { transcribe ->
+                    // transcribe=false（原地松手）→ 识别后自动发送；true（滑到转文字）→ 填输入框可编辑
+                    pendingAutoSend.value = !transcribe
                     voiceProcessing = true
                     voiceController.finish()
                 },
@@ -2236,6 +2250,7 @@ fun AIChatPanel(
                     viewModel.setSessionProviderModel(p, m)
                 },
                 sessionEngine = sessionEngine,
+                onSetSessionEngine = { engine -> viewModel.setSessionEngine(engine) },
                 sessionCliModel = sessionCliModel,
                 sessionCliProviderId = sessionCliProviderId,
                 awaitingApproval = frameAwaitingApproval,

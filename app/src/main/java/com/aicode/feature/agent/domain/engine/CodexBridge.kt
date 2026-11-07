@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
+import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.EngineOptionsRepository
@@ -313,9 +314,14 @@ class CodexBridge @Inject constructor(
             add("-c"); add("mcp_servers.aicode_bridge.args=[\"${dataBridgeScript()}\"]")
             add("-c"); add(mcpEnvOverride(port, sessionId, token = bridgeToken, projectPath))
             // 中文系统下让模型用中文回复（Codex CLI 界面本身没有本地化，官方 issue #30060；
-            // 能控制的只有模型输出语言，走原生 developer_instructions 扩展点，不改用户 config.toml）
-            EngineLocale.replyLanguageDirective()?.let { directive ->
-                add("-c"); add("developer_instructions=${tomlString(directive)}")
+            // 能控制的只有模型输出语言，走原生 developer_instructions 扩展点，不改用户 config.toml）。
+            // 同时注入知识块（知识库索引 + 世界书命中）；TOML 重复 key 会覆盖，语言指令与知识块合并成一条
+            val developerExtras = listOfNotNull(
+                EngineLocale.replyLanguageDirective(),
+                CliKnowledgeInjection.build(containerWorkspacePath(), userRequest ?: "")
+            )
+            if (developerExtras.isNotEmpty()) {
+                add("-c"); add("developer_instructions=${tomlString(developerExtras.joinToString("\n\n"))}")
             }
             // 用户自装 MCP 自动映射（能力全域打通批一）：与 aicode_bridge 同样用 -c 内联，不写用户配置文件
             for (server in mcpConfigRepository.getEffectiveServers()) {
