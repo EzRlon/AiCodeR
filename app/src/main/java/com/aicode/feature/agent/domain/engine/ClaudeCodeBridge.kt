@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -709,10 +710,14 @@ class ClaudeCodeBridge @Inject constructor(
         val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull ?: return null
         val isError = (obj["is_error"] as? JsonPrimitive)?.content == "true" || subtype.startsWith("error")
         return if (isError) {
-            val err = obj["result"]?.jsonPrimitive?.contentOrNull
+            val detail = obj["result"]?.jsonPrimitive?.contentOrNull
                 ?: obj["error"]?.jsonPrimitive?.contentOrNull
+                ?: (obj["errors"] as? JsonArray)?.firstOrNull()?.jsonPrimitive?.contentOrNull
                 ?: "Claude Code 运行失败（$subtype）"
-            AgentEvent.Failed(error = err)
+            // claude 2.1.29x 把启动类失败包装成 error_during_execution 的 result 事件而非裸退出；
+            // 无论本回合是否已产出流式事件都按启动失败分类，是否重试由外层「已产出事件」门把关
+            if (subtype == "error_during_execution") throw classifyEarlyExit(detail)
+            AgentEvent.Failed(error = detail)
         } else {
             AgentEvent.Completed
         }
