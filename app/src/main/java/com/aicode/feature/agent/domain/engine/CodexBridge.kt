@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.engine
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
+import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
@@ -78,6 +79,9 @@ class CodexBridge @Inject constructor(
         )
 
         const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
+
+        /** 终端标签专用 CODEX_HOME：与用户 ~/.codex 隔离，避免覆盖其自定义 provider 与登录态。 */
+        const val CODEX_TAB_HOME_SUFFIX = "/codex-tab"
 
         /** App sessionId → codex thread_id 映射文件（容器内路径）。 */
         const val THREADS_FILE = "/codex-threads.json"
@@ -163,6 +167,53 @@ class CodexBridge @Inject constructor(
             }
         }.getOrNull()
 
+    /**
+     * 顶栏「Codex」终端标签的供应商注入：复用与 exec 相同的供应商解析与转换网关，往专用 CODEX_HOME
+     * 写 config.toml（不碰用户 ~/.codex），返回 env（CODEX_HOME + Key）供标签启动命令前置。
+     * [providerId] 传 App 默认供应商；无可用供应商或网关不可用时返回 null，标签按裸命令启动。
+     */
+    suspend fun cliTabInjection(providerId: String? = null): CliTabInjection? = runCatching {
+        val provider = transmittableOpenAIProvider(providerId) ?: return@runCatching null
+        val directResponsesBase = provider.takeIf { !it.useFullUrl }
+            ?.baseUrl?.trim()?.trimEnd('/')
+            ?.takeIf { it.isNotEmpty() && !it.contains("api.openai.com") }
+            ?.let { if (it.substringAfterLast('/').matches(Regex("v\\d+[a-z]*"))) it else "$it/v1" }
+        val needsConverter = directResponsesBase != null && !provider.useResponseApi
+        val providerBaseUrl = if (needsConverter) {
+            val port = OpenAiCompatGateway.ensureStarted()
+            val key = OpenAiCompatGateway.codexKey(provider.id)
+            OpenAiCompatGateway.registerUpstream(key, provider.baseUrl, provider.firstUsableApiKey, provider.useFullUrl)
+            OpenAiCompatGateway.codexConverterBaseUrl(key, port)
+        } else {
+            directResponsesBase
+        } ?: return@runCatching null
+        // 模型串可能带「供应商名或 id/」前缀，仅前缀命中当前供应商时剥离（聚合商真模型 id 里的 / 不动）
+        val bareModel = provider.selectedModel.takeIf { it.isNotBlank() }
+            ?.let { CliModelRef.bareModelName(it, provider.name, provider.id) }
+            ?: provider.models.firstOrNull { it.isNotBlank() }
+        val home = bridgeDir() + CODEX_TAB_HOME_SUFFIX
+        fileAccess.writeFile(
+            "$home/config.toml",
+            buildString {
+                bareModel?.let { append("model = ${tomlString(it)}\n") }
+                append("model_provider = \"aicode_provider\"\n")
+                append("check_for_update_on_startup = false\n")
+                append("[model_providers.aicode_provider]\n")
+                append("name = \"aicode\"\n")
+                append("base_url = ${tomlString(providerBaseUrl)}\n")
+                append("env_key = \"AICODE_CODEX_PROVIDER_KEY\"\n")
+            },
+            overwrite = true,
+        )
+        CliTabInjection(
+            env = mapOf(
+                "CODEX_HOME" to home,
+                "AICODE_CODEX_PROVIDER_KEY" to provider.firstUsableApiKey,
+                "OPENAI_API_KEY" to provider.firstUsableApiKey,
+            ),
+        )
+    }.onFailure { e -> FileLogger.w(TAG, "CLI 标签供应商注入失败: ${e.message}") }.getOrNull()
+
     private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
         val id = containerSettingsRepository.activeProfileIdFlow.first()
         val profiles = containerSettingsRepository.customProfilesFlow.first()
@@ -227,6 +278,30 @@ class CodexBridge @Inject constructor(
         // exec 非交互模式无审批弹窗：沙箱档位由引擎卡开关决定（默认 workspace-write，让工作区内命令自动执行、
         // 工作区外被挡；开关放开为 danger-full-access 时整个容器可读写）
         val sandboxMode = if (engineOptionsRepository.isCodexSandboxFullAccess()) "danger-full-access" else "workspace-write"
+        // codex 0.16x 实测无视 OPENAI_BASE_URL（仍连官方 wss 端点）：第三方 baseUrl 必须经
+        // -c model_providers 注入（codex 在 base_url 后直接拼 /responses，需保证末尾是版本段）；
+        // Key 另存专用环境变量供 env_key 读取
+        val provider = transmittableOpenAIProvider(providerId)
+        val directResponsesBase = provider?.takeIf { !it.useFullUrl }
+            ?.baseUrl?.trim()?.trimEnd('/')
+            ?.takeIf { it.isNotEmpty() && !it.contains("api.openai.com") }
+            ?.let { if (it.substringAfterLast('/').matches(Regex("v\\d+[a-z]*"))) it else "$it/v1" }
+        // 供应商未声明 Responses API 支持时，经容器内转换网关（Responses→chat）接入
+        val needsConverter = directResponsesBase != null && provider?.useResponseApi == false
+        val gatewayPort = if (needsConverter) OpenAiCompatGateway.ensureStarted() else 0
+        if (needsConverter) {
+            OpenAiCompatGateway.registerUpstream(
+                OpenAiCompatGateway.codexKey(provider!!.id),
+                provider.baseUrl,
+                provider.firstUsableApiKey,
+                provider.useFullUrl,
+            )
+        }
+        val providerBaseUrl = when {
+            needsConverter -> OpenAiCompatGateway.codexConverterBaseUrl(OpenAiCompatGateway.codexKey(provider!!.id), gatewayPort)
+            else -> directResponsesBase
+        }
+        val providerKeyEnv = providerBaseUrl?.let { "AICODE_CODEX_PROVIDER_KEY" }
         val args = buildList {
             add("exec")
             add("--json")
@@ -271,7 +346,19 @@ class CodexBridge @Inject constructor(
             }
             // 图片：base64 解码落盘到桥目录后经 -i 传入（codex 只接受文件路径）
             writeImageAssets(sessionId, images).forEach { path -> add("-i"); add(path) }
-            if (!model.isNullOrBlank() && model != "default") { add("-m"); add(model) }
+            if (!model.isNullOrBlank() && model != "default") {
+                // 会话存的模型串可能带「供应商名或id/」前缀；仅前缀命中当前供应商时剥离（z-ai/ 等真 id 不动）
+                val bareModel = CliModelRef.bareModelName(model, provider?.name, provider?.id)
+                add("-m"); add(bareModel)
+            }
+            if (providerBaseUrl != null) {
+                add("-c"); add("model_provider=aicode_provider")
+                add("-c"); add("model_providers.aicode_provider.name=\"aicode\"")
+                add("-c"); add("model_providers.aicode_provider.base_url=${tomlString(providerBaseUrl)}")
+                add("-c"); add("model_providers.aicode_provider.env_key=\"AICODE_CODEX_PROVIDER_KEY\"")
+            }
+            // 关启动更新自检：CLI 内置 Update now 走 npm 先删后装，弱网中断会把 codex 删空（曾致引擎 not found）
+            add("-c"); add("check_for_update_on_startup=false")
             if (effectiveResume) { add("resume"); add(resumeThreadId!!) }
             add("-") // 提示词走 stdin
         }
@@ -282,14 +369,9 @@ class CodexBridge @Inject constructor(
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
-            transmittableOpenAIProvider(providerId)?.let { p ->
+            provider?.let { p ->
                 put("OPENAI_API_KEY", p.firstUsableApiKey)
-                if (!p.useFullUrl) {
-                    val base = p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
-                    if (base.isNotEmpty() && !base.contains("api.openai.com")) {
-                        put("OPENAI_BASE_URL", base)
-                    }
-                }
+                providerKeyEnv?.let { put(it, p.firstUsableApiKey) }
             }
         }
         // 附件以容器路径告知（正文末尾，引擎用自身工具读取）

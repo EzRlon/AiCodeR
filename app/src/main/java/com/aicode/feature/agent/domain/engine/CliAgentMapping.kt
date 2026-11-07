@@ -35,13 +35,15 @@ internal object CliAgentMapping {
 
     /**
      * 一次遍历分出可映射与跳过两类（[engineBuiltinNames] 传该引擎自带 agent 名，小写比对）。
-     * 跳过原因：名称含非 ASCII 标识符字符 / 与引擎自带 agent 同名。
+     * 跳过原因：名称含非 [A-Za-z0-9_-] 字符、超长（>40，claude --agents 限制）/ 与引擎自带 agent 同名。
      */
     fun partition(agents: List<AgentDefinition>, engineBuiltinNames: Set<String> = emptySet()): Result {
         val mapped = ArrayList<AgentDefinition>(agents.size)
         val skipped = ArrayList<Skipped>()
         for (agent in agents) {
             when {
+                agent.name.length > 40 ->
+                    skipped += Skipped(agent, "名称超长（>40 字符，claude --agents 不接受）")
                 !isCliSafeName(agent.name) ->
                     skipped += Skipped(agent, "名称含非 ASCII 标识符字符")
                 agent.name.trim().lowercase() in engineBuiltinNames ->

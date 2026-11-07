@@ -141,4 +141,34 @@ class OpenAiCompatGatewayTest {
         assertNotNull(OpenAiCompatGateway.translateSseLine(state, "data: {}"))
         assertNull(OpenAiCompatGateway.translateSseLine(state, "data: {}"))
     }
+
+    @Test
+    fun `请求体按字节读取 中文不会被截断`() {
+        // Content-Length 是字节数；若按字符读，中文会让读取少若干字符后阻塞（引擎无响应根因）
+        val body = """{"messages":[{"role":"user","content":"你好世界"}]}"""
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        val raw = ("POST /cc-conv/k/v1/messages HTTP/1.1\r\n" +
+            "Host: 127.0.0.1\r\n" +
+            "Content-Type: application/json\r\n" +
+            "Content-Length: ${bytes.size}\r\n\r\n").toByteArray(Charsets.UTF_8) + bytes
+        val req = OpenAiCompatGateway.readHttpRequest(java.io.ByteArrayInputStream(raw))
+        assertNotNull(req)
+        assertEquals("/cc-conv/k/v1/messages", req!!.path)
+        assertEquals(body, req.body)
+        assertEquals("POST", req.method)
+    }
+
+    @Test
+    fun `chunked 请求体可解析`() {
+        val body = """{"content":"测试分块"}"""
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        val chunkSize = bytes.size.toString(16)
+        val raw = ("POST /passthru/k/v1/messages HTTP/1.1\r\n" +
+            "Transfer-Encoding: chunked\r\n\r\n" +
+            "$chunkSize\r\n").toByteArray(Charsets.UTF_8) + bytes +
+            "\r\n0\r\n\r\n".toByteArray(Charsets.UTF_8)
+        val req = OpenAiCompatGateway.readHttpRequest(java.io.ByteArrayInputStream(raw))
+        assertNotNull(req)
+        assertEquals(body, req!!.body)
+    }
 }

@@ -51,4 +51,13 @@ object CliModelRef {
             else -> base.contains("api.openai.com")
         }
     }
+
+    /**
+     * 旧版会话存的模型串可能带「供应商名或id/」前缀；仅当前缀命中该供应商时剥离。
+     * 不能盲目 substringAfter('/')：z-ai/glm-5.3-flash、deepseek-ai/ 等是真实含斜杠的模型 id。
+     */
+    fun bareModelName(model: String, providerName: String?, providerId: String?): String {
+        val owners = listOfNotNull(providerName, providerId).filter { it.isNotBlank() }
+        return if (owners.any { model.startsWith("$it/") }) model.substringAfter('/') else model
+    }
 }

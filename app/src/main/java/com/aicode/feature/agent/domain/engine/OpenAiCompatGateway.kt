@@ -4,20 +4,29 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.HttpURLConnection
@@ -42,7 +51,7 @@ object OpenAiCompatGateway {
 
     private data class Upstream(val baseUrl: String, val apiKey: String, val fullUrl: Boolean)
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startMutex = Mutex()
 
     @Volatile private var serverSocket: ServerSocket? = null
@@ -54,6 +63,9 @@ object OpenAiCompatGateway {
     suspend fun ensureStarted(): Int = startMutex.withLock {
         serverSocket?.let { return it.localPort }
         closed = false
+        // close() 会 cancel 掉旧 scope；协程作用域取消后不可复用，必须重建，
+        // 否则 launch 静默不跑：端口能连上但请求永远无人处理（引擎"失踪"）
+        if (!scope.isActive) scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         serverSocket = socket
         scope.launch { acceptLoop(socket) }
@@ -76,6 +88,115 @@ object OpenAiCompatGateway {
     /** claude 用的 ANTHROPIC_BASE_URL。 */
     fun converterBaseUrl(key: String, port: Int): String = "http://127.0.0.1:$port/cc-conv/$key"
 
+    /** claude 厂商/ANTHROPIC 型直连用的透传路由（协议不转换，仅替换认证头并补齐残缺流尾）。 */
+    fun passthruBaseUrl(key: String, port: Int): String = "http://127.0.0.1:$port/passthru/$key"
+
+    /** 透传路由的注册表键（与转换路由键空间隔离）。 */
+    fun passthruKey(providerId: String): String = "passthru_" + providerId.replace(Regex("[^\\w.-]"), "_")
+
+    /** codex 用的 base_url（Responses→chat 转换路由，路由尾部已带版本段）。 */
+    fun codexConverterBaseUrl(key: String, port: Int): String = "http://127.0.0.1:$port/codex-conv/$key/v1"
+
+    /** codex 转换路由的注册表键（与 cc-conv 键空间隔离）。 */
+    fun codexKey(providerId: String): String = "codex_" + providerId.replace(Regex("[^\\w.-]"), "_")
+
+    /** 已解析的入站 HTTP 请求。body 按 Content-Length / chunked 以**字节**读取后转 UTF-8。 */
+    internal data class IncomingRequest(
+        val method: String,
+        val path: String,
+        val headers: Map<String, String>,
+        val body: String,
+    )
+
+    /**
+     * 从 socket 读取一个 HTTP/1.1 请求。
+     *
+     * 必须按字节读取请求体：Content-Length 是字节数，而 [java.io.Reader] 的 read 参数是
+     * **字符数**；请求里一旦含中文/emoji（用户提示词或注入的中文系统提示），按字符读会
+     * 少读若干个 char 后一直阻塞等更多数据，连接两端互等直到超时——这正是 Claude/Codex
+     * 引擎「请求发出后毫无响应」的根因。此外兼容 Transfer-Encoding: chunked。
+     */
+    internal fun readHttpRequest(input: InputStream): IncomingRequest? {
+        val headers = HashMap<String, String>()
+
+        // 逐字节读一行（只用 ISO-8859-1 解码头部，保证与原始字节一一对应）。
+        fun readLine(): String? {
+            val line = ByteArrayOutputStream()
+            while (true) {
+                val b = input.read()
+                if (b < 0) return if (line.size() == 0) null else line.toString("ISO-8859-1")
+                if (b == '\n'.code) break
+                if (b != '\r'.code) line.write(b)
+            }
+            return line.toString("ISO-8859-1")
+        }
+
+        val requestLine = readLine() ?: return null
+        val parts = requestLine.split(" ")
+        if (parts.size < 2) return null
+
+        while (true) {
+            val line = readLine() ?: return null
+            if (line.isEmpty()) break
+            val idx = line.indexOf(':')
+            if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
+        }
+
+        val bodyBytes = if (headers["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true) {
+            readChunkedBody(input)
+        } else {
+            val length = headers["content-length"]?.toIntOrNull() ?: 0
+            val buf = ByteArray(length)
+            var read = 0
+            while (read < length) {
+                val n = input.read(buf, read, length - read)
+                if (n < 0) break
+                read += n
+            }
+            buf.copyOf(read)
+        }
+        return IncomingRequest(parts[0], parts[1], headers, String(bodyBytes, Charsets.UTF_8))
+    }
+
+    /** 读 chunked 请求体（去 chunk 头与 CRLF，拼接实际数据；0 长度块结束）。 */
+    private fun readChunkedBody(input: InputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+
+        fun readLine(): String? {
+            val line = ByteArrayOutputStream()
+            while (true) {
+                val b = input.read()
+                if (b < 0) return if (line.size() == 0) null else line.toString("ISO-8859-1")
+                if (b == '\n'.code) break
+                if (b != '\r'.code) line.write(b)
+            }
+            return line.toString("ISO-8859-1")
+        }
+
+        while (true) {
+            val sizeLine = readLine()?.substringBefore(';')?.trim() ?: break
+            val size = sizeLine.toIntOrNull(16) ?: break
+            if (size == 0) {
+                // 吃掉 trailer headers
+                while (true) {
+                    val trailer = readLine() ?: break
+                    if (trailer.isEmpty()) break
+                }
+                break
+            }
+            val buf = ByteArray(size)
+            var read = 0
+            while (read < size) {
+                val n = input.read(buf, read, size - read)
+                if (n < 0) return out.toByteArray()
+                read += n
+            }
+            out.write(buf, 0, read)
+            readLine() // 块末尾 CRLF
+        }
+        return out.toByteArray()
+    }
+
     private fun acceptLoop(socket: ServerSocket) {
         while (!closed) {
             val conn = runCatching { socket.accept() }.getOrNull() ?: break
@@ -89,30 +210,47 @@ object OpenAiCompatGateway {
     private fun handleConnection(conn: Socket) {
         conn.use { s ->
             s.soTimeout = UPSTREAM_READ_TIMEOUT_MS
-            val reader = s.getInputStream().bufferedReader()
-            val requestLine = reader.readLine() ?: return
-            val parts = requestLine.split(" ")
-            if (parts.size < 2) return
-            val path = parts[1]
-            val headers = HashMap<String, String>()
-            while (true) {
-                val line = reader.readLine() ?: return
-                if (line.isEmpty()) break
-                val idx = line.indexOf(':')
-                if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
-            }
-            val length = headers["content-length"]?.toIntOrNull() ?: 0
-            val body = if (length > 0) {
-                val buf = CharArray(length)
-                var read = 0
-                while (read < length) {
-                    val n = reader.read(buf, read, length - read)
-                    if (n < 0) break
-                    read += n
-                }
-                String(buf, 0, read)
-            } else ""
+            val request = readHttpRequest(BufferedInputStream(s.getInputStream())) ?: return
+            val path = request.path
+            val headers = request.headers
+            val body = request.body
 
+            // /passthru/<key>/<上游路径>：claude 厂商端点透传（anthropic 协议原样转发 + 流尾补齐）
+            if (path.startsWith("/passthru/")) {
+                val rest = path.removePrefix("/passthru/")
+                val pkey = rest.substringBefore('/')
+                val upstream = upstreams[pkey]
+                if (upstream == null) {
+                    respondError(s, 404, "unknown passthru key")
+                    return
+                }
+                val suffix = if (rest.contains('/')) rest.substringAfter('/') else ""
+                if (suffix.isEmpty()) {
+                    respondError(s, 404, "missing passthru path")
+                    return
+                }
+                proxyPassthru(s, upstream, "/" + suffix, body, headers)
+                return
+            }
+            // /codex-conv/<key>/v1/responses：codex 专用 Responses→chat 转换路由
+            if (path.startsWith("/codex-conv/")) {
+                val codexKey = path.removePrefix("/codex-conv/").substringBefore('/')
+                val upstream = upstreams[codexKey]
+                if (upstream == null) {
+                    respondError(s, 404, "unknown codex converter key")
+                    return
+                }
+                val responsesBody = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+                if (responsesBody == null) {
+                    respondError(s, 400, "invalid JSON body")
+                    return
+                }
+                val chatBody = responsesToChatRequest(responsesBody).toString()
+                val chatStream = responsesBody["stream"]?.jsonPrimitive?.booleanOrNull == true
+                if (chatStream) proxyResponsesStream(s, upstream, chatBody)
+                else proxyResponsesOnce(s, upstream, chatBody)
+                return
+            }
             // 注册表键取路径段 /cc-conv/<key>/v1/messages
             val key = path.removePrefix("/cc-conv/").substringBefore('/')
             val upstream = upstreams[key]
@@ -125,7 +263,8 @@ object OpenAiCompatGateway {
                 respondError(s, 400, "invalid JSON body")
                 return
             }
-            val stream = anthropicBody["stream"]?.jsonPrimitive?.contentOrNull == "true"
+            // claude 的 /v1/messages 请求里 stream 是 JSON 布尔，不是字符串
+            val stream = anthropicBody["stream"]?.jsonPrimitive?.booleanOrNull == true
             val upstreamBody = buildOpenAiRequest(anthropicBody).toString()
             if (stream) proxyStream(s, upstream, upstreamBody) else proxyOnce(s, upstream, upstreamBody)
         }
@@ -167,6 +306,101 @@ object OpenAiCompatGateway {
         respond(conn, "application/json", anthropic.toString())
     }
 
+    /** 透传：anthropic 兼容端点请求原样转发（仅替换认证头），SSE 流尾残缺时补齐。 */
+    private fun proxyPassthru(conn: Socket, upstream: Upstream, suffix: String, body: String, reqHeaders: Map<String, String>) {
+        val url = upstream.baseUrl.trimEnd('/') + suffix
+        val upstreamConn = URL(url).openConnection() as HttpURLConnection
+        upstreamConn.requestMethod = "POST"
+        upstreamConn.connectTimeout = CONNECT_TIMEOUT_MS
+        upstreamConn.readTimeout = UPSTREAM_READ_TIMEOUT_MS
+        upstreamConn.doOutput = true
+        upstreamConn.setRequestProperty("Content-Type", "application/json")
+        upstreamConn.setRequestProperty("Accept", "text/event-stream, application/json")
+        // apiKeyHelper 输出同时进 x-api-key 与 Bearer 两种头，第三方两种风格全覆盖
+        upstreamConn.setRequestProperty("x-api-key", upstream.apiKey)
+        upstreamConn.setRequestProperty("Authorization", "Bearer ${upstream.apiKey}")
+        reqHeaders["anthropic-version"]?.let { upstreamConn.setRequestProperty("anthropic-version", it) }
+        reqHeaders["anthropic-beta"]?.let { upstreamConn.setRequestProperty("anthropic-beta", it) }
+        upstreamConn.getOutputStream().use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val code = upstreamConn.responseCode
+        if (code !in 200..299) {
+            val err = upstreamConn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+            respondError(conn, if (code >= 400) code else 502, extractUpstreamError(err))
+            return
+        }
+        val contentType = upstreamConn.contentType ?: ""
+        if (!contentType.contains("event-stream")) {
+            val text = upstreamConn.inputStream.bufferedReader().use { it.readText() }
+            respond(conn, contentType.ifBlank { "application/json" }, text)
+            return
+        }
+        conn.getOutputStream().bufferedWriter().use { w ->
+            w.write("HTTP/1.1 200 OK\r\n")
+            w.write("Content-Type: text/event-stream\r\n")
+            w.write("Cache-Control: no-cache\r\n")
+            w.write("Connection: close\r\n\r\n")
+            w.flush()
+            val state = PassthruSseState()
+            try {
+                upstreamConn.inputStream.bufferedReader().forEachLine { line ->
+                    w.write(line); w.write("\n")
+                    state.observe(line)
+                    w.flush()
+                }
+            } catch (e: java.io.IOException) {
+                // 上游掐线：已出正文时照常补尾，claude 才不会把整段当中断撤回或挂死（cc streamfix 实测语义）
+            }
+            state.finish().forEach { (name, data) ->
+                w.write("event: $name\n")
+                w.write("data: $data\n\n")
+            }
+            w.flush()
+        }
+    }
+
+    /** 透传流尾补齐状态机：跟踪 anthropic SSE 事件序列，上游结束时残缺则补尾。 */
+    internal class PassthruSseState {
+        private var messageStarted = false
+        private var sawContent = false
+        private var deltaSent = false
+        private var stopSent = false
+        private val openBlocks = LinkedHashSet<Int>()
+
+        fun observe(line: String) {
+            if (!line.startsWith("data:")) return
+            val obj = runCatching { json.parseToJsonElement(line.removePrefix("data:").trim()).jsonObject }.getOrNull() ?: return
+            when (obj["type"]?.jsonPrimitive?.contentOrNull) {
+                "message_start" -> messageStarted = true
+                "content_block_start" -> openBlocks.add(obj["index"]?.jsonPrimitive?.intOrNull ?: 0)
+                "content_block_stop" -> openBlocks.remove(obj["index"]?.jsonPrimitive?.intOrNull ?: 0)
+                "content_block_delta" -> sawContent = true
+                "message_delta" -> deltaSent = true
+                "message_stop" -> stopSent = true
+            }
+        }
+
+        fun finish(): List<Pair<String, String>> {
+            if (!messageStarted || stopSent || !sawContent) return emptyList()
+            val out = mutableListOf<Pair<String, String>>()
+            for (idx in openBlocks) {
+                out += "content_block_stop" to buildJsonObject {
+                    put("type", "content_block_stop"); put("index", idx)
+                }.toString()
+            }
+            openBlocks.clear()
+            if (!deltaSent) {
+                out += "message_delta" to buildJsonObject {
+                    put("type", "message_delta")
+                    put("delta", buildJsonObject { put("stop_reason", "end_turn"); put("stop_sequence", JsonNull) })
+                    put("usage", buildJsonObject { put("output_tokens", 1) })
+                }.toString()
+            }
+            out += "message_stop" to buildJsonObject { put("type", "message_stop") }.toString()
+            stopSent = true
+            return out
+        }
+    }
+
     /** 流式：读上游 SSE 逐块翻译成 Anthropic 事件流（close 定界，写完即关）。 */
     private fun proxyStream(conn: Socket, upstream: Upstream, anthropicToOpenAiBody: String) {
         val upstreamConn = openUpstream(upstream, anthropicToOpenAiBody)
@@ -183,11 +417,15 @@ object OpenAiCompatGateway {
             w.write("Connection: close\r\n\r\n")
             w.flush()
             val state = SseState()
-            upstreamConn.inputStream.bufferedReader().forEachLine { line ->
-                translateSseLine(state, line)?.let { events ->
-                    events.forEach { w.write(it); w.write("\n") }
-                    w.flush()
+            try {
+                upstreamConn.inputStream.bufferedReader().forEachLine { line ->
+                    translateSseLine(state, line)?.let { events ->
+                        events.forEach { w.write(it); w.write("\n") }
+                        w.flush()
+                    }
                 }
+            } catch (e: java.io.IOException) {
+                // 上游掐线：已出正文且块闭合时照常补尾（见 SseState.finish），整段撤回比报错更糟
             }
             state.finish()?.forEach { w.write(it); w.write("\n") }
             w.flush()
@@ -556,5 +794,396 @@ object OpenAiCompatGateway {
         if (data == "[DONE]") return state.finish()
         val chunk = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: return null
         return state.translate(chunk)
+    }
+
+    // ── Responses→chat 转换（codex 路由专用）──────────────────
+
+    /** Responses API 请求体 → chat/completions 请求体。 */
+    internal fun responsesToChatRequest(responses: JsonObject): JsonObject = buildJsonObject {
+        responses["model"]?.let { put("model", it) }
+        put("messages", buildJsonArray {
+            (responses["instructions"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject {
+                    put("role", "system")
+                    put("content", it)
+                })
+            }
+            when (val input = responses["input"]) {
+                is JsonPrimitive -> add(buildJsonObject {
+                    put("role", "user")
+                    put("content", input.content)
+                })
+                is JsonArray -> responsesItemsToMessages(input).forEach { add(it) }
+                else -> {}
+            }
+        })
+        responses["stream"]?.let { put("stream", it) }
+        if (responses["stream"]?.jsonPrimitive?.booleanOrNull == true) {
+            put("stream_options", buildJsonObject { put("include_usage", true) })
+        }
+        (responses["max_output_tokens"] as? JsonPrimitive)?.let { put("max_tokens", it) }
+        responses["temperature"]?.let { put("temperature", it) }
+        responses["top_p"]?.let { put("top_p", it) }
+        (responses["tools"] as? JsonArray)?.takeIf { !it.isEmpty() }?.let { tools ->
+            put("tools", buildJsonArray {
+                tools.forEach { t ->
+                    val o = t as? JsonObject ?: return@forEach
+                    if (o["type"]?.jsonPrimitive?.contentOrNull == "function") {
+                        add(buildJsonObject {
+                            put("type", "function")
+                            put("function", buildJsonObject {
+                                put("name", o["name"]?.jsonPrimitive?.contentOrNull ?: "")
+                                (o["description"] as? JsonNull) ?: o["description"]?.let { put("description", it) }
+                                (o["parameters"] as? JsonNull) ?: o["parameters"]?.let { put("parameters", it) }
+                            })
+                        })
+                    }
+                }
+            })
+        }
+        responses["tool_choice"]?.let { tc ->
+            when (tc) {
+                is JsonPrimitive -> put("tool_choice", tc)
+                is JsonObject -> if (tc["type"]?.jsonPrimitive?.contentOrNull == "function") {
+                    put("tool_choice", buildJsonObject {
+                        put("type", "function")
+                        put("function", buildJsonObject { put("name", tc["name"]?.jsonPrimitive?.contentOrNull ?: "") })
+                    })
+                }
+                else -> {}
+            }
+        }
+        responses["parallel_tool_calls"]?.let { put("parallel_tool_calls", it) }
+    }
+
+    /** Responses input 数组项 → chat messages。 */
+    private fun responsesItemsToMessages(items: JsonArray): List<JsonObject> {
+        val messages = mutableListOf<JsonObject>()
+        items.forEach { el ->
+            val item = el as? JsonObject ?: return@forEach
+            when (item["type"]?.jsonPrimitive?.contentOrNull) {
+                "message" -> {
+                    val rawRole = item["role"]?.jsonPrimitive?.contentOrNull ?: "user"
+                    // codex 用 developer 角色（Responses 语义），chat 兼容端点普遍只认 system/user/assistant/tool
+                    val role = if (rawRole == "developer") "system" else rawRole
+                    val text = when (val content = item["content"]) {
+                        is JsonPrimitive -> content.content
+                        is JsonArray -> content.joinToString("") { part ->
+                            val p = part as? JsonObject ?: return@joinToString ""
+                            val type = p["type"]?.jsonPrimitive?.contentOrNull
+                            if (type == "input_text" || type == "output_text" || type == "text" || type == "refusal")
+                                p["text"]?.jsonPrimitive?.contentOrNull ?: ""
+                            else ""
+                        }
+                        else -> ""
+                    }
+                    messages += buildJsonObject {
+                        put("role", role)
+                        put("content", text)
+                    }
+                }
+                "function_call" -> {
+                    val callId = item["call_id"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val toolCall = buildJsonObject {
+                        put("id", callId)
+                        put("type", "function")
+                        put("function", buildJsonObject {
+                            put("name", item["name"]?.jsonPrimitive?.contentOrNull ?: "")
+                            put("arguments", item["arguments"]?.jsonPrimitive?.contentOrNull ?: "{}")
+                        })
+                    }
+                    val last = messages.lastOrNull()
+                    if (last?.get("role")?.jsonPrimitive?.contentOrNull == "assistant" && last["tool_calls"] is JsonArray) {
+                        messages[messages.size - 1] = buildJsonObject {
+                            last.forEach { (k, v) -> if (k != "tool_calls") put(k, v) }
+                            put("tool_calls", buildJsonArray {
+                                (last["tool_calls"] as JsonArray).forEach { add(it) }
+                                add(toolCall)
+                            })
+                        }
+                    } else {
+                        messages += buildJsonObject {
+                            put("role", "assistant")
+                            put("content", JsonNull)
+                            put("tool_calls", buildJsonArray { add(toolCall) })
+                        }
+                    }
+                }
+                "function_call_output" -> {
+                    messages += buildJsonObject {
+                        put("role", "tool")
+                        put("tool_call_id", item["call_id"]?.jsonPrimitive?.contentOrNull ?: "")
+                        put("content", when (val out = item["output"]) {
+                            is JsonPrimitive -> out.content
+                            is JsonArray, is JsonObject -> out.toString()
+                            else -> ""
+                        })
+                    }
+                }
+                // reasoning 等其余类型不映射进 chat 历史
+            }
+        }
+        return messages
+    }
+
+    /** 非流式：转发 chat 请求并把响应翻译回 Responses 对象。 */
+    private fun proxyResponsesOnce(conn: Socket, upstream: Upstream, chatBody: String) {
+        val upstreamConn = openUpstream(upstream, chatBody)
+        val code = upstreamConn.responseCode
+        val upstreamResp = (if (code in 200..299) upstreamConn.inputStream else upstreamConn.errorStream)
+            ?.bufferedReader()?.use { it.readText() } ?: ""
+        if (code !in 200..299) {
+            respondError(conn, code, extractUpstreamError(upstreamResp))
+            return
+        }
+        val chat = runCatching { json.parseToJsonElement(upstreamResp).jsonObject }.getOrNull()
+        if (chat == null) {
+            respondError(conn, 502, "upstream returned non-JSON body")
+            return
+        }
+        respond(conn, "application/json", chatResponseToResponse(chat).toString())
+    }
+
+    /** chat/completions 非流式响应 → Responses response 对象。 */
+    internal fun chatResponseToResponse(chat: JsonObject): JsonObject {
+        val choice = (chat["choices"] as? JsonArray)?.firstOrNull() as? JsonObject
+        val message = choice?.get("message") as? JsonObject
+        val text = message?.get("content")?.jsonPrimitive?.contentOrNull ?: ""
+        return buildJsonObject {
+            put("id", "resp_${UUID.randomUUID()}")
+            put("object", "response")
+            put("created_at", System.currentTimeMillis() / 1000)
+            put("status", "completed")
+            put("model", chat["model"]?.jsonPrimitive?.contentOrNull ?: "")
+            put("output", buildJsonArray {
+                if (text.isNotEmpty()) {
+                    add(messageOutputItem(text, "completed"))
+                }
+                (message?.get("tool_calls") as? JsonArray)?.forEach { tc ->
+                    val o = tc as? JsonObject ?: return@forEach
+                    val fn = o["function"] as? JsonObject
+                    add(buildJsonObject {
+                        put("type", "function_call")
+                        put("id", "fc_${UUID.randomUUID().toString().replace("-", "").take(24)}")
+                        put("call_id", o["id"]?.jsonPrimitive?.contentOrNull ?: "")
+                        put("name", fn?.get("name")?.jsonPrimitive?.contentOrNull ?: "")
+                        put("arguments", fn?.get("arguments")?.jsonPrimitive?.contentOrNull ?: "{}")
+                        put("status", "completed")
+                    })
+                }
+            })
+            put("output_text", text)
+            put("usage", usageObject(chat["usage"] as? JsonObject))
+        }
+    }
+
+    /** 流式：读上游 chat SSE 逐块翻译成 Responses 事件流（close 定界，写完即关）。 */
+    private fun proxyResponsesStream(conn: Socket, upstream: Upstream, chatBody: String) {
+        val upstreamConn = openUpstream(upstream, chatBody)
+        val code = upstreamConn.responseCode
+        if (code !in 200..299) {
+            val err = upstreamConn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+            respondError(conn, code, extractUpstreamError(err))
+            return
+        }
+        conn.getOutputStream().bufferedWriter().use { w ->
+            w.write("HTTP/1.1 200 OK\r\n")
+            w.write("Content-Type: text/event-stream\r\n")
+            w.write("Cache-Control: no-cache\r\n")
+            w.write("Connection: close\r\n\r\n")
+            w.flush()
+            val state = ResponsesSseState()
+            try {
+                upstreamConn.inputStream.bufferedReader().forEachLine { line ->
+                    translateResponsesSseLine(state, line)?.forEach { (name, data) ->
+                        w.write("event: $name\n")
+                        w.write("data: $data\n\n")
+                    }
+                    w.flush()
+                }
+            } catch (e: java.io.IOException) {
+                // 上游掐线：照常补 response.completed，codex 收到完整收尾才不反复重试
+            }
+            state.finish().forEach { (name, data) ->
+                w.write("event: $name\n")
+                w.write("data: $data\n\n")
+            }
+            w.flush()
+        }
+    }
+
+    /** 一行上游 chat SSE → 0..n 个 (Responses 事件名, 事件体)。 */
+    internal fun translateResponsesSseLine(state: ResponsesSseState, line: String): List<Pair<String, JsonObject>>? {
+        if (!line.startsWith("data:")) return null
+        val data = line.removePrefix("data:").trim()
+        if (data == "[DONE]") return state.finish()
+        val chunk = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: return null
+        return state.translate(chunk)
+    }
+
+    private fun messageOutputItem(fullText: String, status: String): JsonObject = buildJsonObject {
+        put("type", "message")
+        put("id", "msg_${UUID.randomUUID().toString().replace("-", "").take(24)}")
+        put("role", "assistant")
+        put("status", status)
+        put("content", buildJsonArray {
+            add(buildJsonObject {
+                put("type", "output_text")
+                put("text", fullText)
+                put("annotations", JsonArray(emptyList()))
+            })
+        })
+    }
+
+    private fun usageObject(u: JsonObject?): JsonObject = buildJsonObject {
+        put("input_tokens", u?.get("prompt_tokens")?.jsonPrimitive?.longOrNull ?: 0L)
+        put("output_tokens", u?.get("completion_tokens")?.jsonPrimitive?.longOrNull ?: 0L)
+        put("total_tokens", u?.get("total_tokens")?.jsonPrimitive?.longOrNull ?: 0L)
+    }
+
+    /** Responses 流式翻译状态机：chat 增量块 → Responses 事件序列。 */
+    internal class ResponsesSseState {
+        private val responseId = "resp_" + UUID.randomUUID().toString().replace("-", "").take(24)
+        private val createdAt = System.currentTimeMillis() / 1000
+        private var model = ""
+        private var created = false
+        private var messageOpened = false
+        private val text = StringBuilder()
+        private var nextOutputIndex = 0
+        private val tools = LinkedHashMap<Int, ToolAccum>()
+        private var usage: JsonObject? = null
+        private var finished = false
+
+        private class ToolAccum {
+            var itemIndex = -1
+            val itemId = "fc_" + UUID.randomUUID().toString().replace("-", "").take(24)
+            var callId = ""
+            var name = ""
+            val args = StringBuilder()
+        }
+
+        fun translate(chunk: JsonObject): List<Pair<String, JsonObject>>? {
+            val out = mutableListOf<Pair<String, JsonObject>>()
+            if (!created) {
+                created = true
+                model = chunk["model"]?.jsonPrimitive?.contentOrNull ?: ""
+                out += "response.created" to buildJsonObject {
+                    put("type", "response.created")
+                    put("response", responseEnvelope("in_progress"))
+                }
+            }
+            val choice = (chunk["choices"] as? JsonArray)?.firstOrNull() as? JsonObject
+            val delta = choice?.get("delta") as? JsonObject
+            val textDelta = delta?.get("content")?.jsonPrimitive?.contentOrNull
+            if (!textDelta.isNullOrEmpty()) {
+                if (!messageOpened) {
+                    messageOpened = true
+                    val itemIndex = nextOutputIndex++
+                    out += itemAdded(itemIndex, messageOutputItem("", "in_progress"))
+                }
+                text.append(textDelta)
+                out += "response.output_text.delta" to buildJsonObject {
+                    put("type", "response.output_text.delta")
+                    put("item_id", "")
+                    put("output_index", 0)
+                    put("content_index", 0)
+                    put("delta", textDelta)
+                }
+            }
+            (delta?.get("tool_calls") as? JsonArray)?.forEach { tc ->
+                val o = tc as? JsonObject ?: return@forEach
+                val index = o["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                val fn = o["function"] as? JsonObject
+                val acc = tools[index]
+                if (acc == null) {
+                    val fresh = ToolAccum().also { it.itemIndex = nextOutputIndex++ }
+                    tools[index] = fresh
+                    out += itemAdded(fresh.itemIndex, functionCallItem(fresh, "in_progress"))
+                } else acc
+                val target = tools.getValue(index)
+                o["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { target.callId = it }
+                fn?.get("name")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                    if (target.name.isEmpty()) target.name = it
+                }
+                fn?.get("arguments")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { frag ->
+                    target.args.append(frag)
+                    out += "response.function_call_arguments.delta" to buildJsonObject {
+                        put("type", "response.function_call_arguments.delta")
+                        put("item_id", target.itemId)
+                        put("output_index", target.itemIndex)
+                        put("delta", frag)
+                    }
+                }
+            }
+            (chunk["usage"] as? JsonObject)?.let { usage = it }
+            return out.ifEmpty { null }
+        }
+
+        /** 上游结束（[DONE]/流关闭）后补齐收尾事件。 */
+        fun finish(): List<Pair<String, JsonObject>> {
+            if (finished) return emptyList()
+            finished = true
+            val out = mutableListOf<Pair<String, JsonObject>>()
+            if (!created) {
+                created = true
+                out += "response.created" to buildJsonObject {
+                    put("type", "response.created")
+                    put("response", responseEnvelope("in_progress"))
+                }
+            }
+            val output = buildJsonArray {
+                if (messageOpened || text.isNotEmpty()) {
+                    add(messageOutputItem(text.toString(), "completed"))
+                }
+                tools.values.sortedBy { it.itemIndex }.forEach { acc ->
+                    add(functionCallItem(acc, "completed"))
+                }
+            }
+            output.forEach { item ->
+                out += "response.output_item.done" to buildJsonObject {
+                    put("type", "response.output_item.done")
+                    put("output_index", 0)
+                    put("item", item)
+                }
+            }
+            out += "response.completed" to buildJsonObject {
+                put("type", "response.completed")
+                put("response", buildJsonObject {
+                    put("id", responseId)
+                    put("object", "response")
+                    put("created_at", createdAt)
+                    put("status", "completed")
+                    put("model", model)
+                    put("output", output)
+                    put("usage", usageObject(usage))
+                })
+            }
+            return out
+        }
+
+        private fun itemAdded(index: Int, item: JsonObject) = "response.output_item.added" to buildJsonObject {
+            put("type", "response.output_item.added")
+            put("output_index", index)
+            put("item", item)
+        }
+
+        private fun responseEnvelope(status: String): JsonObject = buildJsonObject {
+            put("id", responseId)
+            put("object", "response")
+            put("created_at", createdAt)
+            put("status", status)
+            put("model", model)
+            put("output", JsonArray(emptyList()))
+            put("usage", usageObject(null))
+        }
+
+        private fun functionCallItem(acc: ToolAccum, status: String): JsonObject = buildJsonObject {
+            put("type", "function_call")
+            put("id", acc.itemId)
+            put("call_id", acc.callId)
+            put("name", acc.name)
+            put("arguments", acc.args.toString().ifEmpty { "{}" })
+            put("status", status)
+        }
     }
 }

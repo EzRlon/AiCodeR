@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
 import com.aicode.R
+import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.agent.domain.cliagent.CliAgent
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
@@ -30,6 +31,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class AgentCliViewModel @Inject constructor(
+    private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val cliAgentManager: CliAgentManager,
     private val terminalSessionProvider: TerminalSessionProvider,
     private val claudeCodeBridge: ClaudeCodeBridge,
@@ -132,7 +134,8 @@ class AgentCliViewModel @Inject constructor(
 
     fun launch(agent: CliAgent, onLaunched: () -> Unit) {
         viewModelScope.launch {
-            runCatching { cliAgentManager.launch(agent) }
+            val command = runCatching { cliTabCommand(agent) }.getOrNull()
+            runCatching { cliAgentManager.launch(agent, commandOverride = command) }
                 .onSuccess { tabId ->
                     // startBackgroundCommand 不抢焦点（仅无标签时才激活）；启动后聚焦新标签，
                     // 让 onLaunched 的「切到终端」看到的正是刚拉起的 CLI 会话。
@@ -140,6 +143,22 @@ class AgentCliViewModel @Inject constructor(
                     onLaunched()
                 }
                 .onFailure { _error.value = it.message }
+        }
+    }
+
+    /**
+     * 标签启动命令：把 App 内配的供应商注入 claude/codex（复用引擎桥的解析与本地网关）。
+     * 无可用供应商或解析失败时返回 null，标签按裸命令启动（走 CLI 自身登录）。
+     * OpenCode 自身读持久配置，无需注入。
+     */
+    private suspend fun cliTabCommand(agent: CliAgent): String? {
+        // 用 App 默认供应商（内置引擎同源），避免“列表第一个可用”选中失效供应商
+        val defaultProviderId = runCatching { defaultModelSettingsRepository.getDefaultProviderId() }
+            .getOrNull()?.takeIf { it.isNotBlank() }
+        return when (agent.id) {
+            "claude" -> claudeCodeBridge.cliTabInjection(defaultProviderId)?.apply(agent.launchCommand)
+            "codex" -> codexBridge.cliTabInjection(defaultProviderId)?.apply(agent.launchCommand)
+            else -> null
         }
     }
 

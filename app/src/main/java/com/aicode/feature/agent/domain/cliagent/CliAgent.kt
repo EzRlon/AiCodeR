@@ -1,5 +1,15 @@
 package com.aicode.feature.agent.domain.cliagent
 
+/**
+ * CLI 终端标签的供应商注入：env 以 `export K='V'; ` 前置于启动命令，argsSuffix 追加在启动命令之后。
+ * 无可用供应商时不需要注入，直接按标签自带的裸命令启动。
+ */
+data class CliTabInjection(val env: Map<String, String> = emptyMap(), val argsSuffix: String = "") {
+    /** 拼成可直接交给 shell 的完整命令。 */
+    fun apply(command: String): String =
+        env.entries.joinToString("") { (k, v) -> "export $k='$v'; " } + command + argsSuffix
+}
+
 /** 容器内 AI CLI 智能体定义：npm 包 + 启动命令。 */
 data class CliAgent(
     /** 唯一标识，与启动命令同名（claude / codex / opencode）。 */
@@ -33,11 +43,21 @@ data class CliAgent(
             "wget -q --spider -T 4 \"\$REG/\" || REG=https://registry.npmjs.org; fi; " +
             "echo \"npm registry: \$REG\"; " +
             "NPM_ARGS='--fetch-retries=3 --fetch-timeout=600000 --no-audit --no-fund'; " +
-            "if ! npm install -g --registry=\"\$REG\" \$NPM_ARGS $npmPackage@$version; then " +
+            "try_install() { npm install -g --registry=\"\$1\" \$NPM_ARGS $npmPackage@$version; }; " +
+            // npmmirror 对平台二进制包（含 bin 的 optionalDependencies）返回 cnpm 风格 .l2s.* 硬链布局，
+            // npm 装完后 bin 符号链接指向不存在的文件（命令 not found），npm 自身退出码却为 0；
+            // 因此装完必须实测命令可执行，断链时卸载后回退官方源重装。
+            "if ! try_install \"\$REG\"; then " +
             "if [ \"\$REG\" != 'https://registry.npmjs.org' ]; then " +
             "echo '镜像源安装失败，改用官方源重试…'; " +
-            "npm install -g --registry=https://registry.npmjs.org \$NPM_ARGS $npmPackage@$version; " +
+            "try_install https://registry.npmjs.org; " +
             "else echo '安装失败：请检查网络/代理后重试'; exit 1; fi; fi; " +
+            "if ! $command --version >/dev/null 2>&1; then " +
+            "if [ \"\$REG\" != 'https://registry.npmjs.org' ]; then " +
+            "echo '镜像源安装产物异常（命令不可执行），卸载后改用官方源重装…'; " +
+            "npm uninstall -g $npmPackage >/dev/null 2>&1; " +
+            "try_install https://registry.npmjs.org; " +
+            "fi; fi; " +
             "echo '───'; " +
             "if command -v $command >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
@@ -101,7 +121,7 @@ object CliAgentCatalog {
             command = "codex",
             websiteUrl = "https://developers.openai.com/codex",
             loginUrl = "https://platform.openai.com/api-keys",
-            launchCommand = selfHealingLaunch("codex")
+            launchCommand = selfHealingLaunch("codex --config check_for_update_on_startup=false")
         ),
         CliAgent(
             id = "opencode",

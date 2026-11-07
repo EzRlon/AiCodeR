@@ -3,6 +3,7 @@ package com.aicode.feature.agent.domain.engine
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
+import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
@@ -246,6 +247,112 @@ class ClaudeCodeBridge @Inject constructor(
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
     }
 
+    /** 供应商注入准备结果：本地网关已就绪、apiKeyHelper 设置已写。 */
+    private class ProviderInjection(
+        val provider: com.aicode.feature.settings.domain.model.AIProviderConfig,
+        val route: VendorAnthropicRoute?,
+        val viaConverter: Boolean,
+        val settingsPath: String?,
+        val converterBase: String?,
+        val passthruBase: String?,
+    )
+
+    /**
+     * 解析供应商并完成注入准备（起本地网关 + 写 apiKeyHelper 设置）。
+     * 无可用供应商、或转换网关起不来时返回 null，调用方按未注入处理。
+     */
+    private suspend fun prepareProviderInjection(providerId: String?): ProviderInjection? {
+        val cc = resolveCcProvider(providerId) ?: return null
+        val p = cc.provider
+        var settingsPath: String? = null
+        var converterBase: String? = null
+        var passthruBase: String? = null
+        if (cc.viaConverter) {
+            // 本地 OpenAI→Anthropic 协议转换网关：上游 Key 注册在 App 侧，不经过 claude 环境；
+            // claude 需要非空 Key 才不走登录，写占位（网关忽略其认证头）
+            val started = runCatching {
+                val port = OpenAiCompatGateway.ensureStarted()
+                val key = ccKeyBase(p.id)
+                OpenAiCompatGateway.registerUpstream(key, p.baseUrl, p.firstUsableApiKey, p.useFullUrl)
+                converterBase = OpenAiCompatGateway.converterBaseUrl(key, port)
+            }.onFailure { e -> FileLogger.w(TAG, "启动协议转换网关失败: ${e.message}") }.isSuccess && converterBase != null
+            if (!started) {
+                // 网关不可用：不注入（占位 Key+OpenAI 模型名直连官方只会 401/400），交给上层报错
+                FileLogger.w(TAG, "转换网关不可用，跳过供应商注入: ${p.id}")
+                return null
+            }
+            settingsPath = writeCcKeySettings(p.id, "cc-openai-compat")
+        } else {
+            // 厂商路由/ANTHROPIC 型直连也经本地透传网关：真 Key 注册在 App 侧，网关替换认证头并补齐
+            // 残缺流尾（deepseek 等端点长回答时流尾不干净，claude 会整段撤回或挂死，cc 实测语义）
+            val upstreamBase = when {
+                cc.route != null -> cc.route.baseUrl
+                !p.useFullUrl -> p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
+                else -> ""
+            }
+            if (!upstreamBase.isNullOrBlank() && !upstreamBase.contains("api.anthropic.com")) {
+                passthruBase = runCatching {
+                    val port = OpenAiCompatGateway.ensureStarted()
+                    val key = OpenAiCompatGateway.passthruKey(p.id)
+                    OpenAiCompatGateway.registerUpstream(key, upstreamBase, p.firstUsableApiKey, fullUrl = false)
+                    OpenAiCompatGateway.passthruBaseUrl(key, port)
+                }.onFailure { e -> FileLogger.w(TAG, "启动透传网关失败: ${e.message}") }.getOrNull()
+            }
+            settingsPath = writeCcKeySettings(p.id, p.firstUsableApiKey)
+        }
+        return ProviderInjection(p, cc.route, cc.viaConverter, settingsPath, converterBase, passthruBase)
+    }
+
+    /**
+     * 供应商侧 claude 环境变量：BaseUrl、档位映射、厂商变量；apiKeyHelper 已就位时不回退 Key 进 env。
+     * 回合注入（runTurnOnce）与终端标签（buildCliTabCommand）共用，避免两处漂移。
+     */
+    private fun providerEnv(inj: ProviderInjection, model: String?): Map<String, String> = buildMap {
+        val p = inj.provider
+        if (inj.settingsPath == null && !inj.viaConverter) {
+            put("ANTHROPIC_API_KEY", p.firstUsableApiKey) // 多 Key 模式恒取首把可用 Key，与 App 内轮换调度不同步（见 P2-6）
+        }
+        val base = when {
+            inj.viaConverter -> inj.converterBase
+            else -> inj.passthruBase
+                ?: inj.route?.baseUrl
+                ?: p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
+        }
+        if (!base.isNullOrEmpty() && !base.contains("api.anthropic.com")) {
+            put("ANTHROPIC_BASE_URL", base)
+        }
+        // 第三方端点不认 claude-* 档位别名，不映射的话子代理的 haiku 档请求直接 400；
+        // 厂商路由用表内档位，转换器路径无 fastModel 概念，全部档位映射到同一模型
+        // 模型串同样条件剥前缀（与 --model 同源，档位 env 不能漏）
+        val main = model?.takeIf { it.isNotBlank() }?.let { CliModelRef.bareModelName(it, p.name, p.id) }
+            ?: inj.route?.defaultModel
+            ?: p.selectedModel.takeIf { it.isNotBlank() }?.let { CliModelRef.bareModelName(it, p.name, p.id) }
+            ?: p.models.firstOrNull { it.isNotBlank() }
+        val fast = inj.route?.fastModel ?: main
+        if (inj.route != null || inj.viaConverter || inj.passthruBase != null) {
+            if (main != null) {
+                put("ANTHROPIC_MODEL", main)
+                put("ANTHROPIC_DEFAULT_OPUS_MODEL", main)
+                put("ANTHROPIC_DEFAULT_SONNET_MODEL", main)
+            }
+            fast?.let { f ->
+                put("ANTHROPIC_DEFAULT_HAIKU_MODEL", f)
+                put("ANTHROPIC_SMALL_FAST_MODEL", f)
+            }
+            inj.route?.extraEnv?.forEach { (k, v) -> put(k, v) }
+        }
+    }
+
+    /**
+     * 顶栏「Claude Code」终端标签的供应商注入：复用同一套供应商解析/网关/apiKeyHelper。
+     * [providerId] 传 App 默认供应商（避免“列表第一个可用”选中失效供应商）；无可用供应商时返回 null，标签按裸命令启动。
+     */
+    suspend fun cliTabInjection(providerId: String? = null): CliTabInjection? = runCatching {
+        val inj = prepareProviderInjection(providerId) ?: return@runCatching null
+        val env = providerEnv(inj, model = null) + ("CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT" to "1")
+        CliTabInjection(env = env, argsSuffix = inj.settingsPath?.let { " --settings '$it'" } ?: "")
+    }.onFailure { e -> FileLogger.w(TAG, "CLI 标签供应商注入失败: ${e.message}") }.getOrNull()
+
     private fun runTurnOnce(
         sessionId: String,
         userRequest: String,
@@ -262,31 +369,8 @@ class ClaudeCodeBridge @Inject constructor(
         val hasCliAgents = writeCliAgentsConfig()
 
         // 供应商解析前置：settings（apiKeyHelper）与 env（BaseUrl/档位映射）两处共用
-        var ccProvider = resolveCcProvider(providerId)
-        var ccSettingsPath: String? = null
-        var converterBase: String? = null
-        if (ccProvider != null) {
-            val p = ccProvider.provider
-            if (ccProvider.viaConverter) {
-                // 本地 OpenAI→Anthropic 协议转换网关：上游 Key 注册在 App 侧，不经过 claude 环境；
-                // claude 需要非空 Key 才不走登录，写占位（网关忽略其认证头）
-                val started = runCatching {
-                    val port = OpenAiCompatGateway.ensureStarted()
-                    val key = ccKeyBase(p.id)
-                    OpenAiCompatGateway.registerUpstream(key, p.baseUrl, p.firstUsableApiKey, p.useFullUrl)
-                    converterBase = OpenAiCompatGateway.converterBaseUrl(key, port)
-                }.onFailure { e -> FileLogger.w(TAG, "启动协议转换网关失败: ${e.message}") }.isSuccess && converterBase != null
-                if (started) {
-                    ccSettingsPath = writeCcKeySettings(p.id, "cc-openai-compat")
-                } else {
-                    // 网关不可用：本轮不注入（占位 Key+OpenAI 模型名直连官方只会 401/400），交给上层报错
-                    FileLogger.w(TAG, "转换网关不可用，本轮跳过供应商注入: ${p.id}")
-                    ccProvider = null
-                }
-            } else {
-                ccSettingsPath = writeCcKeySettings(p.id, p.firstUsableApiKey)
-            }
-        }
+        val ccProvider = prepareProviderInjection(providerId)
+        val ccSettingsPath = ccProvider?.settingsPath
 
         val args = buildList {
             add("-p")
@@ -313,7 +397,11 @@ class ClaudeCodeBridge @Inject constructor(
             }
             // App 智能体定义随回合生成（能力全域打通批二）；无可用定义时不传该 flag
             if (hasCliAgents) { add("--agents"); add(agentsConfigPath()) }
-            if (!model.isNullOrBlank()) { add("--model"); add(model) }
+            if (!model.isNullOrBlank()) {
+                // 会话存的模型串可能带「供应商名或id/」前缀；仅前缀命中当前供应商时剥离（z-ai/ 等真 id 不动）
+                val bareModel = CliModelRef.bareModelName(model, ccProvider?.provider?.name, ccProvider?.provider?.id)
+                add("--model"); add(bareModel)
+            }
         }
         val extraEnv = buildMap {
             put("PERMISSION_BRIDGE_PORT", port.toString())
@@ -324,39 +412,10 @@ class ClaudeCodeBridge @Inject constructor(
             put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // 供应商凭据经 apiKeyHelper 从私有文件读（不进 env）；env 只透 BaseUrl/档位映射/厂商变量。
             // 密钥文件写入失败的回合回退 env 透传保功能（转换器路径 env 里无真 Key，回退仅用于直透/厂商路由）
-            ccProvider?.let { cc ->
-                val p = cc.provider
-                if (ccSettingsPath == null && !cc.viaConverter) {
-                    put("ANTHROPIC_API_KEY", p.firstUsableApiKey) // 多 Key 模式恒取首把可用 Key，与 App 内轮换调度不同步（见 P2-6）
-                }
-                val base = when {
-                    cc.route != null -> cc.route.baseUrl
-                    cc.viaConverter -> converterBase
-                    else -> p.baseUrl.trim().trimEnd('/').removeSuffix("/v1")
-                }
-                if (!base.isNullOrEmpty() && !base.contains("api.anthropic.com")) {
-                    put("ANTHROPIC_BASE_URL", base)
-                }
-                // 第三方端点不认 claude-* 档位别名，不映射的话子代理的 haiku 档请求直接 400；
-                // 厂商路由用表内档位，转换器路径无 fastModel 概念，全部档位映射到同一模型
-                val main = model?.takeIf { it.isNotBlank() }
-                    ?: cc.route?.defaultModel
-                    ?: p.selectedModel.takeIf { it.isNotBlank() }
-                    ?: p.models.firstOrNull { it.isNotBlank() }
-                val fast = cc.route?.fastModel ?: main
-                if (cc.route != null || cc.viaConverter) {
-                    if (main != null) {
-                        put("ANTHROPIC_MODEL", main)
-                        put("ANTHROPIC_DEFAULT_OPUS_MODEL", main)
-                        put("ANTHROPIC_DEFAULT_SONNET_MODEL", main)
-                    }
-                    fast?.let { f ->
-                        put("ANTHROPIC_DEFAULT_HAIKU_MODEL", f)
-                        put("ANTHROPIC_SMALL_FAST_MODEL", f)
-                    }
-                    cc.route?.extraEnv?.forEach { (k, v) -> put(k, v) }
-                }
-            }
+            ccProvider?.let { cc -> putAll(providerEnv(cc, model)) }
+            // claude CLI 2.1.29x 对模型目录外的第三方模型名启用「上下文窗口强制」：不发请求、
+            // 等待 catalog 校验 → 会话无响应（实测）。豁免后恢复「等 API」行为，对官方模型无影响。
+            put("CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT", "1")
         }
 
         FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath auth=helper:${ccSettingsPath != null} envFallback:${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
@@ -444,12 +503,26 @@ class ClaudeCodeBridge @Inject constructor(
             var gotResult = false
             val acc = TurnAccumulator()
             val reader = process.inputStream.bufferedReader()
+            // claude 的启动类致命错误（如 resume 会话不存在）可能打到 stdout 而非 stderr，
+            // 退出分类必须两者都看，否则“续接会话缺失”会被当成普通提前退出、错过全新回合重试
+            val stdoutTail = StringBuilder()
             while (!gotResult) {
                 val line = withContext(Dispatchers.IO) {
                     lastActivity.set(System.currentTimeMillis())
                     reader.readLine()
                 } ?: break
                 if (line.isBlank()) continue
+                stdoutTail.appendLine(line)
+                if (stdoutTail.length > 4000) stdoutTail.delete(0, stdoutTail.length - 4000)
+                // claude 2.1.29x 把启动类失败（resume 会话缺失、未认证等）包装成 error_during_execution
+                // 的 result 事件优雅输出而非裸退出——本回合无任何内容输出时按启动失败分类，
+                // 否则 classifyEarlyExit 被绕过、无续接重试永不触发
+                if (!acc.emittedAny && line.contains("\"error_during_execution\"")) {
+                    gotResult = true
+                    throw classifyEarlyExit(
+                        synchronized(stderrTail) { stderrTail.toString() } + "\n" + stdoutTail.toString()
+                    )
+                }
                 for (event in parseLine(line, acc)) {
                     acc.emittedAny = true
                     emit(event)
@@ -458,7 +531,7 @@ class ClaudeCodeBridge @Inject constructor(
             }
 
             if (!gotResult) {
-                val tail = synchronized(stderrTail) { stderrTail.toString() }
+                val tail = synchronized(stderrTail) { stderrTail.toString() } + "\n" + stdoutTail.toString()
                 throw classifyEarlyExit(tail)
             }
         } finally {
@@ -471,19 +544,21 @@ class ClaudeCodeBridge @Inject constructor(
     }
 
     /** 无 result 行即退出：区分「续接会话不存在」（可重试）与其它启动/执行失败。 */
-    private fun classifyEarlyExit(stderrTail: String): Exception {
-        val lower = stderrTail.lowercase()
+    private fun classifyEarlyExit(tail: String): Exception {
+        val lower = tail.lowercase()
         // 认证类失败（未登录/无 API key）：给出可操作指引，而不是让用户看裸报错
-        if ("api key" in lower || "login" in lower || "unauthorized" in lower || "not logged in" in lower || "oauth" in lower) {
+        if (lower.contains("api key") || lower.contains("login") || lower.contains("unauthorized") || lower.contains("not logged in") || lower.contains("oauth")) {
             return RuntimeException(
                 "Claude Code 尚未认证：请在终端打开一次交互式 claude 并完成登录（或配置 ANTHROPIC_API_KEY），" +
-                    "然后回到会话重发消息。原始错误：" + stderrTail.takeLast(300).trim()
+                    "然后回到会话重发消息。原始错误：" + tail.takeLast(300).trim()
             )
         }
-        return if ("no conversation found" in lower || "session not found" in lower || "resume" in lower && "not found" in lower) {
-            ResumeSessionMissingException(stderrTail.takeLast(400).trim())
+        return if (lower.contains("no conversation found") || lower.contains("session not found") ||
+            (lower.contains("resume") && lower.contains("not found"))
+        ) {
+            ResumeSessionMissingException(tail.takeLast(400).trim())
         } else {
-            RuntimeException("Claude Code 提前退出: " + stderrTail.takeLast(400).trim().ifEmpty { "（无 stderr 输出）" })
+            RuntimeException("Claude Code 提前退出: " + tail.takeLast(400).trim().ifEmpty { "（无 stderr 输出）" })
         }
     }
 

@@ -52,10 +52,11 @@ class CliAgentManager @Inject constructor(
             notify = true
         )
 
-    /** 在新终端标签里启动 CLI 交互会话（notify=false：退出后 shell 保活）。返回标签 id。须在主线程调用。 */
-    suspend fun launch(agent: CliAgent): String =
+    /** 在新终端标签里启动 CLI 交互会话（notify=false：退出后 shell 保活）。返回标签 id。须在主线程调用。
+     *  [commandOverride] 非空时替换默认启动命令（用于前置供应商注入）。 */
+    suspend fun launch(agent: CliAgent, commandOverride: String? = null): String =
         terminalSessionProvider.startBackgroundCommand(
-            command = agent.launchCommand,
+            command = commandOverride ?: agent.launchCommand,
             title = agent.displayName,
             notify = false
         )
