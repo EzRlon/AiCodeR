@@ -50,6 +50,7 @@
 | Shizuku 工具 | AI 的 `Shizuku` 工具：用 Shizuku 执行系统命令（1.12.0 起）→ [文档](/guide/shizuku) |
 | 自定义提示词 | 覆盖与定制 AI 系统的提示词片段 → [文档](/guide/custom-prompts) |
 | 记忆与项目规则 | 跨会话长期记忆，以及 AGENTS.md / CLAUDE.md 项目规则 → [文档](/guide/memory) |
+| 插件 | 原生插件装进本 App 的技能 / MCP / 钩子体系；引擎插件由外部引擎自管 → [文档](/guide/plugins) |
 
 ### 运行环境
 

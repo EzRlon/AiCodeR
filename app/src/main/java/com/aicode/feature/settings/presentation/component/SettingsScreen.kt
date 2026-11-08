@@ -183,6 +183,12 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgentEditor(R.string.settings_subagents),
     Teams(R.string.settings_teams),
     Store(R.string.store_title),
+    /** 「插件」分组首页：原生插件（本 App 内）+ 引擎插件（装进外部引擎的）两个入口。 */
+    Plugins(R.string.settings_category_plugins),
+    /** 原生插件（装进本 App）：`~/.aicode/plugins` 下的插件列表。 */
+    NativePlugins(R.string.native_plugins),
+    PluginDetail(R.string.native_plugins),
+    /** 引擎插件（装进 Claude Code / Codex 等外部引擎）。 */
     EnginePlugins(R.string.settings_engine_plugins),
     ScheduledTasks(R.string.schedule_title),
     ScheduledTaskEditor(R.string.schedule_title),
@@ -223,6 +229,8 @@ private fun SettingsSection.depth(): Int = when (this) {
     SettingsSection.ScheduledTaskEditor,
     SettingsSection.PromptDetail,
     SettingsSection.SkillDetail,
+    SettingsSection.PluginDetail,
+    SettingsSection.NativePlugins,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
     SettingsSection.Log -> 2
@@ -434,6 +442,9 @@ fun SettingsScreen(
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
     var selectedPrompt by remember { mutableStateOf<PromptFragment?>(null) }
     var showPromptsAnnouncement by remember { mutableStateOf(false) }
+    // 插件详情目标：存 id 而非对象，插件启用状态变化后详情页要跟着刷新（对象是快照）。
+    var selectedPluginId by remember { mutableStateOf<String?>(null) }
+    var selectedPluginName by remember { mutableStateOf("") }
     // 编辑页返回目标：从详情进就回详情，从列表「+」进就回列表。
     var promptEditorReturn by remember { mutableStateOf(SettingsSection.Prompts) }
     // 记忆编辑目标：null 表示新建；非 null 时指向被编辑的记忆（含作用域）。
@@ -502,6 +513,9 @@ fun SettingsScreen(
         SettingsSection.ScriptEditor -> SettingsSection.Scripts
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
+        SettingsSection.PluginDetail -> SettingsSection.NativePlugins
+        SettingsSection.NativePlugins -> SettingsSection.Plugins
+        SettingsSection.EnginePlugins -> SettingsSection.Plugins
         SettingsSection.ContainerDownloads -> SettingsSection.Container
         else -> if (expanded) null else SettingsSection.Menu
     }
@@ -878,6 +892,7 @@ fun SettingsScreen(
                 SettingsSection.SkillDetail -> "SkillDetail:${selectedSkill?.name.orEmpty()}"
                 SettingsSection.SubAgentDetail -> "SubAgentDetail:${selectedSubAgent?.name.orEmpty()}"
                 SettingsSection.PromptDetail -> "PromptDetail:${selectedPrompt?.number ?: 0}"
+                SettingsSection.PluginDetail -> "PluginDetail:${selectedPluginId.orEmpty()}"
                 else -> current.name
             }
             sectionStateHolder.SaveableStateProvider(stateKey) {
@@ -890,6 +905,8 @@ fun SettingsScreen(
                     Text(
                         text = if (current == SettingsSection.SkillDetail) {
                             selectedSkill?.name ?: stringResource(current.titleRes)
+                        } else if (current == SettingsSection.PluginDetail) {
+                            selectedPluginName.ifBlank { stringResource(current.titleRes) }
                         } else if (current == SettingsSection.SubAgentDetail) {
                             selectedSubAgent?.name ?: stringResource(current.titleRes)
                         } else if (expanded && current == SettingsSection.Menu) {
@@ -1238,6 +1255,40 @@ fun SettingsScreen(
                     onSelectImageGenModel = { pid, m -> viewModel.setImageGenModel(pid, m) },
                     onClearImageGenModel = { viewModel.clearImageGenModel() }
                 )
+                SettingsSection.Plugins -> PluginsOverviewSection(
+                    onOpenNative = { section = SettingsSection.NativePlugins },
+                    onOpenEngine = { section = SettingsSection.EnginePlugins }
+                )
+                SettingsSection.NativePlugins -> {
+                    val pluginViewModel: com.aicode.feature.plugin.presentation.PluginViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    NativePluginsSection(
+                        viewModel = pluginViewModel,
+                        onOpenDetail = { id, name ->
+                            selectedPluginId = id
+                            selectedPluginName = name
+                            section = SettingsSection.PluginDetail
+                        }
+                    )
+                }
+                SettingsSection.PluginDetail -> {
+                    val pluginViewModel: com.aicode.feature.plugin.presentation.PluginViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val pluginState by pluginViewModel.state.collectAsStateWithLifecycle()
+                    // 直接冷启动进到详情（配置变更恢复）时列表还没扫过，这里补一次
+                    LaunchedEffect(Unit) { pluginViewModel.refresh() }
+                    val target = selectedPluginId?.let { id ->
+                        pluginState.plugins.firstOrNull { it.id == id }
+                    }
+                    if (target == null) {
+                        // 插件目录被删/清单变坏：详情页没有主体，退回列表而不是空白
+                        LaunchedEffect(pluginState.loading) {
+                            if (!pluginState.loading) section = SettingsSection.NativePlugins
+                        }
+                    } else {
+                        PluginDetailSection(plugin = target, viewModel = pluginViewModel)
+                    }
+                }
                 SettingsSection.EnginePlugins -> EnginePluginsSection()
                 SettingsSection.Mcp -> McpSection(
                     entries = mcpEntries,
@@ -2191,8 +2242,8 @@ internal fun SettingsMenu(
             SettingsDivider()
             SettingsRow(
                 icon = FeatherIcons.Command,
-                title = stringResource(SettingsSection.EnginePlugins.titleRes),
-                onClick = { onOpen(SettingsSection.EnginePlugins) }
+                title = stringResource(SettingsSection.Plugins.titleRes),
+                onClick = { onOpen(SettingsSection.Plugins) }
             )
             SettingsDivider()
             SettingsRow(

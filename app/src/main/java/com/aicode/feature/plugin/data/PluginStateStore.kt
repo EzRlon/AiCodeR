@@ -14,6 +14,10 @@ import java.io.File
  * 记录的是相对 `~/.aicode` 的路径。
  *
  * [consentAt] 记录用户接受该插件免责声明的时刻，值为 null 表示尚未同意——此时不允许启用。
+ *
+ * [ownedMcpServers] / [ownedHooks] / [ownedProvisionMarkers] 是同一份「归属清单」在非文件物品上的延伸：
+ * MCP 条目和钩子写在宿主的共享配置文件里，marker 是插件自己创建的标记文件，三者都无法用 [ownedFiles]
+ * 表达（不是插件直写的内容），必须单独记账，卸载才摘得干净、又不会误删用户自己的同名配置。
  */
 @Serializable
 data class PluginState(
@@ -21,7 +25,10 @@ data class PluginState(
     val consentAt: Long? = null,
     val installedAt: Long? = null,
     val version: String? = null,
-    val ownedFiles: List<String> = emptyList()
+    val ownedFiles: List<String> = emptyList(),
+    val ownedMcpServers: List<String> = emptyList(),
+    val ownedHooks: List<String> = emptyList(),
+    val ownedProvisionMarkers: List<String> = emptyList()
 )
 
 @Serializable
@@ -46,8 +53,14 @@ class PluginStateStore(private val rootDir: File) {
     fun update(id: String, transform: (PluginState) -> PluginState): PluginState = synchronized(lock) {
         val all = readState().toMutableMap()
         // 归属清单是卸载的唯一依据，重复项会让卸载重复删同一个文件，在落盘这一步统一收口。
-        val next = transform(all[id] ?: PluginState())
-            .let { it.copy(ownedFiles = it.ownedFiles.distinct()) }
+        val next = transform(all[id] ?: PluginState()).let {
+            it.copy(
+                ownedFiles = it.ownedFiles.distinct(),
+                ownedMcpServers = it.ownedMcpServers.distinct(),
+                ownedHooks = it.ownedHooks.distinct(),
+                ownedProvisionMarkers = it.ownedProvisionMarkers.distinct()
+            )
+        }
         all[id] = next
         writeState(all)
         next
