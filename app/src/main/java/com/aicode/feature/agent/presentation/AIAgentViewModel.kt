@@ -1600,6 +1600,11 @@ class AIAgentViewModel @Inject constructor(
                     running = st is AgentUIState.Streaming || st is AgentUIState.Loading
                 )
                 floatBallSessionHub.updateSessionModel(session?.providerId, session?.model)
+                // 模式也要跟着会话走：只在悬浮窗点击时推模式，App 内切换会话/改模式后按钮会停在旧值。
+                floatBallSessionHub.updateModeEngine(
+                    session?.mode,
+                    floatBallSessionHub.state.value.voiceEngine
+                )
                 // 面板只展示「用户发的」与「AI 最终回复」：工具调用/结果、压缩分隔与摘要、
                 // 后台通知都是构造过程，不往悬浮窗镜像（内容多且无阅读价值）。
                 floatBallSessionHub.updateMessages(

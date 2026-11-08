@@ -1003,13 +1003,23 @@ class StoreViewModel @Inject constructor(
         // 缓存先载入 state：已有译文立即可见，再只翻译缺失 / 源文变化的条目
         val cached = translationStore.all()
         _state.update { it.copy(translations = it.translations + cached) }
-        // 技能/MCP 列表 + 专家团（映射为 EXPERT 条目共用同一缓存键体系）
+        // 技能/MCP 列表 + 专家团 + 引擎插件（映射为 StoreItem 共用同一缓存键体系）
         val candidates = _state.value.items + _state.value.teams.map { team ->
             StoreItem(
                 id = team.fileName,
                 kind = StoreKind.EXPERT,
                 name = team.name,
                 description = team.description,
+                category = "",
+                popularity = 0L,
+                detailUrl = ""
+            )
+        } + _state.value.plugins.map { plugin ->
+            StoreItem(
+                id = plugin.id,
+                kind = StoreKind.PLUGIN,
+                name = plugin.name,
+                description = plugin.description,
                 category = "",
                 popularity = 0L,
                 detailUrl = ""

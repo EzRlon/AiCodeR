@@ -899,6 +899,19 @@ private fun PluginList(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(filtered, key = { it.id }) { plugin ->
+                val translation = state.translations[
+                    StoreItem(
+                        id = plugin.id,
+                        kind = StoreKind.PLUGIN,
+                        name = plugin.name,
+                        description = plugin.description,
+                        category = "",
+                        popularity = 0L,
+                        detailUrl = ""
+                    ).storeTranslationKey()
+                ]
+                val nameZh = translation?.nameZh.orEmpty()
+                val descZh = translation?.descriptionZh.orEmpty()
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.semanticColors.cardSurface,
@@ -908,7 +921,7 @@ private fun PluginList(
                     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = plugin.name,
+                                text = if (nameZh.isBlank()) plugin.name else nameZh,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.weight(1f)
@@ -923,7 +936,7 @@ private fun PluginList(
                         }
                         if (plugin.description.isNotBlank()) {
                             Text(
-                                text = plugin.description,
+                                text = if (descZh.isBlank()) plugin.description else descZh,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,

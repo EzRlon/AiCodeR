@@ -108,6 +108,7 @@ class BackupManagerImpl @Inject constructor(
     private val compactionModelSettingsRepository: CompactionModelSettingsRepository,
     private val syncSettingsRepository: SyncSettingsRepository,
     private val containerSettingsRepository: ContainerSettingsRepository,
+    private val containerInstaller: com.aicode.feature.agent.domain.container.ContainerInstaller,
     private val watchModeSettingsRepository: WatchModeSettingsRepository,
     private val toolPermissionTierRepository: ToolPermissionTierRepository,
     private val scheduledTaskRepository: ScheduledTaskRepository,
@@ -349,6 +350,9 @@ class BackupManagerImpl @Inject constructor(
                     if (options.workspaceFiles) {
                         writeWorkspaceEntries(tar)
                     }
+                    if (options.containerEnv) {
+                        writeContainerEntries(tar)
+                    }
                     if (options.chatHistory) {
                         writeJsonlFileEntry(tar, FILE_SESSIONS) { writer ->
                             var lastTs = 0L
@@ -573,6 +577,39 @@ class BackupManagerImpl @Inject constructor(
         }
     }
 
+    /**
+     * 把容器内的开发环境写入 tar（条目名 `container/<相对 rootfs 的路径>`）。
+     *
+     * 只备用户层，不备系统镜像本体：
+     * - `/root`（home）：用户配置、脚本、引擎 CLI 的登录态与配置
+     * - `/opt`：场景安装的组件（jadx、llama.cpp 等）
+     * - `/usr/local`：npm 全局包（claude/codex/opencode）、pip 包、手工装的二进制
+     *
+     * 不备 `/proc` `/sys` `/dev` `/tmp` `/var/cache` `/var/log` 与 apk 数据库：
+     * 前四者是内核/临时挂载，后两者是缓存与包管理器元数据（镜像重建后由场景脚本重新生成）。
+     */
+    private fun writeContainerEntries(tar: TarArchiveOutputStream) {
+        val rootfs = containerInstaller.rootfsDir
+        if (!rootfs.isDirectory) return
+        CONTAINER_DIRS.forEach { rel ->
+            val dir = File(rootfs, rel)
+            if (dir.isDirectory) {
+                walkContainerFiles(dir, rel) { file, path ->
+                    writeTarFileEntry(tar, "$CONTAINER_PREFIX$path", file)
+                }
+            }
+        }
+    }
+
+    /** 递归遍历容器用户层（跳过符号链接防循环）。 */
+    private fun walkContainerFiles(dir: File, relPrefix: String, onFile: (File, String) -> Unit) {
+        dir.listFiles()?.forEach { f ->
+            if (java.nio.file.Files.isSymbolicLink(f.toPath())) return@forEach
+            val rel = "$relPrefix/${f.name}"
+            if (f.isDirectory) walkContainerFiles(f, rel, onFile) else onFile(f, rel)
+        }
+    }
+
     private fun writeTarFileEntry(tar: TarArchiveOutputStream, name: String, file: File) {
         val entry = TarArchiveEntry(name).apply { size = file.length() }
         tar.putArchiveEntry(entry)
@@ -661,7 +698,35 @@ class BackupManagerImpl @Inject constructor(
         entry.name.startsWith(WORKSPACE_PREFIX) ->
             restoreWorkspaceEntry(tar, entry.name, selectedWorkspaces, restoreMapping)
         entry.name.startsWith(AICODE_PREFIX) -> restoreAicodeEntry(tar, entry)
+        entry.name.startsWith(CONTAINER_PREFIX) -> restoreContainerEntry(tar, entry.name)
         else -> RestoreStats()
+    }
+
+    /**
+     * 还原单个容器用户层文件：直接写回 rootfs 同名路径。
+     *
+     * 路径做了越界防护：条目名去掉前缀后不允许含 `..`，否则备份包可写到 rootfs 之外。
+     */
+    private fun restoreContainerEntry(tar: TarArchiveInputStream, name: String): RestoreStats {
+        val rel = name.removePrefix(CONTAINER_PREFIX)
+        if (rel.isBlank() || rel.contains("..")) {
+            FileLogger.w(TAG, "跳过可疑容器条目：$name")
+            return RestoreStats()
+        }
+        val rootfs = containerInstaller.rootfsDir
+        val target = File(rootfs, rel)
+        // 只允许落在 CONTAINER_DIRS 之下的路径，防止备份包向 rootfs 其他位置写文件
+        val allowed = CONTAINER_DIRS.any { rel == it || rel.startsWith("$it/") }
+        if (!allowed) return RestoreStats()
+
+        target.parentFile?.mkdirs()
+        val bytes = tar.readBytes()
+        target.writeBytes(bytes)
+        // tar 不保留权限位时脚本会丢可执行位，这里按扩展名/目录约定补回
+        if (target.parentFile?.path?.contains("/bin") == true || target.name.endsWith(".sh")) {
+            target.setExecutable(true, false)
+        }
+        return RestoreStats(containerFiles = 1)
     }
 
     /** 还原单个 DB 段 jsonl 条目（调用方负责事务）。未知条目记日志后跳过。 */
@@ -1168,6 +1233,10 @@ class BackupManagerImpl @Inject constructor(
         const val WORKSPACE_PREFIX = "workspaces/"
         const val AICODE_DIR = "aicode"
         const val AICODE_PREFIX = "aicode/"
+        /** 容器开发环境（用户层）条目前缀。 */
+        const val CONTAINER_PREFIX = "container/"
+        /** 容器内需备份的用户层目录（相对 rootfs）。 */
+        val CONTAINER_DIRS = listOf("root", "opt", "usr/local")
         const val AICODE_GIT_CREDENTIALS = "git-credentials"
         const val AICODE_KEYS_DIR = "keys"
 

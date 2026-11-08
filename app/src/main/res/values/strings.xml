@@ -810,6 +810,8 @@
     <string name="backup_data_ai_assets">AI 资产（技能/子代理/记忆/笔记）</string>
     <string name="backup_data_ai_assets_hint">全局 ~/.aicode 自定义内容，含 git 凭据与工具钩子</string>
     <string name="backup_data_keys">密钥库（含私钥）</string>
+    <string name="backup_data_container_env">容器开发环境</string>
+    <string name="backup_data_container_env_hint">已装的工具链、引擎 CLI、home 配置（不含系统镜像本体，新设备需先装同版本镜像）</string>
     <string name="backup_data_keys_hint">含发布签名与 SSH 私钥；请配合口令加密并妥善保管备份</string>
     <string name="backup_data_workspace">工作区文件</string>
     <string name="backup_workspace_git_hint">工作区文件建议通过 Git 提交备份，导出备份仅作备用</string>

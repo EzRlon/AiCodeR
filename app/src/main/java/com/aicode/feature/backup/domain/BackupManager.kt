@@ -69,6 +69,8 @@ data class BackupOptions(
     val permissionRules: Boolean = true,
     val appSettings: Boolean = true,
     val workspaceFiles: Boolean = false,
+    /** 容器开发环境（用户层）：已装的工具链、引擎 CLI、home 配置。不含系统镜像本体。 */
+    val containerEnv: Boolean = false,
     /** 全局 ~/.aicode 下的自定义资产：技能 / 子代理 / 专家团 / 自定义提示词 / 记忆 / 笔记 + 根级配置（git 凭据、hooks 等）。 */
     val aiAssets: Boolean = true,
     /** 统一密钥库（~/.aicode/keys，含发布签名与 SSH 私钥）；默认关，勾选时 UI 给出警示。 */
@@ -96,7 +98,8 @@ data class RestoreStats(
     val workspaceFiles: Int = 0,
     val aiAssetFiles: Int = 0,
     val keyFiles: Int = 0,
-    val scheduledTasks: Int = 0
+    val scheduledTasks: Int = 0,
+    val containerFiles: Int = 0
 ) {
     operator fun plus(other: RestoreStats) = RestoreStats(
         providers = providers + other.providers,
@@ -110,6 +113,7 @@ data class RestoreStats(
         workspaceFiles = workspaceFiles + other.workspaceFiles,
         aiAssetFiles = aiAssetFiles + other.aiAssetFiles,
         keyFiles = keyFiles + other.keyFiles,
-        scheduledTasks = scheduledTasks + other.scheduledTasks
+        scheduledTasks = scheduledTasks + other.scheduledTasks,
+        containerFiles = containerFiles + other.containerFiles
     )
 }

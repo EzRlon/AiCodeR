@@ -58,11 +58,10 @@ import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
+import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Menu
-import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
-import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Share2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
@@ -169,7 +168,8 @@ internal fun ChatHeader(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        FeatherIcons.Plus,
+                        // 新建会话用「撰写」图标：加号已被底栏「添加文件」占用，两者含义不同。
+                        FeatherIcons.Edit3,
                         contentDescription = stringResource(R.string.chat_new_session),
                         modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)

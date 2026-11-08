@@ -105,6 +105,7 @@ class BackupViewModel @Inject constructor(
             .putBoolean(KEY_APP_SETTINGS, options.appSettings)
             .putBoolean(KEY_WORKSPACE_FILES, options.workspaceFiles)
             .putBoolean(KEY_AI_ASSETS, options.aiAssets)
+            .putBoolean(KEY_CONTAINER_ENV, options.containerEnv)
             .putBoolean(KEY_KEYS, options.keys)
             .apply()
     }
@@ -118,6 +119,7 @@ class BackupViewModel @Inject constructor(
         appSettings = prefs.getBoolean(KEY_APP_SETTINGS, true),
         workspaceFiles = prefs.getBoolean(KEY_WORKSPACE_FILES, false),
         aiAssets = prefs.getBoolean(KEY_AI_ASSETS, true),
+        containerEnv = prefs.getBoolean(KEY_CONTAINER_ENV, false),
         keys = prefs.getBoolean(KEY_KEYS, false)
     )
 
@@ -445,6 +447,7 @@ class BackupViewModel @Inject constructor(
         private const val KEY_APP_SETTINGS = "app_settings"
         private const val KEY_WORKSPACE_FILES = "workspace_files"
         private const val KEY_AI_ASSETS = "ai_assets"
+        private const val KEY_CONTAINER_ENV = "container_env"
         private const val KEY_KEYS = "keys"
     }
 }

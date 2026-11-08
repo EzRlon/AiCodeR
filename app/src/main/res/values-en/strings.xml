@@ -803,6 +803,8 @@
     <string name="backup_data_ai_assets">AI Assets (skills/subagents/memory/notes)</string>
     <string name="backup_data_ai_assets_hint">Custom content under global ~/.aicode, incl. git credentials and tool hooks</string>
     <string name="backup_data_keys">Key Library (incl. private keys)</string>
+    <string name="backup_data_container_env">Container Dev Environment</string>
+    <string name="backup_data_container_env_hint">Installed toolchains, engine CLIs and home config (excludes the base image; install the same image version on the new device first)</string>
     <string name="backup_data_keys_hint">Contains release signing and SSH private keys; encrypt with a password and store the backup safely</string>
     <string name="backup_data_workspace">Workspace Files</string>
     <string name="backup_workspace_git_hint">Workspace files are best backed up via Git; the export here is only a fallback</string>

@@ -538,6 +538,17 @@ private fun LocalBackupTab(
             )
             SettingsDivider()
             SettingsRow(
+                title = stringResource(R.string.backup_data_container_env),
+                subtitle = stringResource(R.string.backup_data_container_env_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.containerEnv,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(containerEnv = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
                 title = stringResource(R.string.backup_data_keys),
                 subtitle = stringResource(R.string.backup_data_keys_hint),
                 trailing = {

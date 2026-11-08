@@ -1,7 +1,7 @@
 [
   {
     "id": "openai",
-    "name": "OpenAI",
+    "name": "Codex",
     "type": "OPENAI",
     "baseUrl": "https://api.openai.com/",
     "models": ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"],
