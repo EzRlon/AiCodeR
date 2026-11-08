@@ -106,6 +106,7 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.BarChart2
 import compose.icons.feathericons.Book
+import compose.icons.feathericons.Command
 import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
@@ -182,6 +183,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     SubAgentEditor(R.string.settings_subagents),
     Teams(R.string.settings_teams),
     Store(R.string.store_title),
+    EnginePlugins(R.string.settings_engine_plugins),
     ScheduledTasks(R.string.schedule_title),
     ScheduledTaskEditor(R.string.schedule_title),
     Container(R.string.settings_container),
@@ -1236,6 +1238,7 @@ fun SettingsScreen(
                     onSelectImageGenModel = { pid, m -> viewModel.setImageGenModel(pid, m) },
                     onClearImageGenModel = { viewModel.clearImageGenModel() }
                 )
+                SettingsSection.EnginePlugins -> EnginePluginsSection()
                 SettingsSection.Mcp -> McpSection(
                     entries = mcpEntries,
                     statuses = mcpStatuses,
@@ -2184,6 +2187,12 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Package,
                 title = stringResource(SettingsSection.Store.titleRes),
                 onClick = { onOpen(SettingsSection.Store) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Command,
+                title = stringResource(SettingsSection.EnginePlugins.titleRes),
+                onClick = { onOpen(SettingsSection.EnginePlugins) }
             )
             SettingsDivider()
             SettingsRow(

@@ -58,7 +58,7 @@ import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
-import compose.icons.feathericons.Edit3
+import compose.icons.feathericons.Edit
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Monitor
@@ -169,7 +169,8 @@ internal fun ChatHeader(
                 ) {
                     Icon(
                         // 新建会话用「撰写」图标：加号已被底栏「添加文件」占用，两者含义不同。
-                        FeatherIcons.Edit3,
+                        // 用 Edit 而非 Edit3：Edit3 笔画集中在中部，同尺寸下视觉重量只有邻键一半。
+                        FeatherIcons.Edit,
                         contentDescription = stringResource(R.string.chat_new_session),
                         modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)

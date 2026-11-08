@@ -48,6 +48,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +57,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -112,6 +114,7 @@ import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.rememberImeBottomInset
 import com.aicode.core.ui.TaskDangerLevel
 import com.aicode.core.ui.TaskStateBorder
@@ -285,6 +288,7 @@ internal fun ChatInputBar(
     val hasContent = value.isNotBlank() || pendingAttachments.isNotEmpty()
     val canSend = hasContent
     var showAttachmentSheet by remember { mutableStateOf(false) }
+    var showToolsSheet by remember { mutableStateOf(false) }
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showIntentPicker by remember { mutableStateOf(false) }
     var codingIntentsExpanded by remember { mutableStateOf(true) }
@@ -811,10 +815,11 @@ internal fun ChatInputBar(
                     ) {
                         // 控制行用 FlowRow：屏幕窄时自动换行，保证每个按钮都完整可见（用户反馈：
                         // 小屏设备上思考强度按钮直接不见了）。不再用横向滑动——滑不到的按钮等于不存在。
+                        // 三键均匀分布：左对齐会把空隙全堆到标签键与发送键之间，视觉上标签键偏左。
                         @OptIn(ExperimentalLayoutApi::class)
                         FlowRow(
                             modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                             maxItemsInEachRow = Int.MAX_VALUE
                         ) {
@@ -872,7 +877,6 @@ internal fun ChatInputBar(
                                     }
                                 }
                             }
-                            Spacer(Modifier.width(Spacing.xs))
 
                             ModelIconButton(
                                 provider = activeProvider,
@@ -1086,14 +1090,15 @@ internal fun ChatInputBar(
                             },
                             dragTarget = voiceDragTarget
                         )
+                        // 两侧各占 3 个槽位（左：模式/模型/标签；右：工具/工作区/附件），
+                        // 发送键靠左右等宽的 weight(1f) 落在正中。工具入口必须占住发送键右侧这一格，
+                        // 否则右侧只有 2 个按钮分到同样的宽度，间距会被拉大、发送键看着偏左。
                         Row(
                             modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(
-                                space = Spacing.xs,
-                                alignment = Alignment.End
-                            ),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            ToolsIconButton(onClick = { showToolsSheet = true })
                             if (workspaceViewModel != null) {
                                 WorkspaceIconButton(
                                     viewModel = workspaceViewModel,
@@ -1147,6 +1152,10 @@ internal fun ChatInputBar(
             },
             onDismiss = { showAttachmentSheet = false }
         )
+    }
+
+    if (showToolsSheet) {
+        ToolsSheet(onDismiss = { showToolsSheet = false })
     }
 
     if (showFullScreenInput) {
@@ -1405,6 +1414,55 @@ internal fun UploadIconButton(
 }
 
 @Composable
+private fun ToolsIconButton(onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(36.dp)
+    ) {
+        Icon(
+            FeatherIcons.Tool,
+            contentDescription = stringResource(R.string.chat_tools),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/**
+ * 工具弹窗：具体工具后续再加，这里先只放一个空态、占住入口。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ToolsSheet(onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.chat_tools),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = Spacing.sm)
+            )
+            Text(
+                text = stringResource(R.string.chat_tools_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 internal fun SendButton(
     canSend: Boolean,
     hasContent: Boolean,
@@ -1597,82 +1655,73 @@ private fun VoiceHoldOverlay(
         shape = RoundedCornerShape(Radius.md),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (processing) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.semanticColors.success
-                    )
-            )
-            Text(
-                text = stringResource(
-                    when {
-                        processing -> R.string.chat_voice_processing
-                        tapMode -> R.string.chat_voice_listening_hint
-                        dragTarget?.value == VoiceDragTarget.CANCEL -> R.string.chat_voice_release_cancel
-                        dragTarget?.value == VoiceDragTarget.TRANSCRIBE -> R.string.chat_voice_release_transcribe
-                        else -> R.string.chat_voice_release_send
-                    }
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-            if (onCancel != null) {
-                IconButton(
-                    onClick = onCancel,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(R.string.common_close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
-            Icon(
-                imageVector = FeatherIcons.Mic,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
+        // Surface 的内容槽是 Box 语义：多个子项会叠在同一坐标，分行必须显式 Column。
+        val target = dragTarget?.value ?: VoiceDragTarget.SEND
+        val accent = when {
+            processing -> MaterialTheme.colorScheme.tertiary
+            tapMode -> MaterialTheme.semanticColors.success
+            target == VoiceDragTarget.CANCEL -> MaterialTheme.colorScheme.error
+            target == VoiceDragTarget.TRANSCRIBE -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.semanticColors.success
         }
-        // 微信式分支提示：手指滑入对应区域时高亮（长按模式才显示）
-        if (!processing && !tapMode && dragTarget != null) {
+        Column {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.md)
-                    .padding(bottom = Spacing.sm),
+                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
-                listOf(
-                    VoiceDragTarget.CANCEL to stringResource(R.string.chat_voice_branch_cancel),
-                    VoiceDragTarget.TRANSCRIBE to stringResource(R.string.chat_voice_branch_transcribe)
-                ).forEach { (target, label) ->
-                    val active = dragTarget.value == target
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (active) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(vertical = 6.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(accent)
+                )
+                Text(
+                    text = stringResource(
+                        when {
+                            processing -> R.string.chat_voice_processing
+                            tapMode -> R.string.chat_voice_listening_hint
+                            target == VoiceDragTarget.CANCEL -> R.string.chat_voice_release_cancel
+                            target == VoiceDragTarget.TRANSCRIBE -> R.string.chat_voice_release_transcribe
+                            else -> R.string.chat_voice_release_send
+                        }
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = accent,
+                    modifier = Modifier.weight(1f)
+                )
+                if (onCancel != null) {
+                    IconButton(
+                        onClick = onCancel,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.X,
+                            contentDescription = stringResource(R.string.common_close),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
+                Icon(
+                    imageVector = FeatherIcons.Mic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            // 只在还没滑到任何分支时提示手势：滑中后状态文字已说明结果，再写一遍就是两套显示。
+            if (!processing && !tapMode && dragTarget != null && target == VoiceDragTarget.SEND) {
+                Text(
+                    text = stringResource(R.string.chat_voice_gesture_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.md)
+                        .padding(bottom = Spacing.sm)
+                )
             }
         }
     }

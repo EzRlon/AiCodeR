@@ -2298,6 +2298,16 @@
     <string name="log_delete_file">Delete this log file</string>
     <string name="log_clear_all">Clear all logs</string>
     <string name="chat_voice_release_send">Release to transcribe · slide up to cancel</string>
+    <string name="chat_voice_gesture_hint">Slide up or left to cancel · slide right to transcribe</string>
+    <string name="chat_tools">Tools</string>
+    <string name="chat_tools_empty">Tools are still being planned and will show up here.</string>
+    <string name="settings_engine_plugins">Engine plugins</string>
+    <string name="engine_plugins_more_hint">Install more from Online Store → Plugins.</string>
+    <string name="engine_plugins_uninstall">Uninstall</string>
+    <string name="engine_plugins_uninstall_title">Uninstall engine plugin</string>
+    <string name="engine_plugins_uninstall_message">Uninstall %2$s from %1$s? It will no longer be available in that engine.</string>
+    <string name="engine_plugins_empty_title">No engine plugins installed yet</string>
+    <string name="engine_plugins_empty_desc">Install them per engine from Online Store → Plugins; they show up here.</string>
     <string name="chat_voice_processing">Recognizing…</string>
     <string name="chat_voice_listening_hint">Listening… tap again to stop</string>
     <string name="chat_voice_no_speech">Didn\'t catch that, please retry</string>
