@@ -29,7 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -58,6 +57,7 @@ import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Share2
 import com.aicode.R
+import com.aicode.core.ui.AppTextField
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
@@ -287,13 +287,13 @@ private fun GraphSection(
                 .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            OutlinedTextField(
+            AppTextField(
                 value = query,
                 onValueChange = {
                     query = it
                     viewModel.searchGraph(workspacePath, it)
                 },
-                placeholder = { Text(stringResource(R.string.graph_search_hint), style = MaterialTheme.typography.bodySmall) },
+                placeholder = stringResource(R.string.graph_search_hint),
                 singleLine = true,
                 modifier = Modifier.weight(1f)
             )

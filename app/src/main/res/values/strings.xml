@@ -2303,6 +2303,14 @@
     <string name="chat_tools">工具</string>
     <string name="chat_tools_empty">工具功能还在规划中，后续会加在这里。</string>
     <string name="settings_engine_plugins">引擎插件</string>
+    <string name="mcp_multillm_title">模型顾问团（multi-llm）</string>
+    <string name="mcp_multillm_desc">把 ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek 的网页版反向代理成 MCP 工具，AI 可以直接咨询其他模型。安装约下载 150 MB（chromium 与 Python 依赖）；首次使用需通过 VNC 窗口登录各站点（登录状态会保留）。</string>
+    <string name="mcp_multillm_install">安装</string>
+    <string name="mcp_multillm_attach">挂载到 MCP</string>
+    <string name="mcp_multillm_installing">正在安装…</string>
+    <string name="mcp_multillm_install_failed">模型顾问团安装未完成，请稍后重试（终端：aicode → 模型顾问团）</string>
+    <string name="mcp_multillm_attached">模型顾问团已挂载到下方 MCP 列表</string>
+    <string name="mcp_multillm_running_elsewhere">已有安装正在进行，请稍候</string>
     <string name="engine_plugins_more_hint">安装更多插件请到「在线商店 → 插件」。</string>
     <string name="engine_plugins_uninstall">卸载</string>
     <string name="engine_plugins_uninstall_title">卸载引擎插件</string>

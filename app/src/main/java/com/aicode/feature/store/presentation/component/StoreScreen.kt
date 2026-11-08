@@ -24,9 +24,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
+import com.aicode.core.ui.AppSwitch
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
@@ -1060,7 +1059,7 @@ private fun StoreSourcesSheet(
                             )
                         }
                     }
-                    Switch(checked = src.enabled, onCheckedChange = { onToggle(src.id, it) })
+                    AppSwitch(checked = src.enabled, onCheckedChange = { onToggle(src.id, it) })
                     if (!src.builtIn) {
                         TextButton(onClick = { onRemove(src.id) }) {
                             Text(stringResource(R.string.common_delete))
@@ -1074,20 +1073,18 @@ private fun StoreSourcesSheet(
                     Text(stringResource(R.string.store_sources_add))
                 }
             } else {
-                OutlinedTextField(
+                AppTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.store_sources_name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    label = stringResource(R.string.store_sources_name),
+                    singleLine = true
                 )
-                OutlinedTextField(
+                AppTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.store_sources_url)) },
+                    label = stringResource(R.string.store_sources_url),
                     supportingText = { Text(stringResource(R.string.store_sources_url_hint)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    singleLine = true
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     TextButton(onClick = { adding = false; name = ""; url = "" }) {

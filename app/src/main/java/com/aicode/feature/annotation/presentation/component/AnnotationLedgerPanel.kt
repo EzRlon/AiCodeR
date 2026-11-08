@@ -43,6 +43,8 @@ import com.aicode.R
 import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
+import com.aicode.core.ui.AppTextField
+import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.annotation.domain.model.AnnotationItem
 import com.aicode.feature.annotation.domain.model.AnnotationStatus
@@ -435,19 +437,19 @@ private fun AddFixLedgerDialog(
         title = { Text(stringResource(R.string.fix_ledger_add)) },
         text = {
             Column {
-                androidx.compose.material3.OutlinedTextField(
+                AppTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text(stringResource(R.string.fix_ledger_title_hint)) },
+                    label = stringResource(R.string.fix_ledger_title_hint),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    colors = dialogTextFieldColors()
                 )
                 Spacer(Modifier.height(Spacing.sm))
-                androidx.compose.material3.OutlinedTextField(
+                AppTextField(
                     value = note,
                     onValueChange = { note = it },
-                    label = { Text(stringResource(R.string.fix_ledger_note_hint)) },
-                    modifier = Modifier.fillMaxWidth()
+                    label = stringResource(R.string.fix_ledger_note_hint),
+                    singleLine = false
                 )
             }
         },

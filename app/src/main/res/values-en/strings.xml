@@ -295,6 +295,7 @@
     <string name="theme_preset_coffee">Coffee</string>
     <string name="theme_preset_graphite">Graphite</string>
     <string name="theme_preset_forest">Forest</string>
+    <string name="theme_preset_crimson">Crimson</string>
     <string name="theme_dynamic_color">Dynamic color</string>
     <string name="theme_dynamic_color_desc">Derive colors from your wallpaper. Overrides the color theme above.</string>
     <string name="settings_background_image">Background image</string>
@@ -458,6 +459,11 @@
     <!-- Engine switch -->
     <string name="engine_bridge_unavailable">Claude Code engine is not ready. Install Claude Code in the container first, or switch this session back to the built-in engine.</string>
     <string name="engine_builtin">Built-in engine</string>
+    <string name="engine_pick_title">Switch engine (applies to this session)</string>
+    <string name="engine_switch_running">A turn is running. Stop it before switching.</string>
+    <string name="queue_interject_toast">Added. It will take effect in this turn.</string>
+    <string name="queue_passive_toast">Queued. It will be sent automatically when the current work finishes.</string>
+    <string name="queue_passive_rejected_toast">Not sent: this session is paused (context limit reached). Hand off first.</string>
     <string name="engine_builtin_sub">Full tools, teams, annotation, memory, recall</string>
     <string name="engine_go_login">Sign in via browser</string>
     <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
@@ -1098,6 +1104,7 @@
     <string name="slash_command_init_desc">Analyze the workspace codebase and generate or improve the AGENTS.md project rules</string>
     <string name="slash_command_usage_desc">View today and all-time call count, token usage and estimated cost</string>
     <string name="slash_command_goal_desc">Set a session goal; the AI loops autonomously until done or the budget runs out</string>
+    <string name="slash_command_handoff_desc">Build a handoff snapshot instantly and copy it to the clipboard for a new session to take over (no compaction)</string>
     <string name="retry_error_rate_limit">Rate limit</string>
     <string name="retry_error_server_overloaded">Server overloaded</string>
     <string name="retry_error_server">Server error</string>
@@ -2298,6 +2305,8 @@
     <string name="log_delete_file">Delete this log file</string>
     <string name="log_clear_all">Clear all logs</string>
     <string name="chat_voice_release_send">Release to transcribe · slide up to cancel</string>
+    <string name="chat_voice_release_cancel">Release to cancel</string>
+    <string name="chat_voice_release_transcribe">Release to transcribe</string>
     <string name="chat_voice_gesture_hint">Slide up or left to cancel · slide right to transcribe</string>
     <string name="chat_tools">Tools</string>
     <string name="chat_tools_empty">Tools are still being planned and will show up here.</string>

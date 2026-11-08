@@ -19,7 +19,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -34,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.aicode.core.ui.AppSwitch
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
@@ -181,7 +181,7 @@ private fun LoreRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = entry.enabled, onCheckedChange = onToggle)
+        AppSwitch(checked = entry.enabled, onCheckedChange = onToggle)
         IconButton(onClick = onDelete) {
             Icon(FeatherIcons.Trash2, contentDescription = stringResource(R.string.common_delete))
         }
@@ -285,7 +285,7 @@ private fun LoreEditor(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(stringResource(R.string.lorebook_enabled), style = MaterialTheme.typography.bodyMedium)
-                Switch(checked = enabled, onCheckedChange = { enabled = it })
+                AppSwitch(checked = enabled, onCheckedChange = { enabled = it })
             }
             AppTextField(
                 value = content,
