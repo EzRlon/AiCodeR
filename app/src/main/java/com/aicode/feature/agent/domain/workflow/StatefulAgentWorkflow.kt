@@ -131,10 +131,17 @@ class StatefulAgentWorkflow @Inject constructor(
         const val VERIFIER_FILE = "agent/verifier.md"
         /** 验收报告落库前的字符上限（模型输出异常超长时截断，防撑爆卡片）。 */
         const val VERIFICATION_REPORT_MAX_CHARS = 4_000
-        /** 收尾验收输入的对话记录：最多尾部多少条消息、每条截断多少字符、总量封顶多少字符。 */
-        const val VERIFICATION_CONVERSATION_MESSAGES = 30
-        const val VERIFICATION_MESSAGE_MAX_CHARS = 1_500
-        const val VERIFICATION_CONVERSATION_MAX_CHARS = 12_000
+        /** 收尾验收输入中「助手自述」部分的预算：尾部多少条消息、每条截断多少字符、总量封顶多少字符。 */
+        const val VERIFICATION_CONVERSATION_MESSAGES = 18
+        const val VERIFICATION_MESSAGE_MAX_CHARS = 1_000
+        const val VERIFICATION_CONVERSATION_MAX_CHARS = 7_000
+        /** 收尾验收输入中「工具证据」部分的预算：与自述预算合计约 1.2 万字符，与改造前总预算持平。 */
+        const val VERIFICATION_EVIDENCE_MAX_CHARS = 5_000
+        const val VERIFICATION_EVIDENCE_ITEM_CHARS = 800
+        const val VERIFICATION_EVIDENCE_MAX_ITEMS = 6
+        const val VERIFICATION_EVIDENCE_MAX_DELEGATED = 2
+        /** 算作硬证据的工具：命令执行类（构建、测试、脚本）。子代理报告另计，属半证据。 */
+        val VERIFICATION_EVIDENCE_TOOLS = setOf("Bash", "terminal", "run_script")
         /** 快照交接的原文尾窗上限（字符）：控制在 ~1 万 token 内，接手会话首屏可承受。 */
         const val INSTANT_HANDOFF_TAIL_LIMIT = 24_000
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
@@ -1579,7 +1586,15 @@ class StatefulAgentWorkflow @Inject constructor(
             val desc = if (item.description.isNotBlank()) "（${item.description}）" else ""
             "- [$status] ${item.subject}$desc"
         }
-        val input = "目标清单（todo）：\n$todoText\n\n最近对话记录：\n${buildVerificationConversation(state.messages)}"
+        val evidence = buildVerificationEvidence(state.messages)
+        val input = buildString {
+            append("目标清单（todo）：\n").append(todoText)
+            if (evidence.isNotBlank()) {
+                append("\n\n工具实际返回（证据，非助手自述，以此为准）：\n").append(evidence)
+            }
+            append("\n\n最近对话记录（助手自述，仅作补充）：\n")
+                .append(buildVerificationConversation(state.messages))
+        }
         val prompt = promptProvider.resolvePrompt(VERIFIER_FILE).replace(LEADING_COMMENT, "")
 
         val callStartWall = System.currentTimeMillis()
@@ -1633,8 +1648,54 @@ class StatefulAgentWorkflow @Inject constructor(
     }
 
     /**
-     * 拼收尾验收的对话记录：只取用户与助手的可见文本（工具原始结果又长又碎，验收判断主要
-     * 看助手汇报与 todo 完成度），按尾部窗口与字符上限截断。
+     * 拼收尾验收的证据：命令执行类工具的原始返回，连命令一起带上。
+     * 只给验收员看助手自述，等于让被验收方自己出证词；构建/测试的真实返回才是可核对的依据。
+     * 只覆盖尚未被压缩掉的尾部消息，早于压缩点的结果不再回溯。
+     */
+    private fun buildVerificationEvidence(messages: List<AgentMessage>): String {
+        val argumentsByCall = HashMap<String, String>()
+        messages.forEach { msg ->
+            if (msg is AgentMessage.AssistantMessage) {
+                msg.toolCalls.forEach { call ->
+                    argumentsByCall[call.id] = call.arguments.entries
+                        .joinToString(" ") { (key, value) ->
+                            "$key=${value.toString().removeSurrounding("\"")}"
+                        }
+                        .take(VERIFICATION_EVIDENCE_ITEM_CHARS / 2)
+                }
+            }
+        }
+        val results = messages.filterIsInstance<AgentMessage.ToolResultMessage>()
+            .filter { it.result.isNotBlank() }
+        val picked = results.filter { it.toolName in VERIFICATION_EVIDENCE_TOOLS }
+            .takeLast(VERIFICATION_EVIDENCE_MAX_ITEMS) +
+            results.filter { it.toolName == "task" }.takeLast(VERIFICATION_EVIDENCE_MAX_DELEGATED)
+        val text = picked.joinToString("\n") { msg ->
+            val title = if (msg.toolName == "task") {
+                "子代理报告"
+            } else {
+                "${msg.toolName}：${argumentsByCall[msg.id].orEmpty()}"
+            }
+            "--- $title\n${clipEvidence(msg.result)}"
+        }
+        return if (text.length > VERIFICATION_EVIDENCE_MAX_CHARS) {
+            text.take(VERIFICATION_EVIDENCE_MAX_CHARS)
+        } else {
+            text
+        }
+    }
+
+    /** 命令输出把结论留在两端（开头是回显、结尾是成败判定），中间截断。 */
+    private fun clipEvidence(text: String): String {
+        if (text.length <= VERIFICATION_EVIDENCE_ITEM_CHARS) return text
+        val head = VERIFICATION_EVIDENCE_ITEM_CHARS / 3
+        val tail = VERIFICATION_EVIDENCE_ITEM_CHARS - head
+        return text.take(head) + "\n…\n" + text.takeLast(tail)
+    }
+
+    /**
+     * 拼收尾验收的对话记录：只取用户与助手的可见文本，按尾部窗口与字符上限截断。
+     * 工具真实返回另走 [buildVerificationEvidence]，这里的自述只作补充。
      */
     private fun buildVerificationConversation(messages: List<AgentMessage>): String {
         val sb = StringBuilder()
