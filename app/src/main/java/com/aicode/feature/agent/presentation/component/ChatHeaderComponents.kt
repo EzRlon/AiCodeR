@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -116,14 +115,17 @@ internal fun ChatHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
+                    .padding(horizontal = Spacing.sm, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 大屏常驻侧栏时隐掉汉堡键：侧栏已经摆在左边，再给个开关反而困惑。
                 if (showMenuButton) {
-                    IconButton(
-                        onClick = onOpenDrawer,
-                        modifier = Modifier.onboardingTarget(OnboardingStep.OPEN_SIDEBAR)
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .onboardingTarget(OnboardingStep.OPEN_SIDEBAR)
+                            .clickable(onClick = onOpenDrawer),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             FeatherIcons.Menu,
@@ -165,7 +167,7 @@ internal fun ChatHeader(
                 )
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(40.dp)
                         .combinedClickable(
                             onClick = onNewChat,
                             onLongClick = onNewChatLongClick
@@ -207,7 +209,13 @@ private fun WorkbenchIconButton(
     active: Boolean,
     onClick: () -> Unit
 ) {
-    IconButton(onClick = onClick) {
+    // 用 40dp 热区代替 IconButton：IconButton 会撑到 48dp 最小交互尺寸，顶栏高度就压不下来。
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
         Box(
             modifier = Modifier
                 .size(32.dp)
@@ -251,7 +259,7 @@ private fun VncHeaderIconButton() {
     val overlayOpen = window.visible && !window.minimized
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(40.dp)
             .combinedClickable(
                 onClick = viewModel::onHeaderSingleTap,
                 onDoubleClick = viewModel::onHeaderDoubleTap,

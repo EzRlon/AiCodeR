@@ -2293,7 +2293,7 @@
     <string name="chat_voice_release_cancel">松手取消</string>
     <string name="chat_voice_release_transcribe">松开 转文字</string>
     <string name="chat_voice_branch_cancel">取消</string>
-    <string name="chat_voice_branch_transcribe">滑到这里 转文字</string>
+    <string name="chat_voice_branch_transcribe">转文字</string>
     <string name="chat_voice_processing">正在识别…</string>
     <string name="chat_voice_listening_hint">正在聆听…再点一下结束</string>
     <string name="chat_voice_no_speech">没有听清，请重试</string>

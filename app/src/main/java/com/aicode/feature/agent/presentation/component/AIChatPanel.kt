@@ -2323,13 +2323,13 @@ fun AIChatPanel(
                 },
                 tokenEstimated = contextUsages[currentSessionId]?.estimated ?: (sessionLastInputTokens <= 0 && currentSessionId != null),
                 tokenProgress = run {
-                    val contextLimit = activeModelMetadata?.let {
-                        com.aicode.feature.settings.domain.model.ModelContextPolicy.effectiveInputBudget(it)
-                    } ?: 0
+                    // CLI 引擎会话没有 modelMetadata，旧逻辑回退 0 导致额度环恒不显示（用户反馈环消失）；
+                    // 无元数据时按默认窗口估算，让环始终有分母。
+                    val contextLimit = activeModelMetadata
+                        ?.let { com.aicode.feature.settings.domain.model.ModelContextPolicy.effectiveInputBudget(it) }
+                        ?: com.aicode.feature.settings.domain.model.ModelContextPolicy.DEFAULT_CONTEXT_TOKENS
                     val usage = contextUsages[currentSessionId]?.takeIf { sessionLastInputTokens > 0 || isBusy }
-                    if (contextLimit > 0) {
-                        (usage?.inputTokens ?: sessionLastInputTokens).toFloat() / contextLimit
-                    } else 0f
+                    (usage?.inputTokens ?: sessionLastInputTokens).toFloat() / contextLimit
                 },
                 isScrolling = listState.isScrollInProgress,
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,

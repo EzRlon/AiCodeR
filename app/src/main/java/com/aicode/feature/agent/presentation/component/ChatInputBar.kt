@@ -188,6 +188,9 @@ private const val OVERFLOW_MEASURE_MIN_CHARS = 120
  */
 private val INPUT_FIELD_CONTENT_PADDING = 16.dp
 
+/** 输入区右侧为内嵌麦克风预留的宽度，与麦克风热区等宽，避免文字末尾到按钮之间出现空白。 */
+private val INPUT_FIELD_MIC_SLOT = 32.dp
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatInputBar(
@@ -712,10 +715,10 @@ internal fun ChatInputBar(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // 右侧给内嵌麦克风让位（36dp 按钮 + 4dp 间隙），不影响输入与光标
+                                    // 右侧给内嵌麦克风让位（36dp 热区），不影响输入与光标
                                     .padding(
                                         start = INPUT_FIELD_CONTENT_PADDING,
-                                        end = INPUT_FIELD_CONTENT_PADDING + 40.dp
+                                        end = INPUT_FIELD_CONTENT_PADDING + INPUT_FIELD_MIC_SLOT
                                     ),
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                                     color = MaterialTheme.colorScheme.onSurface
@@ -741,21 +744,23 @@ internal fun ChatInputBar(
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .padding(end = 40.dp)
+                                                .padding(end = INPUT_FIELD_MIC_SLOT)
                                         )
                                     }
                                     inner()
                                 }
                             )
                             // 内嵌麦克风：点击进入聆听模式；激活时亮起变色（primaryContainer 圆形底，
-                            // 各主题下与输入框底色对比都足够）；尺寸与控制行按钮统一（36dp + 20dp 图标）
+                            // 各主题下与输入框底色对比都足够）
+                            // 用 Box 而非 IconButton：后者有 48dp 最小交互尺寸，会把右侧占位撑大、
+                            // 让文字与麦克风之间出现一大块空白（用户反馈）。
                             val voiceActive = voiceTapActive || voiceHoldActive
-                            IconButton(
-                                onClick = onVoiceInput,
+                            Box(
                                 modifier = Modifier
                                     .align(Alignment.CenterEnd)
-                                    .padding(end = 2.dp)
-                                    .size(36.dp)
+                                    .size(INPUT_FIELD_MIC_SLOT)
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onVoiceInput)
                                     .then(
                                         if (voiceActive) {
                                             Modifier.background(
@@ -765,7 +770,8 @@ internal fun ChatInputBar(
                                         } else {
                                             Modifier
                                         }
-                                    )
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     FeatherIcons.Mic,
@@ -1012,25 +1018,29 @@ internal fun ChatInputBar(
                             },
                             dragTarget = voiceDragTarget
                         )
-                        Box(
+                        Row(
                             modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.CenterEnd
+                            horizontalArrangement = Arrangement.spacedBy(
+                                space = Spacing.xs,
+                                alignment = Alignment.End
+                            ),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                        if (workspaceViewModel != null) {
-                            WorkspaceIconButton(
-                                viewModel = workspaceViewModel,
-                                hasRunningSessions = hasRunningSessions,
-                                onSwitchConfirmed = onSwitchWorkspaceConfirmed,
-                                modifier = Modifier.size(36.dp),
-                                iconSize = 20.dp
+                            if (workspaceViewModel != null) {
+                                WorkspaceIconButton(
+                                    viewModel = workspaceViewModel,
+                                    hasRunningSessions = hasRunningSessions,
+                                    onSwitchConfirmed = onSwitchWorkspaceConfirmed,
+                                    modifier = Modifier.size(36.dp),
+                                    iconSize = 20.dp
+                                )
+                            }
+                            UploadIconButton(
+                                enabled = true,
+                                icon = FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.chat_add_attachment),
+                                onClick = { showAttachmentSheet = true }
                             )
-                        }
-                    UploadIconButton(
-                        enabled = true,
-                        icon = FeatherIcons.Plus,
-                        contentDescription = stringResource(R.string.chat_add_attachment),
-                        onClick = { showAttachmentSheet = true }
-                    )
                         }
                     }
                 }
@@ -1374,27 +1384,38 @@ internal fun SendButton(
             .size(44.dp),
         contentAlignment = Alignment.Center
     ) {
-        if (clampedProgress > 0f) {
-            val usageLabel = stringResource(
-                if (tokenEstimated) R.string.chat_context_usage_estimated else R.string.chat_context_usage,
-                (clampedProgress * 100).toInt()
+        // 额度环必须常驻：0% 时也要画出底圈，否则新会话/无用量时整圈消失（用户反馈环不见了）。
+        val usageLabel = stringResource(
+            if (tokenEstimated) R.string.chat_context_usage_estimated else R.string.chat_context_usage,
+            (clampedProgress * 100).toInt()
+        )
+        Canvas(
+            modifier = Modifier
+                .size(44.dp)
+                // 上下文用量只靠这圈弧表达，给读屏补上百分比。
+                .semantics { contentDescription = usageLabel }
+        ) {
+            val stroke = 3.dp.toPx()
+            val arcSize = size.minDimension - stroke
+            val topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f)
+            val arcRect = androidx.compose.ui.geometry.Size(arcSize, arcSize)
+            drawArc(
+                color = arcColor.copy(alpha = 0.18f),
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcRect,
+                style = Stroke(width = stroke, cap = StrokeCap.Round)
             )
-            Canvas(
-                modifier = Modifier
-                    .size(44.dp)
-                    // 上下文用量只靠这圈弧表达，给读屏补上百分比。
-                    .semantics { contentDescription = usageLabel }
-            ) {
-                val stroke = 3.dp.toPx()
-                val arcSize = size.minDimension - stroke
-                val topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f)
+            if (clampedProgress > 0f) {
                 drawArc(
                     color = arcColor,
                     startAngle = -90f,
                     sweepAngle = 360f * clampedProgress,
                     useCenter = false,
                     topLeft = topLeft,
-                    size = androidx.compose.ui.geometry.Size(arcSize, arcSize),
+                    size = arcRect,
                     style = Stroke(width = stroke, cap = StrokeCap.Round)
                 )
             }
@@ -1439,12 +1460,12 @@ internal fun SendButton(
                                     }
                                     val dy = change.position.y - down.position.y
                                     val dx = change.position.x - down.position.x
-                                    // 微信式三分支：上滑取消；下滑入分支区后按水平偏移分取消/转文字；回中=发送。
-                                    // 实时写入 dragTarget 供语音浮层高亮当前分支。
+                                    // 方向主判据：左右滑动直接决定分支，不要求先向下移出底边（发送键贴底，下方没有可滑空间）。
+                                    // 上滑取消，回中发送；实时写入 dragTarget 供语音浮层高亮当前分支。
                                     target = when {
+                                        dx > VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.TRANSCRIBE
+                                        dx < -VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.CANCEL
                                         dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx() -> VoiceDragTarget.CANCEL
-                                        dy > VOICE_BRANCH_SLIDE_DP.dp.toPx() && dx < -VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.CANCEL
-                                        dy > VOICE_BRANCH_SLIDE_DP.dp.toPx() && dx > VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.TRANSCRIBE
                                         else -> VoiceDragTarget.SEND
                                     }
                                     dragTarget?.value = target
@@ -1484,9 +1505,6 @@ internal fun SendButton(
 
 /** 长按语音：手指向上滑动超过该距离视为取消（松手不发送）。 */
 private const val VOICE_CANCEL_SLIDE_DP = 60f
-
-/** 长按语音：下滑超过该距离进入底部分支区（取消/转文字）。 */
-private const val VOICE_BRANCH_SLIDE_DP = 60f
 
 /** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
 private const val VOICE_BRANCH_DX_DP = 50f

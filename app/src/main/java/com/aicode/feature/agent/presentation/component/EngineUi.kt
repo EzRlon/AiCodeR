@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -48,28 +50,34 @@ internal fun engineBadgeLabel(engine: String?): String? = when (engine) {
     else -> null
 }
 
-/** 引擎标识图标：内置=星形，CLI=品牌 logo / 终端图标。 */
+/** 引擎标识图标：内置=星形，CLI=品牌 logo / 终端图标。[tint] 为 null 时按次级文字色着色。 */
 @Composable
-internal fun EngineMarkIcon(engine: String?, size: Dp, modifier: Modifier = Modifier) {
+internal fun EngineMarkIcon(
+    engine: String?,
+    size: Dp,
+    modifier: Modifier = Modifier,
+    tint: Color? = null
+) {
+    val iconTint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant
     when (engine) {
         AgentEngines.CLAUDE_CODE -> ModelLogoIcon(modelName = "claude", size = size, modifier = modifier)
         AgentEngines.CODEX -> ModelLogoIcon(modelName = "gpt", size = size, modifier = modifier)
         AgentEngines.OPENCODE -> Icon(
             FeatherIcons.Terminal,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = iconTint,
             modifier = modifier.size(size)
         )
         null -> Icon(
             Icons.Rounded.AutoAwesome,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = iconTint,
             modifier = modifier.size(size)
         )
         else -> Icon(
             FeatherIcons.Terminal,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = iconTint,
             modifier = modifier.size(size)
         )
     }
@@ -84,6 +92,7 @@ internal val selectableEngines: List<String?> =
  * 引擎入口收编在这里而非输入区控制行——控制行按钮已满一排，再进一个会换行成两排（用户反馈）。
  * 切换失败（回合进行中）弹 Toast。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun EngineSwitcherRow(currentEngine: String?, onSetEngine: (String?) -> Boolean) {
     val context = LocalContext.current
@@ -94,13 +103,22 @@ internal fun EngineSwitcherRow(currentEngine: String?, onSetEngine: (String?) ->
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.size(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // FlowRow：四个胶囊一行放不下时整体换行，而不是把最后一个胶囊挤成竖排单字（用户反馈）。
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             selectableEngines.forEach { engine ->
                 val current = currentEngine == engine
                 val background = if (current) {
                     MaterialTheme.colorScheme.primaryContainer
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                }
+                val labelColor = if (current) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -116,16 +134,14 @@ internal fun EngineSwitcherRow(currentEngine: String?, onSetEngine: (String?) ->
                         }
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
-                    EngineMarkIcon(engine = engine, size = 14.dp)
+                    EngineMarkIcon(engine = engine, size = 14.dp, tint = labelColor)
                     Spacer(Modifier.width(4.dp))
                     Text(
                         text = engineDisplayName(engine),
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (current) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
+                        maxLines = 1,
+                        softWrap = false,
+                        color = labelColor
                     )
                 }
             }
