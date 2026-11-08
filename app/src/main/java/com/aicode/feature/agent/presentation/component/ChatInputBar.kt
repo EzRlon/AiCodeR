@@ -1663,21 +1663,13 @@ private fun VoiceHoldOverlay(
                         text = label,
                         style = MaterialTheme.typography.labelMedium,
                         color = if (active) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
+                            MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .background(
-                                if (active) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant
-                                },
-                                RoundedCornerShape(Radius.sm)
-                            )
-                            .padding(vertical = 8.dp),
+                            .padding(vertical = 6.dp),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }

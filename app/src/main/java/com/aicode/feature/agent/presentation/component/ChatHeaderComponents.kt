@@ -121,9 +121,8 @@ internal fun ChatHeader(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            // 侧栏图标：MessageSquare 表示「会话/消息列表」，
-                            // 与右侧专家团的 Users 图标区分开，不再用通用汉堡菜单。
-                            FeatherIcons.MessageSquare,
+                            // 侧栏入口用常规汉堡菜单图标：这是「打开侧栏」的通用语义。
+                            FeatherIcons.Menu,
                             contentDescription = stringResource(R.string.chat_open_sidebar),
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)

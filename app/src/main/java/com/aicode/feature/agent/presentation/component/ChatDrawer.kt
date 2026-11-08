@@ -2219,14 +2219,6 @@ private fun DeliverableRow(
     // 动作作用域挂在行上（菜单内容随退场动画销毁，不能在那里 rememberCoroutineScope）。
     val actionScope = rememberCoroutineScope()
     val key = deliverableGroupKey(item.attachment.fileName)
-    // 图标表达文件类型，不再用下载图标（交付物已自动导出，无需暗示下载）。
-    val icon = when (key) {
-        "apk" -> FeatherIcons.Box
-        "archive" -> FeatherIcons.Archive
-        "image" -> FeatherIcons.Image
-        "doc" -> FeatherIcons.FileText
-        else -> FeatherIcons.File
-    }
     val timeText = remember(item.timestamp) {
         if (item.timestamp <= 0) "" else SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
             .format(Date(item.timestamp))
@@ -2247,13 +2239,6 @@ private fun DeliverableRow(
                 .padding(horizontal = Spacing.md, vertical = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.width(Spacing.sm))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     item.attachment.fileName,
