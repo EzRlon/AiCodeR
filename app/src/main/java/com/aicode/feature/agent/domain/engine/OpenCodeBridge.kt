@@ -74,10 +74,14 @@ class OpenCodeBridge @Inject constructor(
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val engineOptionsRepository: EngineOptionsRepository,
-    private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
+    private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
+    private val deliveryRegistry: CliDeliveryRegistry
 ) {
     private companion object {
         const val TAG = "OpenCodeBridge"
+
+        /** aicode_bridge 的交付工具名；CLI 侧实际工具名可能带前缀，用包含匹配。 */
+        const val SEND_FILE_TOOL = "send_file"
 
         const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
 
@@ -330,7 +334,7 @@ class OpenCodeBridge @Inject constructor(
         // 附件以容器路径告知（正文末尾，引擎用自身工具读取）
         val prompt = userRequest + attachmentSuffix(attachments)
 
-        val acc = TurnAccumulator()
+        val acc = TurnAccumulator(sessionId)
         try {
             withContext(Dispatchers.IO) {
                 val w = process.outputStream.bufferedWriter()
@@ -401,7 +405,7 @@ class OpenCodeBridge @Inject constructor(
     // ── run --format json NDJSON → AgentEvent 翻译 ─────────────────
 
     /** 单回合累积状态。 */
-    private class TurnAccumulator {
+    private class TurnAccumulator(val sessionId: String) {
         val reasoning = StringBuilder()
         var remoteSessionId: String? = null
         var emittedAny = false
@@ -433,7 +437,7 @@ class OpenCodeBridge @Inject constructor(
                 acc.reasoning.append(part["text"]?.jsonPrimitive?.contentOrNull ?: "")
                 listOf(AgentEvent.ReasoningDelta(accumulated = acc.reasoning.toString()))
             }
-            "tool_use" -> parseToolUse(obj)
+            "tool_use" -> parseToolUse(obj, acc)
             "error" -> {
                 val error = obj["error"] as? JsonObject
                 val message = error?.get("message")?.jsonPrimitive?.contentOrNull
@@ -449,7 +453,7 @@ class OpenCodeBridge @Inject constructor(
      * 工具调用只在成败后一次性到达（session.tool.success/failed）：补发 Started+Finished 同 id 配对，
      * 保证下游「执行中」工具行被 REPLACE 而非残留。
      */
-    private fun parseToolUse(obj: JsonObject): List<AgentEvent> {
+    private fun parseToolUse(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
         val part = obj["part"] as? JsonObject ?: return emptyList()
         val state = part["state"] as? JsonObject ?: return emptyList()
         val id = part["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
@@ -461,9 +465,21 @@ class OpenCodeBridge @Inject constructor(
             ?: (state["error"] as? JsonPrimitive)?.contentOrNull
             ?: state["output"]?.toString() // 结构化输出兑底（qa P2-2）
             ?: "（无结果）"
+        // 与内置 sendFile 同一语义：交付物在 App 侧登记，这里取出来挂成文件卡片
+        val attachments = if (!isError && toolName.contains(SEND_FILE_TOOL)) {
+            deliveryRegistry.drain(acc.sessionId)
+        } else {
+            emptyList()
+        }
         return listOf(
             AgentEvent.ToolCallStarted(id = id, toolName = toolName, argsPreview = input.toString().take(400)),
-            AgentEvent.ToolCallFinished(id = id, toolName = toolName, result = result.take(4000), isError = isError)
+            AgentEvent.ToolCallFinished(
+                id = id,
+                toolName = toolName,
+                result = result.take(4000),
+                isError = isError,
+                attachments = attachments
+            )
         )
     }
 

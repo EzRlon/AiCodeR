@@ -73,13 +73,17 @@ class ClaudeCodeBridge @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
-    private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
+    private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
+    private val deliveryRegistry: CliDeliveryRegistry
 ) {
     private companion object {
         const val TAG = "ClaudeCodeBridge"
 
         /** 容器内桥接资产目录：/root/.aicode 独立于 rootfs（升级不丢），且是 node 可用的绝对路径。 */
         const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
+
+        /** aicode_bridge 的交付工具名；CLI 侧实际工具名形如 mcp__aicode_bridge__send_file，用包含匹配。 */
+        const val SEND_FILE_TOOL = "send_file"
 
         const val MCP_SERVER_NAME = "permission_bridge"
         const val MCP_TOOL_NAME = "request_permission"
@@ -508,7 +512,7 @@ class ClaudeCodeBridge @Inject constructor(
             }
 
             var gotResult = false
-            val acc = TurnAccumulator()
+            val acc = TurnAccumulator(sessionId)
             val reader = process.inputStream.bufferedReader()
             // claude 的启动类致命错误（如 resume 会话不存在）可能打到 stdout 而非 stderr，
             // 退出分类必须两者都看，否则“续接会话缺失”会被当成普通提前退出、错过全新回合重试
@@ -572,7 +576,7 @@ class ClaudeCodeBridge @Inject constructor(
     // ── stream-json → AgentEvent 翻译 ────────────────────────────────
 
     /** 单回合累积状态：流式增量需拼成「全量累积文本」才能对齐 AgentEvent 契约（消费端是整体替换）。 */
-    private class TurnAccumulator {
+    private class TurnAccumulator(val sessionId: String) {
         val text = StringBuilder()
         val reasoning = StringBuilder()
         /** tool_use id → 工具名：tool_result 回来时补齐 Finished 的 toolName。 */
@@ -680,12 +684,22 @@ class ClaudeCodeBridge @Inject constructor(
             val b = block as? JsonObject ?: return@mapNotNull null
             if (b["type"]?.jsonPrimitive?.contentOrNull != "tool_result") return@mapNotNull null
             val toolUseId = b["tool_use_id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val name = acc.toolNames[toolUseId] ?: ""
+            val failed = b["is_error"]?.jsonPrimitive?.contentOrNull == "true" ||
+                (b["is_error"] as? JsonPrimitive)?.content == "true"
+            // send_file 的交付语义在 App 侧登记（见 PermissionBridgeServer.handleSendFile），
+            // 这里取出来挂成文件卡片；失败时不取，避免把半份交付渲染出来。
+            val attachments = if (!failed && name.contains(SEND_FILE_TOOL)) {
+                deliveryRegistry.drain(acc.sessionId)
+            } else {
+                emptyList()
+            }
             AgentEvent.ToolCallFinished(
                 id = toolUseId,
-                toolName = acc.toolNames[toolUseId] ?: "",
+                toolName = name,
                 result = extractText(b["content"]),
-                isError = b["is_error"]?.jsonPrimitive?.contentOrNull == "true" ||
-                    (b["is_error"] as? JsonPrimitive)?.content == "true"
+                isError = failed,
+                attachments = attachments
             )
         }
     }
@@ -935,7 +949,8 @@ const TOOLS = [
   { name: 'ledger_list', description: 'List annotation ledger and fix ledger entries with statuses (queried via the AiCode app)', inputSchema: { type: 'object', properties: {} } },
   { name: 'ledger_advance', description: 'Advance an annotation and its linked fix-ledger entry to FIXING/REVIEW via the AiCode app (closing is user-only)', inputSchema: { type: 'object', properties: { annotationId: { type: 'string' }, target: { type: 'string', enum: ['FIXING', 'REVIEW'] } }, required: ['annotationId', 'target'] } },
   { name: 'recall_search', description: 'Full-text search archived history sessions via the AiCode app, including messages compacted out of context (FTS for ASCII, fuzzy for CJK)', inputSchema: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string', enum: ['session', 'workspace', 'all'] }, limit: { type: 'integer' } }, required: ['query'] } },
-  { name: 'graph_search', description: 'Search the project conclusion graph via the AiCode app: decisions, verified pitfalls and pending items already settled in this project, with their source sessions. Use recall_search for raw message details instead.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, includeInvalid: { type: 'boolean' }, limit: { type: 'integer' } } } }
+  { name: 'graph_search', description: 'Search the project conclusion graph via the AiCode app: decisions, verified pitfalls and pending items already settled in this project, with their source sessions. Use recall_search for raw message details instead.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, includeInvalid: { type: 'boolean' }, limit: { type: 'integer' } } } },
+  { name: 'send_file', description: 'Deliver existing workspace files to the user: they appear as file cards in the chat (tap to open, APKs can be installed directly) and are listed on the Deliverables page. Use it when you finish a build or produce an artifact the user should receive. All paths must exist; the whole call fails if any path is invalid.', inputSchema: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' }, description: 'Container paths, e.g. ~/workspace/app/build/outputs/apk/release/app-release.apk' } }, required: ['paths'] } }
 ];
 
 function toolsCall(name, args) {
@@ -989,7 +1004,7 @@ function handleLine(line) {
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: local }] } });
       return;
     }
-    if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search' || name === 'graph_search') {
+    if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search' || name === 'graph_search' || name === 'send_file') {
       askApp(name, (name === 'recall_search' || name === 'graph_search') ? Object.assign({ projectRoot: PROJECT }, args) : args).then((res) => {
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.ok ? (res.result || '成功') : ('错误：' + (res.message || '未知错误')) }] } });
       }).catch((e) => {

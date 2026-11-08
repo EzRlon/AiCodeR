@@ -69,10 +69,14 @@ class CodexBridge @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
-    private val engineOptionsRepository: EngineOptionsRepository
+    private val engineOptionsRepository: EngineOptionsRepository,
+    private val deliveryRegistry: CliDeliveryRegistry
 ) {
     private companion object {
         const val TAG = "CodexBridge"
+
+        /** aicode_bridge 的交付工具名；CLI 侧实际工具名可能带前缀，用包含匹配。 */
+        const val SEND_FILE_TOOL = "send_file"
 
         /** 发 ToolCallStarted 的 item 类型白名单（与 parseItemCompleted 的 Finished 配对）。 */
         val TOOL_ITEM_TYPES = setOf(
@@ -423,7 +427,7 @@ class CodexBridge @Inject constructor(
             }
         }
 
-        val acc = TurnAccumulator()
+        val acc = TurnAccumulator(sessionId)
         try {
             withContext(Dispatchers.IO) {
                 val w = process.outputStream.bufferedWriter()
@@ -482,7 +486,7 @@ class CodexBridge @Inject constructor(
     // ── ThreadEvent JSONL → AgentEvent 翻译 ────────────────────────
 
     /** 单回合累积状态：codex 无文本增量，文本/工具按 item 整段交付。 */
-    private class TurnAccumulator {
+    private class TurnAccumulator(val sessionId: String) {
         val reasoning = StringBuilder()
         /** item id → 展示工具名：item.completed 回来时补齐 Finished 的 toolName。 */
         val toolNames = mutableMapOf<String, String>()
@@ -549,12 +553,22 @@ class CodexBridge @Inject constructor(
             else -> {
                 val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
                 val status = item["status"]?.jsonPrimitive?.contentOrNull
+                val name = acc.toolNames[id]
+                    ?: displayToolName(item["type"]?.jsonPrimitive?.contentOrNull, item)
+                val failed = status == "failed"
+                // 与内置 sendFile 同一语义：交付物在 App 侧登记，这里取出来挂成文件卡片
+                val attachments = if (!failed && name.contains(SEND_FILE_TOOL)) {
+                    deliveryRegistry.drain(acc.sessionId)
+                } else {
+                    emptyList()
+                }
                 return listOf(
                     AgentEvent.ToolCallFinished(
                         id = id,
-                        toolName = acc.toolNames[id] ?: displayToolName(item["type"]?.jsonPrimitive?.contentOrNull, item),
+                        toolName = name,
                         result = itemResult(item, status),
-                        isError = status == "failed"
+                        isError = failed,
+                        attachments = attachments
                     )
                 )
             }

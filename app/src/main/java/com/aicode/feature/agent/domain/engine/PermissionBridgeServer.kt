@@ -48,7 +48,9 @@ class PermissionBridgeServer @Inject constructor(
     private val fixLedgerRepository: FixLedgerRepository,
     private val annotationRepository: com.aicode.feature.annotation.data.AnnotationRepository,
     private val recallTool: com.aicode.feature.agent.domain.tool.recall.RecallTool,
-    private val graphSearchTool: com.aicode.feature.memorygraph.domain.tool.GraphSearchTool
+    private val graphSearchTool: com.aicode.feature.memorygraph.domain.tool.GraphSearchTool,
+    private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
+    private val deliveryRegistry: CliDeliveryRegistry
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -197,6 +199,54 @@ class PermissionBridgeServer @Inject constructor(
         }
     }
 
+    /**
+     * `send_file`：把工作区文件登记为本次会话的交付物，等桥在解析工具结果时取走挂成文件卡片。
+     *
+     * 与内置 `SendFileTool` 保持同一套语义：**原子**——任一文件无效则整体失败，不登记任何附件。
+     * 否则用户会看到半份交付，且模型收到的"成功"与实际不符。
+     */
+    private fun handleSendFile(input: JsonObject, sessionId: String): JsonObject {
+        val paths = (input["paths"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+        if (paths.isEmpty()) return errData("paths 不能为空")
+
+        val attachments = mutableListOf<com.aicode.feature.agent.presentation.AgentAttachment>()
+        val errors = mutableListOf<String>()
+        paths.forEach { path ->
+            runCatching {
+                if (!fileAccess.exists(path) || fileAccess.isDirectory(path)) {
+                    error("文件不存在：$path")
+                }
+                val local = fileAccess.copyToLocal(path)
+                val name = path.substringAfterLast('/').ifBlank { local.name }
+                val mime = java.net.URLConnection.guessContentTypeFromName(name)
+                    ?: "application/octet-stream"
+                com.aicode.feature.agent.presentation.AgentAttachment(
+                    fileName = name,
+                    containerPath = path,
+                    localPath = local.absolutePath,
+                    mimeType = mime,
+                    sizeBytes = fileAccess.fileSize(path),
+                    isImage = mime.startsWith("image/")
+                )
+            }.onSuccess { attachments += it }
+                .onFailure { errors += (it.message ?: path) }
+        }
+        if (errors.isNotEmpty()) {
+            return errData("本次未交付任何文件（全部路径必须有效）：\n" + errors.joinToString("\n"))
+        }
+
+        deliveryRegistry.record(sessionId, attachments)
+        FileLogger.i(TAG, "CLI 交付登记: session=$sessionId files=${attachments.size}")
+        return okData(
+            "已交付 ${attachments.size} 个文件到聊天区：\n" +
+                attachments.joinToString("\n") { it.fileName }
+        )
+    }
+
     private fun compactPreview(input: JsonObject): String {
         val text = input.toString()
         return if (text.length <= 300) text else text.take(300) + "…"
@@ -207,6 +257,7 @@ class PermissionBridgeServer @Inject constructor(
     /** 账本类数据请求：只读合流列表与状态推进（与本体 fixledger 工具同语义，只能前进，关闭由用户手动）。 */
     private suspend fun handleDataRequest(tool: String, input: JsonObject, sessionId: String): JsonObject {
         return when (tool) {
+            "send_file" -> handleSendFile(input, sessionId)
             "ledger_list" -> {
                 val annotations = annotationRepository.items.first()
                 val fixes = fixLedgerRepository.items.first()
