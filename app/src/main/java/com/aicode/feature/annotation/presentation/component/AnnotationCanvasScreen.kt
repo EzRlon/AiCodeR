@@ -103,6 +103,10 @@ private const val BAR_PREF_NAME = "live_annotation_bar"
 private const val BAR_PREF_X = "x"
 private const val BAR_PREF_Y = "y"
 
+/** 布局版本：默认位置改成居中后自增，旧版存下的贴角坐标作废。 */
+private const val BAR_PREF_LAYOUT_VERSION = "layout_version"
+private const val BAR_LAYOUT_VERSION = 2
+
 /**
  * 标注中心统一画布（反馈 6）：一块画布 + 一条工具架，活标注与截屏标注在同一界面完成。
  *
@@ -406,14 +410,17 @@ internal fun AnnotationCanvasScreen(
         }
         LaunchedEffect(hostCanvasSize, barSize) {
             if (barOffset == null && hostCanvasSize.width > 0) {
-                val saved = if (barPrefs.contains(BAR_PREF_X) && barPrefs.contains(BAR_PREF_Y)) {
+                val layoutStale = barPrefs.getInt(BAR_PREF_LAYOUT_VERSION, 1) < BAR_LAYOUT_VERSION
+                val saved = if (!layoutStale && barPrefs.contains(BAR_PREF_X) && barPrefs.contains(BAR_PREF_Y)) {
                     Offset(barPrefs.getFloat(BAR_PREF_X, 0f), barPrefs.getFloat(BAR_PREF_Y, 0f))
                 } else {
                     null
                 }
+                // 默认位置：水平居中、垂直略偏上（避开底部录制/保存条），不再贴左上角。
                 val fallback = Offset(
-                    (screenWidthPx - barWidthForClamp - with(density) { 16.dp.toPx() }).coerceAtLeast(16f),
-                    screenHeightPx * if (screenWidthPx > screenHeightPx) 0.4f else 0.62f
+                    ((screenWidthPx - barWidthForClamp) / 2f).coerceAtLeast(16f),
+                    (screenHeightPx * if (screenWidthPx > screenHeightPx) 0.4f else 0.62f)
+                        .coerceAtLeast(16f)
                 )
                 barOffset = clampBar(saved ?: fallback)
             }
@@ -429,7 +436,11 @@ internal fun AnnotationCanvasScreen(
                     detectDragGestures(
                         onDragEnd = {
                             barOffset?.let {
-                                barPrefs.edit().putFloat(BAR_PREF_X, it.x).putFloat(BAR_PREF_Y, it.y).apply()
+                                barPrefs.edit()
+                                    .putFloat(BAR_PREF_X, it.x)
+                                    .putFloat(BAR_PREF_Y, it.y)
+                                    .putInt(BAR_PREF_LAYOUT_VERSION, BAR_LAYOUT_VERSION)
+                                    .apply()
                             }
                         }
                     ) { change, delta ->

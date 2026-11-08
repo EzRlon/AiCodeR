@@ -52,7 +52,7 @@ class GeneralSettingsRepository @Inject constructor(
         val GOAL_MAX_TOKENS_KEY = intPreferencesKey("goal_max_tokens")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
         val SELF_IMPROVE_MODE_KEY = booleanPreferencesKey("self_improve_mode")
-        /** REA 逆向分析工作台的首次知情告知：勾选同意后不再弹出。 */
+        /** REA 程序分析工作台的首次知情告知：勾选同意后不再弹出。 */
         val REA_CONSENT_ACKNOWLEDGED_KEY = booleanPreferencesKey("rea_consent_acknowledged")
         val HANDOFF_PROMPT_ENABLED_KEY = booleanPreferencesKey("handoff_prompt_enabled")
         val HANDOFF_PROMPT_PERCENT_KEY = intPreferencesKey("handoff_prompt_percent")
@@ -365,7 +365,7 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[SELF_IMPROVE_MODE_KEY] = enabled }
     }
 
-    /** REA 逆向分析知情告知是否已同意；null=尚未加载完成。 */
+    /** REA 程序分析知情告知是否已同意；null=尚未加载完成。 */
     val reaConsentAcknowledgedFlow: Flow<Boolean?> = context.generalDataStore.data.map { prefs ->
         prefs[REA_CONSENT_ACKNOWLEDGED_KEY]
     }

@@ -153,7 +153,37 @@ data class AppThemePreset(
             )
         )
 
-        val ALL_PRESETS = listOf(DEFAULT, COFFEE, GRAPHITE, FOREST)
+        /** 鲜红：高饱和正红主色，深色态提亮为朱红以保证对比度。 */
+        val CRIMSON = fromSeeds(
+            id = "crimson",
+            nameRes = R.string.theme_preset_crimson,
+            lightSeed = AppThemeSeed(
+                primary = Color(0xFFE11D2E),
+                secondary = Color(0xFFB91C1C),
+                tertiary = Color(0xFF9A3412),
+                background = Color(0xFFFDF3F3),
+                surface = Color(0xFFFFFAFA),
+                surfaceVariant = Color(0xFFF7E3E3),
+                onSurface = Color(0xFF2A1113),
+                onSurfaceVariant = Color(0xFF6B4A4D),
+                outline = Color(0xFFB98A8D),
+                outlineVariant = Color(0xFFEBCFD0)
+            ),
+            darkSeed = AppThemeSeed(
+                primary = Color(0xFFFF5A5F),
+                secondary = Color(0xFFFF8A8F),
+                tertiary = Color(0xFFFFA94D),
+                background = Color(0xFF14090A),
+                surface = Color(0xFF1E1011),
+                surfaceVariant = Color(0xFF2B1719),
+                onSurface = Color(0xFFFDEAEA),
+                onSurfaceVariant = Color(0xFFC9A0A3),
+                outline = Color(0xFF7A4A4E),
+                outlineVariant = Color(0xFF3A1F22)
+            )
+        )
+
+        val ALL_PRESETS = listOf(DEFAULT, COFFEE, GRAPHITE, FOREST, CRIMSON)
 
         fun findById(id: String?): AppThemePreset =
             ALL_PRESETS.firstOrNull { it.id == id } ?: DEFAULT

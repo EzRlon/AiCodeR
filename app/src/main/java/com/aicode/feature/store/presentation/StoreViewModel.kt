@@ -15,6 +15,8 @@ import com.aicode.feature.store.data.StoreSourceConfig
 import com.aicode.feature.store.data.CmSkill
 import com.aicode.feature.store.data.CmSkillsResponse
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.EngineTarget
+import com.aicode.feature.store.data.PluginStoreItem
 import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.store.data.StoreTranslationService
@@ -24,6 +26,7 @@ import com.aicode.feature.store.data.storeTranslationKey
 import com.aicode.feature.store.data.storeTranslationSourceHash
 import com.aicode.feature.store.data.toStoreItem
 import com.aicode.feature.store.domain.ScanResult
+import com.aicode.feature.store.domain.EnginePluginInstaller
 import com.aicode.feature.store.domain.StoreInstallScanner
 import com.aicode.feature.store.domain.StoreInstaller
 import com.aicode.feature.store.domain.SkillInstallPlan
@@ -112,7 +115,13 @@ data class StoreUiState(
     /** 扫描命中后挂起的安装（非空时展示确认 / 警示弹窗）；确认或取消后置回 null。 */
     val pendingScan: PendingScanGate? = null,
     /** 条目 key → 最近一次安装前安全扫描结论（详情弹层「安全扫描」区块展示）。 */
-    val lastScans: Map<String, ScanResult> = emptyMap()
+    val lastScans: Map<String, ScanResult> = emptyMap(),
+    /** 引擎插件列表（PLUGIN tab）。 */
+    val plugins: List<PluginStoreItem> = emptyList(),
+    /** 插件引擎筛选：null = 全部。 */
+    val pluginEngineFilter: EngineTarget? = null,
+    /** 插件已安装的引擎组合（key = 插件 id，value = 已装的引擎集合）。 */
+    val installedPluginEngines: Map<String, Set<EngineTarget>> = emptyMap()
 )
 
 /**
@@ -134,6 +143,7 @@ class StoreViewModel @Inject constructor(
     private val languageSettings: LanguageSettingsRepository,
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
     private val sourceConfig: StoreSourceConfig,
+    private val pluginInstaller: EnginePluginInstaller,
     baseClient: okhttp3.OkHttpClient,
     @param:ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
@@ -234,6 +244,7 @@ class StoreViewModel @Inject constructor(
             StoreKind.SKILL -> loadSkills(nextPage = true)
             StoreKind.MCP -> loadMcp(next = true)
             StoreKind.EXPERT -> Unit
+            StoreKind.PLUGIN -> Unit
         }
     }
 
@@ -242,6 +253,7 @@ class StoreViewModel @Inject constructor(
             StoreKind.SKILL -> loadSkills(nextPage = false)
             StoreKind.MCP -> loadMcp(next = false)
             StoreKind.EXPERT -> loadTeams()
+            StoreKind.PLUGIN -> loadPlugins()
         }
     }
 
@@ -493,6 +505,10 @@ class StoreViewModel @Inject constructor(
                         FileLogger.w(TAG, "install() 收到专家条目，已忽略")
                         _state.update { it.copy(installingId = null, message = "专家请在内置专家页安装") }
                     }
+                    StoreKind.PLUGIN -> {
+                        FileLogger.w(TAG, "install() 收到插件条目，已忽略")
+                        _state.update { it.copy(installingId = null, message = "插件请在内置插件页按引擎安装") }
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -597,6 +613,119 @@ class StoreViewModel @Inject constructor(
                 kickTranslation()
             }
         }
+    }
+
+    /**
+     * 加载引擎插件：内置清单（assets/plugin_catalog.json）立即展示，随后按各引擎 `plugin list`
+     * 回填已安装状态。已安装判定调引擎自己的 CLI，不读其插件目录。
+     */
+    fun loadPlugins() {
+        viewModelScope.launch {
+            val builtin = withContext(Dispatchers.IO) { parsePluginCatalog() }
+            _state.update { it.copy(plugins = builtin) }
+            kickTranslation()
+
+            val installedByEngine = withContext(Dispatchers.IO) {
+                EngineTarget.entries.associateWith { target ->
+                    runCatching { pluginInstaller.listInstalled(target) }.getOrDefault(emptySet())
+                }
+            }
+            if (_state.value.tab != StoreKind.PLUGIN) return@launch
+            _state.update { s ->
+                s.copy(
+                    installedPluginEngines = s.plugins.associate { item ->
+                        item.id to item.engines.filter { target ->
+                            installedByEngine[target].orEmpty().any { it.contains(item.name) }
+                        }.toSet()
+                    }
+                )
+            }
+        }
+    }
+
+    fun setPluginEngineFilter(target: EngineTarget?) {
+        _state.update { it.copy(pluginEngineFilter = target) }
+    }
+
+    /** 安装插件到指定引擎：命令失败时把引擎输出带回 UI，不静默失败。 */
+    fun installPlugin(item: PluginStoreItem, target: EngineTarget) {
+        if (_state.value.installingId != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(installingId = item.id, error = null) }
+            runCatching { pluginInstaller.install(item, target) }.fold(
+                onSuccess = {
+                    _state.update { s ->
+                        s.copy(
+                            installingId = null,
+                            installedPluginEngines = s.installedPluginEngines.toMutableMap().apply {
+                                put(item.id, get(item.id).orEmpty() + target)
+                            }
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    _state.update { it.copy(installingId = null, error = e.message ?: "安装失败") }
+                }
+            )
+        }
+    }
+
+    fun uninstallPlugin(item: PluginStoreItem, target: EngineTarget) {
+        viewModelScope.launch {
+            _state.update { it.copy(installingId = item.id, error = null) }
+            runCatching { pluginInstaller.uninstall(item, target) }.fold(
+                onSuccess = {
+                    _state.update { s ->
+                        s.copy(
+                            installingId = null,
+                            installedPluginEngines = s.installedPluginEngines.toMutableMap().apply {
+                                put(item.id, get(item.id).orEmpty() - target)
+                            }
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    _state.update { it.copy(installingId = null, error = e.message ?: "卸载失败") }
+                }
+            )
+        }
+    }
+
+    /** 内置插件清单：assets/plugin_catalog.json（字段：id/name/description/engines/installRef/marketplace）。 */
+    private fun parsePluginCatalog(): List<PluginStoreItem> = runCatching {
+        val text = context.assets.open("plugin_catalog.json").bufferedReader().use { it.readText() }
+        val arr = org.json.JSONObject(text).optJSONArray("plugins") ?: return@runCatching emptyList()
+        val out = ArrayList<PluginStoreItem>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+            val engineNames = obj.optJSONArray("engines") ?: continue
+            val engines = (0 until engineNames.length()).mapNotNull { idx ->
+                when (engineNames.optString(idx)) {
+                    "claude_code" -> EngineTarget.CLAUDE_CODE
+                    "codex" -> EngineTarget.CODEX
+                    "opencode" -> EngineTarget.OPENCODE
+                    else -> null
+                }
+            }
+            if (engines.isEmpty()) continue
+            out.add(
+                PluginStoreItem(
+                    id = id,
+                    name = obj.optString("name", id),
+                    description = obj.optString("description"),
+                    version = obj.optString("version"),
+                    engines = engines,
+                    installRef = obj.optString("installRef", id),
+                    marketplaceSource = obj.optString("marketplaceSource").takeIf { it.isNotBlank() },
+                    marketplaceName = obj.optString("marketplaceName").takeIf { it.isNotBlank() }
+                )
+            )
+        }
+        out.sortedBy { it.name.lowercase() }
+    }.getOrElse { e ->
+        FileLogger.w(TAG, "加载插件清单失败", e)
+        emptyList()
     }
 
     /** 解析内置专家团（assets/teams 团队包 frontmatter）；已安装 = ~/.aicode/teams 存在同名文件。 */
@@ -929,6 +1058,7 @@ class StoreViewModel @Inject constructor(
                         StoreKind.SKILL -> if (item.name.lowercase() in skillNames) item.id else null
                         StoreKind.MCP -> if (installer.sanitizeMcpName(item) in mcpNames) item.id else null
                         StoreKind.EXPERT -> null
+                        StoreKind.PLUGIN -> null
                     }
                 }.toSet()
                 s.copy(installedIds = installed)

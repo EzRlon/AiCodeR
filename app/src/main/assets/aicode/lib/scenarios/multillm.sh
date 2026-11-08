@@ -1,5 +1,5 @@
 #!/bin/sh
-# 场景：模型顾问团（multi-llm）——把六家大模型网页版反代成 MCP 工具，
+# 场景：模型顾问团（multi-llm）——把六家大模型网页版接入为 MCP 工具，
 # 装好后 AI 可直接咨询 ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek。
 # 服务端源码由 App 启动时释放到 ~/.aicode/multi-llm/（本脚本只装运行时）。
 # 链路（musl 容器实测）：系统 chromium + Xvfb/x11vnc（server 自动拉起）+ pip --target 隔离依赖 +

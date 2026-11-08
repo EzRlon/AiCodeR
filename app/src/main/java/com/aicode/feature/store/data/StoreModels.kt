@@ -5,8 +5,38 @@ import kotlinx.serialization.Serializable
 
 // ── 统一模型（UI 层使用的商店条目） ──────────────────────────────────
 
-/** 商店条目类型：技能 / MCP 服务器。 */
-enum class StoreKind { SKILL, MCP, EXPERT }
+/** 商店条目类型：技能 / MCP 服务器 / 专家团 / 引擎插件。 */
+enum class StoreKind { SKILL, MCP, EXPERT, PLUGIN }
+
+/**
+ * 引擎插件可安装的目标引擎。三个引擎的插件机制互不兼容：
+ * Claude Code 与 Codex 都走 marketplace 源，但源格式不同；OpenCode 无 marketplace，只能装 npm 包。
+ */
+enum class EngineTarget(val label: String, val cli: String) {
+    CLAUDE_CODE("Claude Code", "claude"),
+    CODEX("Codex", "codex"),
+    OPENCODE("OpenCode", "opencode")
+}
+
+/**
+ * 引擎插件条目。
+ *
+ * [installRef] 是传给对应引擎 CLI 的插件标识：
+ * - Claude Code / Codex：`<plugin>@<marketplace>`（如 `formatter@acme-tools`）
+ * - OpenCode：npm 包名或 `github:org/repo`
+ */
+data class PluginStoreItem(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val version: String = "",
+    val engines: List<EngineTarget>,
+    val installRef: String,
+    /** 安装所需的 marketplace 源；OpenCode 为 null。 */
+    val marketplaceSource: String? = null,
+    /** marketplace 显示名，安装时以 `plugin@marketplace` 形式引用。 */
+    val marketplaceName: String? = null
+)
 
 /**
  * 内置专家团条目：成套团队（团队定义 + 成员专家），一键安装到 ~/.aicode/teams 与 ~/.aicode/agents。

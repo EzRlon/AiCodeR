@@ -767,7 +767,7 @@
     <!-- Disclaimer -->
     <string name="about_disclaimer">Disclaimer</string>
     <string name="disclaimer_title">Disclaimer</string>
-    <string name="disclaimer_body">AiCode is free and open-source software provided “as is”, for learning, research and lawful software development only.\n\nYou must comply with the laws and regulations of your jurisdiction and the terms of any service you use. Using this software for any illegal or infringing purpose is strictly prohibited, including but not limited to: unauthorized access to, cracking or reverse engineering of others’ software or systems, circumventing technological protection measures, stealing or leaking others’ data, distributing malicious code, or any other act that infringes the lawful rights of others.\n\nYou bear all risks and responsibility for your use of this software. The authors and contributors shall not be liable for any direct or indirect loss arising from your use of, or inability to use, this software, nor for any act you perform using this software or its consequences.\n\nIf you do not agree with this disclaimer, please stop using the software and uninstall it immediately.</string>
+    <string name="disclaimer_body">AiCodeR is free and open-source software provided “as is”, without warranty of any kind, express or implied, including merchantability, fitness for a particular purpose and non-infringement; for learning, research and lawful software development only.\n\nYou must comply with the laws and regulations of your jurisdiction and the terms of any service you use. Using this software for any illegal or infringing purpose is strictly prohibited, including but not limited to: unauthorized access to, cracking or unauthorized analysis of others’ software or systems, circumventing technological protection measures, stealing or leaking others’ data, distributing malicious code, infringing intellectual property, or any other act that infringes the lawful rights of others.\n\nYou bear all risks and responsibility for your use of this software. This software may call third-party model services or tools that you configure yourself; their terms of service, data handling, content compliance and fees are between you and those providers — the authors and contributors are not a party to it and give no guarantee or liability. You are responsible for the lawful origin and the consequences of any content you process, upload or generate through this software.\n\nThe authors and contributors shall not be liable for any direct or indirect loss arising from your use of, or inability to use, this software (including data loss, business interruption or loss of profit), nor for any act you perform using this software or its consequences. To the maximum extent permitted by law, this disclaimer survives any change of features, version update or discontinuation of maintenance.\n\nIf you do not agree with this disclaimer, please stop using the software and uninstall it immediately.</string>
     <string name="disclaimer_accept">I have read and agree</string>
     <string name="disclaimer_decline">Disagree</string>
 
@@ -1525,8 +1525,8 @@
     <string name="mcp_tools_disable_all">Disable all</string>
     <string name="mcp_add_sheet_title">Add MCP server</string>
     <string name="mcp_recommended_section">Recommended</string>
-    <string name="mcp_recommended_rea_title">REA Reverse Engineering</string>
-    <string name="mcp_recommended_rea_desc">Analyze how an app, APK or JS bundle works (install the "Reverse Engineering" environment first)</string>
+    <string name="mcp_recommended_rea_title">REA Program Analysis</string>
+    <string name="mcp_recommended_rea_desc">Analyze how an app, APK or JS bundle works (install the "Program Analysis" environment first)</string>
     <string name="mcp_multillm_title">multi-llm · Model Consultants</string>
     <string name="mcp_multillm_desc">Reverse-proxies the web versions of ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek into MCP tools, so the AI can consult other models directly. Install downloads ~150 MB (chromium and Python dependencies); first use requires signing in to each site via the VNC window (login persists).</string>
     <string name="mcp_multillm_install">Install</string>
@@ -1540,7 +1540,7 @@
     <string name="mcp_tools_whitelist_note">Whitelist mode: only %1$d listed tools are enabled (preset-managed; tools can be disabled here)</string>
     <string name="rea_entry_title">Analyzer</string>
     <string name="multillm_entry_title">Advisors</string>
-    <string name="rea_workbench_title">REA Reverse Engineering</string>
+    <string name="rea_workbench_title">REA Program Analysis</string>
     <string name="rea_env_label">Environment</string>
     <string name="rea_mcp_label">MCP</string>
     <string name="rea_status_checking">Checking…</string>
@@ -1562,7 +1562,7 @@
     <string name="rea_rescan">Rescan</string>
     <string name="rea_samples_empty">No analyzable files found in the workspace (APK / DEX / JAR / SO / JS…); copy or download a target first</string>
     <string name="rea_analyze_button">Analyze</string>
-    <string name="rea_analyze_prompt">Please analyze %1$s following the reverse-engineering methodology: start with an overall structure overview, then step into the core logic, explaining in plain language as I am learning RE</string>
+    <string name="rea_analyze_prompt">Please analyze %1$s following the program-analysis methodology: start with an overall structure overview, then step into the core logic, explaining in plain language as I am learning program analysis</string>
     <string name="rea_tools_title">Available analysis tools (%1$d)</string>
     <string name="rea_tasks_title">Learning task templates (tap to fill into chat)</string>
     <string name="rea_task_overview">Walk me through the overall structure of an APK: manifest, components, packer/obfuscation traits</string>
@@ -1684,6 +1684,9 @@
     <string name="store_translation_retry">Retry</string>
     <string name="store_tab_skills">Skills</string>
     <string name="store_tab_experts">Expert Teams</string>
+    <string name="store_tab_plugins">Plugins</string>
+    <string name="store_plugin_all_engines">All engines</string>
+    <string name="store_plugins_empty">No plugins available for this engine</string>
     <string name="store_experts_empty">No built-in expert teams available</string>
     <string name="store_expert_install">Install</string>
     <string name="store_team_members">Members: %1$s</string>
@@ -2851,7 +2854,7 @@
     <!-- REA workbench compliance -->
     <string name="rea_compliance_banner">For analyzing software you own or are authorized to analyze only; comply with local laws and software licenses</string>
     <string name="rea_consent_title">Before you start</string>
-    <string name="rea_consent_body">This workbench is for learning and research: analyze software you own or are licensed to analyze. Do not use it to crack others\' software, steal trade secrets, or break any law; you are solely responsible for your use. The tools listed (decompiling, code extraction, etc.) have deep access to software — use them only for legitimate purposes.</string>
+    <string name="rea_consent_body">This workbench is for learning and research: analyze software you own or are licensed to analyze. Do not use it to crack others\' software, steal trade secrets, or break any law; you are solely responsible for your use. The tools listed (decompiling, code extraction, etc.) have deep access to software — use them only for legitimate purposes. If your use gives rise to any third-party claim or dispute, you handle it and bear full responsibility; the authors and contributors accept no joint liability.</string>
     <string name="rea_consent_checkbox">I have read and understood the above</string>
     <string name="rea_consent_confirm">Agree and continue</string>
     <string name="rea_consent_decline">Not now</string>

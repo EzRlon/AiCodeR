@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,6 +48,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -102,9 +102,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -188,8 +186,11 @@ private const val OVERFLOW_MEASURE_MIN_CHARS = 120
  */
 private val INPUT_FIELD_CONTENT_PADDING = 16.dp
 
-/** 输入区右侧为内嵌麦克风预留的宽度，与麦克风热区等宽，避免文字末尾到按钮之间出现空白。 */
+/** 内嵌麦克风的热区尺寸。 */
 private val INPUT_FIELD_MIC_SLOT = 32.dp
+
+/** 文字末尾到麦克风的最小间隔，避免两者视觉相贴。 */
+private val INPUT_FIELD_MIC_GAP = 6.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -715,10 +716,11 @@ internal fun ChatInputBar(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // 右侧给内嵌麦克风让位（36dp 热区），不影响输入与光标
+                                    // 右侧只给麦克风热区 + 小间隔，不再叠加 16dp 内容内边距：
+                                    // 之前文字末尾到麦克风空出一大块（用户反馈）。
                                     .padding(
                                         start = INPUT_FIELD_CONTENT_PADDING,
-                                        end = INPUT_FIELD_CONTENT_PADDING + INPUT_FIELD_MIC_SLOT
+                                        end = INPUT_FIELD_MIC_SLOT + INPUT_FIELD_MIC_GAP
                                     ),
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                                     color = MaterialTheme.colorScheme.onSurface
@@ -742,9 +744,7 @@ internal fun ChatInputBar(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(end = INPUT_FIELD_MIC_SLOT)
+                                            modifier = Modifier.fillMaxWidth()
                                         )
                                     }
                                     inner()
@@ -911,35 +911,103 @@ internal fun ChatInputBar(
                                     modifier = Modifier.heightIn(max = 320.dp),
                                     scrollState = rememberScrollState(),
                                 ) {
-                                    // 思考强度：从控制行收纳至此
+                                    // 思考强度：与模型弹窗的引擎胶囊用同一套视觉语言——
+                                    // 图标 + 文字 + 选中实心主色 + 对勾，未选中描边胶囊。
                                     Row(
-                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            FeatherIcons.Zap,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(Modifier.size(4.dp))
+                                        Text(
+                                            text = stringResource(R.string.chat_reasoning_effort),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    // 档位最多 7 个，窄屏一行放不下；FlowRow 让胶囊整颗换行而不是被压成竖排。
+                                    @OptIn(ExperimentalLayoutApi::class)
+                                    FlowRow(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         availableEfforts.forEach { candidate ->
                                             val selected = candidate == reasoningEffort
-                                            Text(
-                                                text = stringResource(candidate.labelRes()),
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = if (selected) {
-                                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                                },
+                                            val labelColor = if (selected) {
+                                                MaterialTheme.colorScheme.onPrimary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            }
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
                                                 modifier = Modifier
+                                                    .clip(RoundedCornerShape(50))
                                                     .background(
                                                         if (selected) {
-                                                            MaterialTheme.colorScheme.primaryContainer
+                                                            MaterialTheme.colorScheme.primary
                                                         } else {
-                                                            MaterialTheme.colorScheme.surfaceVariant
-                                                        },
-                                                        RoundedCornerShape(50)
+                                                            MaterialTheme.colorScheme.surfaceContainerHighest
+                                                        }
                                                     )
-                                                    .clickable { if (!isBusy) onReasoningEffortChange(candidate) }
-                                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                                            )
+                                                    .then(
+                                                        if (selected) Modifier
+                                                        else Modifier.border(
+                                                            width = 1.dp,
+                                                            color = MaterialTheme.colorScheme.outlineVariant,
+                                                            shape = RoundedCornerShape(50)
+                                                        )
+                                                    )
+                                                    .clickable(enabled = !isBusy && !selected) {
+                                                        onReasoningEffortChange(candidate)
+                                                    }
+                                                    .padding(
+                                                        start = 10.dp,
+                                                        end = if (selected) 8.dp else 10.dp,
+                                                        top = 6.dp,
+                                                        bottom = 6.dp
+                                                    )
+                                            ) {
+                                                Icon(
+                                                    FeatherIcons.Zap,
+                                                    contentDescription = null,
+                                                    tint = labelColor,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    text = stringResource(candidate.labelRes()),
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    color = labelColor
+                                                )
+                                                if (selected) {
+                                                    Spacer(Modifier.width(3.dp))
+                                                    Icon(
+                                                        FeatherIcons.Check,
+                                                        contentDescription = null,
+                                                        tint = labelColor,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                    )
                                     MessageIntentMenuItem(
                                         intent = null,
                                         selected = intentType == null,

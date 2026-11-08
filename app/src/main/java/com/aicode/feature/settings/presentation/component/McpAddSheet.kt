@@ -46,8 +46,8 @@ internal val ReaEnabledTools: Set<String> = setOf(
 )
 
 /**
- * 「推荐」区条目：REA（Reverse Engineer Anything）逆向分析。
- * 本地 stdio（npx），依赖容器「逆向分析」环境（jadx 引擎路径经 env 传入）；
+ * 「推荐」区条目：REA（Program Analysis）程序分析。
+ * 本地 stdio（npx），依赖容器「程序分析」环境（jadx 引擎路径经 env 传入）；
  * 预填带工具白名单与 enabled=true（保存即用，配合「零门槛」定位）。
  */
 internal val RecommendedReaConfig: McpServerConfig = McpServerConfig(

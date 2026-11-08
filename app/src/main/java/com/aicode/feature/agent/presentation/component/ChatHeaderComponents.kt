@@ -1,10 +1,8 @@
 package com.aicode.feature.agent.presentation.component
 
-import android.content.ClipData
 import android.content.Context
 import android.content.ContextWrapper
 import android.os.Build
-import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -41,17 +39,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -65,21 +59,20 @@ import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.GitBranch
-import compose.icons.feathericons.Globe
 import compose.icons.feathericons.Menu
+import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.Monitor
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Share2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
-import kotlinx.coroutines.launch
 
-/** 顶栏顶部余量：状态栏 inset 的 35% + 4dp——向状态栏靠近但不贴死，同时避开挖孔区。 */
+/** 顶栏顶部余量：状态栏 inset 的 55% + 8dp——按钮视觉重心落到状态栏下方舒适区，不再贴着状态栏顶边。 */
 @Composable
 private fun statusBarComfortPadding(): Dp {
     val density = LocalDensity.current
     val inset = WindowInsets.statusBars.getTop(density)
-    return with(density) { (inset * 0.35f).toDp() + 4.dp }
+    return with(density) { (inset * 0.55f).toDp() + 8.dp }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -128,7 +121,9 @@ internal fun ChatHeader(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            FeatherIcons.Menu,
+                            // 侧栏图标：MessageSquare 表示「会话/消息列表」，
+                            // 与右侧专家团的 Users 图标区分开，不再用通用汉堡菜单。
+                            FeatherIcons.MessageSquare,
                             contentDescription = stringResource(R.string.chat_open_sidebar),
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -186,7 +181,8 @@ internal fun ChatHeader(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                        .padding(horizontal = Spacing.md)
+                        .padding(top = 2.dp, bottom = Spacing.xs),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {

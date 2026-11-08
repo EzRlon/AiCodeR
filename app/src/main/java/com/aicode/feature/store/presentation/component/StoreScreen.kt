@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -36,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +54,8 @@ import com.aicode.core.ui.SegmentedTabs
 import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.PluginStoreItem
+import com.aicode.feature.store.data.EngineTarget
 import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.store.data.storeTranslationKey
 import com.aicode.feature.store.domain.ScanHit
@@ -79,6 +83,9 @@ internal fun StoreScreen(
     onLoadMore: () -> Unit,
     onInstall: (StoreItem) -> Unit,
     onInstallTeam: (TeamStoreItem) -> Unit,
+    onInstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
+    onUninstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
+    onPluginEngineFilter: (EngineTarget?) -> Unit = {},
     onConsumeMessage: () -> Unit,
     onRetryTranslation: () -> Unit = {},
     onConfirmScan: () -> Unit = {},
@@ -118,27 +125,39 @@ internal fun StoreScreen(
                     StoreKind.SKILL -> 0
                     StoreKind.MCP -> 1
                     StoreKind.EXPERT -> 2
+                    StoreKind.PLUGIN -> 3
                 },
                 labels = listOf(
                     stringResource(R.string.store_tab_skills),
                     stringResource(R.string.store_tab_mcp),
-                    stringResource(R.string.store_tab_experts)
+                    stringResource(R.string.store_tab_experts),
+                    stringResource(R.string.store_tab_plugins)
                 ),
                 onSelect = {
                     onTab(
                         when (it) {
                             0 -> StoreKind.SKILL
                             1 -> StoreKind.MCP
-                            else -> StoreKind.EXPERT
+                            2 -> StoreKind.EXPERT
+                            else -> StoreKind.PLUGIN
                         }
                     )
                 },
                 modifier = Modifier.weight(1f)
             )
-            IconButton(onClick = { showSources = true }) {
+            // 商店源入口：与 tab 同行、同高、同风格（之前是行外单独一个悬浮图标，视觉上脱离按钮组）。
+            Spacer(Modifier.width(Spacing.xs))
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable { showSources = true },
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
                     FeatherIcons.Layers,
                     contentDescription = stringResource(R.string.store_sources_title),
+                    modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -203,6 +222,13 @@ internal fun StoreScreen(
         Spacer(Modifier.size(Spacing.xs))
 
         when {
+            state.tab == StoreKind.PLUGIN -> PluginList(
+                state = state,
+                onInstall = onInstallPlugin,
+                onUninstall = onUninstallPlugin,
+                onEngineFilter = onPluginEngineFilter
+            )
+
             state.tab == StoreKind.EXPERT -> TeamList(
                 state = state,
                 onInstall = onInstallTeam,
@@ -813,6 +839,147 @@ private fun TeamList(
                 }
             }
         }
+    }
+}
+
+/**
+ * 引擎插件列表：引擎筛选胶囊 + 按条目可选引擎给出安装按钮。
+ * 一个插件可同时支持多个引擎，安装时按引擎分别下发各自的 CLI 命令。
+ */
+@Composable
+private fun PluginList(
+    state: StoreUiState,
+    onInstall: (PluginStoreItem, EngineTarget) -> Unit,
+    onUninstall: (PluginStoreItem, EngineTarget) -> Unit,
+    onEngineFilter: (EngineTarget?) -> Unit
+) {
+    val filtered = state.pluginEngineFilter?.let { t ->
+        state.plugins.filter { t in it.engines }
+    } ?: state.plugins
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+        ) {
+            PluginEngineChip(
+                label = stringResource(R.string.store_plugin_all_engines),
+                selected = state.pluginEngineFilter == null,
+                onClick = { onEngineFilter(null) }
+            )
+            EngineTarget.entries.forEach { target ->
+                PluginEngineChip(
+                    label = target.label,
+                    selected = state.pluginEngineFilter == target,
+                    onClick = { onEngineFilter(target) }
+                )
+            }
+        }
+
+        if (filtered.isEmpty()) {
+            Text(
+                text = stringResource(R.string.store_plugins_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 24.dp)
+            )
+            return@Column
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = Spacing.lg,
+                end = Spacing.lg,
+                top = Spacing.xs,
+                bottom = Spacing.xl
+            ),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(filtered, key = { it.id }) { plugin ->
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.semanticColors.cardSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = plugin.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (plugin.version.isNotBlank()) {
+                                Text(
+                                    text = "v${plugin.version}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (plugin.description.isNotBlank()) {
+                            Text(
+                                text = plugin.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            plugin.engines.forEach { target ->
+                                val installed = target in state.installedPluginEngines[plugin.id].orEmpty()
+                                PluginEngineChip(
+                                    label = if (installed) "${target.label} ✓" else target.label,
+                                    selected = installed,
+                                    onClick = {
+                                        if (installed) {
+                                            onUninstall(plugin, target)
+                                        } else {
+                                            onInstall(plugin, target)
+                                        }
+                                    },
+                                    enabled = state.installingId == null
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 引擎胶囊：既做筛选也做安装入口（插件卡片内按引擎逐个给出按钮）。 */
+@Composable
+private fun PluginEngineChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.semanticColors.cardSurface,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.clickable(enabled = enabled) { onClick() }
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
     }
 }
 

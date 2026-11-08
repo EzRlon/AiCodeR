@@ -61,6 +61,9 @@ fun rememberSheetFlingFix(sheetState: SheetState): NestedScrollConnection =
         }
     }
 
+/** 弹层统一圆角：窄屏 sheet 与宽屏 dialog 共用，避免同一弹层在不同屏幕下圆角不一致。 */
+private val SHEET_CORNER_RADIUS = 24.dp
+
 /**
  * 自适应模态底栏/弹窗：
  * - 紧凑屏幕（手机竖屏、窄分屏等，< 600dp）：呈现为标准贴底 [ModalBottomSheet]，保留下拉手势与拖拽手柄，
@@ -73,7 +76,10 @@ fun AdaptiveModalBottomSheet(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     sheetState: SheetState = rememberModalBottomSheetState(),
-    shape: Shape = BottomSheetDefaults.ExpandedShape,
+    shape: Shape = RoundedCornerShape(
+        topStart = SHEET_CORNER_RADIUS,
+        topEnd = SHEET_CORNER_RADIUS
+    ),
     containerColor: Color = MaterialTheme.colorScheme.surface,
     contentColor: Color = contentColorFor(containerColor),
     tonalElevation: Dp = BottomSheetDefaults.Elevation,
@@ -133,7 +139,7 @@ fun AdaptiveModalBottomSheet(
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.lg, vertical = Spacing.xl)
                     .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(SHEET_CORNER_RADIUS),
                 color = containerColor,
                 contentColor = contentColor,
                 tonalElevation = tonalElevation

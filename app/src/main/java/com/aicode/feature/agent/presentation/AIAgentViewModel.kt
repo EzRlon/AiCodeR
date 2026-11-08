@@ -2420,42 +2420,34 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
-     * 待发列表「发给主 agent（不打断）」：忙碌时与 [interjectQueuedRequest] 同样搭车注入本轮；
-     * 空闲时只挂入通知中心——由下次后台任务/子代理消息搭车送达或本轮收尾兑底，不主动起新轮次。
+     * 待发列表「发给主 agent（不打断）」：把这条消息作为独立用户消息排入会话，不打断当前回合。
+     * - 忙碌时：走 [enqueueAgentRequest] 排队，本轮结束后自动发出（不搭车注入本轮，
+     *   否则只在上下文里出现一句、历史里看不到这条消息，用户会以为丢了）；
+     * - 空闲时：同样入队并立即调度，不弹确认、不打断。
      */
     fun passiveForwardQueuedRequest(id: String) {
         val sid = _currentSessionId.value ?: return
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
+        val accepted = enqueueAgentRequest(
+            request = req.request,
+            modelRequest = req.modelRequest,
+            currentFile = req.currentFile,
+            selectedCode = req.selectedCode,
+            projectRoot = req.projectRoot.ifEmpty { _currentWorkspace.value },
+            inputImages = req.inputImages,
+            inputAttachments = req.inputAttachments,
+            isAutoTrigger = req.isAutoTrigger,
+            targetSessionId = sid,
+            intentType = req.intentType,
+            persistUserMessage = true
+        )
         android.widget.Toast.makeText(
             context,
-            R.string.queue_passive_toast,
+            if (accepted) R.string.queue_passive_toast else R.string.queue_passive_rejected_toast,
             android.widget.Toast.LENGTH_SHORT
         ).show()
-        if (sessionJobs[sid]?.isActive == true) {
-            deliverSystemEvent(
-                sid,
-                PendingNotification(
-                    kind = AgentNotificationKind.USER_MESSAGE,
-                    sourceId = sid,
-                    title = "",
-                    outcome = NotificationOutcome.COMPLETED,
-                    message = req.request
-                )
-            )
-        } else {
-            agentNotificationCenter.enqueue(
-                sid,
-                PendingNotification(
-                    kind = AgentNotificationKind.USER_MESSAGE,
-                    sourceId = sid,
-                    title = "",
-                    outcome = NotificationOutcome.COMPLETED,
-                    message = req.request
-                )
-            )
-        }
     }
 
     private fun processNextInQueue(sessionId: String) {

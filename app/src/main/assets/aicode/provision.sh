@@ -120,7 +120,7 @@ env_install_menu() {
     done
 }
 
-# ══ App 工作台调用入口：provision.sh --install <场景id> → 非交互直接安装单个场景（如 App「逆向分析」工作台一键安装）══
+# ══ App 工作台调用入口：provision.sh --install <场景id> → 非交互直接安装单个场景（如 App「程序分析」工作台一键安装）══
 #    仅适用于安装流程本身无交互输入的场景；进度打印到 stdout（供终端/日志排查；App 侧当前仅取退出码）；失败返回非零。
 if [ "$1" = "--install" ]; then
     scenario_id="$2"

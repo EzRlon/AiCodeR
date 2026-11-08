@@ -2,6 +2,7 @@ package com.aicode.feature.agent.presentation.component
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,15 +22,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Check
 import compose.icons.feathericons.Terminal
 
 /** 会话引擎的显示名（engine 值 → UI 名称；null=内置引擎）。 */
@@ -110,39 +114,60 @@ internal fun EngineSwitcherRow(currentEngine: String?, onSetEngine: (String?) ->
         ) {
             selectableEngines.forEach { engine ->
                 val current = currentEngine == engine
+                // 选中态用实心 primary 填充 + 对勾，与未选中的描边胶囊拉开明显层级：
+                // 之前选中只是浅色底，在四个胶囊里几乎看不出当前是哪个（用户反馈）。
                 val background = if (current) {
-                    MaterialTheme.colorScheme.primaryContainer
+                    MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.surfaceContainerHighest
                 }
                 val labelColor = if (current) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
+                    MaterialTheme.colorScheme.onPrimary
                 } else {
-                    MaterialTheme.colorScheme.onSurface
+                    MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .background(background, RoundedCornerShape(50))
-                        .clickable {
-                            if (current || onSetEngine(engine)) return@clickable
+                        .clip(RoundedCornerShape(50))
+                        .background(background)
+                        .then(
+                            if (current) Modifier
+                            else Modifier.border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(50)
+                            )
+                        )
+                        .clickable(enabled = !current) {
+                            if (onSetEngine(engine)) return@clickable
                             Toast.makeText(
                                 context,
                                 R.string.engine_switch_running,
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .padding(start = 10.dp, end = if (current) 8.dp else 10.dp, top = 6.dp, bottom = 6.dp)
                 ) {
                     EngineMarkIcon(engine = engine, size = 14.dp, tint = labelColor)
                     Spacer(Modifier.width(4.dp))
                     Text(
                         text = engineDisplayName(engine),
                         style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
                         maxLines = 1,
                         softWrap = false,
                         color = labelColor
                     )
+                    if (current) {
+                        Spacer(Modifier.width(3.dp))
+                        Icon(
+                            FeatherIcons.Check,
+                            contentDescription = null,
+                            tint = labelColor,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
                 }
             }
         }

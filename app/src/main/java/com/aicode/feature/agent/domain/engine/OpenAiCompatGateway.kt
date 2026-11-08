@@ -37,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 本地 OpenAI→Anthropic 协议转换网关：让只有 OpenAI 兼容端点的厂商（未收录进
- * EngineVendorCompat 的自定义反代等）也能驱动 Claude Code 引擎。claude 以
+ * EngineVendorCompat 的自定义端点等）也能驱动 Claude Code 引擎。claude 以
  * ANTHROPIC_BASE_URL 指向本网关，网关把 /v1/messages 请求翻译成 OpenAI
  * chat/completions 转发给上游，响应（含 SSE 流式）反向翻译回 Anthropic 协议。
  * 上游 Key 只存在 App 侧注册表，不经过 claude 的环境变量。

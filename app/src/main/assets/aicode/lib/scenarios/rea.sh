@@ -1,11 +1,11 @@
 #!/bin/sh
-# 场景：逆向分析（REA · Reverse Engineer Anything）
-# 装好分析引擎与桥接后：设置 → MCP → 添加 → 推荐区 → 点选「REA 逆向工程」→ 保存，
+# 场景：程序分析（REA · Program Analysis）
+# 装好分析引擎与桥接后：设置 → MCP → 添加 → 推荐区 → 点选「REA 程序分析」→ 保存，
 # 即可直接对 AI 说「帮我分析这个 App/APK/JS 包是怎么实现的」。
 # 说明：仅用于分析你拥有或获授权分析的软件（正当用途）。
 # 支持：任意发行版（apk/apt/dnf/yum/pacman）自动检测后按需安装；Node 不足时先试仓库再装官方预编译包
 #（musl 系统不适用官方包，仅走仓库）。
-scenario_name_rea() { echo "逆向分析（REA：分析 App / APK / JS 包是怎么实现的）"; }
+scenario_name_rea() { echo "程序分析（REA：分析 App / APK / JS 包是怎么实现的）"; }
 
 # 受版本约束的组件（与 MCP 预设 RecommendedReaConfig 保持一致；升级需同步两处）
 REA_AGENTS_VERSION="6.5.0"
@@ -42,8 +42,8 @@ rea_agents_installed() {
 install_scenario_rea() {
     # 幂等：标记、引擎、pin 版本组件齐全直接跳过
     if [ -f "$REA_DIR/.installed" ] && [ -f "$REA_DIR/$REA_JADX_JAR_NAME" ] && rea_agents_installed; then
-        plog "REA 逆向分析环境已就绪，跳过"
-        echo "${C_GREEN}✓ 逆向分析环境已就绪${C_RESET}（设置 → MCP → 添加 → 推荐区 选「REA 逆向工程」）"
+        plog "REA 程序分析环境已就绪，跳过"
+        echo "${C_GREEN}✓ 程序分析环境已就绪${C_RESET}（设置 → MCP → 添加 → 推荐区 选「REA 程序分析」）"
         return 0
     fi
 
@@ -132,11 +132,11 @@ install_scenario_rea() {
     # 6) 完成标记与引导（完整 JDK 缺失时提示 APK 分析待补）
     date '+%Y-%m-%d %H:%M:%S' > "$REA_DIR/.installed"
     echo ""
-    echo "${C_GREEN}✓ 逆向分析环境安装完成${C_RESET}"
+    echo "${C_GREEN}✓ 程序分析环境安装完成${C_RESET}"
     if ! rea_javac_ok; then
         echo "  ${C_YELLOW}注意：缺完整 JDK，APK 分析暂不可用；装好「Java 开发」场景后重跑本场景即可补上。${C_RESET}"
     fi
-    echo "  下一步：设置 → MCP → 添加 → 推荐区 → 点选「REA 逆向工程」→ 保存"
+    echo "  下一步：设置 → MCP → 添加 → 推荐区 → 点选「REA 程序分析」→ 保存"
     echo "  然后直接对 AI 说：帮我分析一下 ~/workspace/xxx.apk 是怎么实现的"
     echo "  ${C_DIM}（仅用于分析你拥有或获授权分析的软件）${C_RESET}"
     plog "REA 场景安装完成"

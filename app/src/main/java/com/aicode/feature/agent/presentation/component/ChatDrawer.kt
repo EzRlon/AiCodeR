@@ -55,6 +55,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -139,6 +140,7 @@ import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Crosshair
+import compose.icons.feathericons.Box
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FilePlus
@@ -2217,8 +2219,9 @@ private fun DeliverableRow(
     // 动作作用域挂在行上（菜单内容随退场动画销毁，不能在那里 rememberCoroutineScope）。
     val actionScope = rememberCoroutineScope()
     val key = deliverableGroupKey(item.attachment.fileName)
+    // 图标表达文件类型，不再用下载图标（交付物已自动导出，无需暗示下载）。
     val icon = when (key) {
-        "apk" -> FeatherIcons.Download
+        "apk" -> FeatherIcons.Box
         "archive" -> FeatherIcons.Archive
         "image" -> FeatherIcons.Image
         "doc" -> FeatherIcons.FileText
@@ -2233,20 +2236,25 @@ private fun DeliverableRow(
             android.text.format.Formatter.formatShortFileSize(context, item.attachment.sizeBytes)
     }
     Box {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { menuOpen = true }
-                .padding(horizontal = Spacing.md, vertical = Spacing.xs)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                // 与会话列表一致：点按=打开操作弹层，长按=同一弹层（触屏上更顺手）。
+                .combinedClickable(
+                    onClick = { menuOpen = true },
+                    onLongClick = { menuOpen = true }
                 )
-                Spacer(Modifier.width(Spacing.sm))
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     item.attachment.fileName,
                     style = MaterialTheme.typography.bodyMedium,
@@ -2254,52 +2262,95 @@ private fun DeliverableRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .weight(1f)
                         // 名称超宽时自动跑马灯滚动（可拖动），完整展示文件名。
                         .basicMarquee()
                 )
-                Icon(
-                    FeatherIcons.MoreHorizontal,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            val meta = listOfNotNull(
-                timeText.takeIf { it.isNotBlank() },
-                sizeText.takeIf { it.isNotBlank() }
-            ).joinToString(" · ")
-            if (meta.isNotEmpty()) {
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 18.dp + Spacing.sm, top = 1.dp)
-                )
+                val meta = listOfNotNull(
+                    timeText.takeIf { it.isNotBlank() },
+                    sizeText.takeIf { it.isNotBlank() }
+                ).joinToString(" · ")
+                if (meta.isNotEmpty()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
             }
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        if (menuOpen) {
+            DeliverableActionSheet(
+                item = item,
+                fileAccess = fileAccess,
+                actionScope = actionScope,
+                onDismiss = { menuOpen = false }
+            )
+        }
+    }
+}
+
+/** 交付物操作弹层：与会话列表长按菜单同一套圆角底栏（AdaptiveModalBottomSheet）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DeliverableActionSheet(
+    item: AIAgentViewModel.DeliverableItem,
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
+    actionScope: kotlinx.coroutines.CoroutineScope,
+    onDismiss: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.lg)
+        ) {
+            Text(
+                text = item.attachment.fileName,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             if (fileAccess != null) {
                 attachmentActionEntries(
                     context, item.attachment, fileAccess, actionScope,
                     // 交付物已自动导出到真机 下载/AiCodeR，不再需要手动「保存到手机」。
                     includeSaveToPhone = false,
                 ).forEach { entry ->
-                    DropdownMenuItem(
-                        text = { Text(stringResource(entry.labelRes)) },
-                        leadingIcon = {
-                            Icon(entry.icon, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                        onClick = {
-                            menuOpen = false
-                            entry.action()
-                        }
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDismiss()
+                                entry.action()
+                            }
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            entry.icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(Spacing.md))
+                        Text(
+                            text = stringResource(entry.labelRes),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             } else {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.deliverables_unavailable)) },
-                    onClick = { menuOpen = false }
+                Text(
+                    text = stringResource(R.string.deliverables_unavailable),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
                 )
             }
         }

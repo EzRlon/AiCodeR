@@ -110,10 +110,13 @@ internal fun settingsPageBackground(): Color =
 internal fun SettingsGroupHeader(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
-        fontWeight = FontWeight.Normal,
+        // 分组标题是导航层的分类锚点，要压得住下面的会话标题：
+        // 字号略大 + 中粗 + 次要文字色，靠字重和间距分层，不靠抢眼颜色。
+        style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.4.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = Spacing.md, top = Spacing.lg, bottom = Spacing.sm)
+        modifier = Modifier.padding(start = Spacing.md, top = Spacing.lg, bottom = Spacing.xs)
     )
 }
 

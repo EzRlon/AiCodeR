@@ -92,8 +92,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 「逆向分析（REA）」工作台：环境与 MCP 真实连接状态 + 一键安装/接入 +
- * 分析目标（样本）选择 + 一键派发分析任务 + 工具清单，面向逆向学习用户设计。
+ * 「程序分析（REA）」工作台：环境与 MCP 真实连接状态 + 一键安装/接入 +
+ * 分析目标（样本）选择 + 一键派发分析任务 + 工具清单，面向程序分析学习用户设计。
  * - 环境：容器内 `provision.sh --install rea`（完成标记 `/opt/rea/.installed`，为最终权威判据——
  *   基础容器 provision 菜单与该标记相互独立，不再以 `.provisioned` 短路误判，见 checkEnv）；
  * - MCP：写入全局配置的 REA 预设并立即重连；状态行展示 [McpManager.statuses] 的真实连接态，
@@ -112,7 +112,7 @@ class ReaWorkbenchViewModel @Inject constructor(
 
     enum class EnvState { Checking, NotProvisioned, NotInstalled, Installed, Unsupported }
 
-    /** 工作区内可作为逆向分析目标的样本文件。 */
+    /** 工作区内可作为程序分析目标的样本文件。 */
     data class ReaSample(
         val path: String,
         val name: String,
@@ -277,7 +277,7 @@ class ReaWorkbenchViewModel @Inject constructor(
         }
     }
 
-    /** 扫描工作区内可分析目标：APK/DEX/JAR/SO/JS 等逆向常见格式，排除依赖与版本目录。 */
+    /** 扫描工作区内可分析目标：APK/DEX/JAR/SO/JS 等程序分析常见格式，排除依赖与版本目录。 */
     fun scanSamples() {
         if (_scanning.value) return
         viewModelScope.launch {
@@ -373,7 +373,7 @@ class ReaWorkbenchViewModel @Inject constructor(
     }
 }
 
-/** 逆向分析工作台页面（侧栏「逆向分析」入口）。 */
+/** 程序分析工作台页面（侧栏「程序分析」入口）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaWorkbenchScreen(
