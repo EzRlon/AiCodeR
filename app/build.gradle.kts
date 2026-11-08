@@ -424,6 +424,11 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.test:core-ktx:1.6.1")
     testImplementation("androidx.test.ext:junit:1.1.5")
+    // Compose UI 自动化（Robolectric 载体）：createComposeRule 在 JVM 上渲染真实 Compose 树，
+    // 断言布局结构（同行/不重叠/控件存在）。与 implementation 同 BOM，版本自动对齐。
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     // 协程测试：runTest 虚拟时间（替代 runBlocking）+ Dispatchers.setMain（ViewModel 测试基建）
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     // MockK：Kotlin 原生 mock（coEvery/coVerify 协程支持），用于 ViewModel/Repository 依赖打桩
