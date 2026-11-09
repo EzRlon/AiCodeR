@@ -172,11 +172,19 @@ class ContextCompactor @Inject constructor(
         }
         if (skipReason != null) {
             FileLogger.i(TAG, skipReason)
+            FileLogger.i(
+                TAG,
+                "压缩指标: 结果=跳过 原因=$skipReason 当前=$currentTokens 阈值=$threshold " +
+                    "上限=$inputBudget 消息数=${messages.size}"
+            )
             return unchanged
         }
         val material = headMaterial
 
         onEvent(AgentEvent.CompactionStarted(currentTokens))
+        // 压缩是「改之前必须先有数」的典型：耗时、块数、收益这些量没有埋点，
+        // 任何阈值调整都只能凭感觉。一行结构化日志，便于事后 grep 统计。
+        val compactionStartedAt = System.currentTimeMillis()
         val originalOutputLimit = aiProvider.maxOutputTokens
         val markerTimestamp = if (sessionId != null) messagePersistenceUseCase.nextTimestamp() else null
         val summaryTimestamp = if (sessionId != null) messagePersistenceUseCase.nextTimestamp() else null
@@ -231,6 +239,11 @@ class ContextCompactor @Inject constructor(
             // 这不是失败，只是不该落库，静默保留原历史。
             if (compactedTokens >= estimatedTokens) {
                 FileLogger.i(TAG, "压缩未缩减 token（$estimatedTokens → $compactedTokens），保留原历史")
+                FileLogger.i(
+                    TAG,
+                    "压缩指标: 结果=无收益 原因=摘要比原文长 块数=$block 原始=$estimatedTokens " +
+                        "压缩后=$compactedTokens 耗时ms=${System.currentTimeMillis() - compactionStartedAt}"
+                )
                 return unchanged
             }
             check(compactedTokens <= inputBudget) {
@@ -251,6 +264,19 @@ class ContextCompactor @Inject constructor(
                 messagePersistenceUseCase.invalidateHistory(sessionId)
             }
             FileLogger.i(TAG, "上下文压缩完成：$block 块，$estimatedTokens → $compactedTokens tokens")
+            // 结构化指标行：压缩收益 / 保留比例 / 块数 / 耗时，供调阈值与排查「变笨」用
+            val savedPercent = if (estimatedTokens > 0) {
+                (100 - compactedTokens * 100 / estimatedTokens)
+            } else {
+                0
+            }
+            FileLogger.i(
+                TAG,
+                "压缩指标: 结果=成功 原始=$estimatedTokens 压缩后=$compactedTokens " +
+                    "节省=$savedPercent% 块数=$block 保留消息=${messages.size - splitIndex}/" +
+                    "${messages.size} 消息上限=$inputBudget 耗时ms=" +
+                    "${System.currentTimeMillis() - compactionStartedAt}"
+            )
             // 摘要里已有「关键决定」「教训与坑」段落：直接解析成图谱结论，零额外模型调用。
             // 仅当用户开启结论抽取时才写（默认关，数据不外发）。
             if (sessionId != null) {
@@ -271,6 +297,13 @@ class ContextCompactor @Inject constructor(
             throw e
         } catch (e: Exception) {
             FileLogger.e(TAG, "压缩上下文失败，保留原历史", e)
+            // 失败也要进指标：压缩失败会退回原历史继续跑，用户感知不到，
+            // 「为什么老会话变笨」往往就藏在这条里
+            FileLogger.i(
+                TAG,
+                "压缩指标: 结果=失败 原始=$estimatedTokens 原因=${e.message ?: e.javaClass.simpleName} " +
+                    "耗时ms=${System.currentTimeMillis() - compactionStartedAt}"
+            )
             onEvent(AgentEvent.CompactionFailed(e.message ?: e.javaClass.simpleName))
             return unchanged
         } finally {
