@@ -7,6 +7,7 @@ import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
+import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -228,6 +229,7 @@ class CodexBridge @Inject constructor(
     /**
      * 跑一个用户回合。[resume] 为 true 时先尝试 `exec resume` 续接（映射缺失或续接失败自动转全新回合）。
      * [model] 透传 `-m`（CLI 侧模型名或 App 供应商模型名）；[providerId] 对齐透传的 Key/baseURL。
+     * [mode] 为会话工作模式，映射到 `--sandbox` 档位。
      * [images] 解码落盘到容器桥目录后经 `-i` 传入；[attachments] 以容器路径告知。
      */
     fun runTurn(
@@ -237,13 +239,14 @@ class CodexBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
+        mode: AgentMode = AgentMode.BUILD,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, mode = mode, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -251,10 +254,10 @@ class CodexBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "codex 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -267,6 +270,7 @@ class CodexBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
+        mode: AgentMode = AgentMode.BUILD,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -280,9 +284,13 @@ class CodexBridge @Inject constructor(
             FileLogger.i(TAG, "无 codex thread 映射，按全新回合执行: sid=$sessionId")
         }
 
-        // exec 非交互模式无审批弹窗：沙箱档位由引擎卡开关决定（默认 workspace-write，让工作区内命令自动执行、
-        // 工作区外被挡；开关放开为 danger-full-access 时整个容器可读写）
-        val sandboxMode = if (engineOptionsRepository.isCodexSandboxFullAccess()) "danger-full-access" else "workspace-write"
+        // 工作模式 → 沙箱档位。BUILD 时沿用引擎卡开关作为默认（兼容老用户），PLAN/AUTO 由模式决定。
+        val sandboxMode = when (mode) {
+            AgentMode.BUILD ->
+                if (engineOptionsRepository.isCodexSandboxFullAccess()) "danger-full-access"
+                else "workspace-write"
+            else -> EngineModeMapping.codexSandbox(mode)
+        }
         // codex 0.16x 实测无视 OPENAI_BASE_URL（仍连官方 wss 端点）：第三方 baseUrl 必须经
         // -c model_providers 注入（codex 在 base_url 后直接拼 /responses，需保证末尾是版本段）；
         // Key 另存专用环境变量供 env_key 读取

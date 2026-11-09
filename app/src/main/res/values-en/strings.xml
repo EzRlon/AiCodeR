@@ -472,6 +472,9 @@
     <string name="engine_codex_sandbox_toggle">Open up the sandbox (read/write outside the workspace)</string>
     <string name="engine_opencode_unavailable">OpenCode engine is not ready. Install OpenCode in the container first, or switch this session back to the built-in engine.</string>
     <string name="engine_opencode_auto_toggle">Auto-approve permission requests</string>
+    <string name="engine_option_build_only">Only applies in Build mode; Plan/Auto mode takes precedence.</string>
+    <string name="engine_mode_note_codex_build">Codex has no per-step approval: Build mode runs commands inside the workspace automatically and blocks anything outside it.</string>
+    <string name="engine_mode_note_codex_plan">Codex runs in a read-only sandbox; every write is rejected by the engine.</string>
 
     <!-- Memory graph v2 -->
     <string name="memory_graph_tab_graph">Graph</string>

@@ -473,6 +473,9 @@
     <string name="engine_codex_sandbox_toggle">放开沙箱（可读写工作区外）</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_opencode_auto_toggle">自动批准权限请求</string>
+    <string name="engine_option_build_only">仅构建模式下生效，计划/自动模式以工作模式为准</string>
+    <string name="engine_mode_note_codex_build">Codex 引擎无逐次审批：构建模式在工作区内自动执行，区外被拦截</string>
+    <string name="engine_mode_note_codex_plan">Codex 引擎以只读沙箱执行，任何写入都会被底层拒绝</string>
 
     <!-- 记忆图谱 v2 -->
     <string name="memory_graph_tab_graph">图谱</string>

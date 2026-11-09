@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
+import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
@@ -220,6 +221,7 @@ class ClaudeCodeBridge @Inject constructor(
     /**
      * 跑一个用户回合。命令文本即 [userRequest]；[model] 透传 `--model`（CLI 侧模型名或 App 供应商模型名）；
      * [providerId] 为会话选定的 App 供应商（对齐透传的 Key/baseURL，null = 引擎自带模型）；
+     * [mode] 为会话工作模式，映射到 CLI 的 `--permission-mode` / `--permission-prompts`；
      * [images] 随消息以 base64 图片块传入；[attachments] 以容器路径告知（引擎用自身工具读取）；
      * [resume] 为 true 时先尝试 `--resume` 续接，失败自动转全新回合。
      */
@@ -230,13 +232,14 @@ class ClaudeCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
+        mode: AgentMode = AgentMode.BUILD,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, mode = mode, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -244,10 +247,10 @@ class ClaudeCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（qa P2-3）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -366,6 +369,7 @@ class ClaudeCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
+        mode: AgentMode = AgentMode.BUILD,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -384,6 +388,12 @@ class ClaudeCodeBridge @Inject constructor(
             add("--verbose")
             add("--input-format"); add("stream-json")
             add("--include-partial-messages")
+            // 工作模式 → CLI 原生权限模式：BUILD=manual（权限桥逐次确认，同改造前）；
+            // PLAN=plan（CLI 只读）；AUTO=bypassPermissions（全放行）。
+            add("--permission-mode"); add(EngineModeMapping.claudePermissionMode(mode))
+            // PLAN/AUTO 无人应答：prompts=none 让请求直接拒绝而非挂起；BUILD 保持默认 host。
+            val prompts = EngineModeMapping.claudePermissionPrompts(mode)
+            if (prompts != "host") { add("--permission-prompts"); add(prompts) }
             // 用本体 sessionId 对齐 CLI 侧会话 id：新回合 --session-id 设定，续接回合 --resume 直接续上
             if (resume) {
                 add("--resume"); add(sessionId)

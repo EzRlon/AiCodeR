@@ -2759,6 +2759,7 @@ class AIAgentViewModel @Inject constructor(
                                 model = currentSession.model,
                                 resume = true,
                                 providerId = currentSession.providerId,
+                                mode = agentContext.permissionMode,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -2784,6 +2785,7 @@ class AIAgentViewModel @Inject constructor(
                                 model = currentSession.model,
                                 resume = true,
                                 providerId = currentSession.providerId,
+                                mode = agentContext.permissionMode,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -2809,6 +2811,7 @@ class AIAgentViewModel @Inject constructor(
                                 model = currentSession.model,
                                 resume = true,
                                 providerId = currentSession.providerId,
+                                mode = agentContext.permissionMode,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )

@@ -822,12 +822,14 @@ private fun CliEngineRows(
             }
         )
         // 引擎行为选项：Codex 沙箱档位 / OpenCode 自动批准（全局生效，下一次发送起作用）
+        // 仅构建模式生效；计划/自动模式以会话工作模式为准（见 EngineModeMapping）。
         when (state.agent.id) {
             "codex" -> {
                 SettingsDivider()
                 EngineOptionToggleRow(
                     icon = FeatherIcons.Shield,
                     title = stringResource(R.string.engine_codex_sandbox_toggle),
+                    subtitle = stringResource(R.string.engine_option_build_only),
                     checked = codexSandboxFullAccess,
                     onCheckedChange = viewModel::setCodexSandboxFullAccess
                 )
@@ -837,6 +839,7 @@ private fun CliEngineRows(
                 EngineOptionToggleRow(
                     icon = FeatherIcons.Zap,
                     title = stringResource(R.string.engine_opencode_auto_toggle),
+                    subtitle = stringResource(R.string.engine_option_build_only),
                     checked = openCodeAutoApprove,
                     onCheckedChange = viewModel::setOpenCodeAutoApprove
                 )
@@ -858,11 +861,13 @@ private fun EngineOptionToggleRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null
 ) {
     SettingsRow(
         icon = icon,
         title = title,
+        subtitle = subtitle,
         onClick = { onCheckedChange(!checked) },
         showChevron = false,
         trailing = {

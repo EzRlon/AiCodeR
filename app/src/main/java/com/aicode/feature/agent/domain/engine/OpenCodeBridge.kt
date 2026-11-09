@@ -5,6 +5,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
+import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -193,7 +194,8 @@ class OpenCodeBridge @Inject constructor(
     /**
      * 跑一个用户回合。[resume] 为 true 时先尝试 `-s` 续接（映射缺失或续接失败自动转全新回合）。
      * [model] 透传 `-m`（provider/model 形态或引擎内置名）；[providerId] 为会话选定的 App 供应商
-     * （自定义端点时注入 provider 段并对齐 Key）；[images] 落盘后经 `-f` 传入；[attachments] 以容器路径告知。
+     * （自定义端点时注入 provider 段并对齐 Key）；[mode] 为会话工作模式，映射到 `--agent` 与 `--auto`；
+     * [images] 落盘后经 `-f` 传入；[attachments] 以容器路径告知。
      */
     fun runTurn(
         sessionId: String,
@@ -202,13 +204,14 @@ class OpenCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
+        mode: AgentMode = AgentMode.BUILD,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, mode = mode, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -216,10 +219,10 @@ class OpenCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "opencode 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -232,6 +235,7 @@ class OpenCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
+        mode: AgentMode = AgentMode.BUILD,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -249,11 +253,17 @@ class OpenCodeBridge @Inject constructor(
             FileLogger.i(TAG, "无 opencode session 映射，按全新回合执行: sid=$sessionId")
         }
 
-        // headless 权限请求无人应答：--auto 自动批准未被显式 deny 的请求；由引擎卡开关控制（默认开）
-        val autoApprove = engineOptionsRepository.isOpenCodeAutoApprove()
+        // 工作模式 → 自动批准。AUTO 全放行；PLAN 用只读 plan agent 且绝不加 --auto；
+        // BUILD 沿用引擎卡开关作为默认（兼容老用户）。
+        val autoApprove = when (mode) {
+            AgentMode.AUTO -> true
+            AgentMode.PLAN -> false
+            AgentMode.BUILD -> engineOptionsRepository.isOpenCodeAutoApprove()
+        }
         val args = buildList {
             add("run")
             add("--format"); add("json")
+            EngineModeMapping.openCodeAgent(mode)?.let { add("--agent"); add(it) }
             if (autoApprove) add("--auto")
             // 思考过程事件（session.reasoning.ended）需要该开关才外发
             add("--thinking")

@@ -122,6 +122,7 @@ import com.aicode.feature.onboarding.domain.OnboardingStep
 import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
 import com.aicode.feature.agent.domain.command.SlashCommandKind
+import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.presentation.SessionGoalUi
@@ -670,6 +671,16 @@ internal fun ChatInputBar(
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                // 外部引擎的模式由引擎原生能力实现，行为细节与内置引擎不同，必须如实告知。
+                                engineModeNoteRes(sessionEngine, currentMode)?.let { noteRes ->
+                                    Text(
+                                        text = stringResource(noteRes),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                                 Text(
                                     text = stringResource(
                                         if (currentMode == AgentMode.PLAN) R.string.chat_mode_longpress_hint_plan
@@ -1384,6 +1395,17 @@ private fun modeBannerRes(mode: AgentMode): Int = when (mode) {
     AgentMode.BUILD -> R.string.agent_mode_build_desc
     AgentMode.PLAN -> R.string.agent_mode_plan_banner
     AgentMode.AUTO -> R.string.agent_mode_auto_banner
+}
+
+/** 外部引擎的模式由引擎原生能力实现，行为细节与内置引擎不同，必须如实告知。 */
+private fun engineModeNoteRes(engine: String?, mode: AgentMode): Int? = when (engine) {
+    AgentEngines.CODEX -> when (mode) {
+        AgentMode.BUILD -> R.string.engine_mode_note_codex_build
+        AgentMode.PLAN -> R.string.engine_mode_note_codex_plan
+        else -> null
+    }
+    AgentEngines.CLAUDE_CODE, AgentEngines.OPENCODE -> null
+    else -> null
 }
 
 private fun modeIcon(mode: AgentMode): ImageVector = when (mode) {
