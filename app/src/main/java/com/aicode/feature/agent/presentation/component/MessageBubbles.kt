@@ -503,7 +503,10 @@ internal fun AgentMessageItem(
                 val tokenStats = turnUsage
                     ?.takeIf { it.inputTokens > 0 || it.outputTokens > 0 }
                     ?.let {
-                        val inStr = formatTokenCount(it.inputTokens.toLong())
+                        // inputTokens 已含缓存命中（与设置页同口径）；气泡上显示「新增输入」更贴近真实增量，
+                        // 缓存命中量由后面的命中率图标表达，避免把百万级缓存读取误当成新消耗。
+                        val fresh = (it.inputTokens - it.cachedInputTokens).coerceAtLeast(0)
+                        val inStr = formatTokenCount(fresh.toLong())
                         val outStr = formatTokenCount(it.outputTokens.toLong())
                         "↑$inStr ↓$outStr"
                     }

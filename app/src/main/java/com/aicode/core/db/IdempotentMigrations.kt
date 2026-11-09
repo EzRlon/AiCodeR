@@ -207,6 +207,61 @@ internal class Migration72To73 : Migration(72, 73) {
     }
 }
 
+/**
+ * 幂等版 73→74（替代 `74_add_session_cached_tokens.sql` 执行）：会话累计缓存命中输入。
+ *
+ * 与 `totalInputTokens` 同口径（总量已含缓存），该列只是子集，用于在记忆图谱/会话卡片上
+ * 直接展示缓存命中率，避免每次再从消息表回算。
+ */
+internal class Migration73To74 : Migration(73, 74) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val hadColumn = columnExists(db, "chat_sessions", "totalCachedInputTokens")
+        addColumnIfMissing(
+            db, "chat_sessions", "totalCachedInputTokens",
+            "ALTER TABLE `chat_sessions` ADD COLUMN `totalCachedInputTokens` INTEGER NOT NULL DEFAULT 0"
+        )
+        if (hadColumn) return // 列已存在说明回填过，避免重复累加
+
+        // 回填历史 Claude 会话：旧桥接把 input_tokens（未含缓存）记进 totalInputTokens，
+        // 缓存命中单独存在消息行里。把两者合并成新口径，老会话在记忆图谱上才能与内置引擎可比。
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "UPDATE `agent_messages` SET `inputTokens` = `inputTokens` + `cachedInputTokens` " +
+                    "WHERE `cachedInputTokens` > 0 AND `sessionId` IN " +
+                    "(SELECT `id` FROM `chat_sessions` WHERE `engine` = 'claude_code')"
+            )
+            db.execSQL(
+                "UPDATE `chat_sessions` SET " +
+                    "`totalCachedInputTokens` = COALESCE((SELECT SUM(m.`cachedInputTokens`) FROM `agent_messages` m " +
+                    "WHERE m.`sessionId` = `chat_sessions`.`id`), 0), " +
+                    "`totalInputTokens` = `totalInputTokens` + COALESCE((SELECT SUM(m.`cachedInputTokens`) " +
+                    "FROM `agent_messages` m WHERE m.`sessionId` = `chat_sessions`.`id`), 0) " +
+                    "WHERE `engine` = 'claude_code'"
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+}
+
+/** 列是否存在；检查失败按「已存在」处理（与 [addColumnIfMissing] 同一保守口径）。 */
+private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
+    runCatching {
+        db.query("PRAGMA table_info(`$table`)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex) == column) {
+                    found = true
+                    break
+                }
+            }
+            found
+        }
+    }.getOrDefault(true)
+
 /** 列不存在才执行 DDL；检查失败按「已存在」处理并记日志（宁可 no-op，也不重复 ALTER 崩库）。 */
 private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column: String, ddl: String) {
     val exists = runCatching {

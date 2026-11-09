@@ -174,6 +174,8 @@ object TokenStatsPalette {
     val Input = Color(0xFF3B82F6)
     val Output = Color(0xFFF59E0B)
     val Cache = Color(0xFF8B5CF6)
+    /** 缓存写入：与缓存读取同色系、更浅一档，堆叠条里可区分。 */
+    val CacheWrite = Color(0xFFA78BFA)
     val Error = Color(0xFFEF4444)
     val Cancelled = Color(0xFF94A3B8)
     val Progress = Color(0xFF22C55E)

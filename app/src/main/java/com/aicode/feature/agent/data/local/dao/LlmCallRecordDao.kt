@@ -18,7 +18,9 @@ data class DayCallStats(
     val errors: Int,
     val avgTtfbMillis: Double?,
     val avgDurationMillis: Double?,
-    val retryCount: Long = 0
+    val retryCount: Long = 0,
+    /** 写入缓存的 token 数之和（inputTokens 的子集）。 */
+    val cacheCreationTokens: Long = 0
 )
 
 /** 按渠道（provider）聚合的调用统计，供渠道排行使用。 */
@@ -30,7 +32,9 @@ data class ProviderCallStats(
     val outputTokens: Long,
     val cachedInputTokens: Long,
     val errors: Int,
-    val retryCount: Long = 0
+    val retryCount: Long = 0,
+    /** 写入缓存的 token 数之和（inputTokens 的子集）。 */
+    val cacheCreationTokens: Long = 0
 )
 
 /** 按模型聚合的调用统计，供模型排行使用。 */
@@ -104,6 +108,7 @@ interface LlmCallRecordDao {
                SUM(inputTokens) AS inputTokens,
                SUM(outputTokens) AS outputTokens,
                SUM(cachedInputTokens) AS cachedInputTokens,
+               SUM(cacheCreationTokens) AS cacheCreationTokens,
                COUNT(*) AS calls,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
                AVG(ttfbMillis) AS avgTtfbMillis,
@@ -131,6 +136,7 @@ interface LlmCallRecordDao {
                SUM(inputTokens) AS inputTokens,
                SUM(outputTokens) AS outputTokens,
                SUM(cachedInputTokens) AS cachedInputTokens,
+               SUM(cacheCreationTokens) AS cacheCreationTokens,
                COUNT(*) AS calls,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
                AVG(ttfbMillis) AS avgTtfbMillis,
@@ -160,6 +166,7 @@ interface LlmCallRecordDao {
                SUM(r.inputTokens) AS inputTokens,
                SUM(r.outputTokens) AS outputTokens,
                SUM(r.cachedInputTokens) AS cachedInputTokens,
+               SUM(r.cacheCreationTokens) AS cacheCreationTokens,
                SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END) AS errors,
                SUM(r.retryCount) AS retryCount
         FROM llm_call_records r

@@ -2963,7 +2963,12 @@ class AIAgentViewModel @Inject constructor(
                             // 同步写库：工具循环下一轮 CallLlm 前会重读 lastInputTokens 判断压缩，
                             // 异步写库可能读到压缩前的旧大值导致重复触发压缩。
                             runCatching {
-                                chatSessionDao.addTokenUsage(sessionId, event.inputTokens, event.outputTokens)
+                                chatSessionDao.addTokenUsage(
+                                    sessionId,
+                                    event.inputTokens,
+                                    event.outputTokens,
+                                    event.cachedInputTokens
+                                )
                                 if (event.inputTokens > 0) {
                                     chatSessionDao.updateLastInputTokens(sessionId, event.inputTokens)
                                 }
@@ -3884,9 +3889,13 @@ class AIAgentViewModel @Inject constructor(
                 appendLine("| 项目 | 今日 | 累计 |")
                 appendLine("|---|---|---|")
                 appendLine("| 调用次数 | ${today.calls} | ${allTime.calls} |")
-                appendLine("| 输入 tokens | ${formatTokenCount(today.inputTokens)} | ${formatTokenCount(allTime.inputTokens)} |")
-                appendLine("| 输出 tokens | ${formatTokenCount(today.outputTokens)} | ${formatTokenCount(allTime.outputTokens)} |")
+                // 输入总量已含缓存命中：把「新增输入」单独列出来，避免把百万级缓存读取误读成真实增量
+                appendLine(
+                    "| 新增输入 tokens | ${formatTokenCount((today.inputTokens - today.cachedInputTokens).coerceAtLeast(0))} " +
+                        "| ${formatTokenCount((allTime.inputTokens - allTime.cachedInputTokens).coerceAtLeast(0))} |"
+                )
                 appendLine("| 缓存命中 tokens | ${formatTokenCount(today.cachedInputTokens)} | ${formatTokenCount(allTime.cachedInputTokens)} |")
+                appendLine("| 输出 tokens | ${formatTokenCount(today.outputTokens)} | ${formatTokenCount(allTime.outputTokens)} |")
                 appendLine("| 预估费用 | ${formatCostUsd(today.costUsd)} | ${formatCostUsd(allTime.costUsd)} |")
             }
             sessionUseCase.touch(sid, messagePersistenceUseCase.nextTimestamp())

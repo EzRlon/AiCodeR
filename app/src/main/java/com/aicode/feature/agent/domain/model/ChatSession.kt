@@ -66,6 +66,8 @@ data class ChatSession(
     val model: String? = null,
     val totalInputTokens: Int = 0,
     val totalOutputTokens: Int = 0,
+    /** 累计缓存命中输入：是 [totalInputTokens] 的子集，只用于展示命中率，不参与总消耗。 */
+    val totalCachedInputTokens: Int = 0,
     val lastInputTokens: Int = 0,
     val isPinned: Boolean = false,
     /** 子代理会话：父会话 id；null 表示普通根会话。 */

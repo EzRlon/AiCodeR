@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +66,9 @@ import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.agent.presentation.AgentUIState
+import com.aicode.core.theme.TokenStatsPalette
+import com.aicode.feature.agent.domain.engine.AgentEngines
+import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.memorygraph.domain.model.GraphEdge
@@ -532,29 +538,15 @@ fun MemoryGraphScreen(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
 
-        // ── 统计条 ──
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.lg),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        ) {
-            Text(
-                text = stringResource(R.string.memory_graph_stat_threads, visibleRoots.size),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(R.string.memory_graph_stat_running, runningCount),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(R.string.memory_graph_stat_tokens, formatTokens(totalTokens)),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        // ── 统计条：线索 / 进行中 / 累计 token / 缓存命中率 ──
+        SessionStatsBar(
+            threads = visibleRoots.size,
+            running = runningCount,
+            totalInputTokens = sessions.sumOf { it.totalInputTokens },
+            totalOutputTokens = sessions.sumOf { it.totalOutputTokens },
+            totalCachedTokens = sessions.sumOf { it.totalCachedInputTokens },
+            modifier = Modifier.padding(horizontal = Spacing.md),
+        )
 
         // ── 三页（与 Git 本地仓库同款）：结论时间线 / 会话 / 图谱，底部悬浮页签切换 ──
                 HorizontalPager(
@@ -578,13 +570,47 @@ fun MemoryGraphScreen(
                                 )
                             }
                         } else {
-                            LazyColumn(
-                                state = sessionsListState,
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = Spacing.md, end = Spacing.md, top = Spacing.sm, bottom = 84.dp),
-                                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-                            ) {
-                visibleRoots.forEach { session ->
+                            var onlyRunning by rememberSaveable { mutableStateOf(false) }
+                            var sortByTokens by rememberSaveable { mutableStateOf(false) }
+                            val shownRoots = visibleRoots
+                                .filter { !onlyRunning || isRunning(it.id) }
+                                .let {
+                                    if (sortByTokens) it.sortedByDescending { s -> s.totalInputTokens + s.totalOutputTokens }
+                                    else it
+                                }
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                // 分类/排序：线索多起来后，「只看进行中」与「按消耗排序」是最常用的两种切法
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    LaneFilterChip(
+                                        selected = !onlyRunning,
+                                        label = stringResource(R.string.memory_graph_filter_all),
+                                        onClick = { onlyRunning = false },
+                                    )
+                                    LaneFilterChip(
+                                        selected = onlyRunning,
+                                        label = stringResource(R.string.memory_graph_filter_running),
+                                        onClick = { onlyRunning = true },
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    LaneFilterChip(
+                                        selected = sortByTokens,
+                                        label = stringResource(R.string.memory_graph_sort_tokens),
+                                        onClick = { sortByTokens = !sortByTokens },
+                                    )
+                                }
+                                LazyColumn(
+                                    state = sessionsListState,
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(start = Spacing.md, end = Spacing.md, top = Spacing.xs, bottom = 84.dp),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                                ) {
+                shownRoots.forEach { session ->
                     val stat = activity[session.id]
                     val subs = subSessionsByParent[session.id].orEmpty()
                     val expanded = session.id in expandedIds
@@ -617,6 +643,7 @@ fun MemoryGraphScreen(
                         )
                     }
                 }
+                                }
                             }
                         }
                         else -> GraphSection(
@@ -713,11 +740,20 @@ private fun SessionLaneCard(
                     }
                     Spacer(Modifier.width(Spacing.xs))
                 }
-                Text(
-                    text = session.mode.name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            }
+            // 分类标签：模式 / 执行引擎 / 子代理数量——一眼分清「哪个引擎、什么权限、有没有分身」
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LaneTag(stringResource(modeLabelRes(session.mode)))
+                LaneTag(
+                    AgentEngines.displayName(session.engine)
+                        ?: stringResource(R.string.settings_token_stats_source_builtin)
                 )
+                if (subs.isNotEmpty()) {
+                    LaneTag(stringResource(R.string.memory_graph_subs_tag, subs.size))
+                }
             }
             // 目标行
             session.goal?.takeIf { it.isNotBlank() }?.let { goal ->
@@ -751,7 +787,9 @@ private fun SessionLaneCard(
                     )
                 }
             }
-            // 统计行：消息 / token / 相对时间
+            // 统计行：消息 / 总量 / 缓存命中率 / 相对时间 + token 构成条
+            val cachedTokens = session.totalCachedInputTokens
+            val freshTokens = (session.totalInputTokens - cachedTokens).coerceAtLeast(0)
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     text = stringResource(R.string.memory_graph_detail_messages, stat?.messageCount ?: 0),
@@ -766,6 +804,19 @@ private fun SessionLaneCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (session.totalInputTokens > 0 && cachedTokens > 0) {
+                    Text(
+                        text = stringResource(
+                            R.string.memory_graph_cache_rate,
+                            "%.0f%%".format(
+                                java.util.Locale.US,
+                                (cachedTokens * 100.0 / session.totalInputTokens).coerceAtMost(100.0)
+                            )
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 Text(
                     text = relativeTime(stat?.lastActiveAt ?: session.updatedAt),
@@ -773,6 +824,11 @@ private fun SessionLaneCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            LaneCompositionBar(
+                fresh = freshTokens,
+                cached = cachedTokens,
+                output = session.totalOutputTokens
+            )
             // 子代理行（内嵌泳道层级）
             subs.forEach { sub ->
                 Row(
@@ -868,6 +924,142 @@ private fun SessionLaneCard(
             }
         }
     }
+}
+
+/**
+ * 图谱顶部的四格统计：线索数、进行中、累计 token（输入+输出）、缓存命中率。
+ *
+ * 缓存率单独浮现，是因为「累计 token」现在含缓存命中；不展示命中率的话，
+ * 用户会把百万级缓存读取误读成同样量级的真实消耗。
+ */
+@Composable
+private fun SessionStatsBar(
+    threads: Int,
+    running: Int,
+    totalInputTokens: Int,
+    totalOutputTokens: Int,
+    totalCachedTokens: Int,
+    modifier: Modifier = Modifier,
+) {
+    val cacheRate = if (totalInputTokens > 0) {
+        "%.0f%%".format(
+            java.util.Locale.US,
+            (totalCachedTokens * 100.0 / totalInputTokens).coerceAtMost(100.0)
+        )
+    } else {
+        "-"
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            StatCell(
+                value = threads.toString(),
+                label = stringResource(R.string.memory_graph_stat_threads_label),
+                modifier = Modifier.weight(1f),
+            )
+            StatCell(
+                value = running.toString(),
+                label = stringResource(R.string.memory_graph_stat_running_label),
+                modifier = Modifier.weight(1f),
+            )
+            StatCell(
+                value = formatTokens(totalInputTokens + totalOutputTokens),
+                label = stringResource(R.string.memory_graph_stat_tokens_label),
+                modifier = Modifier.weight(1f),
+            )
+            StatCell(
+                value = cacheRate,
+                label = stringResource(R.string.memory_graph_stat_cache_rate_label),
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatCell(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 线索卡上的轻量标签：模式 / 引擎 / 子代理数。 */
+@Composable
+private fun LaneTag(text: String) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+        )
+    }
+}
+
+@Composable
+private fun LaneFilterChip(selected: Boolean, label: String, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+        shape = RoundedCornerShape(50),
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+    )
+}
+
+/** 单条线索的 token 构成：新增输入 / 缓存 / 输出。 */
+@Composable
+private fun LaneCompositionBar(fresh: Int, cached: Int, output: Int) {
+    val segments = listOf(
+        fresh to TokenStatsPalette.Input,
+        cached to TokenStatsPalette.Cache,
+        output to TokenStatsPalette.Output,
+    ).filter { it.first > 0 }
+    if (segments.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(RoundedCornerShape(999.dp)),
+    ) {
+        segments.forEach { (value, color) ->
+            Box(
+                modifier = Modifier
+                    .weight(value.toFloat())
+                    .fillMaxHeight()
+                    .background(color)
+            )
+        }
+    }
+}
+
+private fun modeLabelRes(mode: AgentMode): Int = when (mode) {
+    AgentMode.BUILD -> R.string.agent_mode_build
+    AgentMode.PLAN -> R.string.agent_mode_plan
+    AgentMode.AUTO -> R.string.agent_mode_auto
 }
 
 @Composable

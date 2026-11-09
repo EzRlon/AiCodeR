@@ -14,6 +14,7 @@ import com.aicode.feature.agent.data.local.dao.RecentCallRecord
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.data.local.entity.PermissionAuditEntity
 import com.aicode.feature.agent.domain.container.ConnectionState
+import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.agent.domain.container.ContainerImageCatalog
 import com.aicode.feature.agent.domain.container.ContainerImageEntry
@@ -1410,7 +1411,8 @@ class SettingsViewModel @Inject constructor(
                         ) { allProviders, allModels, configuredProviders ->
                             val providerList = (allProviders.mapNotNull { p ->
                                 val id = p.providerId ?: return@mapNotNull null
-                                id to (p.providerName ?: id)
+                                // 外部引擎没有 ai_providers 行，用引擎展示名兜底，避免筛选器里露出 claude_code
+                                id to (p.providerName ?: AgentEngines.displayName(id) ?: id)
                             } + configuredProviders.map { it.id to it.name }).distinctBy { it.first }
                             val modelList = allModels.mapNotNull { it.model }.distinct()
                             val keyCounts = configuredProviders.associate { it.id to it.apiKeys.size }

@@ -137,8 +137,8 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET goalTurnCount = goalTurnCount + 1 WHERE id = :id")
     suspend fun incrementGoalTurn(id: String)
 
-    @Query("UPDATE chat_sessions SET totalInputTokens = totalInputTokens + :inputTokens, totalOutputTokens = totalOutputTokens + :outputTokens WHERE id = :id")
-    suspend fun addTokenUsage(id: String, inputTokens: Int, outputTokens: Int)
+    @Query("UPDATE chat_sessions SET totalInputTokens = totalInputTokens + :inputTokens, totalOutputTokens = totalOutputTokens + :outputTokens, totalCachedInputTokens = totalCachedInputTokens + :cachedInputTokens WHERE id = :id")
+    suspend fun addTokenUsage(id: String, inputTokens: Int, outputTokens: Int, cachedInputTokens: Int)
 
     @Query("UPDATE chat_sessions SET lastInputTokens = :lastInputTokens WHERE id = :id")
     suspend fun updateLastInputTokens(id: String, lastInputTokens: Int)

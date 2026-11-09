@@ -44,7 +44,12 @@ data class ChatSessionEntity(
     /** 回收站：null = 正常会话；非 null = 入回收站的时间戳（超过 30 天后彻底清除）。 */
     val deletedAt: Long? = null,
     /** 本会话的执行引擎：null = 本体内置工作流；"claude_code" = CLI 桥接（引擎切换）。 */
-    val engine: String? = null
+    val engine: String? = null,
+    /**
+     * 会话累计缓存命中输入：是 [totalInputTokens] 的子集，只用于展示缓存命中率，
+     * **不参与总消耗**（总量已含缓存）。口径由 `UsageNormalizer` 在适配器出口统一。
+     */
+    val totalCachedInputTokens: Int = 0
 ) {
     fun toDomain(): ChatSession = ChatSession(
         id = id,
@@ -70,7 +75,8 @@ data class ChatSessionEntity(
         subagentType = subagentType,
         teamName = teamName,
         deletedAt = deletedAt,
-        engine = engine
+        engine = engine,
+        totalCachedInputTokens = totalCachedInputTokens
     )
 
     companion object {
@@ -98,7 +104,8 @@ data class ChatSessionEntity(
             subagentType = session.subagentType,
             teamName = session.teamName,
             deletedAt = session.deletedAt,
-            engine = session.engine
+            engine = session.engine,
+            totalCachedInputTokens = session.totalCachedInputTokens
         )
     }
 }

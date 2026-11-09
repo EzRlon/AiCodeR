@@ -1,6 +1,8 @@
 package com.aicode.feature.agent.domain.engine
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.cliagent.CliTabInjection
@@ -8,6 +10,8 @@ import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
+import com.aicode.feature.agent.domain.provider.NormalizedUsage
+import com.aicode.feature.agent.domain.provider.UsageNormalizer
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
@@ -75,7 +79,8 @@ class ClaudeCodeBridge @Inject constructor(
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
-    private val deliveryRegistry: CliDeliveryRegistry
+    private val deliveryRegistry: CliDeliveryRegistry,
+    private val llmCallRecordDao: LlmCallRecordDao
 ) {
     private companion object {
         const val TAG = "ClaudeCodeBridge"
@@ -549,6 +554,29 @@ class ClaudeCodeBridge @Inject constructor(
                     emit(event)
                     if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
                 }
+                // 每条 assistant 消息 = 一次真实 API 调用：按归一化后的用量补一条调用记录，
+                // 让「设置 → Token 统计」能看到外部引擎（此前桥接完全不写这张表）。
+                acc.pendingUsage?.let { usage ->
+                    acc.pendingUsage = null
+                    if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                        runCatching {
+                            llmCallRecordDao.insert(
+                                LlmCallRecordEntity(
+                                    sessionId = sessionId,
+                                    providerId = AgentEngines.CLAUDE_CODE,
+                                    model = acc.model ?: model,
+                                    kind = "chat",
+                                    inputTokens = usage.inputTokens,
+                                    outputTokens = usage.outputTokens,
+                                    cachedInputTokens = usage.cachedInputTokens,
+                                    cacheCreationTokens = usage.cacheCreationTokens,
+                                    status = "success",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                        }.onFailure { e -> FileLogger.w(TAG, "写入 Claude 调用用量失败: ${e.message}") }
+                    }
+                }
             }
 
             if (!gotResult) {
@@ -592,6 +620,10 @@ class ClaudeCodeBridge @Inject constructor(
         /** tool_use id → 工具名：tool_result 回来时补齐 Finished 的 toolName。 */
         val toolNames = mutableMapOf<String, String>()
         var emittedAny = false
+        /** 当前 assistant 消息自带的模型名（CLI 实际调用模型），用于用量明细。 */
+        var model: String? = null
+        /** 刚解析到的单次调用用量；消费端落账后清空，避免同一行重复写记录。 */
+        var pendingUsage: NormalizedUsage? = null
         fun resetBlocks() { text.clear(); reasoning.clear() }
     }
 
@@ -665,15 +697,25 @@ class ClaudeCodeBridge @Inject constructor(
                 }
             }
         }
-        val usage = message["usage"] as? JsonObject
+        val rawUsage = message["usage"] as? JsonObject
+        // CLI 的 input_tokens 只含未命中缓存的部分；按 Anthropic 语义补齐 cache_read / cache_creation，
+        // 否则会话总账、上下文占用与缓存命中率都会严重偏低（实测上下文 30 万时只记 1 千）。
+        val usage = UsageNormalizer.anthropic(
+            input = rawUsage?.intOf("input_tokens") ?: 0,
+            cacheRead = rawUsage?.intOf("cache_read_input_tokens"),
+            cacheCreation = rawUsage?.intOf("cache_creation_input_tokens"),
+            output = rawUsage?.intOf("output_tokens") ?: 0
+        )
+        acc.model = message["model"]?.jsonPrimitive?.contentOrNull ?: acc.model
+        acc.pendingUsage = usage
         val events = mutableListOf<AgentEvent>(
             AgentEvent.AssistantText(
                 content = text.toString(),
                 toolCalls = toolCalls,
                 reasoning = reasoning.toString(),
-                inputTokens = usage?.intOf("input_tokens") ?: 0,
-                outputTokens = usage?.intOf("output_tokens") ?: 0,
-                cachedInputTokens = usage?.intOf("cache_read_input_tokens") ?: 0
+                inputTokens = usage.inputTokens,
+                outputTokens = usage.outputTokens,
+                cachedInputTokens = usage.cachedInputTokens
             )
         )
         // 本体链路靠 ToolCallStarted 落「执行中」工具行与参数预览：CLI 工具在 CLI 侧执行，
