@@ -3,12 +3,19 @@ package com.aicode.feature.plugin.domain
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.plugin.data.PluginState
 import com.aicode.feature.plugin.data.PluginStateStore
+import com.aicode.feature.workspace.domain.FileAccessProvider
 import java.io.File
 
 /** 已安装的插件：清单 + 目录 + 状态，三者一起给界面用。 */
 data class InstalledPlugin(
     val manifest: PluginManifest,
-    val dir: File,
+    /** 容器视角的插件目录（如 `~/.aicode/plugins/<id>`）；本地与远程同一套路径。 */
+    val dirPath: String,
+    /**
+     * 本地模式下对应的宿主目录，供「在文件管理器中打开」与本地占用统计使用。
+     * 远程模式下插件在服务器上，没有本地路径，为 null（此时只展示 [dirPath]）。
+     */
+    val localDir: File?,
     val state: PluginState
 ) {
     val id: String get() = manifest.id
@@ -26,11 +33,16 @@ data class PluginScanResult(
 /**
  * 插件注册表：扫描插件根目录下的各插件目录，把清单与状态合成一份可用的列表。
  *
+ * 目录一律以**容器路径**经 [FileAccessProvider] 访问：本地模式落 App 私有目录，
+ * 远程 SSH 模式落服务器用户 home 下的 `~/.aicode/plugins`——与技能/子代理扫描同一套逻辑，
+ * 否则远程模式下插件列表恒空。
+ *
  * 只做「读」与状态变更；内容的释放/摘除是 `PluginResourceReleaser` 的职责，
  * 两者分开是为了让扫描与状态可单测，且卸载顺序（先摘能力、再删文件、最后清状态）可控。
  */
 class PluginRegistry(
-    private val pluginsRoot: File,
+    private val fileAccess: FileAccessProvider,
+    private val pluginsRoot: String,
     private val stateStore: PluginStateStore
 ) {
 
@@ -42,16 +54,20 @@ class PluginRegistry(
      * 目录不存在不是错误（首次运行就是这样）。
      */
     fun scan(): PluginScanResult {
-        val dirs = pluginsRoot.listFiles { f -> f.isDirectory && !f.name.startsWith('.') }
-            ?.sortedBy { it.name }
-            ?: emptyList()
+        // 根目录不存在（首次运行）、远程未连接都可能让列举失败：按空结果处理，不向上抛。
+        val dirs = runCatching { fileAccess.listFiles(pluginsRoot) }
+            .onFailure { FileLogger.w(TAG, "列举插件根目录失败: $pluginsRoot", it) }
+            .getOrDefault(emptyList())
+            .filter { it.isDirectory && !it.name.startsWith('.') }
+            .sortedBy { it.name }
         if (dirs.isEmpty()) return PluginScanResult()
 
         val plugins = mutableListOf<InstalledPlugin>()
         val problems = mutableListOf<PluginProblem>()
 
         dirs.forEach { dir ->
-            when (val result = PluginManifestParser.parseDirectory(dir)) {
+            val dirPath = join(pluginsRoot, dir.name)
+            when (val result = PluginManifestParser.parseDirectory(fileAccess, dirPath)) {
                 is PluginManifestResult.Invalid ->
                     problems += PluginProblem(dir.name, result.errors)
 
@@ -66,7 +82,8 @@ class PluginRegistry(
                     } else {
                         plugins += InstalledPlugin(
                             manifest = manifest,
-                            dir = dir,
+                            dirPath = dirPath,
+                            localDir = dir.localFile,
                             state = stateStore.stateOf(manifest.id) ?: PluginState()
                         )
                     }
@@ -83,7 +100,7 @@ class PluginRegistry(
     /** 只取已启用的插件，按 id 排序（渲染顺序稳定）。 */
     fun enabledPlugins(): List<InstalledPlugin> = scan().plugins.filter { it.enabled }.sortedBy { it.id }
 
-    fun pluginDir(id: String): File = File(pluginsRoot, id)
+    fun pluginDir(id: String): String = join(pluginsRoot, id)
 
     /**
      * 启用/禁用。**未同意免责的插件不允许启用**——免责是插件的准入条件，不能绕过。
@@ -115,5 +132,7 @@ class PluginRegistry(
 
     private companion object {
         const val TAG = "PluginRegistry"
+
+        fun join(root: String, name: String): String = root.trimEnd('/') + "/" + name
     }
 }

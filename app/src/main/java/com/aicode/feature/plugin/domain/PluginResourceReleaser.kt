@@ -8,7 +8,6 @@ import com.aicode.feature.hooks.domain.HooksConfig
 import com.aicode.feature.plugin.data.PluginState
 import com.aicode.feature.plugin.data.PluginStateStore
 import com.aicode.feature.workspace.domain.FileAccessProvider
-import java.io.File
 
 /**
  * 没能装上的项。带 [detail]（路径 / 名称）而不是拼好的句子：
@@ -99,7 +98,7 @@ class PluginResourceReleaser(
         copyContentDirs(plugin, capabilities.scripts, CONTENT_SCRIPTS, ownedFiles, conflicts)
         copyContentDirs(plugin, capabilities.prompts, CONTENT_PROMPTS, ownedFiles, conflicts)
 
-        capabilities.assets.forEach { asset -> copyAsset(plugin.dir, asset, ownedFiles, conflicts) }
+        capabilities.assets.forEach { asset -> copyAsset(plugin.dirPath, asset, ownedFiles, conflicts) }
 
         attachMcp(plugin, ownedMcp, conflicts)
         attachHooks(plugin, ownedHooks, conflicts)
@@ -162,18 +161,18 @@ class PluginResourceReleaser(
         conflicts: MutableList<ReleaseConflict>
     ) {
         sources.forEach { source ->
-            val sourceDir = File(plugin.dir, source)
-            if (!sourceDir.isDirectory) {
+            val sourceDir = join(plugin.dirPath, source)
+            if (!fileAccess.isDirectory(sourceDir)) {
                 conflicts += ReleaseConflict(ConflictKind.SOURCE_MISSING, source)
                 return@forEach
             }
-            sourceDir.listFiles()?.sortedBy { it.name }?.forEach { entry ->
+            listFilesOrEmpty(sourceDir).sortedBy { it.name }.forEach { entry ->
                 val target = "$targetDir/${entry.name}"
                 if (fileAccess.exists(target)) {
                     conflicts += ReleaseConflict(ConflictKind.TARGET_EXISTS, target)
                     return@forEach
                 }
-                runCatching { copyRecursively(entry, target) }
+                runCatching { copyRecursively(join(sourceDir, entry.name), target) }
                     .onSuccess { owned += target }
                     .onFailure {
                         FileLogger.w(TAG, "复制插件内容失败: ${entry.name} -> $target", it)
@@ -184,18 +183,18 @@ class PluginResourceReleaser(
     }
 
     private fun copyAsset(
-        pluginDir: File,
+        pluginDir: String,
         asset: AssetMapping,
         owned: MutableList<String>,
         conflicts: MutableList<ReleaseConflict>
     ) {
-        val source = File(pluginDir, asset.from)
-        if (!source.exists()) {
+        val source = join(pluginDir, asset.from)
+        if (!fileAccess.exists(source)) {
             conflicts += ReleaseConflict(ConflictKind.SOURCE_MISSING, asset.from)
             return
         }
-        val targets: List<Pair<File, String>> = if (source.isDirectory) {
-            source.listFiles()?.map { it to "${asset.to}/${it.name}" }.orEmpty()
+        val targets: List<Pair<String, String>> = if (fileAccess.isDirectory(source)) {
+            listFilesOrEmpty(source).map { join(source, it.name) to "${asset.to}/${it.name}" }
         } else {
             listOf(source to asset.to)
         }
@@ -207,21 +206,26 @@ class PluginResourceReleaser(
             runCatching { copyRecursively(file, target) }
                 .onSuccess { owned += target }
                 .onFailure {
-                    FileLogger.w(TAG, "释放资源失败: ${file.name} -> $target", it)
+                    FileLogger.w(TAG, "释放资源失败: ${file.substringAfterLast('/')} -> $target", it)
                     conflicts += ReleaseConflict(ConflictKind.WRITE_FAILED, target)
                 }
         }
     }
 
-    /** 文件走流、目录递归；全程经 [FileAccessProvider]，本地与远程 SFTP 同一套行为。 */
-    private fun copyRecursively(source: File, target: String) {
-        if (source.isDirectory) {
+    /** 文件读字节、目录递归；全程经 [FileAccessProvider]，本地与远程 SFTP 同一套行为。 */
+    private fun copyRecursively(source: String, target: String) {
+        if (fileAccess.isDirectory(source)) {
             fileAccess.mkdirs(target)
-            source.listFiles()?.forEach { child -> copyRecursively(child, "$target/${child.name}") }
+            listFilesOrEmpty(source).forEach { child -> copyRecursively(join(source, child.name), join(target, child.name)) }
         } else {
-            source.inputStream().use { fileAccess.writeStream(target, it, overwrite = false) }
+            fileAccess.writeBytes(target, fileAccess.readBytes(source), overwrite = false)
         }
     }
+
+    private fun listFilesOrEmpty(dir: String) =
+        runCatching { fileAccess.listFiles(dir) }.getOrDefault(emptyList())
+
+    private fun join(base: String, name: String) = base.trimEnd('/') + "/" + name.trimStart('/')
 
     // ── MCP ──
 
@@ -249,7 +253,9 @@ class PluginResourceReleaser(
                 command = spec.command,
                 args = spec.args,
                 url = spec.url,
-                env = spec.env
+                env = spec.env,
+                enabled = spec.enabled,
+                enabledTools = spec.enabledTools.toSet()
             )
             owned += spec.name
         }
@@ -331,8 +337,11 @@ class PluginResourceReleaser(
     // ── 环境准备 ──
 
     /**
-     * 跑一次安装脚本，成功后写 marker。marker 存在即视为已准备（与内置开发环境同一套幂等思路）。
+     * 跑一次安装，成功后写 marker。marker 存在即视为已准备（与内置开发环境同一套幂等思路）。
      * 容器没就绪不算失败、只记一条跳过：装插件本身不该要求用户先起容器。
+     *
+     * `builtinScenario` 走宿主内置场景入口（场景脚本留在 assets 里，继续复用共享库与幂等标记）；
+     * 否则走插件目录内的 `script`。
      */
     private suspend fun prepareProvision(
         plugin: InstalledPlugin,
@@ -342,13 +351,23 @@ class PluginResourceReleaser(
     ) {
         val marker = spec.marker ?: "$PLUGIN_DATA_DIR/${plugin.id}/.provisioned"
         if (fileAccess.exists(marker)) return
-        val script = spec.script ?: run {
-            conflicts += ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, spec.scenario)
-            return
+        val command = when {
+            spec.builtinScenario != null -> {
+                // 清单解析时已按白名单校验；这里再挡一次，避免绕过解析直接构造的调用方拼出意外命令。
+                if (!BUILTIN_SCENARIO_ID.matches(spec.builtinScenario)) {
+                    conflicts += ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, spec.scenario)
+                    return
+                }
+                "sh $BUILTIN_PROVISION_SCRIPT --install '${spec.builtinScenario}'"
+            }
+            spec.script != null -> "sh ${pluginScriptPath(plugin.id, spec.script)}"
+            else -> {
+                conflicts += ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, spec.scenario)
+                return
+            }
         }
-        val scriptPath = pluginScriptPath(plugin.id, script)
         val result = runCatching {
-            commandEngine.runCommandSyncIfReady("sh $scriptPath", timeoutMs = PROVISION_TIMEOUT_MS)
+            commandEngine.runCommandSyncIfReady(command, timeoutMs = PROVISION_TIMEOUT_MS)
         }.getOrNull()
         if (result == null) {
             conflicts += ReleaseConflict(ConflictKind.PROVISION_SKIPPED, spec.scenario)
@@ -371,6 +390,11 @@ class PluginResourceReleaser(
 
         /** 插件私有数据（marker 等），不参与内容发布。 */
         const val PLUGIN_DATA_DIR = "~/.aicode/.plugin-data"
+
+        /** 宿主内置场景的统一入口（App 启动时提取到 `~/.aicode/`）。 */
+        private const val BUILTIN_PROVISION_SCRIPT = "~/.aicode/provision.sh"
+
+        private val BUILTIN_SCENARIO_ID = Regex("^[a-z0-9][a-z0-9_-]*$")
 
         private const val KEY_SEPARATOR = "\u0000"
         private const val HOOKS_PATH = "~/.aicode/hooks.json"

@@ -1,0 +1,26 @@
+{
+  "id": "com.aicode.multillm",
+  "name": "模型顾问团（multi-llm）",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "author": "AiCodeR",
+  "description": "把六家大模型网页版接入为 MCP 工具，AI 可直接咨询 ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek",
+  "permissions": ["container.exec", "network"],
+  "capabilities": {
+    "provision": {
+      "scenario": "multillm",
+      "builtinScenario": "multillm"
+    },
+    "mcp": [
+      {
+        "name": "multi-llm",
+        "transport": "stdio",
+        "command": "python3",
+        "args": ["/root/.aicode/multi-llm/server.py"],
+        "env": {
+          "PYTHONPATH": "/root/.aicode/multi-llm-venv/site"
+        }
+      }
+    ]
+  }
+}

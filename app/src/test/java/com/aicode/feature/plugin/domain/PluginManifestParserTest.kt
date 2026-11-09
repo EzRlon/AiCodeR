@@ -1,6 +1,7 @@
 package com.aicode.feature.plugin.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -131,6 +132,54 @@ class PluginManifestParserTest {
             capabilities = """"mcp": [{"name": "demo", "transport": "grpc", "url": "https://x"}]"""
         )
         assertTrue(errorsOf(json).any { it.contains("不支持的 MCP transport") })
+    }
+
+    @Test
+    fun `builtinScenario 合法时通过`() {
+        val json = manifest(
+            capabilities = """"provision": {"scenario": "rea", "builtinScenario": "rea"}"""
+        )
+        assertEquals("rea", valid(json).capabilities.provision?.builtinScenario)
+    }
+
+    @Test
+    fun `script 与 builtinScenario 互斥`() {
+        val json = manifest(
+            capabilities = """"provision": {"scenario": "rea", "script": "s.sh", "builtinScenario": "rea"}"""
+        )
+        assertTrue(errorsOf(json).any { it.contains("只能二选一") })
+    }
+
+    @Test
+    fun `未知内置场景被拒`() {
+        val json = manifest(
+            capabilities = """"provision": {"scenario": "x", "builtinScenario": "android"}"""
+        )
+        assertTrue(errorsOf(json).any { it.startsWith("不支持的内置场景") })
+    }
+
+    @Test
+    fun `provision 缺少执行入口被拒`() {
+        val json = manifest(capabilities = """"provision": {"scenario": "x"}""")
+        assertTrue(errorsOf(json).any { it.contains("需要 script 或 builtinScenario") })
+    }
+
+    @Test
+    fun `MCP enabled 与工具白名单透传`() {
+        val json = manifest(
+            capabilities = """"mcp": [{"name": "rea", "command": "npx", "enabled": false, "enabledTools": ["a", "b"]}]"""
+        )
+        val mcp = valid(json).capabilities.mcp.single()
+        assertFalse(mcp.enabled)
+        assertEquals(listOf("a", "b"), mcp.enabledTools)
+    }
+
+    @Test
+    fun `MCP 白名单含非法工具名被拒`() {
+        val json = manifest(
+            capabilities = """"mcp": [{"name": "rea", "command": "npx", "enabledTools": ["bad tool"]}]"""
+        )
+        assertTrue(errorsOf(json).any { it.contains("非法工具名") })
     }
 
     @Test

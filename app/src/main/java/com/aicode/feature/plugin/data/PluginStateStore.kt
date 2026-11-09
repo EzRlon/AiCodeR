@@ -1,10 +1,10 @@
 package com.aicode.feature.plugin.data
 
 import com.aicode.core.util.FileLogger
+import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /**
  * 单个插件的持久化状态。
@@ -37,10 +37,16 @@ private data class PluginStateFile(val plugins: Map<String, PluginState> = empty
 /**
  * 插件状态的落盘（`<插件根>/state.json`）。
  *
- * 与 `SyncIndexStore` 同一套写法：临时文件 + rename 原子落盘，避免写一半掉电损坏；
+ * 读写经 [FileAccessProvider]：本地模式落 App 私有目录，远程 SSH 模式落服务器上的
+ * `~/.aicode/plugins/state.json`，与插件列表同源——否则远程会话看到的是本地一份空的旧状态。
+ * 原子落盘交给 provider 实现（本地与远程都先写临时文件再替换），这里不再自己拼临时文件。
+ *
  * 文件缺失或损坏一律按「空状态」处理（保守：插件视为未启用，用户重新启用即可，不会误删内容）。
  */
-class PluginStateStore(private val rootDir: File) {
+class PluginStateStore(
+    private val fileAccess: FileAccessProvider,
+    private val rootPath: String
+) {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val lock = Any()
@@ -74,32 +80,23 @@ class PluginStateStore(private val rootDir: File) {
         }
     }
 
-    private fun stateFile() = File(rootDir, FILE_NAME)
+    private fun stateFile() = rootPath.trimEnd('/') + "/" + FILE_NAME
 
     private fun readState(): Map<String, PluginState> {
         val file = stateFile()
-        if (!file.isFile) return emptyMap()
+        if (!fileAccess.isFile(file)) return emptyMap()
         return runCatching {
-            json.decodeFromString<PluginStateFile>(file.readText()).plugins
+            json.decodeFromString<PluginStateFile>(fileAccess.readFile(file)).plugins
         }.getOrElse { e ->
-            FileLogger.w(TAG, "插件状态文件损坏，按空状态处理: ${file.absolutePath}: ${e.message}")
+            FileLogger.w(TAG, "插件状态文件损坏，按空状态处理: $file: ${e.message}")
             emptyMap()
         }
     }
 
     private fun writeState(plugins: Map<String, PluginState>) {
         runCatching {
-            rootDir.mkdirs()
-            val payload = json.encodeToString(PluginStateFile(plugins))
-            val tmp = File(rootDir, "$FILE_NAME.tmp")
-            tmp.writeText(payload)
-            val target = stateFile()
-            if (!tmp.renameTo(target)) {
-                // rename 失败（罕见）回退直接写，避免丢状态
-                target.writeText(payload)
-                tmp.delete()
-            }
-        }.onFailure { FileLogger.e(TAG, "保存插件状态失败: ${rootDir.absolutePath}", it) }
+            fileAccess.writeFile(stateFile(), json.encodeToString(PluginStateFile(plugins)))
+        }.onFailure { FileLogger.e(TAG, "保存插件状态失败: ${stateFile()}", it) }
     }
 
     companion object {

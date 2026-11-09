@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.aicode.R
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.CommandEngine
-import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.plugin.data.PluginStateStore
 import com.aicode.feature.plugin.domain.DefaultPluginHostConfig
@@ -24,7 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import javax.inject.Inject
 
 data class PluginUiState(
@@ -44,23 +42,23 @@ data class PluginUiState(
 /**
  * 原生插件的列表、启用/禁用与能力装配。
  *
- * 插件根目录固定为 `~/.aicode/plugins`（App 私有 `filesDir/aicode/plugins`），
+ * 插件根目录固定为 `~/.aicode/plugins`（本地模式落 App 私有目录，远程 SSH 模式落服务器 home），
  * 与技能 / 子代理等既有目录同级——用户手工把插件目录拷进去就能被扫到，不需要额外的「安装」步骤。
+ * 读写一律经 [FileAccessProvider]，跟随当前执行环境。
  *
  * 启用不是只改个布尔：必须先把能力装进宿主既有目录（见 [PluginResourceReleaser]），
  * 禁用则先把装进去的东西摘干净。任何一步失败都保持「未启用」，不留半装状态。
  */
 @HiltViewModel
 class PluginViewModel @Inject constructor(
-    containerInstaller: ContainerInstaller,
     fileAccess: FileAccessProvider,
     mcpConfig: McpConfigRepository,
     commandEngine: CommandEngine
 ) : ViewModel() {
 
-    private val pluginsRoot = File(containerInstaller.aicodeDir, DIR_NAME)
-    private val stateStore = PluginStateStore(pluginsRoot)
-    private val registry = PluginRegistry(pluginsRoot, stateStore)
+    private val pluginsRoot = "~/.aicode/" + DIR_NAME
+    private val stateStore = PluginStateStore(fileAccess, pluginsRoot)
+    private val registry = PluginRegistry(fileAccess, pluginsRoot, stateStore)
     private val releaser = PluginResourceReleaser(
         fileAccess = fileAccess,
         hostConfig = DefaultPluginHostConfig(mcpConfig, fileAccess),
@@ -92,28 +90,31 @@ class PluginViewModel @Inject constructor(
         _state.update { it.copy(busyId = id) }
 
         viewModelScope.launch {
-            val failure = runCatching {
-                if (enabled) {
-                    val outcome = releaser.attach(plugin)
-                    if (!registry.setEnabled(id, true)) {
-                        // 免责校验没过（理论上前面已拦），把刚装的摘掉，别留半装状态
-                        releaser.detach(id)
-                        return@runCatching R.string.plugin_enable_blocked_no_consent
-                    }
-                    if (outcome.conflicts.isEmpty()) {
-                        null
+            // 装配会列举并读取插件目录：远程 SSH 模式下每次列举都是同步 SFTP 往返，必须离开主线程。
+            val failure = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (enabled) {
+                        val outcome = releaser.attach(plugin)
+                        if (!registry.setEnabled(id, true)) {
+                            // 免责校验没过（理论上前面已拦），把刚装的摘掉，别留半装状态
+                            releaser.detach(id)
+                            return@runCatching R.string.plugin_enable_blocked_no_consent
+                        }
+                        if (outcome.conflicts.isEmpty()) {
+                            null
+                        } else {
+                            _state.update { it.copy(conflicts = outcome.conflicts) }
+                            R.string.plugin_enabled_with_skips
+                        }
                     } else {
-                        _state.update { it.copy(conflicts = outcome.conflicts) }
-                        R.string.plugin_enabled_with_skips
+                        releaser.detach(id)
+                        registry.setEnabled(id, false)
+                        null
                     }
-                } else {
-                    releaser.detach(id)
-                    registry.setEnabled(id, false)
-                    null
+                }.getOrElse { e ->
+                    FileLogger.e(TAG, "插件状态切换失败: $id", e)
+                    R.string.plugin_toggle_failed
                 }
-            }.getOrElse { e ->
-                FileLogger.e(TAG, "插件状态切换失败: $id", e)
-                R.string.plugin_toggle_failed
             }
 
             _state.update { s ->
@@ -144,9 +145,6 @@ class PluginViewModel @Inject constructor(
     fun consumeMessage() = _state.update { it.copy(messageRes = null, messageArgs = emptyList()) }
 
     fun consumeConflicts() = _state.update { it.copy(conflicts = emptyList()) }
-
-    /** 插件目录的绝对路径，详情页「查看插件目录」用。 */
-    fun pluginDir(id: String): File = registry.pluginDir(id)
 
     private companion object {
         const val TAG = "PluginViewModel"

@@ -41,16 +41,18 @@ class PluginResourceReleaserTest {
     private val fs = InMemoryFileAccess()
     private val host = FakeHostConfig()
     private val engine = FakeCommandEngine()
-    private val store: PluginStateStore by lazy { PluginStateStore(tmp.root) }
+    private val store: PluginStateStore by lazy { PluginStateStore(fs, "/state-root") }
 
     private fun releaser() = PluginResourceReleaser(fs, host, engine, store)
 
+    /** 插件目录也在内存文件系统里，与装配侧同源——这正是远程模式下的真实形态。 */
     private fun plugin(
         id: String = "com.demo.hello",
         capabilities: PluginCapabilities = PluginCapabilities(),
         slots: List<PluginSlotSpec> = emptyList()
     ): InstalledPlugin {
-        val dir = tmp.newFolder(id)
+        val dirPath = "/plugins/$id"
+        fs.mkdirs(dirPath)
         return InstalledPlugin(
             manifest = PluginManifest(
                 id = id,
@@ -59,7 +61,8 @@ class PluginResourceReleaserTest {
                 capabilities = capabilities,
                 slots = slots
             ),
-            dir = dir,
+            dirPath = dirPath,
+            localDir = null,
             state = store.stateOf(id) ?: com.aicode.feature.plugin.data.PluginState()
         )
     }
@@ -67,8 +70,8 @@ class PluginResourceReleaserTest {
     @Test
     fun `技能目录被复制到既有目录并记账`() = runBlocking {
         val p = plugin(capabilities = PluginCapabilities(skills = listOf("skills")))
-        File(p.dir, "skills/alpha").mkdirs()
-        File(p.dir, "skills/alpha/SKILL.md").writeText("# alpha")
+        fs.mkdirs("${p.dirPath}/skills/alpha")
+        fs.writeFile("${p.dirPath}/skills/alpha/SKILL.md", "# alpha")
 
         val outcome = releaser().attach(p)
 
@@ -82,8 +85,8 @@ class PluginResourceReleaserTest {
         fs.mkdirs("~/.aicode/skills/alpha")
         fs.writeFile("~/.aicode/skills/alpha/SKILL.md", "用户自己的")
         val p = plugin(capabilities = PluginCapabilities(skills = listOf("skills")))
-        File(p.dir, "skills/alpha").mkdirs()
-        File(p.dir, "skills/alpha/SKILL.md").writeText("# 插件的")
+        fs.mkdirs("${p.dirPath}/skills/alpha")
+        fs.writeFile("${p.dirPath}/skills/alpha/SKILL.md", "# 插件的")
 
         val outcome = releaser().attach(p)
 
@@ -164,8 +167,8 @@ class PluginResourceReleaserTest {
                 hooks = listOf(HookSpec(event = HooksConfig.EVENT_PRE_TOOL_USE, script = "h.sh"))
             )
         )
-        File(p.dir, "skills/alpha").mkdirs()
-        File(p.dir, "skills/alpha/SKILL.md").writeText("# alpha")
+        fs.mkdirs("${p.dirPath}/skills/alpha")
+        fs.writeFile("${p.dirPath}/skills/alpha/SKILL.md", "# alpha")
         // 用户自己的资源，不应被摘除波及
         fs.mkdirs("~/.aicode/skills/user-owned")
         fs.writeFile("~/.aicode/skills/user-owned/SKILL.md", "mine")
@@ -245,6 +248,77 @@ class PluginResourceReleaserTest {
             outcome.conflicts
         )
         assertTrue(host.hookTable.isEmpty())
+    }
+
+    // ── 内置场景 provision ─────────────────────────────────────────
+
+    @Test
+    fun `builtinScenario 走宿主内置场景入口`() = runBlocking {
+        val p = plugin(
+            capabilities = PluginCapabilities(
+                provision = ProvisionSpec(scenario = "multillm", builtinScenario = "multillm")
+            )
+        )
+
+        val outcome = releaser().attach(p)
+
+        assertEquals(listOf("sh ~/.aicode/provision.sh --install 'multillm'"), engine.commands)
+        assertTrue(outcome.conflicts.isEmpty())
+        assertTrue(fs.exists("~/.aicode/.plugin-data/com.demo.hello/.provisioned"))
+    }
+
+    @Test
+    fun `builtinScenario 非法时不执行命令`() = runBlocking {
+        val p = plugin(
+            capabilities = PluginCapabilities(
+                provision = ProvisionSpec(scenario = "x", builtinScenario = "rea; rm -rf /")
+            )
+        )
+
+        val outcome = releaser().attach(p)
+
+        assertEquals(
+            listOf(ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, "x")),
+            outcome.conflicts
+        )
+        assertTrue("不得把非法场景拼进命令", engine.commands.isEmpty())
+    }
+
+    @Test
+    fun `builtinScenario 容器未就绪只记跳过`() = runBlocking {
+        engine.ready = false
+        val p = plugin(
+            capabilities = PluginCapabilities(
+                provision = ProvisionSpec(scenario = "rea", builtinScenario = "rea")
+            )
+        )
+
+        val outcome = releaser().attach(p)
+
+        assertEquals(
+            listOf(ReleaseConflict(ConflictKind.PROVISION_SKIPPED, "rea")),
+            outcome.conflicts
+        )
+        assertFalse(fs.exists("~/.aicode/.plugin-data/com.demo.hello/.provisioned"))
+    }
+
+    // ── MCP 字段透传 ───────────────────────────────────────────────
+
+    @Test
+    fun `MCP enabled 与工具白名单写入宿主配置`() = runBlocking {
+        val p = plugin(
+            capabilities = PluginCapabilities(
+                mcp = listOf(
+                    McpSpec(name = "rea", command = "npx", enabled = false, enabledTools = listOf("a", "b"))
+                )
+            )
+        )
+
+        releaser().attach(p)
+
+        val saved = host.servers.single { it.name == "rea" }
+        assertFalse(saved.enabled)
+        assertEquals(setOf("a", "b"), saved.enabledTools)
     }
 }
 

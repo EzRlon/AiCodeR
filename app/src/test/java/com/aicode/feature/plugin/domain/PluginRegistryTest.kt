@@ -1,6 +1,9 @@
 package com.aicode.feature.plugin.domain
 
 import com.aicode.feature.plugin.data.PluginStateStore
+import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.FileEntry
+import com.aicode.testutil.TestFileAccessProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,9 +17,11 @@ class PluginRegistryTest {
     @get:Rule
     val tmp = TemporaryFolder()
 
+    private val provider = TestFileAccessProvider()
     private val pluginsRoot: File get() = File(tmp.root, "plugins")
-    private val stateStore: PluginStateStore get() = PluginStateStore(pluginsRoot)
-    private val registry: PluginRegistry get() = PluginRegistry(pluginsRoot, stateStore)
+    private val stateStore: PluginStateStore get() = PluginStateStore(provider, pluginsRoot.absolutePath)
+    private val registry: PluginRegistry
+        get() = PluginRegistry(provider, pluginsRoot.absolutePath, stateStore)
 
     private fun writePlugin(dirName: String, json: String) {
         val dir = File(pluginsRoot, dirName)
@@ -131,6 +136,27 @@ class PluginRegistryTest {
         registry.setEnabled("com.aicode.b", true)
 
         assertEquals(listOf("com.aicode.b"), registry.enabledPlugins().map { it.id })
+    }
+
+    @Test
+    fun `扫描经 FileAccessProvider 以容器路径访问`() {
+        // 回归：曾经直接用 java.io.File 扫本地目录，远程 SSH 模式下列表恒空。
+        val inner = TestFileAccessProvider()
+        val listed = mutableListOf<String>()
+        val provider = object : FileAccessProvider by inner {
+            override fun listFiles(path: String): List<FileEntry> {
+                listed += path
+                return inner.listFiles(path)
+            }
+        }
+        val registry = PluginRegistry(
+            provider,
+            "~/.aicode/plugins",
+            PluginStateStore(provider, "~/.aicode/plugins")
+        )
+
+        registry.scan()
+        assertEquals(listOf("~/.aicode/plugins"), listed)
     }
 
     @Test

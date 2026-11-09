@@ -1,8 +1,7 @@
 package com.aicode.feature.plugin.domain
 
-import com.aicode.core.util.FileLogger
+import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /** 清单解析结果。失败时带回**全部**问题，而不是只报第一条——安装前一次性说清。 */
 sealed interface PluginManifestResult {
@@ -29,6 +28,18 @@ object PluginManifestParser {
     /** 允许释放内容的容器根；插件不得往这之外写。 */
     private val ALLOWED_TARGET_ROOTS = listOf("~/.aicode/", "~/workspace/")
 
+    /**
+     * 允许插件调用的内置场景 id。
+     *
+     * 白名单而不是只做正则：`builtinScenario` 最终会拼进容器命令，能让第三方插件驱动任意
+     * 环境安装不是应有的能力。新增内置场景插件时在这里显式放行（与 `lib/env-common.sh`
+     * 的 `SCENARIO_IDS` 保持一致）。
+     */
+    val BUILTIN_SCENARIOS = setOf("multillm", "rea")
+
+    private val BUILTIN_SCENARIO_ID = Regex("^[a-z0-9][a-z0-9_-]*$")
+    private val MCP_TOOL_NAME = Regex("^[A-Za-z0-9_.-]+$")
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     fun parse(text: String): PluginManifestResult {
@@ -49,11 +60,14 @@ object PluginManifestParser {
         }
     }
 
-    /** 从磁盘读一份清单；读不到或解析失败都归为 Invalid。 */
-    fun parseDirectory(pluginDir: File): PluginManifestResult {
-        val file = File(pluginDir, FILE_NAME)
-        if (!file.isFile) return PluginManifestResult.Invalid(listOf("缺少 $FILE_NAME"))
-        return runCatching { parse(file.readText()) }
+    /**
+     * 从插件目录读一份清单；读不到或解析失败都归为 Invalid。
+     * 路径经 [FileAccessProvider] 访问，本地与远程 SSH 同一套逻辑。
+     */
+    fun parseDirectory(fileAccess: FileAccessProvider, pluginDir: String): PluginManifestResult {
+        val file = pluginDir.trimEnd('/') + "/" + FILE_NAME
+        if (!fileAccess.isFile(file)) return PluginManifestResult.Invalid(listOf("缺少 $FILE_NAME"))
+        return runCatching { parse(fileAccess.readFile(file)) }
             .getOrElse { e ->
                 PluginManifestResult.Invalid(listOf("读取 $FILE_NAME 失败: ${e.message}"))
             }
@@ -85,8 +99,21 @@ object PluginManifestParser {
 
         c.provision?.let { p ->
             if (p.scenario.isBlank()) errors += "provision.scenario 不能为空"
+            val hasScript = !p.script.isNullOrBlank()
+            val hasBuiltin = !p.builtinScenario.isNullOrBlank()
+            if (hasScript && hasBuiltin) {
+                errors += "provision.script 与 builtinScenario 只能二选一"
+            }
+            if (!hasScript && !hasBuiltin) {
+                errors += "provision 需要 script 或 builtinScenario 之一"
+            }
             p.script?.let {
                 if (!isSafeRelativePath(it)) errors += "provision.script 必须是相对路径: $it"
+            }
+            p.builtinScenario?.let { id ->
+                if (!BUILTIN_SCENARIO_ID.matches(id) || id !in BUILTIN_SCENARIOS) {
+                    errors += "不支持的内置场景: $id"
+                }
             }
             p.marker?.let {
                 if (ALLOWED_TARGET_ROOTS.none { root -> it.startsWith(root) }) {
@@ -99,6 +126,8 @@ object PluginManifestParser {
         c.mcp.forEach { mcp ->
             if (mcp.name.isBlank()) errors += "mcp.name 不能为空"
             if (!seenServers.add(mcp.name)) errors += "mcp 名称重复: ${mcp.name}"
+            mcp.enabledTools.filterNot { MCP_TOOL_NAME.matches(it) }
+                .forEach { errors += "mcp.enabledTools 含非法工具名: $it（${mcp.name}）" }
             when (mcp.transport) {
                 McpSpec.TRANSPORT_STDIO -> if (mcp.command.isNullOrBlank()) {
                     errors += "stdio 型 MCP 必须提供 command: ${mcp.name}"

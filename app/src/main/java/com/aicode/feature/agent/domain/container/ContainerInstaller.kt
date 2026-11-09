@@ -38,6 +38,9 @@ class ContainerInstaller @Inject constructor(
         /** 内置技能已释放到的 App versionCode 标记文件（与 skills 同级，不随技能目录被备份带走）。 */
         private const val SKILLS_VERSION_STAMP = ".builtin_skills_version"
 
+        /** 内置原生插件清单的 assets 目录（每个子目录一个插件，目录名 = 清单 id）。 */
+        private const val BUILTIN_PLUGINS_ASSET_DIR = "builtin-plugins"
+
         /**
          * 从 assets 提取文档到 ~/.aicode/docs (内置使用指导)，支持 guide/ advanced/ 等分类子目录。
          *
@@ -160,6 +163,24 @@ class ContainerInstaller @Inject constructor(
                     // 目录项：assets.open 对目录抛 IOException，递归处理
                     extractAssetsRecursive(context, assetPath, destFile)
                 }
+            }
+        }
+
+        /**
+         * 从 assets 提取内置原生插件清单到 ~/.aicode/plugins/（每个插件一个目录）。
+         *
+         * 只覆盖随包文件（plugin.json）；`state.json` 与用户自己放进来的插件目录一概不碰。
+         * 内置插件因此每次升级都会刷新清单，想停用走插件页开关（禁用只改状态，不删目录）。
+         */
+        fun extractBuiltinPlugins(context: Context) {
+            val destRoot = File(File(context.filesDir, "aicode"), "plugins")
+            runCatching {
+                val ids = context.assets.list(BUILTIN_PLUGINS_ASSET_DIR) ?: return@runCatching
+                ids.forEach { id ->
+                    extractAssetsRecursive(context, "$BUILTIN_PLUGINS_ASSET_DIR/$id", File(destRoot, id))
+                }
+            }.onFailure {
+                FileLogger.w(TAG, "提取内置插件清单失败: ${it.message}", it)
             }
         }
 

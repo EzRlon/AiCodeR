@@ -1,5 +1,6 @@
 package com.aicode.feature.plugin.data
 
+import com.aicode.testutil.TestFileAccessProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -14,7 +15,9 @@ class PluginStateStoreTest {
     @get:Rule
     val tmp = TemporaryFolder()
 
-    private fun store() = PluginStateStore(tmp.root)
+    private val provider = TestFileAccessProvider()
+
+    private fun store() = PluginStateStore(provider, tmp.root.absolutePath)
 
     @Test
     fun `文件不存在时为空状态`() {
@@ -27,7 +30,7 @@ class PluginStateStoreTest {
         val s = store()
         s.update("com.aicode.demo") { it.copy(enabled = true, consentAt = 100L, version = "1.0.0") }
 
-        val reloaded = PluginStateStore(tmp.root).stateOf("com.aicode.demo")!!
+        val reloaded = PluginStateStore(provider, tmp.root.absolutePath).stateOf("com.aicode.demo")!!
         assertTrue(reloaded.enabled)
         assertEquals(100L, reloaded.consentAt)
         assertEquals("1.0.0", reloaded.version)

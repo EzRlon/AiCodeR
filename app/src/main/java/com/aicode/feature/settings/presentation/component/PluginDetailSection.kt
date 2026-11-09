@@ -26,6 +26,7 @@ import com.aicode.feature.plugin.domain.ReleaseConflict
 import com.aicode.feature.plugin.presentation.PluginViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Folder
+import java.io.File
 
 /**
  * 插件详情：状态、元信息、免责、权限、提供的能力、占用文件。
@@ -97,11 +98,13 @@ internal fun PluginDetailSection(
                     )
                 }
                 SettingsDivider()
+                // 远程 SSH 模式下插件在服务器上，没有本地目录可打开；只展示容器路径，不给点击。
+                val localDir = plugin.localDir
                 SettingsRow(
                     icon = FeatherIcons.Folder,
                     title = stringResource(R.string.plugin_detail_open_dir),
-                    subtitle = plugin.dir.absolutePath,
-                    onClick = { ExternalFileActions.viewInFileManager(context, plugin.dir) }
+                    subtitle = localDir?.absolutePath ?: plugin.dirPath,
+                    onClick = localDir?.let { dir -> { ExternalFileActions.viewInFileManager(context, dir) } }
                 )
             }
         }
@@ -192,14 +195,17 @@ internal fun PluginDetailSection(
             }
         }
 
-        item {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = Formatter.formatShortFileSize(context, dirSize(plugin)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.xl)
-                )
+        // 占用统计要走本地目录递归；远程模式没有本地目录，跳过这一行（避免在组合线程上做 SFTP 列举）。
+        plugin.localDir?.let { dir ->
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = Formatter.formatShortFileSize(context, dirSize(dir)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = Spacing.sm, bottom = Spacing.xl)
+                    )
+                }
             }
         }
     }
@@ -258,5 +264,5 @@ private fun capabilityLines(capabilities: com.aicode.feature.plugin.domain.Plugi
     }
 
 /** 插件目录占用（浅层递归；插件目录都很小，不必走后台扫描器）。 */
-private fun dirSize(plugin: InstalledPlugin): Long =
-    plugin.dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+private fun dirSize(dir: File): Long =
+    dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }

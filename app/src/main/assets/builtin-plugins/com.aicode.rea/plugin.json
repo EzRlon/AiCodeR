@@ -1,0 +1,35 @@
+{
+  "id": "com.aicode.rea",
+  "name": "程序分析（REA）",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "author": "AiCodeR",
+  "description": "分析 App / APK / JS 包是怎么实现的：反编译、字符串、交叉引用与证据包",
+  "permissions": ["container.exec", "network"],
+  "capabilities": {
+    "provision": {
+      "scenario": "rea",
+      "builtinScenario": "rea"
+    },
+    "mcp": [
+      {
+        "name": "rea",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "rea-agents@6.5.0", "mcp"],
+        "env": {
+          "REA_JADX_MCP_JAR": "/opt/rea/jadx-headless-mcp-0.7.1-all.jar"
+        },
+        "enabledTools": [
+          "binary_session", "open_binary", "close_binary", "binary_overview", "inspect_artifact",
+          "inspect_android_package", "inspect_android_class", "inspect_android_method",
+          "search_android_classes", "trace_android_references", "analyze_javascript_application",
+          "identify_flutter_build", "inspect_go_binary", "inspect_rust_binary", "inspect_analysis_view",
+          "list_strings", "search_strings", "find_xrefs_to_name",
+          "analyze_function", "procedure_pseudo_code", "procedure_callers", "batch_decompile",
+          "list_unknowns", "export_evidence_bundle"
+        ]
+      }
+    ]
+  }
+}

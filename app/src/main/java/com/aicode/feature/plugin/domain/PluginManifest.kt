@@ -53,11 +53,20 @@ data class AssetMapping(
     val to: String
 )
 
-/** 容器内环境准备：跑安装脚本，用 marker 文件做幂等判定。 */
+/**
+ * 容器内环境准备：跑安装脚本，用 marker 文件做幂等判定。
+ *
+ * [script] 与 [builtinScenario] 二选一：
+ * - [script]：插件目录内的相对路径，按 `sh <插件目录>/<script>` 执行；
+ * - [builtinScenario]：宿主内置场景 id（见 `lib/scenarios` 下的场景脚本），按
+ *   `sh ~/.aicode/provision.sh --install <id>` 执行。场景脚本留在宿主 assets 里，
+ *   继续复用共享库（`lib/env-common.sh`）与幂等标记，插件只声明「要哪个场景」。
+ */
 @Serializable
 data class ProvisionSpec(
     val scenario: String,
     val script: String? = null,
+    val builtinScenario: String? = null,
     val marker: String? = null
 )
 
@@ -69,7 +78,11 @@ data class McpSpec(
     val command: String? = null,
     val args: List<String> = emptyList(),
     val url: String? = null,
-    val env: Map<String, String> = emptyMap()
+    val env: Map<String, String> = emptyMap(),
+    /** 写入宿主 MCP 表后是否直接启用（默认启用，保存即用）。 */
+    val enabled: Boolean = true,
+    /** 工具白名单：非空时只注册名单内工具（REA 等大工具集必须靠它压 prompt 预算）。 */
+    val enabledTools: List<String> = emptyList()
 ) {
     companion object {
         const val TRANSPORT_STDIO = "stdio"

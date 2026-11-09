@@ -294,6 +294,10 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             ContainerInstaller.extractMultiLlm(this@AIEditorApp)
         }
+        // 内置原生插件清单释放到 ~/.aicode/plugins/：模型顾问团、程序分析由插件页统一启停
+        appScope.launch {
+            ContainerInstaller.extractBuiltinPlugins(this@AIEditorApp)
+        }
         // 启动即把内置提示词全量释放到 ~/.aicode/prompts/（覆盖式，随 App 升级更新）；
         // 用户自定义覆盖放在 ~/.aicode/prompts.custom/，同名即覆盖，不被升级覆盖。
         appScope.launch {
