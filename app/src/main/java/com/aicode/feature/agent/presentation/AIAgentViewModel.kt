@@ -82,6 +82,7 @@ import com.aicode.feature.agent.domain.workflow.AgentWorkflow
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalManager
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalRequest
+import com.aicode.feature.agent.domain.workflow.SessionRunState
 import com.aicode.feature.terminal.domain.TabFinishedEvent
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.domain.TerminalSessionManager
@@ -1103,7 +1104,12 @@ class AIAgentViewModel @Inject constructor(
      *  同值不写库（避免设置页重复点卡清掉已选模型）。 */
     fun setSessionEngine(engine: String?): Boolean {
         val sid = _currentSessionId.value ?: return false
-        if (sessionJobs[sid]?.isActive == true || commandJobs[sid]?.isActive == true) return false
+        if (SessionRunState.isRunning(
+                hasActiveSessionJob = sessionJobs[sid]?.isActive == true,
+                hasActiveCommandJob = commandJobs[sid]?.isActive == true,
+                sessionInRunningCommands = sid in _runningCommandSessions.value
+            )
+        ) return false
         // 状态流尚未加载（首帧）时不短路：currentSessionState 为 null 只说明还没加载，不代表引擎就是内置
         if (currentSessionState.value != null && currentSessionState.value?.engine == engine) return true
         viewModelScope.launch { sessionUseCase.updateEngine(sid, engine) }
@@ -2314,8 +2320,11 @@ class AIAgentViewModel @Inject constructor(
             _handoffPrompt.value = HandoffPrompt(sid, pausedHandoffSessions.getValue(sid), paused = true)
             return false
         }
-        val isCurrentRunning = sid != null &&
-            (sessionJobs[sid]?.isActive == true || sid in _runningCommandSessions.value)
+        val isCurrentRunning = sid != null && SessionRunState.isRunning(
+            hasActiveSessionJob = sessionJobs[sid]?.isActive == true,
+            hasActiveCommandJob = commandJobs[sid]?.isActive == true,
+            sessionInRunningCommands = sid in _runningCommandSessions.value
+        )
         if (isCurrentRunning) {
             val req = QueuedRequest(
                 id = UUID.randomUUID().toString(),
@@ -2456,15 +2465,23 @@ class AIAgentViewModel @Inject constructor(
     }
 
     private fun processNextInQueue(sessionId: String) {
-        // 暂停会话不消费队列：保留待发请求，交接后用户到新会话重新发起。
-        if (sessionId in pausedHandoffSessions) return
-        // 斜杠命令执行期不消费：动作类命令内联跑、不注册 sessionJobs，若此时消费
-        // 会与命令并行启动 agent 回合（同会话状态竞态）；命令 finally 收尾时会自行接续队列。
-        if (sessionId in _runningCommandSessions.value) return
-        // 已有活跃 job（可能是本次收尾前由通知合并/flush 等入口启动的）时不消费，
-        // 避免队列被多个收尾入口重复消费、同一会话并发跑两个 job。
-        if (sessionJobs[sessionId]?.isActive == true) return
         val queue = _queuedRequests.value[sessionId] ?: return
+        // 消费闸门（规则见 SessionRunState.shouldConsumeQueue），四类情况都不消费：
+        // - 已有活跃 job（可能是本次收尾前由通知合并/flush 等入口启动的）：避免队列被
+        //   多个收尾入口重复消费、同一会话并发跑两个 job。传给 isOwnJob 的是「是否已被
+        //   某个活跃 job 接管」的取反——有 job 在跑就说明会话已被接管，本轮不该再消费；
+        // - 暂停会话：保留待发请求，交接后用户到新会话重新发起；
+        // - 斜杠命令执行期：动作类命令内联跑、不注册 sessionJobs，此时消费会与命令并行
+        //   启动 agent 回合（同会话状态竞态）；命令 finally 收尾时会自行接续队列；
+        // - 队列为空：无事可做。
+        val takenOverByActiveJob = sessionJobs[sessionId]?.isActive == true
+        if (!SessionRunState.shouldConsumeQueue(
+                isOwnJob = !takenOverByActiveJob,
+                queuedCount = queue.size,
+                paused = sessionId in pausedHandoffSessions,
+                commandRunning = sessionId in _runningCommandSessions.value
+            )
+        ) return
         val next = queue.firstOrNull() ?: return
         _queuedRequests.value = _queuedRequests.value + (sessionId to queue.drop(1))
         executeAgentRequestStream(
@@ -3077,7 +3094,7 @@ class AIAgentViewModel @Inject constructor(
 
         } catch (e: CancellationException) {
             val cancelledState = _agentStates.value[sessionId]
-            val isOwnJob = sessionJobs[sessionId] == coroutineContext[Job]
+            val isOwnJob = SessionRunState.isOwnJob(sessionJobs[sessionId], coroutineContext[Job])
             FileLogger.d(TAG, "stream cancelled: sid=$sessionId isOwnJob=$isOwnJob state=$cancelledState")
             if (isOwnJob &&
                 (cancelledState is AgentUIState.Loading || cancelledState is AgentUIState.Streaming)
@@ -3097,7 +3114,7 @@ class AIAgentViewModel @Inject constructor(
              setAgentState(sessionId, AgentUIState.Error(e.toUserMessage()))
              _completedSessions.value = _completedSessions.value - sessionId
         } finally {
-            val isOwnJob = sessionJobs[sessionId] == coroutineContext[Job]
+            val isOwnJob = SessionRunState.isOwnJob(sessionJobs[sessionId], coroutineContext[Job])
             FileLogger.d(TAG, "stream finally: sid=$sessionId isOwnJob=$isOwnJob state=${_agentStates.value[sessionId]}")
             if (isOwnJob) {
                 sessionJobs.remove(sessionId)
@@ -3409,9 +3426,11 @@ class AIAgentViewModel @Inject constructor(
         var fbSid: String? = null
         var fbPending: Pair<String?, String?>? = null
         fun pushFloatBallDetails() {
-            val running = fbSid != null &&
-                (sessionJobs[fbSid]?.isActive == true || commandJobs[fbSid]?.isActive == true ||
-                    fbSid in _runningCommandSessions.value)
+            val running = fbSid != null && SessionRunState.isRunning(
+                hasActiveSessionJob = sessionJobs[fbSid]?.isActive == true,
+                hasActiveCommandJob = commandJobs[fbSid]?.isActive == true,
+                sessionInRunningCommands = fbSid in _runningCommandSessions.value
+            )
             floatBallStateStore.syncDetails(
                 activeToolName = fbToolName,
                 replyPreview = fbPreview,

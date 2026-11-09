@@ -3,8 +3,8 @@ package com.aicode.feature.agent.domain.workflow
 /**
  * 会话运行状态的判定规则（纯逻辑，便于单测）。
  *
- * **当前状态：本对象尚无调用方**，`AIAgentViewModel` 里的原始逻辑仍在用它自己的实现。
- * 这是一个「先可测化」的中间产物，接线是后续工作；两者行为一致，改一处须同步另一处。
+ * 调用方：`AIAgentViewModel` 的 job 持有判定、队列消费闸门与忙碌判定都已改走本对象，
+ * 不再各写一份。改动这里的语义会同时影响那三处，务必对照 `SessionRunStateTest`。
  *
  * 背景（该 bug 已在 AIAgentViewModel 内修复，本对象只是把判定规则提炼出来）：
  * 曾经有一处竞态——同一个会话的 job 被注册两次且键不同，导致「忙碌判定」出现窗口期：
