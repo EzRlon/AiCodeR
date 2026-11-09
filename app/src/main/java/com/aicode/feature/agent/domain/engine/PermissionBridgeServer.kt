@@ -206,44 +206,21 @@ class PermissionBridgeServer @Inject constructor(
      * 否则用户会看到半份交付，且模型收到的"成功"与实际不符。
      */
     private fun handleSendFile(input: JsonObject, sessionId: String): JsonObject {
-        val paths = (input["paths"] as? kotlinx.serialization.json.JsonArray)
-            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            .orEmpty()
+        val paths = CliDeliveryPayload.extractPaths(input)
         if (paths.isEmpty()) return errData("paths 不能为空")
 
-        val attachments = mutableListOf<com.aicode.feature.agent.presentation.AgentAttachment>()
-        val errors = mutableListOf<String>()
-        paths.forEach { path ->
-            runCatching {
-                if (!fileAccess.exists(path) || fileAccess.isDirectory(path)) {
-                    error("文件不存在：$path")
-                }
-                val local = fileAccess.copyToLocal(path)
-                val name = path.substringAfterLast('/').ifBlank { local.name }
-                val mime = java.net.URLConnection.guessContentTypeFromName(name)
-                    ?: "application/octet-stream"
-                com.aicode.feature.agent.presentation.AgentAttachment(
-                    fileName = name,
-                    containerPath = path,
-                    localPath = local.absolutePath,
-                    mimeType = mime,
-                    sizeBytes = fileAccess.fileSize(path),
-                    isImage = mime.startsWith("image/")
-                )
-            }.onSuccess { attachments += it }
-                .onFailure { errors += (it.message ?: path) }
-        }
-        if (errors.isNotEmpty()) {
-            return errData("本次未交付任何文件（全部路径必须有效）：\n" + errors.joinToString("\n"))
+        val payload = CliDeliveryPayload.build(paths, fileAccess)
+        if (!payload.ok) {
+            return errData(
+                "本次未交付任何文件（全部路径必须有效）：\n" + payload.errors.joinToString("\n")
+            )
         }
 
-        deliveryRegistry.record(sessionId, attachments)
-        FileLogger.i(TAG, "CLI 交付登记: session=$sessionId files=${attachments.size}")
+        deliveryRegistry.record(sessionId, payload.attachments)
+        FileLogger.i(TAG, "CLI 交付登记: session=$sessionId files=${payload.attachments.size}")
         return okData(
-            "已交付 ${attachments.size} 个文件到聊天区：\n" +
-                attachments.joinToString("\n") { it.fileName }
+            "已交付 ${payload.attachments.size} 个文件到聊天区：\n" +
+                payload.attachments.joinToString("\n") { it.fileName }
         )
     }
 
