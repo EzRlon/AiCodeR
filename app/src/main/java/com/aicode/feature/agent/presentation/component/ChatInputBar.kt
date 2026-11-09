@@ -1640,7 +1640,7 @@ internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
 
 /** 语音浮层：长按「按住说话」与点击聆听共用；识别期间文案切换，点击模式提示再点一下结束。 */
 @Composable
-private fun VoiceHoldOverlay(
+internal fun VoiceHoldOverlay(
     processing: Boolean,
     tapMode: Boolean = false,
     dragTarget: androidx.compose.runtime.State<VoiceDragTarget>? = null,
