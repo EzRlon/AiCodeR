@@ -688,8 +688,8 @@ class CodexBridge @Inject constructor(
     }
 
     /** TOML 基本串转义（qa P2-1）：配置值含引号/反斜杠/换行时正常透传而非解析失败。 */
-    private fun tomlString(value: String): String =
-        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\""
+    /** 转义实现见 [CliToml.string]（抽出去是为了能单测——转义错一个字符整条 -c 参数就废了）。 */
+    private fun tomlString(value: String): String = CliToml.string(value)
 
     /**
      * 图片落盘到容器桥目录（codex -i 只接受文件路径），返回容器内路径列表。
