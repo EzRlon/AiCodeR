@@ -70,6 +70,8 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.ListSelectionState
 import com.aicode.core.ui.SelectionToggleAction
+import com.aicode.core.ui.isAnimationDisabled
+import com.aicode.core.ui.isRtlLayout
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
@@ -601,6 +603,8 @@ fun SettingsScreen(
         )
     }
 
+    val rtl = isRtlLayout()
+    val animate = !isAnimationDisabled()
     Row(modifier = Modifier.fillMaxSize()) {
         // 大屏：菜单常驻左栏，右栏只换详情，不再整页来回切。
         if (expanded) {
@@ -640,7 +644,7 @@ fun SettingsScreen(
             transitionSpec = {
                 val forward = targetState.depth() >= initialState.depth()
                 // sizeTransform 必须给 null：新旧内容尺寸本就一样，默认的尺寸补间只会让容器裁剪拖影。
-                ContentTransform(pageEnter(forward), pageExit(forward), sizeTransform = null)
+                ContentTransform(pageEnter(forward, rtl, animate), pageExit(forward, rtl, animate), sizeTransform = null)
             },
             label = "settings-section"
         ) { current ->

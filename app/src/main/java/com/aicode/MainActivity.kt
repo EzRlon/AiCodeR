@@ -15,6 +15,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -85,6 +86,8 @@ import com.aicode.core.ui.PAGE_MOTION_MS
 import com.aicode.core.ui.VerticalSplitHandle
 import com.aicode.core.ui.drawerWidth
 import com.aicode.core.ui.isExpandedWidth
+import com.aicode.core.ui.isAnimationDisabled
+import com.aicode.core.ui.isRtlLayout
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.ui.rememberImageViewerState
@@ -885,15 +888,17 @@ fun AppNavigation(
 
     // 页面主体（NavHost）：大屏放进 Row 的右侧，窄窗放进 modal 抽屉容器里。
     val navBody: @Composable () -> Unit = {
+        val rtl = isRtlLayout()
+        val animate = !isAnimationDisabled()
         NavHost(
             navController = navController,
             startDestination = "chat",
             // 过渡期间退场页会向左移出自身区域，大屏下不夹住会画到左侧常驻会话侧栏上。
             modifier = Modifier.fillMaxSize().clipToBounds(),
-            enterTransition = { pageEnter(forward = true) },
-            exitTransition = { pageExit(forward = true) },
-            popEnterTransition = { pageEnter(forward = false) },
-            popExitTransition = { pageExit(forward = false) }
+            enterTransition = { pageEnter(forward = true, rtl = rtl, animate = animate) },
+            exitTransition = { pageExit(forward = true, rtl = rtl, animate = animate) },
+            popEnterTransition = { pageEnter(forward = false, rtl = rtl, animate = animate) },
+            popExitTransition = { pageExit(forward = false, rtl = rtl, animate = animate) }
         ) {
             composable("chat") {
                 // 聊天区内覆盖 LocalUriHandler：Markdown 链接点击默认经此 handler 派发。
@@ -1205,17 +1210,28 @@ fun AppNavigation(
         val sidebarTarget = if (currentRoute == "chat" && !vncFullscreen) drawerWidth() else 0.dp
         val sidebarWidth by animateDpAsState(
             targetValue = sidebarTarget,
-            animationSpec = tween(durationMillis = PAGE_MOTION_MS),
+            animationSpec = spring(
+                dampingRatio = 0.82f,
+                stiffness = 380f,
+                visibilityThreshold = 0.5.dp
+            ),
             label = "sidebar-width"
         )
+        // 展开进度 0..1：宽度与内容位移/透明度共用同一个进度，三者同步收尾，
+        // 不会出现「宽度停住了内容还在飘」。
+        val sidebarFullWidth = drawerWidth()
+        val sidebarProgress = if (sidebarFullWidth.value > 0f) {
+            (sidebarWidth / sidebarFullWidth).coerceIn(0f, 1f)
+        } else 0f
         // 标签悬出宽度随动画比例缩放：收起/展开末帧不出现 16dp 跳变。
-        val sidebarTabOverhang = ContentWidth.drawerTabOverhang *
-            (sidebarWidth / drawerWidth()).coerceIn(0f, 1f)
+        val sidebarTabOverhang = ContentWidth.drawerTabOverhang * sidebarProgress
         // 侧栏完全收起后整棵子树离开组合，要拿 SaveableStateHolder 接住内部状态，
         // 否则每次从设置页回来 tab 都跳回「会话」、文件树滚动位置也丢。
         val sidebarStateHolder = rememberSaveableStateHolder()
         Row(modifier = Modifier.fillMaxSize()) {
-            if (sidebarWidth > 0.dp) {
+            // 按**目标值**决定是否保留子树：若按当前宽度判断，收起动画最后一帧宽度归零时子树
+            // 会立刻离开组合，位移与淡出被截断，观感变成「突然消失」。
+            if (sidebarTarget > 0.dp) {
                 Box(
                     modifier = Modifier
                         // 多出「标签骑线悬出」的半宽：标签中心对齐面板右缘线，右半落在主内容侧（图2 定稿）
@@ -1225,10 +1241,16 @@ fun AppNavigation(
                 ) {
                     // 内容按完整宽度渲染再裁剪：收起过程中不去重排侧栏内部布局。
                     // 宽度含「标签骑线悬出」的半宽，与 sheet 路径保持一致。
+                    // 同时让内容随展开进度向左位移并淡出：只裁剪不位移时收起像「被刀切」，
+                    // 有了位移与透明度，才看得出「面板从左侧抽出/收回」。
                     Box(
                         modifier = Modifier
                             .width(drawerWidth() + sidebarTabOverhang)
                             .fillMaxHeight()
+                            .graphicsLayer {
+                                translationX = -(1f - sidebarProgress) * size.width * 0.18f
+                                alpha = 0.35f + 0.65f * sidebarProgress
+                            }
                     ) {
                         sidebarStateHolder.SaveableStateProvider("chat-sidebar") {
                             drawerBody()
