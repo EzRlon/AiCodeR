@@ -9,6 +9,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
@@ -37,6 +42,9 @@ class ContainerInstaller @Inject constructor(
 
         /** 内置技能已释放到的 App versionCode 标记文件（与 skills 同级，不随技能目录被备份带走）。 */
         private const val SKILLS_VERSION_STAMP = ".builtin_skills_version"
+
+        /** 内置技能指纹清单（与 skills 同级）：记录上次释放内容，用于识别用户改动、避免升级覆盖。 */
+        private const val SKILLS_MANIFEST_FILE = ".builtin_skills_manifest.json"
 
         /** 内置原生插件清单的 assets 目录（每个子目录一个插件，目录名 = 清单 id）。 */
         private const val BUILTIN_PLUGINS_ASSET_DIR = "builtin-plugins"
@@ -99,18 +107,20 @@ class ContainerInstaller @Inject constructor(
 
         /**
          * 从 assets 提取内置技能到 ~/.aicode/skills/，每个技能按目录整体重写（先删同名目录再释放），
-         * 使内置技能随 App 升级自动更新——内置技能视为随版本分发的只读内容，直接改动会被升级覆盖。
+         * 使内置技能随 App 升级自动更新。
          *
-         * 与用户自装技能共存：只处理 assets 中存在的技能名，其余目录不触碰；但**同名**的用户技能
-         * 会被内置版覆盖（自动更新机制的代价，属已知取舍）。技能列表由
-         * [com.aicode.feature.agent.domain.skill.SkillDirectoryScanner] 实时扫描本目录得到，释放后无需额外注册。
+         * 与用户自装技能共存：只处理 assets 中存在的技能名，其余目录不触碰。**同名**目录用
+         * [SkillReleaseGuard] 按内容指纹判定——用户改过的跳过、不覆盖（保住用户数据），
+         * 没改过的内置版才整体重释放（随版本更新）。冲突清单写入日志。
+         * 技能列表由 [com.aicode.feature.agent.domain.skill.SkillDirectoryScanner] 实时扫描本目录得到，
+         * 释放后无需额外注册。
          */
         fun extractBuiltinSkills(context: Context) {
             val aicodeDir = File(context.filesDir, "aicode")
             val destDir = File(aicodeDir, "skills")
             // 版本戳放 skills 同级而非目录内：skills/ 会被备份整体打包（AI_ASSET_DIRS），
             // 戳若在里面就会随备份一起被带走，从同版本备份恢复时戳匹配 → 跳过释放，
-            // 结果用的是备份里的旧技能内容而非内置内容。
+            // 结果用的是备份里的旧技能内容而非内置内容。清单同理放同级。
             val stamp = File(aicodeDir, SKILLS_VERSION_STAMP)
             // 内置技能共 2.4MB（含 ui-ux-pro-max 的 1.8MB data/），全量重释放要删 12 棵目录树再写一遍。
             // 内容随 App 版本变化，版本号相同就没必要重做：冷启动不再重复写闪存（性能功耗纪律）。
@@ -121,17 +131,51 @@ class ContainerInstaller @Inject constructor(
             runCatching {
                 destDir.mkdirs()
                 val entries = context.assets.list("skills") ?: return@runCatching
+                val manifestFile = File(aicodeDir, SKILLS_MANIFEST_FILE)
+                val manifest = readSkillsManifest(manifestFile).toMutableMap()
+                val skipped = mutableListOf<String>()
                 for (entry in entries) {
                     val dest = File(destDir, entry)
-                    // 先删再释放：内置技能随版本可能删减/移动文件，只覆盖不清理会残留旧文件。
-                    // 用 SafeDelete 而非 File.deleteRecursively：skills 与用户内容共享，符号链接只删链接、不下钻。
-                    SafeDelete.deleteTree(dest)
-                    extractAssetsRecursive(context, "skills/$entry", dest)
+                    when (SkillReleaseGuard.decide(dest, manifest[entry])) {
+                        SkillReleaseGuard.Decision.SKIP_USER_MODIFIED -> {
+                            // 用户在改过的内置技能上做过修改：不覆盖，也不写新指纹（下次仍按「用户改动」跳过）。
+                            skipped += entry
+                            continue
+                        }
+                        else -> {
+                            // 先删再释放：内置技能随版本可能删减/移动文件，只覆盖不清理会残留旧文件。
+                            // 用 SafeDelete 而非 File.deleteRecursively：skills 与用户内容共享，符号链接只删链接、不下钻。
+                            SafeDelete.deleteTree(dest)
+                            extractAssetsRecursive(context, "skills/$entry", dest)
+                            manifest[entry] = SkillReleaseGuard.directoryFingerprint(dest)
+                        }
+                    }
+                }
+                writeSkillsManifest(manifestFile, manifest)
+                if (skipped.isNotEmpty()) {
+                    FileLogger.i(TAG, "内置技能跳过释放（用户已改动，未覆盖）：$skipped")
                 }
                 if (version != null) stamp.writeText(version)
             }.onFailure {
                 FileLogger.w(TAG, "提取内置技能失败: ${it.message}", it)
             }
+        }
+
+        /** 读内置技能指纹清单；文件缺失 / 损坏（非 JSON）时退回空表（下一轮按「无记录」保守处理）。 */
+        private fun readSkillsManifest(file: File): Map<String, String> = runCatching {
+            if (!file.isFile) return emptyMap()
+            val root = Json.parseToJsonElement(file.readText()) as? JsonObject ?: return emptyMap()
+            root.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }.toMap()
+        }.getOrDefault(emptyMap())
+
+        /** 写内置技能指纹清单；失败只记日志（下轮会按「无记录」保守处理，不会误删）。 */
+        private fun writeSkillsManifest(file: File, manifest: Map<String, String>) {
+            runCatching {
+                val obj = buildJsonObject {
+                    manifest.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+                }
+                file.writeText(obj.toString())
+            }.onFailure { FileLogger.w(TAG, "写入内置技能清单失败: ${it.message}", it) }
         }
 
         /** 当前 App 的 versionCode；取不到时返回 null（调用方退回「每次都释放」）。 */
