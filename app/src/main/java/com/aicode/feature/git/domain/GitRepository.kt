@@ -51,8 +51,9 @@ class GitRepository @Inject constructor(
     }
     /**
      * 执行一条 `git` 子命令，返回合并后的 stdout+stderr 文本。仅用于只读命令（status/branches/log/remote 等）：
-     * 这些靠输出解析、容错，git 非零退出码不会让 UI 误判（解析得空罢了）。凭据由 `credential.helper=store`
-     * 经凭据文件自动注入（见 [com.aicode.feature.credentials.data.repository.FileCredentialRepository]），
+     * 这些靠输出解析、容错，git 非零退出码不会让 UI 误判（解析得空罢了）。凭据由容器内自定义
+     * helper `git-credential-aicode`（`credential.helper` 指向它）按 host 命中注入，
+     * 凭据真源见 [com.aicode.feature.credentials.data.repository.FileCredentialRepository]，
      * 不在此按命令塞 `http.extraHeader`。
      * 每条参数经 [shellQuote] 单引号转义，含空格/特殊字符的值（提交消息、含空格路径等）安全传递。
      */
@@ -480,8 +481,8 @@ class GitRepository @Inject constructor(
             .let { it.isNotBlank() && !it.startsWith("fatal") }
 
     /**
-     * 拉取：直接 `git pull`，凭据由容器 `credential.helper` 链自动注入——`store` 命中已有凭据秒过，
-     * 未命中时自定义 helper 经文件 IPC 触发 app 弹窗回填，git 自动续跑（见 [CredentialRequestBridge]）。
+     * 拉取：直接 `git pull`，凭据由容器 `credential.helper`（自定义 `git-credential-aicode`）自动注入——
+     * 已存凭据秒过，未命中时 helper 经文件 IPC 触发 app 弹窗回填，git 自动续跑（见 [CredentialRequestBridge]）。
      * 故不再在此预查 host 凭据：三端（UI/终端/AI）共用同一 helper 兜底，逻辑单一来源。remote 不存在
      * 或真实失败由 [gitChecked] 据退出码抛 [GitCommandFailureException]，上层 toast。
      */
@@ -702,9 +703,32 @@ class GitRepository @Inject constructor(
      * 空值跳过对应项不动现有配置。由 UI 在用户保存身份时显式调用。
      */
     suspend fun setUserIdentity(name: String, email: String) {
-        if (name.isNotBlank()) gitChecked("config", if (hasLocalConfig("user.name")) "--local" else "--global", "user.name", name)
-        if (email.isNotBlank()) gitChecked("config", if (hasLocalConfig("user.email")) "--local" else "--global", "user.email", email)
+        // 作用域**一次决定、name/email 同进同退**。逐键各自判断会把同一个身份拆到两个作用域：
+        // 仓库已有 local user.name 但没有 local user.email 时，name 写 local、email 写 global，
+        // 之后 `git config --get` 读回的值与 UI 回显就不一致。
+        val scope = if (hasLocalConfig("user.name") || hasLocalConfig("user.email")) "--local" else "--global"
+        applyIdentity(scope, "user.name", name)
+        applyIdentity(scope, "user.email", email)
     }
+
+    /**
+     * 写单个署名键。空值 = 撤销该作用域的覆盖、回落到上一级解析结果；
+     * 原来空值直接跳过，导致项目级覆盖无法撤销（用户清空后保存等于没保存）。
+     */
+    private suspend fun applyIdentity(scope: String, key: String, value: String) {
+        if (value.isNotBlank()) {
+            gitChecked("config", scope, key, value)
+        } else if (getConfig(scope, key).isNotEmpty()) {
+            runCatching { gitChecked("config", scope, "--unset", key) }
+        }
+    }
+
+    /** 读指定作用域（`--local` / `--global`）的配置值；不存在或非仓库时返回空串。 */
+    private suspend fun getConfig(scope: String, key: String): String =
+        runCatching { git("config", scope, "--get", key).trim() }.getOrDefault("").removeSuffix("\r")
+
+    /** 全局署名的 user.name（只读 global，区别于 [getUserName] 的生效值）。 */
+    suspend fun getGlobalUserName(): String = getConfig("--global", "user.name")
 
     /** 当前工作区是否有项目级（`--local`）配置值。非 git 仓库或无值时返回 false。 */
     private suspend fun hasLocalConfig(key: String): Boolean =

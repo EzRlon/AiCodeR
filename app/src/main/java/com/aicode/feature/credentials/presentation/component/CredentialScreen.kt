@@ -116,9 +116,6 @@ fun CredentialScreen(
     // editingCredential != null -> 编辑现有；editingCredential == null && isAddingCredential -> 新增；否则列表态。
     var editingCredential by remember { mutableStateOf<GitCredential?>(null) }
     var isAddingCredential by remember { mutableStateOf(false) }
-    // 右上角 + 打开「添加凭据」方式选择弹层；再进入手动添加或快速登录子流程。
-    var showAddSheet by remember { mutableStateOf(false) }
-    var showQuickLoginSheet by remember { mutableStateOf(false) }
     val quickLoginState by viewModel.quickLogin.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -134,11 +131,6 @@ fun CredentialScreen(
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showAddSheet = true }) {
-                        Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.credential_add))
                     }
                 }
             )
@@ -184,40 +176,50 @@ fun CredentialScreen(
                             }
                         }
                     }
-                    1 -> if (state.credentials.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = Spacing.lg)
-                                .padding(bottom = 70.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            EmptyCredentialsCard(
-                                onQuickLogin = { viewModel.startGitHubLogin() },
-                                onManualAdd = { isAddingCredential = true }
-                            )
+                    1 -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = credentialListState,
+                        contentPadding = PaddingValues(start = Spacing.lg, end = Spacing.lg, bottom = 70.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                    ) {
+                        // 账号授权：在浏览器 / GitHub 客户端里确认，令牌由设备码流自动写入。
+                        item(key = "oauth-header") {
+                            SectionHeader(stringResource(R.string.credential_section_oauth))
                         }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            state = credentialListState,
-                            contentPadding = PaddingValues(start = Spacing.lg, end = Spacing.lg, bottom = 70.dp),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.md)
-                        ) {
-                            item(key = "header") {
-                                SectionHeader(stringResource(R.string.git_credentials_count, state.credentials.size))
+                        item(key = "oauth-group") {
+                            SettingsGroup {
+                                SettingsRow(
+                                    icon = FeatherIcons.Github,
+                                    title = stringResource(R.string.credential_oauth_github_title),
+                                    subtitle = stringResource(R.string.credential_oauth_github_desc),
+                                    onClick = viewModel::startGitHubLogin
+                                )
                             }
-                            item(key = "credential-group") {
-                                SettingsGroup {
-                                    state.credentials.forEachIndexed { index, cred ->
-                                        if (index > 0) SettingsDivider()
-                                        CredentialItem(
-                                            credential = cred,
-                                            onEdit = { editingCredential = cred },
-                                            onDelete = { viewModel.deleteCredential(cred.id) }
-                                        )
-                                    }
+                        }
+                        // 凭据授权：逐条填主机 + 用户名 + 令牌，适用于 GitHub 以外主机或自建服务。
+                        item(key = "manual-header") {
+                            SectionHeader(stringResource(R.string.credential_section_manual))
+                        }
+                        item(key = "manual-group") {
+                            SettingsGroup {
+                                state.credentials.forEachIndexed { index, cred ->
+                                    if (index > 0) SettingsDivider()
+                                    CredentialItem(
+                                        credential = cred,
+                                        onEdit = { editingCredential = cred },
+                                        onDelete = { viewModel.deleteCredential(cred.id) }
+                                    )
                                 }
+                                if (state.credentials.isNotEmpty()) SettingsDivider()
+                                SettingsRow(
+                                    icon = FeatherIcons.Plus,
+                                    title = stringResource(R.string.credential_add_manual_title),
+                                    subtitle = stringResource(
+                                        if (state.credentials.isEmpty()) R.string.credential_empty_desc
+                                        else R.string.credential_add_manual_desc
+                                    ),
+                                    onClick = { isAddingCredential = true }
+                                )
                             }
                         }
                     }
@@ -251,30 +253,6 @@ fun CredentialScreen(
             initial = null,
             onDismiss = { isAddingCredential = false },
             onSave = { viewModel.saveCredential(it); isAddingCredential = false }
-        )
-    }
-
-    if (showAddSheet) {
-        CredentialAddSheet(
-            onManual = {
-                showAddSheet = false
-                isAddingCredential = true
-            },
-            onQuickLogin = {
-                showAddSheet = false
-                viewModel.startGitHubLogin()
-            },
-            onDismiss = { showAddSheet = false }
-        )
-    }
-
-    if (showQuickLoginSheet) {
-        QuickLoginSheet(
-            onSelectGitHub = {
-                showQuickLoginSheet = false
-                viewModel.startGitHubLogin()
-            },
-            onDismiss = { showQuickLoginSheet = false }
         )
     }
 
@@ -424,102 +402,3 @@ private fun hostBadgeLabel(host: String): String {
     }
 }
 
-/** 凭据列表为空时的现代空态引导卡片 */
-@Composable
-private fun EmptyCredentialsCard(
-    onQuickLogin: () -> Unit,
-    onManualAdd: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Radius.xl),
-        color = MaterialTheme.semanticColors.cardSurface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shadowElevation = 0.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.xl),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.md)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(Radius.mdLarge)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Key,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
-            ) {
-                Text(
-                    text = stringResource(R.string.credential_empty_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(R.string.credential_empty_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = Spacing.sm)
-                )
-            }
-
-            Spacer(Modifier.height(Spacing.xs))
-
-            Button(
-                onClick = onQuickLogin,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp),
-                shape = RoundedCornerShape(Radius.mdLarge)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Github,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(Spacing.sm))
-                Text(
-                    text = stringResource(R.string.credential_add_github_title),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            OutlinedButton(
-                onClick = onManualAdd,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp),
-                shape = RoundedCornerShape(Radius.mdLarge)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Edit3,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(Spacing.sm))
-                Text(
-                    text = stringResource(R.string.credential_add_manual_title),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-    }
-}

@@ -83,7 +83,7 @@ class CredentialViewModel @Inject constructor(
         val userName: String = "",
         /** 容器 git config 当前 user.email，作编辑框初值。 */
         val userEmail: String = "",
-        /** 容器 `git config --global` 实际 user.name，回显「git 实际值」（与 userName 同源）。 */
+        /** 容器 `git config --global` 实际 user.name，供 UI 提示「留空时使用哪个署名」。 */
         val globalUserName: String = "",
         /** 容器 git config 当前 remote.origin.url，作仓库地址编辑框初值。 */
         val repoUrl: String = "",
@@ -142,7 +142,7 @@ class CredentialViewModel @Inject constructor(
                     it.copy(
                         userName = gitRepository.getUserName(),
                         userEmail = gitRepository.getUserEmail(),
-                        globalUserName = gitRepository.getUserName(),
+                        globalUserName = gitRepository.getGlobalUserName(),
                         repoUrl = gitRepository.getRepoUrl()
                     )
                 }
