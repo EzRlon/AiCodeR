@@ -7,6 +7,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
+import com.aicode.feature.store.data.HttpStatusException
 import com.aicode.feature.store.data.StoreApiClient
 import com.aicode.feature.store.data.StoreCatalogCache
 import com.aicode.feature.store.data.StoreItem
@@ -230,7 +231,7 @@ class StoreViewModel @Inject constructor(
                 },
                 onFailure = { e ->
                     _state.update {
-                        it.copy(loading = false, searching = false, error = e.message ?: "搜索失败，请检查网络")
+                        it.copy(loading = false, searching = false, error = e.storeErrorMessage(R.string.store_error_search))
                     }
                 }
             )
@@ -282,7 +283,7 @@ class StoreViewModel @Inject constructor(
                     onFailure = { e ->
                         if (_state.value.tab != StoreKind.SKILL) return@fold
                         _state.update {
-                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                            it.copy(loading = false, loadingMore = false, error = e.storeErrorMessage(R.string.store_error_load))
                         }
                     }
                 )
@@ -315,7 +316,7 @@ class StoreViewModel @Inject constructor(
                 kickTranslation()
             } else if (_state.value.items.isEmpty()) {
                 _state.update {
-                    it.copy(loading = false, loadingMore = false, error = "加载失败，请检查网络")
+                    it.copy(loading = false, loadingMore = false, error = context.getString(R.string.store_error_load))
                 }
             } else {
                 _state.update { it.copy(loading = false, loadingMore = false) }
@@ -391,7 +392,7 @@ class StoreViewModel @Inject constructor(
                 onFailure = { e ->
                     if (_state.value.tab != StoreKind.MCP) return@fold
                     _state.update {
-                        it.copy(loading = false, searching = false, error = e.message ?: "搜索失败，请检查网络")
+                        it.copy(loading = false, searching = false, error = e.storeErrorMessage(R.string.store_error_search))
                     }
                 }
             )
@@ -426,7 +427,7 @@ class StoreViewModel @Inject constructor(
                         // 翻页失败回置守卫：仍在飞的首页刷新结果不应被丢弃
                         mcpAdvanced = false
                         _state.update {
-                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                            it.copy(loading = false, loadingMore = false, error = e.storeErrorMessage(R.string.store_error_load))
                         }
                     }
                 )
@@ -466,7 +467,7 @@ class StoreViewModel @Inject constructor(
                     if (_state.value.tab != StoreKind.MCP) return@fold
                     _state.update {
                         if (it.items.isEmpty()) {
-                            it.copy(loading = false, loadingMore = false, error = e.message ?: "加载失败，请检查网络")
+                            it.copy(loading = false, loadingMore = false, error = e.storeErrorMessage(R.string.store_error_load))
                         } else {
                             it.copy(loading = false, loadingMore = false)
                         }
@@ -1051,6 +1052,22 @@ class StoreViewModel @Inject constructor(
     private suspend fun isChineseUi(): Boolean {
         val tag = languageSettings.snapshot()
         return if (tag.isNullOrBlank()) Locale.getDefault().language == "zh" else tag.startsWith("zh")
+    }
+
+    /**
+     * 把网络异常转成用户可读提示：429 按服务端 `Retry-After` 给出「N 秒后重试」，
+     * 其余保留原始 message，缺失时用 [fallbackRes] 兜底。
+     */
+    private fun Throwable.storeErrorMessage(fallbackRes: Int): String {
+        if (this is HttpStatusException && code == 429) {
+            val seconds = retryAfterMillis?.let { ((it + 999L) / 1000L).toInt() }
+            return if (seconds != null && seconds > 0) {
+                context.getString(R.string.store_error_rate_limited, seconds)
+            } else {
+                context.getString(R.string.store_error_rate_limited_later)
+            }
+        }
+        return message ?: context.getString(fallbackRes)
     }
 
     /** 刷新「已安装」集合：本地技能名（忽略大小写）+ 本地 MCP 配置名。 */

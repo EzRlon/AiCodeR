@@ -478,12 +478,43 @@
     <string name="engine_resume_hint">History resumes automatically from the CLI side session.</string>
     <string name="cli_model_builtin_group">Engine models</string>
     <string name="engine_codex_unavailable">Codex engine is not ready. Install Codex in the container first, or switch this session back to the built-in engine.</string>
-    <string name="engine_codex_sandbox_toggle">Open up the sandbox (read/write outside the workspace)</string>
     <string name="engine_opencode_unavailable">OpenCode engine is not ready. Install OpenCode in the container first, or switch this session back to the built-in engine.</string>
-    <string name="engine_opencode_auto_toggle">Auto-approve permission requests</string>
-    <string name="engine_option_build_only">Only applies in Build mode; Plan/Auto mode takes precedence.</string>
+    <string name="engine_mode_in_card_title">Work mode is set in the chat bottom bar</string>
+    <string name="engine_mode_in_card_hint">Sandbox / auto-approve tiers moved into the mode menu at the chat\'s bottom-right, set per session using each engine\'s native tiers</string>
     <string name="engine_mode_note_codex_build">Codex has no per-step approval: Build mode runs commands inside the workspace automatically and blocks anything outside it.</string>
     <string name="engine_mode_note_codex_plan">Codex runs in a read-only sandbox; every write is rejected by the engine.</string>
+
+    <!-- Claude Code native permission modes (the six permission-mode values) -->
+    <string name="engine_mode_claude_manual">Ask by default</string>
+    <string name="engine_mode_claude_accept_edits">Auto-accept edits</string>
+    <string name="engine_mode_claude_plan">Plan</string>
+    <string name="engine_mode_claude_auto">Auto-decide</string>
+    <string name="engine_mode_claude_dont_ask">Don\'t ask</string>
+    <string name="engine_mode_claude_bypass">Allow all</string>
+    <string name="engine_mode_desc_claude_manual">Each tool call is confirmed one by one through the permission bridge; nothing runs without approval</string>
+    <string name="engine_mode_desc_claude_accept_edits">File edits are accepted automatically; other tools are still confirmed one by one</string>
+    <string name="engine_mode_desc_claude_plan">Read-only exploration; a plan is produced and runs only after you approve it</string>
+    <string name="engine_mode_desc_claude_auto">The model decides per call whether it is safe; safe ones run directly, the rest still ask</string>
+    <string name="engine_mode_desc_claude_dont_ask">No more prompts: operations not pre-authorized are rejected outright instead of hanging</string>
+    <string name="engine_mode_desc_claude_bypass">Allow everything, no more prompts (catastrophic deletes are still blocked by this app)</string>
+
+    <!-- Codex native sandbox modes (the three sandbox values) -->
+    <string name="engine_mode_codex_read_only">Read-only</string>
+    <string name="engine_mode_codex_workspace_write">Workspace writable</string>
+    <string name="engine_mode_codex_full_access">Full access</string>
+    <string name="engine_mode_desc_codex_read_only">Read-only sandbox: any write is rejected by the engine</string>
+    <string name="engine_mode_desc_codex_workspace_write">Writable only inside the workspace; anything outside is blocked (no per-step approval)</string>
+    <string name="engine_mode_desc_codex_full_access">Unrestricted path writes and command execution; only this app\'s catastrophic-delete guard remains</string>
+
+    <!-- OpenCode native combinations (agent build|plan with the auto switch) -->
+    <string name="engine_mode_opencode_build">Build</string>
+    <string name="engine_mode_opencode_build_auto">Build + auto-approve</string>
+    <string name="engine_mode_opencode_plan">Plan</string>
+    <string name="engine_mode_opencode_plan_auto">Plan + auto-approve</string>
+    <string name="engine_mode_desc_opencode_build">build agent: permission requests not explicitly denied are approved one by one</string>
+    <string name="engine_mode_desc_opencode_build_auto">build agent: requests not explicitly denied are all auto-approved</string>
+    <string name="engine_mode_desc_opencode_plan">plan agent: read-only exploration without landing changes</string>
+    <string name="engine_mode_desc_opencode_plan_auto">plan agent, auto-approving requests not explicitly denied</string>
 
     <!-- Memory graph v2 -->
     <string name="memory_graph_tab_graph">Graph</string>
@@ -1234,6 +1265,10 @@
     <string name="credential_add_github_desc">One-tap sign-in with GitHub account, no manual token required</string>
     <string name="credential_add_manual_title">Configure Manually</string>
     <string name="credential_add_manual_subtitle">For GitLab, Gitee, self-hosted servers or personal access tokens</string>
+    <string name="credential_section_oauth">Account authorization</string>
+    <string name="credential_section_manual">Credential authorization</string>
+    <string name="credential_oauth_github_title">Authorize with a GitHub account</string>
+    <string name="credential_oauth_github_desc">Confirm in the browser or the GitHub App; no manual token entry needed</string>
     <string name="credential_add_recommend">Recommended</string>
     <string name="credential_quick_login">Quick login</string>
     <string name="credential_quick_login_desc">Sign in via GitHub device code</string>
@@ -1473,6 +1508,7 @@
     <string name="git_tab_identity">Identity</string>
     <string name="git_tab_credentials">Credentials</string>
     <string name="git_identity_title">Commit Identity</string>
+    <string name="git_identity_global_hint">Leave empty to inherit the global identity: %1$s</string>
     <string name="git_identity_desc">Used as author for every commit. Applies globally in the container, shared across all workspaces.</string>
     <string name="git_repo_url_title">Repository URL</string>
     <string name="git_remote_url">remote.origin.url</string>
@@ -1724,6 +1760,10 @@
     <string name="store_installed">Installed</string>
     <string name="store_load_more">Load more</string>
     <string name="store_empty">Nothing found — try another keyword</string>
+    <string name="store_error_load">Failed to load — check your network</string>
+    <string name="store_error_search">Search failed — check your network</string>
+    <string name="store_error_rate_limited">The store is rate-limiting requests. Try again in %1$d s</string>
+    <string name="store_error_rate_limited_later">The store is rate-limiting requests. Please try again later</string>
     <string name="store_open_source">Source</string>
     <string name="store_mcp_stdio_hint">Local-only package; manual setup required</string>
     <string name="schedule_page_hint_title">Run commands or scripts automatically</string>

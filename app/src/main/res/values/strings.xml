@@ -479,12 +479,43 @@
     <string name="engine_resume_hint">历史续接：本会话自动沿 CLI 侧会话续跑，无需手动选择</string>
     <string name="cli_model_builtin_group">引擎模型</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_codex_sandbox_toggle">放开沙箱（可读写工作区外）</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_opencode_auto_toggle">自动批准权限请求</string>
-    <string name="engine_option_build_only">仅构建模式下生效，计划/自动模式以工作模式为准</string>
+    <string name="engine_mode_in_card_title">工作模式在会话底栏设置</string>
+    <string name="engine_mode_in_card_hint">沙箱 / 自动批准等档位已随模式菜单移到聊天右下角，按引擎原生档位逐会话设置</string>
     <string name="engine_mode_note_codex_build">Codex 引擎无逐次审批：构建模式在工作区内自动执行，区外被拦截</string>
     <string name="engine_mode_note_codex_plan">Codex 引擎以只读沙箱执行，任何写入都会被底层拒绝</string>
+
+    <!-- Claude Code 原生权限档位（permission-mode 的六个取值） -->
+    <string name="engine_mode_claude_manual">默认询问</string>
+    <string name="engine_mode_claude_accept_edits">自动接受编辑</string>
+    <string name="engine_mode_claude_plan">计划</string>
+    <string name="engine_mode_claude_auto">自动判定</string>
+    <string name="engine_mode_claude_dont_ask">不询问</string>
+    <string name="engine_mode_claude_bypass">全部放行</string>
+    <string name="engine_mode_desc_claude_manual">每个工具调用都经权限桥逐次确认，未批准不执行</string>
+    <string name="engine_mode_desc_claude_accept_edits">文件编辑自动接受，其余工具仍逐次确认</string>
+    <string name="engine_mode_desc_claude_plan">只读探索，产出方案待你批准后才执行</string>
+    <string name="engine_mode_desc_claude_auto">由模型逐次判定是否安全，安全的直接执行，其余仍询问</string>
+    <string name="engine_mode_desc_claude_dont_ask">不再询问：未预先授权的操作直接拒绝而非挂起</string>
+    <string name="engine_mode_desc_claude_bypass">全部放行，不再询问（灾难性删除仍被本应用拦截）</string>
+
+    <!-- Codex 原生沙箱档位（sandbox 的三个取值） -->
+    <string name="engine_mode_codex_read_only">只读</string>
+    <string name="engine_mode_codex_workspace_write">工作区可写</string>
+    <string name="engine_mode_codex_full_access">完全访问</string>
+    <string name="engine_mode_desc_codex_read_only">只读沙箱：任何写入都会被底层拒绝</string>
+    <string name="engine_mode_desc_codex_workspace_write">仅工作区内可写，区外被拦截（无逐次审批）</string>
+    <string name="engine_mode_desc_codex_full_access">不限路径写入与命令执行，仅靠本应用的灾难性删除防护</string>
+
+    <!-- OpenCode 原生组合（agent build|plan 与 auto 开关） -->
+    <string name="engine_mode_opencode_build">构建</string>
+    <string name="engine_mode_opencode_build_auto">构建 + 自动批准</string>
+    <string name="engine_mode_opencode_plan">计划</string>
+    <string name="engine_mode_opencode_plan_auto">计划 + 自动批准</string>
+    <string name="engine_mode_desc_opencode_build">build 身份，未显式拒绝的权限请求逐次批准</string>
+    <string name="engine_mode_desc_opencode_build_auto">build 身份，未被显式拒绝的请求全部自动批准</string>
+    <string name="engine_mode_desc_opencode_plan">plan 身份，只读探索不落地修改</string>
+    <string name="engine_mode_desc_opencode_plan_auto">plan 身份且自动批准未被显式拒绝的请求</string>
 
     <!-- 记忆图谱 v2 -->
     <string name="memory_graph_tab_graph">图谱</string>
@@ -1235,6 +1266,10 @@
     <string name="credential_add_github_desc">通过 GitHub 账号一键授权，无需手动创建 Token</string>
     <string name="credential_add_manual_title">手动配置凭据</string>
     <string name="credential_add_manual_subtitle">适用于 GitLab、Gitee、自建服务器或个人访问令牌</string>
+    <string name="credential_section_oauth">账号授权</string>
+    <string name="credential_section_manual">凭据授权</string>
+    <string name="credential_oauth_github_title">使用 GitHub 账号授权</string>
+    <string name="credential_oauth_github_desc">在浏览器或 GitHub App 中确认，无需手动填写令牌</string>
     <string name="credential_add_recommend">推荐</string>
     <string name="credential_quick_login">快速登录</string>
     <string name="credential_quick_login_desc">通过 GitHub 设备码授权登录</string>
@@ -1474,6 +1509,7 @@
     <string name="git_tab_identity">署名</string>
     <string name="git_tab_credentials">凭据</string>
     <string name="git_identity_title">提交署名</string>
+    <string name="git_identity_global_hint">留空则沿用全局署名：%1$s</string>
     <string name="git_identity_desc">用于每次提交的 author。容器全局生效，所有工作区共用。</string>
     <string name="git_repo_url_title">仓库地址</string>
     <string name="git_remote_url">remote.origin.url</string>
@@ -1717,6 +1753,10 @@
     <string name="store_installed">已安装</string>
     <string name="store_load_more">加载更多</string>
     <string name="store_empty">没有找到内容，试试更换关键词</string>
+    <string name="store_error_load">加载失败，请检查网络</string>
+    <string name="store_error_search">搜索失败，请检查网络</string>
+    <string name="store_error_rate_limited">商店请求过于频繁，请 %1$d 秒后重试</string>
+    <string name="store_error_rate_limited_later">商店请求过于频繁，请稍后重试</string>
     <string name="store_open_source">来源</string>
     <string name="store_mcp_stdio_hint">仅提供本地包，暂不支持一键安装</string>
     <string name="schedule_page_hint_title">自动执行命令或脚本</string>

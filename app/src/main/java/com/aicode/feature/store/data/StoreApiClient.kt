@@ -1,7 +1,6 @@
 package com.aicode.feature.store.data
 
 import com.aicode.core.util.FileLogger
-import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -12,6 +11,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 
 /**
  * 在线商店的网络客户端：claudemarket.ai（技能）+ 官方 MCP Registry（MCP 服务器）。
@@ -35,9 +35,6 @@ class StoreApiClient @Inject constructor(
         const val CM_BASE = "https://claudemarket.ai"
         const val MCP_BASE = "https://registry.modelcontextprotocol.io"
         const val USER_AGENT = "AiCodeR-Android"
-        const val MAX_ATTEMPTS = 3
-        const val RETRY_BACKOFF_MS = 500L
-        val HTTP_CODE_REGEX = Regex("^HTTP (\\d{3})$")
     }
 
     private val json = Json {
@@ -78,7 +75,7 @@ class StoreApiClient @Inject constructor(
                     .header("User-Agent", USER_AGENT)
                     .build()
                 client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                    resp.throwIfUnsuccessful()
                     val body = resp.body ?: error("empty body")
                     val bytes = body.bytes()
                     if (bytes.size > maxBytes) error("file too large: ${bytes.size}")
@@ -97,7 +94,7 @@ class StoreApiClient @Inject constructor(
                     .header("User-Agent", USER_AGENT)
                     .build()
                 client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                    resp.throwIfUnsuccessful()
                     val body = resp.body ?: error("empty body")
                     val bytes = body.bytes()
                     if (bytes.size > maxBytes) error("file too large: ${bytes.size}")
@@ -116,7 +113,7 @@ class StoreApiClient @Inject constructor(
                     .header("Accept", "application/json")
                     .build()
                 client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                    resp.throwIfUnsuccessful()
                     val body = resp.body ?: error("empty body")
                     json.decodeFromString<T>(body.string())
                 }
@@ -124,30 +121,33 @@ class StoreApiClient @Inject constructor(
         }.onFailure { FileLogger.w(TAG, "商店请求失败: $url", it) }
     }
 
+    /** 非 2xx 抛出带状态码与 `Retry-After` 的异常，交由 [withRetry] 判断是否重试。 */
+    private fun Response.throwIfUnsuccessful() {
+        if (isSuccessful) return
+        throw HttpStatusException(
+            code = code,
+            retryAfterMillis = StoreRetryPolicy.parseRetryAfterMillis(header("Retry-After"))
+        )
+    }
+
     /**
      * 瞬时错误自动重试：GitHub / gh-proxy 等上游存在间歇性连接失败（连接 reset 等），
-     * 首次请求失败后重试即可恢复。最多 [MAX_ATTEMPTS] 次尝试，失败按 [RETRY_BACKOFF_MS]
-     * 指数退避（500ms、1000ms）；仅 IOException 与 HTTP 5xx/429 重试，404 等其它错误立即返回。
+     * 首次请求失败后重试即可恢复。具体退避与 429 限流处理见 [StoreRetryPolicy]：
+     * 429 不再按短退避硬撞，没有 `Retry-After` 时立即失败。
      */
     private suspend inline fun <T> withRetry(block: () -> Result<T>): Result<T> {
         var attempt = 1
         while (true) {
             val result = block()
-            val error = result.exceptionOrNull()
-            if (error == null || attempt >= MAX_ATTEMPTS || !isTransientError(error)) return result
-            val backoffMs = RETRY_BACKOFF_MS shl (attempt - 1)
-            FileLogger.w(TAG, "瞬时错误，${backoffMs}ms 后重试（第 ${attempt + 1}/$MAX_ATTEMPTS 次）: $error")
-            delay(backoffMs)
+            val error = result.exceptionOrNull() ?: return result
+            val delayMs = StoreRetryPolicy.nextDelayMillis(error, attempt) ?: return result
+            FileLogger.w(
+                TAG,
+                "瞬时错误，${delayMs}ms 后重试（第 ${attempt + 1}/${StoreRetryPolicy.MAX_ATTEMPTS} 次）: $error"
+            )
+            if (delayMs > 0) delay(delayMs)
             attempt++
         }
-    }
-
-    /** IOException（连接失败、超时、reset）与 HTTP 5xx/429 视为瞬时错误。 */
-    private fun isTransientError(error: Throwable): Boolean {
-        if (error is IOException) return true
-        val code = HTTP_CODE_REGEX.find(error.message ?: return false)?.groupValues?.get(1)?.toIntOrNull()
-            ?: return false
-        return code >= 500 || code == 429
     }
 
     private fun urlEncode(s: String): String = URLEncoder.encode(s, "UTF-8")
