@@ -204,15 +204,19 @@ class VncOverlayViewModel @Inject constructor(
     }
 
     /**
-     * 拉 multi-llm；首次连接失败时把全局配置里的条目重写为最新预设（旧版本写入的
+     * 拉 multi-llm；首次连接失败时把全局配置里**已存在**的条目重写为最新预设（旧版本写入的
      * 条目缺 PYTHONPATH，server.py 缺 mcp 模块秒退，表现为连接失败→黑屏），再试一次。
+     *
+     * 条目不存在时直接放弃：multi-llm 已改为插件管理，清单未启用/已卸载时不应由浮窗
+     * 凭空写回全局配置，否则「设置 → MCP 服务器」会多出一条插件管不到的残影（新设备也会中招）。
      */
     private suspend fun connectMultiLlm(): com.aicode.feature.agent.domain.mcp.McpClient? {
         mcpManager.reloadServer(MULTI_LLM_SERVER_NAME)
         mcpManager.getConnectedClient(MULTI_LLM_SERVER_NAME)?.let { return it }
-        val repaired = listOf(mcpPreset())
+        val servers = mcpConfigRepository.getGlobalServers()
+        if (servers.none { it.name == MULTI_LLM_SERVER_NAME }) return null
         mcpConfigRepository.setGlobalServers(
-            mcpConfigRepository.getGlobalServers().filterNot { it.name == MULTI_LLM_SERVER_NAME } + repaired
+            servers.filterNot { it.name == MULTI_LLM_SERVER_NAME } + mcpPreset()
         )
         mcpManager.reloadServer(MULTI_LLM_SERVER_NAME)
         return mcpManager.getConnectedClient(MULTI_LLM_SERVER_NAME)
