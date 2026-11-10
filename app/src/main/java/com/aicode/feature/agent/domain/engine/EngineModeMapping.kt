@@ -30,6 +30,10 @@ object EngineModeMapping {
         AgentMode.PLAN, AgentMode.AUTO -> "none"
     }
 
+    /** 原生权限模式 → 额外环境变量。容器内 CLI 以 root 运行，claude 对 bypassPermissions 直接秒退。 */
+    fun claudeExtraEnv(nativePermissionMode: String): Map<String, String> =
+        if (nativePermissionMode == "bypassPermissions") mapOf("IS_SANDBOX" to "1") else emptyMap()
+
     /**
      * Codex `-s/--sandbox`。
      *

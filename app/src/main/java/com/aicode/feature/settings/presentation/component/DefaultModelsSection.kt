@@ -49,7 +49,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.widget.Toast
 import com.aicode.R
 import com.aicode.core.theme.Spacing
-import com.aicode.core.ui.AppSwitch
 import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.agent.presentation.AgentCliViewModel
 import com.aicode.feature.onboarding.domain.OnboardingStep
@@ -66,12 +65,11 @@ import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
-import compose.icons.feathericons.Shield
+import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.User
 import compose.icons.feathericons.Users
-import compose.icons.feathericons.Zap
 
 /**
  * 默认模型二级页：集中管理应用中的默认/特定用途模型设置（如识图模型、压缩模型）。
@@ -762,8 +760,6 @@ private fun CliEngineRows(
 ) {
     val viewModel: AgentCliViewModel = hiltViewModel()
     val states by viewModel.states.collectAsStateWithLifecycle()
-    val codexSandboxFullAccess by viewModel.codexSandboxFullAccess.collectAsStateWithLifecycle()
-    val openCodeAutoApprove by viewModel.openCodeAutoApprove.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -821,27 +817,16 @@ private fun CliEngineRows(
                 }
             }
         )
-        // 引擎行为选项：Codex 沙箱档位 / OpenCode 自动批准（全局生效，下一次发送起作用）
-        // 仅构建模式生效；计划/自动模式以会话工作模式为准（见 EngineModeMapping）。
+        // 引擎行为不再用卡上开关：沙箱 / 自动批准已由会话底栏的模式菜单按引擎原生档位控制
+        // （见 EngineModeCatalog），卡上只留一句引导，避免出现拨了不生效的死开关。
         when (state.agent.id) {
-            "codex" -> {
+            "codex", "opencode" -> {
                 SettingsDivider()
-                EngineOptionToggleRow(
-                    icon = FeatherIcons.Shield,
-                    title = stringResource(R.string.engine_codex_sandbox_toggle),
-                    subtitle = stringResource(R.string.engine_option_build_only),
-                    checked = codexSandboxFullAccess,
-                    onCheckedChange = viewModel::setCodexSandboxFullAccess
-                )
-            }
-            "opencode" -> {
-                SettingsDivider()
-                EngineOptionToggleRow(
-                    icon = FeatherIcons.Zap,
-                    title = stringResource(R.string.engine_opencode_auto_toggle),
-                    subtitle = stringResource(R.string.engine_option_build_only),
-                    checked = openCodeAutoApprove,
-                    onCheckedChange = viewModel::setOpenCodeAutoApprove
+                SettingsRow(
+                    icon = FeatherIcons.Sliders,
+                    title = stringResource(R.string.engine_mode_in_card_title),
+                    subtitle = stringResource(R.string.engine_mode_in_card_hint),
+                    showChevron = false
                 )
             }
         }
@@ -855,23 +840,3 @@ private fun engineIdOf(agentId: String): String = when (agentId) {
     else -> AgentEngines.OPENCODE
 }
 
-/** 引擎行为选项开关行：标题 + 右侧开关；整行可点切换。 */
-@Composable
-private fun EngineOptionToggleRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null
-) {
-    SettingsRow(
-        icon = icon,
-        title = title,
-        subtitle = subtitle,
-        onClick = { onCheckedChange(!checked) },
-        showChevron = false,
-        trailing = {
-            AppSwitch(checked = checked, onCheckedChange = null)
-        }
-    )
-}

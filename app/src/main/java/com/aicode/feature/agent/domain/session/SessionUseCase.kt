@@ -276,6 +276,10 @@ class SessionUseCase @Inject constructor(
         chatSessionDao.updateEngine(sessionId, engine)
     }
 
+    suspend fun updateEngineMode(sessionId: String, engineMode: String?) {
+        chatSessionDao.updateEngineMode(sessionId, engineMode)
+    }
+
     suspend fun updateReasoningEffort(sessionId: String, effort: String) {
         chatSessionDao.updateReasoningEffort(sessionId, effort)
     }

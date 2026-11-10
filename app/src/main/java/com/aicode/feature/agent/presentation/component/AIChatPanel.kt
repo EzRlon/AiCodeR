@@ -2257,6 +2257,8 @@ fun AIChatPanel(
                 onSelectCliModel = { p, m -> viewModel.setSessionCliModel(p, m) },
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
+                currentEngineMode = currentSessionState?.engineMode,
+                onSelectEngineMode = { viewModel.setSessionEngineMode(it) },
                 onModePillLongClick = {
                     when (currentMode) {
                         AgentMode.PLAN -> showScheduledPlanSheet = true

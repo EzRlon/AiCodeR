@@ -127,6 +127,9 @@ interface ChatSessionDao {
 
     @Query("UPDATE chat_sessions SET engine = :engine, providerId = NULL, model = NULL WHERE id = :id")
     suspend fun updateEngine(id: String, engine: String?)
+
+    @Query("UPDATE chat_sessions SET engineMode = :engineMode WHERE id = :id")
+    suspend fun updateEngineMode(id: String, engineMode: String?)
     /** 设定/覆盖 goal：同时重置轮次计数与 token 快照。goal 为 null 表示清除。 */
     @Query("UPDATE chat_sessions SET goal = :goal, goalStatus = :status, goalTurnCount = 0, goalStartInputTokens = :startInput, goalStartOutputTokens = :startOutput WHERE id = :id")
     suspend fun updateGoal(id: String, goal: String?, status: String?, startInput: Int, startOutput: Int)

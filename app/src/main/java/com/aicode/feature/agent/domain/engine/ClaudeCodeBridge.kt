@@ -80,7 +80,8 @@ class ClaudeCodeBridge @Inject constructor(
     private val mcpConfigRepository: McpConfigRepository,
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
-    private val llmCallRecordDao: LlmCallRecordDao
+    private val llmCallRecordDao: LlmCallRecordDao,
+    private val todoMirror: EngineTodoMirror
 ) {
     private companion object {
         const val TAG = "ClaudeCodeBridge"
@@ -90,6 +91,9 @@ class ClaudeCodeBridge @Inject constructor(
 
         /** aicode_bridge 的交付工具名；CLI 侧实际工具名形如 mcp__aicode_bridge__send_file，用包含匹配。 */
         const val SEND_FILE_TOOL = "send_file"
+
+        /** Claude 原生待办工具名：todos 数组经 EngineTodoMirror 镜像进 App 待办表。 */
+        const val CLAUDE_TODO_TOOL = "TodoWrite"
 
         const val MCP_SERVER_NAME = "permission_bridge"
         const val MCP_TOOL_NAME = "request_permission"
@@ -237,14 +241,14 @@ class ClaudeCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
-        mode: AgentMode = AgentMode.BUILD,
+        engineMode: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, mode = mode, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -252,10 +256,10 @@ class ClaudeCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（qa P2-3）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -374,7 +378,7 @@ class ClaudeCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
-        mode: AgentMode = AgentMode.BUILD,
+        engineMode: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -387,17 +391,20 @@ class ClaudeCodeBridge @Inject constructor(
         val ccProvider = prepareProviderInjection(providerId)
         val ccSettingsPath = ccProvider?.settingsPath
 
+        // 工作模式 → CLI 原生权限模式。engineMode 为空时取该引擎默认档（manual），
+        // 保证与改造前行为一致。args 与环境变量两处共用。
+        val nativeMode = EngineModeCatalog.normalize(AgentEngines.CLAUDE_CODE, engineMode)
+
         val args = buildList {
             add("-p")
             add("--output-format"); add("stream-json")
             add("--verbose")
             add("--input-format"); add("stream-json")
             add("--include-partial-messages")
-            // 工作模式 → CLI 原生权限模式：BUILD=manual（权限桥逐次确认，同改造前）；
-            // PLAN=plan（CLI 只读）；AUTO=bypassPermissions（全放行）。
-            add("--permission-mode"); add(EngineModeMapping.claudePermissionMode(mode))
-            // PLAN/AUTO 无人应答：prompts=none 让请求直接拒绝而非挂起；BUILD 保持默认 host。
-            val prompts = EngineModeMapping.claudePermissionPrompts(mode)
+            add("--permission-mode"); add(nativeMode)
+            // 无人应答的档位（plan / auto / dontAsk / bypassPermissions）：prompts=none 让请求
+            // 直接拒绝而非挂起；manual / acceptEdits 保持默认 host 走权限桥。
+            val prompts = EngineModeMapping.claudePermissionPrompts(EngineModeCatalog.semantic(AgentEngines.CLAUDE_CODE, nativeMode))
             if (prompts != "host") { add("--permission-prompts"); add(prompts) }
             // 用本体 sessionId 对齐 CLI 侧会话 id：新回合 --session-id 设定，续接回合 --resume 直接续上
             if (resume) {
@@ -442,6 +449,9 @@ class ClaudeCodeBridge @Inject constructor(
             // claude CLI 2.1.29x 对模型目录外的第三方模型名启用「上下文窗口强制」：不发请求、
             // 等待 catalog 校验 → 会话无响应（实测）。豁免后恢复「等 API」行为，对官方模型无影响。
             put("CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT", "1")
+            // 容器内 CLI 以 root 运行，而 claude 对 root 下的 bypassPermissions（AUTO）直接秒退
+            // （"--dangerously-skip-permissions cannot be used with root/sudo privileges"）。
+            putAll(EngineModeMapping.claudeExtraEnv(nativeMode))
         }
 
         FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath auth=helper:${ccSettingsPath != null} envFallback:${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
@@ -577,6 +587,11 @@ class ClaudeCodeBridge @Inject constructor(
                         }.onFailure { e -> FileLogger.w(TAG, "写入 Claude 调用用量失败: ${e.message}") }
                     }
                 }
+                // TodoWrite 全量待办镜像落库（快照式替换）：待办卡片的拉起/刷新/自动收起走既有 Flow
+                acc.pendingTodos.takeIf { it.isNotEmpty() }?.let { todos ->
+                    acc.pendingTodos = emptyList()
+                    todoMirror.mirror(sessionId, todos)
+                }
             }
 
             if (!gotResult) {
@@ -624,6 +639,8 @@ class ClaudeCodeBridge @Inject constructor(
         var model: String? = null
         /** 刚解析到的单次调用用量；消费端落账后清空，避免同一行重复写记录。 */
         var pendingUsage: NormalizedUsage? = null
+        /** 刚解析到的 TodoWrite 全量待办；消费端镜像落库后清空（与 pendingUsage 同一节奏）。 */
+        var pendingTodos: List<EngineTodoMirror.NativeTodo> = emptyList()
         fun resetBlocks() { text.clear(); reasoning.clear() }
     }
 
@@ -693,6 +710,10 @@ class ClaudeCodeBridge @Inject constructor(
                     val id = b["id"]?.jsonPrimitive?.contentOrNull ?: ""
                     val name = b["name"]?.jsonPrimitive?.contentOrNull ?: ""
                     acc.toolNames[id] = name
+                    // Claude 的 TodoWrite（todos 数组）镜像进 App 待办表：待办卡片由此拉起/刷新/自动收起
+                    if (name.equals(CLAUDE_TODO_TOOL, ignoreCase = true)) {
+                        acc.pendingTodos = todoMirror.parseTodos(input["todos"] as? kotlinx.serialization.json.JsonArray)
+                    }
                     toolCalls.add(ToolCall(id = id, name = name, arguments = input))
                 }
             }

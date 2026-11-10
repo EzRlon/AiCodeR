@@ -123,6 +123,7 @@ import com.aicode.feature.onboarding.presentation.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
 import com.aicode.feature.agent.domain.command.SlashCommandKind
 import com.aicode.feature.agent.domain.engine.AgentEngines
+import com.aicode.feature.agent.domain.engine.EngineModeCatalog
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.presentation.SessionGoalUi
@@ -238,6 +239,10 @@ internal fun ChatInputBar(
     onSelectCliModel: (providerId: String?, model: String) -> Unit = { _, _ -> },
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
+    /** 当前引擎原生工作模式 id（见 EngineModeCatalog）；null = 跟随引擎默认档。 */
+    currentEngineMode: String? = null,
+    /** 切换引擎原生工作模式。 */
+    onSelectEngineMode: (String) -> Unit = {},
     /** 长按模式图标：按当前模式弹「定时任务 / 定时 Plan」创建面板；null 时不响应。 */
     onModePillLongClick: (() -> Unit)? = null,
     /** 本条消息类型键（控制行类型图标按钮）；null=未分类。 */
@@ -627,19 +632,23 @@ internal fun ChatInputBar(
                     // 模式切换不再弹「已切换」Toast（验收反馈：底栏模式说明条已承载模式提示，弹窗多余）。
 
                     // 模式说明条（验收反馈）：底栏向上拓展展示当前模式规则。
-                    // 默认：切到计划/自动自动展开；构建默认收起，再次点击已点亮的模式图标开关本说明。
-                    var modeInfoVisible by rememberSaveable(sessionId) { mutableStateOf(currentMode != AgentMode.BUILD) }
-                    var lastMode by remember(sessionId) { mutableStateOf(currentMode) }
-                    // 切到任一模式都把它的说明条展开（含构建）；首次进入不算切换，保持默认收起。
-                    LaunchedEffect(currentMode) {
-                        if (currentMode != lastMode) {
-                            lastMode = currentMode
+                    // 默认：切到非默认档位自动展开；默认档位默认收起，再次点击已点亮的模式图标开关本说明。
+                    val engineModeEntries = EngineModeCatalog.entriesFor(sessionEngine)
+                    val activeModeId = EngineModeCatalog.normalize(sessionEngine, currentEngineMode)
+                    val defaultModeId = EngineModeCatalog.defaultModeId(sessionEngine)
+                    val activeSemantic = EngineModeCatalog.semantic(sessionEngine, activeModeId)
+                    var modeInfoVisible by rememberSaveable(sessionId) { mutableStateOf(activeModeId != defaultModeId) }
+                    var lastModeId by remember(sessionId) { mutableStateOf(activeModeId) }
+                    // 切到任一档位都把它的说明条展开（含默认档）；首次进入不算切换，保持默认收起。
+                    LaunchedEffect(activeModeId) {
+                        if (activeModeId != lastModeId) {
+                            lastModeId = activeModeId
                             modeInfoVisible = true
                         }
                     }
                     // 自动展开的说明条展示数秒后自动收起（验收反馈：不应长久固定占用底栏高度）。
-                    // 键随模式/会话重启：切模式重开计时；用户中途手动点开（无模式变化）不受影响。
-                    LaunchedEffect(currentMode, sessionId) {
+                    // 键随档位/会话重启：切档重开计时；用户中途手动点开（无档位变化）不受影响。
+                    LaunchedEffect(activeModeId, sessionId) {
                         delay(MODE_INFO_AUTO_COLLAPSE_MS)
                         modeInfoVisible = false
                     }
@@ -657,7 +666,7 @@ internal fun ChatInputBar(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = modeIcon(currentMode),
+                                imageVector = modeIcon(activeSemantic),
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(14.dp)
@@ -665,14 +674,17 @@ internal fun ChatInputBar(
                             Spacer(Modifier.width(6.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = stringResource(modeBannerRes(currentMode)),
+                                    text = stringResource(
+                                        engineModeBannerRes(sessionEngine, activeModeId)
+                                            ?: modeBannerRes(activeSemantic)
+                                    ),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 // 外部引擎的模式由引擎原生能力实现，行为细节与内置引擎不同，必须如实告知。
-                                engineModeNoteRes(sessionEngine, currentMode)?.let { noteRes ->
+                                engineModeNoteRes(sessionEngine, activeSemantic)?.let { noteRes ->
                                     Text(
                                         text = stringResource(noteRes),
                                         style = MaterialTheme.typography.labelSmall,
@@ -683,7 +695,7 @@ internal fun ChatInputBar(
                                 }
                                 Text(
                                     text = stringResource(
-                                        if (currentMode == AgentMode.PLAN) R.string.chat_mode_longpress_hint_plan
+                                        if (activeSemantic == AgentMode.PLAN) R.string.chat_mode_longpress_hint_plan
                                         else R.string.chat_mode_longpress_hint
                                     ),
                                     style = MaterialTheme.typography.labelSmall,
@@ -692,15 +704,15 @@ internal fun ChatInputBar(
                             }
                             IconButton(
                                 onClick = {
-                                    if (currentMode == AgentMode.BUILD) modeInfoVisible = false
-                                    else onToggleMode(AgentMode.BUILD)
+                                    if (activeModeId == defaultModeId) modeInfoVisible = false
+                                    else onSelectEngineMode(defaultModeId)
                                 },
                                 modifier = Modifier.size(24.dp)
                             ) {
                                 Icon(
                                     FeatherIcons.X,
                                     contentDescription = stringResource(
-                                        if (currentMode == AgentMode.BUILD) R.string.common_collapse
+                                        if (activeModeId == defaultModeId) R.string.common_collapse
                                         else R.string.agent_mode_back_to_build
                                     ),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -839,9 +851,9 @@ internal fun ChatInputBar(
                             // 长按进「定时任务 / 定时 Plan」面板。
                             Box {
                                 Icon(
-                                    imageVector = modeIcon(currentMode),
-                                    contentDescription = stringResource(modeLabelRes(currentMode)),
-                                    tint = when (currentMode) {
+                                    imageVector = modeIcon(activeSemantic),
+                                    contentDescription = stringResource(engineModeLabelRes(sessionEngine, activeModeId)),
+                                    tint = when (activeSemantic) {
                                         AgentMode.BUILD -> MaterialTheme.semanticColors.success
                                         AgentMode.PLAN -> MaterialTheme.colorScheme.primary
                                         AgentMode.AUTO -> MaterialTheme.colorScheme.error
@@ -858,19 +870,19 @@ internal fun ChatInputBar(
                                     expanded = modeMenuVisible,
                                     onDismissRequest = { modeMenuVisible = false }
                                 ) {
-                                    AgentMode.entries.forEach { mode ->
+                                    engineModeEntries.forEach { entry ->
                                         DropdownMenuItem(
-                                            text = { Text(stringResource(modeLabelRes(mode))) },
+                                            text = { Text(stringResource(engineModeLabelRes(sessionEngine, entry.id))) },
                                             leadingIcon = {
                                                 Icon(
-                                                    imageVector = modeIcon(mode),
+                                                    imageVector = modeIcon(entry.semantic),
                                                     contentDescription = null,
-                                                    tint = if (mode == currentMode) MaterialTheme.colorScheme.primary
+                                                    tint = if (entry.id == activeModeId) MaterialTheme.colorScheme.primary
                                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                                     modifier = Modifier.size(18.dp)
                                                 )
                                             },
-                                            trailingIcon = if (mode == currentMode) {
+                                            trailingIcon = if (entry.id == activeModeId) {
                                                 {
                                                     Icon(
                                                         FeatherIcons.Check,
@@ -881,8 +893,8 @@ internal fun ChatInputBar(
                                             } else null,
                                             onClick = {
                                                 modeMenuVisible = false
-                                                if (mode == currentMode) modeInfoVisible = !modeInfoVisible
-                                                else onToggleMode(mode)
+                                                if (entry.id == activeModeId) modeInfoVisible = !modeInfoVisible
+                                                else onSelectEngineMode(entry.id)
                                             }
                                         )
                                     }
@@ -1406,6 +1418,54 @@ private fun engineModeNoteRes(engine: String?, mode: AgentMode): Int? = when (en
     }
     AgentEngines.CLAUDE_CODE, AgentEngines.OPENCODE -> null
     else -> null
+}
+
+/** 引擎原生档位显示名。内置引擎直接用语义档位的名字。 */
+private fun engineModeLabelRes(engine: String?, modeId: String): Int = when (engine) {
+    AgentEngines.CLAUDE_CODE -> when (modeId) {
+        "manual" -> R.string.engine_mode_claude_manual
+        "acceptEdits" -> R.string.engine_mode_claude_accept_edits
+        "plan" -> R.string.engine_mode_claude_plan
+        "auto" -> R.string.engine_mode_claude_auto
+        "dontAsk" -> R.string.engine_mode_claude_dont_ask
+        else -> R.string.engine_mode_claude_bypass
+    }
+    AgentEngines.CODEX -> when (modeId) {
+        "read-only" -> R.string.engine_mode_codex_read_only
+        "workspace-write" -> R.string.engine_mode_codex_workspace_write
+        else -> R.string.engine_mode_codex_full_access
+    }
+    AgentEngines.OPENCODE -> when (modeId) {
+        "build" -> R.string.engine_mode_opencode_build
+        "build+auto" -> R.string.engine_mode_opencode_build_auto
+        "plan" -> R.string.engine_mode_opencode_plan
+        else -> R.string.engine_mode_opencode_plan_auto
+    }
+    else -> modeLabelRes(EngineModeCatalog.semantic(null, modeId))
+}
+
+/** 引擎原生档位的说明（底欄向上延伸那条）；null = 不展示说明。 */
+private fun engineModeBannerRes(engine: String?, modeId: String): Int? = when (engine) {
+    AgentEngines.CLAUDE_CODE -> when (modeId) {
+        "manual" -> R.string.engine_mode_desc_claude_manual
+        "acceptEdits" -> R.string.engine_mode_desc_claude_accept_edits
+        "plan" -> R.string.engine_mode_desc_claude_plan
+        "auto" -> R.string.engine_mode_desc_claude_auto
+        "dontAsk" -> R.string.engine_mode_desc_claude_dont_ask
+        else -> R.string.engine_mode_desc_claude_bypass
+    }
+    AgentEngines.CODEX -> when (modeId) {
+        "read-only" -> R.string.engine_mode_desc_codex_read_only
+        "workspace-write" -> R.string.engine_mode_desc_codex_workspace_write
+        else -> R.string.engine_mode_desc_codex_full_access
+    }
+    AgentEngines.OPENCODE -> when (modeId) {
+        "build" -> R.string.engine_mode_desc_opencode_build
+        "build+auto" -> R.string.engine_mode_desc_opencode_build_auto
+        "plan" -> R.string.engine_mode_desc_opencode_plan
+        else -> R.string.engine_mode_desc_opencode_plan_auto
+    }
+    else -> modeBannerRes(EngineModeCatalog.semantic(null, modeId))
 }
 
 private fun modeIcon(mode: AgentMode): ImageVector = when (mode) {

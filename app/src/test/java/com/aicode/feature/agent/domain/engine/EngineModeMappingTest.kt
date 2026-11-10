@@ -50,4 +50,11 @@ class EngineModeMappingTest {
         assertEquals("read-only", EngineModeMapping.codexSandbox(AgentMode.PLAN))
         assertEquals("plan", EngineModeMapping.openCodeAgent(AgentMode.PLAN))
     }
+
+    @Test
+    fun `AUTO 下 claude 必须带 IS_SANDBOX，否则 root 内秒退`() {
+        assertEquals(mapOf("IS_SANDBOX" to "1"), EngineModeMapping.claudeExtraEnv("bypassPermissions"))
+        assertTrue(EngineModeMapping.claudeExtraEnv("manual").isEmpty())
+        assertTrue(EngineModeMapping.claudeExtraEnv("plan").isEmpty())
+    }
 }

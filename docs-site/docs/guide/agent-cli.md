@@ -29,7 +29,7 @@
 
 ## 工作模式
 
-在聊天会话里使用外部引擎时，左下角的构建 / 计划 / 自动模式同样生效，由各引擎自己的权限能力实现（例如 Codex 用沙箱档位、OpenCode 用只读 agent）。各引擎的具体表现见[工作模式](/guide/modes#外部引擎-claude-code-codex-opencode)。
+在聊天会话里使用外部引擎时，左下角的模式菜单会直接列出**该引擎自己的原生权限档位**（Claude Code 的六种权限模式、Codex 的三种沙箱、OpenCode 的 build/plan 与自动批准组合），由各引擎自己的权限能力实现。各引擎的具体档位见[工作模式](/guide/modes#外部引擎-claude-code-codex-opencode)。
 
 ## 交付文件
 

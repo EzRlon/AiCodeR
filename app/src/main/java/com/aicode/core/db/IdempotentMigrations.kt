@@ -246,6 +246,13 @@ internal class Migration73To74 : Migration(73, 74) {
     }
 }
 
+/** 74→75：chat_sessions 增加 `engineMode`（引擎原生工作模式 id，null = 跟随引擎默认档）。 */
+internal class Migration74To75 : Migration(74, 75) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "chat_sessions", "engineMode", "ALTER TABLE `chat_sessions` ADD COLUMN `engineMode` TEXT")
+    }
+}
+
 /** 列是否存在；检查失败按「已存在」处理（与 [addColumnIfMissing] 同一保守口径）。 */
 private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
     runCatching {

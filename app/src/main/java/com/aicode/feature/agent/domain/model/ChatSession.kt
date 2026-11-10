@@ -79,5 +79,7 @@ data class ChatSession(
     /** 回收站：null = 正常会话；非 null = 入回收站的时间戳（回收站页据此显示剩余天数）。 */
     val deletedAt: Long? = null,
     /** 本会话的执行引擎：null = 本体内置工作流；"claude_code" = CLI 桥接（引擎切换）。 */
-    val engine: String? = null
+    val engine: String? = null,
+    /** 引擎原生工作模式 id（见 EngineModeCatalog）；null = 跟随该引擎默认档。 */
+    val engineMode: String? = null
 )

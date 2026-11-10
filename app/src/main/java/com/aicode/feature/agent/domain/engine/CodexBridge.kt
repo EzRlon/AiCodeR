@@ -9,7 +9,6 @@ import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
-import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -38,6 +37,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import com.aicode.feature.agent.domain.provider.NormalizedUsage
+import com.aicode.feature.agent.domain.provider.UsageNormalizer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -70,8 +71,8 @@ class CodexBridge @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
-    private val engineOptionsRepository: EngineOptionsRepository,
-    private val deliveryRegistry: CliDeliveryRegistry
+    private val deliveryRegistry: CliDeliveryRegistry,
+    private val todoMirror: EngineTodoMirror
 ) {
     private companion object {
         const val TAG = "CodexBridge"
@@ -239,14 +240,14 @@ class CodexBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
-        mode: AgentMode = AgentMode.BUILD,
+        engineMode: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, mode = mode, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -254,10 +255,10 @@ class CodexBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "codex 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -270,7 +271,7 @@ class CodexBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
-        mode: AgentMode = AgentMode.BUILD,
+        engineMode: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -284,13 +285,9 @@ class CodexBridge @Inject constructor(
             FileLogger.i(TAG, "无 codex thread 映射，按全新回合执行: sid=$sessionId")
         }
 
-        // 工作模式 → 沙箱档位。BUILD 时沿用引擎卡开关作为默认（兼容老用户），PLAN/AUTO 由模式决定。
-        val sandboxMode = when (mode) {
-            AgentMode.BUILD ->
-                if (engineOptionsRepository.isCodexSandboxFullAccess()) "danger-full-access"
-                else "workspace-write"
-            else -> EngineModeMapping.codexSandbox(mode)
-        }
+        // 工作模式 → 沙箱档位，直接用引擎原生取值。engineMode 为空时取该引擎默认档
+        // （workspace-write），与改造前 BUILD 默认一致。
+        val sandboxMode = EngineModeCatalog.normalize(AgentEngines.CODEX, engineMode)
         // codex 0.16x 实测无视 OPENAI_BASE_URL（仍连官方 wss 端点）：第三方 baseUrl 必须经
         // -c model_providers 注入（codex 在 base_url 后直接拼 /responses，需保证末尾是版本段）；
         // Key 另存专用环境变量供 env_key 读取
@@ -458,6 +455,26 @@ class CodexBridge @Inject constructor(
                     emit(event)
                     if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
                 }
+                // todo_list 全量待办镜像落库（快照式替换）：待办卡片的拉起/刷新/自动收起走既有 Flow
+                acc.pendingTodos.takeIf { it.isNotEmpty() }?.let { todos ->
+                    acc.pendingTodos = emptyList()
+                    todoMirror.mirror(sessionId, todos)
+                }
+                // 整轮用量落账（codex 只在 turn.completed 给一次）：发一条空内容 AssistantText 承载用量，
+                // 复用 VM 既有 addTokenUsage 链路，记忆图谱/统计页由此看到 Codex 会话消耗。
+                acc.pendingUsage?.let { usage ->
+                    acc.pendingUsage = null
+                    if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                        emit(
+                            AgentEvent.AssistantText(
+                                content = "",
+                                inputTokens = usage.inputTokens,
+                                outputTokens = usage.outputTokens,
+                                cachedInputTokens = usage.cachedInputTokens
+                            )
+                        )
+                    }
+                }
             }
 
             if (!gotResult) {
@@ -499,6 +516,10 @@ class CodexBridge @Inject constructor(
         /** item id → 展示工具名：item.completed 回来时补齐 Finished 的 toolName。 */
         val toolNames = mutableMapOf<String, String>()
         var threadId: String? = null
+        /** 刚解析到的 todo_list 全量待办；消费端镜像落库后清空。 */
+        var pendingTodos: List<EngineTodoMirror.NativeTodo> = emptyList()
+        /** 刚解析到的整轮用量（turn.completed）；消费端落账后清空。 */
+        var pendingUsage: NormalizedUsage? = null
         /** 最近一条顶层 error 文本：EOF 分类时兕底（发版 qa P2-2）。 */
         var lastError: String? = null
         var emittedAny = false
@@ -524,7 +545,20 @@ class CodexBridge @Inject constructor(
  }
             "item.started" -> parseItemStarted(obj, acc)
             "item.completed" -> parseItemCompleted(obj, acc)
-            "turn.completed" -> listOf(AgentEvent.Completed)
+            "turn.completed" -> {
+                // 用量在 turn.completed 的 usage 里整轮给一次（codex 无逐条消息用量）。
+                // 字段语义同 Anthropic：input_tokens 不含缓存，需补 cached/cache_write，
+                // 统一走 UsageNormalizer.anthropic，禁止在此另起口径。
+                (obj["usage"] as? JsonObject)?.let { u ->
+                    acc.pendingUsage = UsageNormalizer.anthropic(
+                        input = u.intOf("input_tokens") ?: 0,
+                        cacheRead = u.intOf("cached_input_tokens"),
+                        cacheCreation = u.intOf("cache_write_input_tokens"),
+                        output = u.intOf("output_tokens") ?: 0
+                    )
+                }
+                listOf(AgentEvent.Completed)
+            }
             "turn.failed" -> listOfNotNull(parseTurnFailed(obj))
             else -> emptyList()
         }
@@ -558,6 +592,12 @@ class CodexBridge @Inject constructor(
                 return listOf(AgentEvent.ReasoningDelta(accumulated = acc.reasoning.toString()))
             }
             "error" -> return emptyList() // item 级非致命错误（如传输降级提示），回合照常推进
+            "todo_list" -> {
+                // Codex 原生待办（update_plan 产出的 items: [{step, status}]）镜像进 App 待办表：
+                // 待办卡片由此拉起/刷新/自动收起
+                acc.pendingTodos = todoMirror.parseTodos(item["items"] as? kotlinx.serialization.json.JsonArray)
+                return emptyList()
+            }
             else -> {
                 val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
                 val status = item["status"]?.jsonPrimitive?.contentOrNull
@@ -601,6 +641,9 @@ class CodexBridge @Inject constructor(
         }
         else -> type ?: "tool"
     }
+
+    private fun JsonObject.intOf(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.content?.toIntOrNull()
 
     private fun argsPreview(item: JsonObject): String = when (item["type"]?.jsonPrimitive?.contentOrNull) {
         "command_execution" -> item["command"]?.jsonPrimitive?.contentOrNull ?: ""

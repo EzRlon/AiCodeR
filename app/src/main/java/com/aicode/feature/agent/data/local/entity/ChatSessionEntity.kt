@@ -49,7 +49,9 @@ data class ChatSessionEntity(
      * 会话累计缓存命中输入：是 [totalInputTokens] 的子集，只用于展示缓存命中率，
      * **不参与总消耗**（总量已含缓存）。口径由 `UsageNormalizer` 在适配器出口统一。
      */
-    val totalCachedInputTokens: Int = 0
+    val totalCachedInputTokens: Int = 0,
+    /** 引擎原生工作模式 id（见 EngineModeCatalog）；null = 跟随该引擎默认档。 */
+    val engineMode: String? = null
 ) {
     fun toDomain(): ChatSession = ChatSession(
         id = id,
@@ -76,7 +78,8 @@ data class ChatSessionEntity(
         teamName = teamName,
         deletedAt = deletedAt,
         engine = engine,
-        totalCachedInputTokens = totalCachedInputTokens
+        totalCachedInputTokens = totalCachedInputTokens,
+        engineMode = engineMode
     )
 
     companion object {
@@ -105,7 +108,8 @@ data class ChatSessionEntity(
             teamName = session.teamName,
             deletedAt = session.deletedAt,
             engine = session.engine,
-            totalCachedInputTokens = session.totalCachedInputTokens
+            totalCachedInputTokens = session.totalCachedInputTokens,
+            engineMode = session.engineMode
         )
     }
 }

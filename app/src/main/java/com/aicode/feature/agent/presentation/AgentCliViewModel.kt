@@ -11,7 +11,6 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.engine.ClaudeCodeBridge
 import com.aicode.feature.agent.domain.engine.CodexBridge
 import com.aicode.feature.agent.domain.engine.OpenCodeBridge
-import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.terminal.domain.TerminalSessionProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -37,7 +36,6 @@ class AgentCliViewModel @Inject constructor(
     private val claudeCodeBridge: ClaudeCodeBridge,
     private val codexBridge: CodexBridge,
     private val openCodeBridge: OpenCodeBridge,
-    private val engineOptionsRepository: EngineOptionsRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -60,22 +58,6 @@ class AgentCliViewModel @Inject constructor(
     /** 最近一次安装/启动失败的提示（消费后置空），供设置页展示。 */
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
-
-    /** Codex 沙箱是否完全放开（引擎卡开关）：false = workspace-write（默认），true = danger-full-access。 */
-    val codexSandboxFullAccess: StateFlow<Boolean> = engineOptionsRepository.codexSandboxFullAccessFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    fun setCodexSandboxFullAccess(enabled: Boolean) {
-        viewModelScope.launch { engineOptionsRepository.setCodexSandboxFullAccess(enabled) }
-    }
-
-    /** OpenCode 是否自动批准权限请求（引擎卡开关）：默认 true。 */
-    val openCodeAutoApprove: StateFlow<Boolean> = engineOptionsRepository.openCodeAutoApproveFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
-
-    fun setOpenCodeAutoApprove(enabled: Boolean) {
-        viewModelScope.launch { engineOptionsRepository.setOpenCodeAutoApprove(enabled) }
-    }
 
     init {
         refresh()

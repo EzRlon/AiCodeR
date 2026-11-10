@@ -106,9 +106,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import com.aicode.core.ui.drawerWidth
-import com.aicode.core.ui.pageEnter
+import com.aicode.core.ui.isAnimationDisabled
+import com.aicode.core.ui.isRtlLayout
 import com.aicode.core.ui.pressScale
-import com.aicode.core.ui.pageExit
+import com.aicode.core.ui.tabEnter
+import com.aicode.core.ui.tabExit
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -359,6 +361,8 @@ fun ChatDrawerContent(
     // tab 与展开状态进 saveable：大屏下侧栏收起后整棵子树会离开组合（见 MainActivity 的
     // SaveableStateProvider），用 remember 存会让每次回到聊天页都重置回「会话」页。
     var selectedTab by rememberSaveable { mutableStateOf(0) }
+    val rtl = isRtlLayout()
+    val animate = !isAnimationDisabled()
     var showPreviewEntrySheet by remember { mutableStateOf(false) }
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
     val selectedSessionIds = remember { mutableStateListOf<String>() }
@@ -516,10 +520,10 @@ fun ChatDrawerContent(
                                 }
                             },
                         transitionSpec = {
-                            // 与全局页面切换动效同语言：切到「文件」从右来、切回「会话」从左来。
+                            // 同级 Tab 切换：只做轻量淡入 + 1/12 屏位移，不做整页横滑（那是进入子页的语言）。
                             // sizeTransform 必须给 null，否则容器裁剪会留下拖影。
                             val forward = targetState > initialState
-                            ContentTransform(pageEnter(forward), pageExit(forward), sizeTransform = null)
+                            ContentTransform(tabEnter(forward, rtl, animate), tabExit(forward, rtl, animate), sizeTransform = null)
                         },
                         label = "drawer-tab-content"
                     ) { tab ->

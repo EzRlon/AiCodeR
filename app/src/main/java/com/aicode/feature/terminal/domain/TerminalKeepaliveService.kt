@@ -73,12 +73,19 @@ class TerminalKeepaliveService : Service() {
     /** 远程 SSH 已连接期间需 Wi-Fi 锁防息屏断连；仅常驻开关/悬浮球不构成持锁理由。 */
     private var remoteConnected = false
 
+    /** 本次服务实例的存活起点（onCreate 记下，onDestroy 结算）：保活时长指标（B4）。 */
+    private var createdAtMs = 0L
+
+    /** 停止原因标记：onTaskRemoved 置位，onDestroy 结算时区分「用户主动划掉」与「系统回收」。 */
+    private var stoppedByTaskRemoval = false
+
     inner class LocalBinder : Binder() {
         fun getService(): TerminalKeepaliveService = this@TerminalKeepaliveService
     }
 
     override fun onCreate() {
         super.onCreate()
+        createdAtMs = System.currentTimeMillis()
         FileLogger.i(TAG, "Service created")
         // 进程被系统回收后 START_STICKY 重建：persistent 是内存态会丢失。
         // 从持久化开关恢复常驻前台，否则服务空转后 stopSelf，保活形同虚设。
@@ -111,6 +118,16 @@ class TerminalKeepaliveService : Service() {
     }
 
     override fun onDestroy() {
+        // 保活时长指标（B4）：结算本次实例存活时长。短于阈值即「保活被系统提前回收」的直接证据
+        // （用户主动划掉任务也会走这里，但那种情况 stoppedByTaskRemoval 已置位可区分）。
+        FileLogger.i(TAG, "Service destroyed")
+        runCatching {
+            val startedAt = createdAtMs
+            if (startedAt > 0) {
+                val aliveMs = System.currentTimeMillis() - startedAt
+                FileLogger.i(TAG, "保活指标: 结果=${if (stoppedByTaskRemoval) "用户划掉" else "系统回收或正常停止"} 存活ms=$aliveMs")
+            }
+        }
         removeOverlay()
         serviceScope.cancel()
         releaseWifiLocks()
@@ -122,6 +139,7 @@ class TerminalKeepaliveService : Service() {
         // 用户从最近任务划掉 app = 明确不要后台运行：停掉前台服务并取消 WorkManager 周期兜底，
         // 否则进程被杀后服务会被 START_STICKY 或 KeepaliveWorker 重新拉起并弹通知。
         // 开关本身保持不变，下次打开 app 时由 MainActivity / AIEditorApp 自动恢复。
+        stoppedByTaskRemoval = true
         KeepaliveWorker.cancel(this)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()

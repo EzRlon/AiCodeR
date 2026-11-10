@@ -167,6 +167,8 @@ class StatefulAgentWorkflow @Inject constructor(
         )
         /** 压缩失败熔断：连续失败次数达到该值后暂停尝试。 */
         const val COMPACTION_FAILURES_TO_TRIP = 3
+        /** 工具耗时指标（B4）：低于该耗时的成功调用不打日志（一次回合几十次调用，防刷成流水账）。 */
+        const val TOOL_DURATION_LOG_THRESHOLD_MS = 1_000L
         /** 同会话连续溢出恢复上限：达到后直接报错并提示快照交接，不再反复压缩空转（用户反馈的嵌套陷阱）。 */
         const val MAX_OVERFLOW_RECOVERIES = 3
         /** 熔断后暂停的 LLM 调用轮数，期满恢复尝试。 */
@@ -1329,6 +1331,9 @@ class StatefulAgentWorkflow @Inject constructor(
         if (tool == null) {
             return ToolRunResult(ToolResult.Error("工具 $name 不存在", "TOOL_NOT_FOUND").toTransportString(), true)
         }
+        // 工具耗时指标（B4）：只在执行体结束后统一结算；慢工具（≥1s）与失败必须留下痕迹，
+        // 日常琐碎工具（todo 等）不打日志防刷屏。含 PreToolUse 前的排队时间无意义，从执行体起算。
+        val startedAt = System.currentTimeMillis()
         return try {
             // 工具实现在此被调用；工作流本身在主线程收集，故统一切到 IO——避免远程模式下工具里的
             // 同步文件/网络 IO 阻塞主线程。依赖主线程的工具（浏览器）在自身实现内已切回 Main。
@@ -1338,13 +1343,26 @@ class StatefulAgentWorkflow @Inject constructor(
                 val images = if (result is ToolResult.Success) result.images else emptyList()
                 val transportResult = if (attachments.isNotEmpty()) stripAttachments(result) else result
                 val processed = toolOutputStore.process(name, toolCall.id, transportResult)
+                logToolDuration(name, startedAt, processed is ToolResult.Error)
                 ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, attachments, images)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            logToolDuration(name, startedAt, isError = true)
             ToolRunResult(ToolResult.Error("工具执行失败: ${e.message}", "TOOL_EXECUTION_FAILED").toTransportString(), true)
         }
+    }
+
+    /**
+     * 工具耗时指标行（对齐 ContextCompactor 的「压缩指标」风格）：
+     * 只记 ≥1s 的慢调用与全部失败——一次回合几十次工具调用，全量记录会把日志刷成工具流水账；
+     * 而「为什么这轮这么慢」「哪个工具卡住了」这类排查只关心慢的和错的。
+     */
+    private fun logToolDuration(name: String, startedAtMillis: Long, isError: Boolean) {
+        val elapsed = System.currentTimeMillis() - startedAtMillis
+        if (elapsed < TOOL_DURATION_LOG_THRESHOLD_MS && !isError) return
+        FileLogger.i(TAG, "工具指标: 工具=$name 结果=${if (isError) "失败" else "成功"} 耗时ms=$elapsed")
     }
 
     private suspend fun activeModelSupportsVision(sessionId: String?): Boolean {
@@ -1644,6 +1662,8 @@ class StatefulAgentWorkflow @Inject constructor(
         context: AgentContext,
         onEvent: suspend (AgentEvent) -> Unit
     ): ToolRunResult {
+        // 工具耗时指标（B4）：与 runToolSync 同一口径，从执行体起算。
+        val startedAt = System.currentTimeMillis()
         return try {
             // 同 runToolSync：流式工具也可能在主线程收集上下文里被驱动，统一切 IO。
             withContext(Dispatchers.IO) {
@@ -1669,11 +1689,13 @@ class StatefulAgentWorkflow @Inject constructor(
                 val result = finalResult ?: ToolResult.Error("流式工具未返回结果", "MISSING_STREAM_RESULT")
                 val processed = toolOutputStore.process(toolCall.name, toolCall.id, result)
                 val images = if (result is ToolResult.Success) result.images else emptyList()
+                logToolDuration(toolCall.name, startedAt, processed is ToolResult.Error)
                 ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, images = images)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            logToolDuration(toolCall.name, startedAt, isError = true)
             ToolRunResult(ToolResult.Error("工具执行失败: ${e.message}", "TOOL_EXECUTION_FAILED").toTransportString(), true)
         }
     }

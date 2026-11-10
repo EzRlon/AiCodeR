@@ -45,7 +45,6 @@ import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.settings.data.repository.AgentSoundSettingsRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
-import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
@@ -106,6 +105,7 @@ import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
 import com.aicode.feature.agent.domain.team.TeamRepository
 import kotlinx.coroutines.flow.Flow
 import com.aicode.feature.agent.domain.engine.AgentEngines
+import com.aicode.feature.agent.domain.engine.EngineModeCatalog
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -1112,8 +1112,25 @@ class AIAgentViewModel @Inject constructor(
         ) return false
         // 状态流尚未加载（首帧）时不短路：currentSessionState 为 null 只说明还没加载，不代表引擎就是内置
         if (currentSessionState.value != null && currentSessionState.value?.engine == engine) return true
-        viewModelScope.launch { sessionUseCase.updateEngine(sid, engine) }
+        viewModelScope.launch {
+            sessionUseCase.updateEngine(sid, engine)
+            // 原生档位按引擎隔离：旧引擎的档位在新引擎里无意义，重置到新引擎默认档。
+            sessionUseCase.updateEngineMode(sid, EngineModeCatalog.defaultModeId(engine))
+        }
         return true
+    }
+
+    /** 设置当前会话的引擎原生工作模式（[modeId] 取自 [EngineModeCatalog.entriesFor]）。 */
+    fun setSessionEngineMode(modeId: String) {
+        val sid = _currentSessionId.value ?: return
+        viewModelScope.launch {
+            val engine = currentSessionState.value?.engine
+            val normalized = EngineModeCatalog.normalize(engine, modeId)
+            sessionUseCase.updateEngineMode(sid, normalized)
+            // 内置引擎没有独立原生档位，mode 列是唯一真相，必须同步写入；
+            // 外部引擎的 mode 列由语义投影派生，不必落库（避免两列互相追着改）。
+            if (engine == null) sessionUseCase.updateMode(sid, normalized)
+        }
     }
 
     /** CLI 引擎会话选模型：[providerId] 非空 = App 供应商模型（model 为裸模型名或 opencode 的 provider/model 串）；
@@ -1470,8 +1487,18 @@ class AIAgentViewModel @Inject constructor(
         startWakeLockRenewal()
     }
 
-    /** 任务收尾：释放唤醒锁；仅当既无后台终端任务、用户也没手动开保活时才停前台服务。 */
-    private fun releaseKeepalive() {
+    /**
+     * 任务收尾：**仅当没有其它会话仍在运行**时才释放唤醒锁 / 停前台服务。
+     *
+     * 回归点（并发多会话）：原先无条件 release，会话 A 跑完收尾会把正在跑的会话 B 依赖的
+     * WakeLock 一起放掉，后台时 CPU 可休眠 → B 的流式收包停摆。现按「是否还有活跃任务」判定，
+     * 最后一个会话结束时才真正释放。
+     */
+    private fun releaseKeepalive(excludingSessionId: String? = null) {
+        // 还有其它会话/命令在跑：锁交给它们继续持有，不在这里释放。
+        // excludingSessionId 用于「当前 job 在 finally 里调 release」的场景——它自身仍登记在
+        // sessionJobs 中且已进入收尾，必须排除，否则会误判为「仍在跑」而永不释放。
+        if (hasAnyActiveSessionJob(excludingSessionId)) return
         wakeLockRenewJob?.cancel()
         wakeLockRenewJob = null
         if (wakeLock.isHeld) {
@@ -1482,6 +1509,15 @@ class AIAgentViewModel @Inject constructor(
             TerminalKeepaliveService.disablePersistent(context)
         }
     }
+
+    /**
+     * 是否仍有**其它**活跃的 agent 会话 Job（含子代理会话）；收尾释放锁前用于判定。
+     *
+     * 按 sessionId 排除：调用点只在当前会话的 finally 里（自身 job 已进入收尾但尚未从 map 移除），
+     * 不排除就会把自己算成「仍在跑」导致锁永不释放。
+     */
+    private fun hasAnyActiveSessionJob(excludingSessionId: String? = null): Boolean =
+        sessionJobs.entries.any { (sid, job) -> job.isActive && sid != excludingSessionId }
 
     /**
      * 在 WakeLock 到期前持续续期，直到没有正在运行的任务。单次 acquire 的超时覆盖不了超长任务
@@ -1571,6 +1607,13 @@ class AIAgentViewModel @Inject constructor(
 
         /** WakeLock 续期提前量：在超时前这么早重新 acquire，避免任务中途丢锁。 */
         private const val WAKE_LOCK_RENEW_MARGIN_MS = 10 * 60 * 1000L
+
+        /**
+         * 跨会话并发上限：每个运行中的会话都会独占一份 proot + 一个 node CLI 进程
+         * （外部引擎各数百 MB 常驻），并发数太高会在中低端机触发 OOM。
+         * 超出时新会话请求**入队等待**而不是直接拒绝，由已有任务收尾后自动续跑。
+         */
+        const val MAX_CONCURRENT_RUNNING_SESSIONS = 2
         /** 从后台任务通知文本中提取 <title> 内容，供系统通知正文展示。 */
         val TASK_NOTIFICATION_TITLE_REGEX = Regex("<title>([^<]+)</title>")
         /** 文件浏览排序：目录在前，同类按名称不区分大小写。 */
@@ -2325,7 +2368,12 @@ class AIAgentViewModel @Inject constructor(
             hasActiveCommandJob = commandJobs[sid]?.isActive == true,
             sessionInRunningCommands = sid in _runningCommandSessions.value
         )
-        if (isCurrentRunning) {
+        // 跨会话并发上限：本会话没在跑、但别的会话已占满并发数 → 同样入队等待。
+        // 与「同会话排队」共用一套队列与续跑机制（processNextInQueue），只是多一个触发条件。
+        val overConcurrencyLimit = sid != null && !isCurrentRunning &&
+            sessionJobs.count { (otherSid, job) -> job.isActive && otherSid != sid } >= MAX_CONCURRENT_RUNNING_SESSIONS
+        if (overConcurrencyLimit) FileLogger.i(TAG, "并发会话已达上限 $MAX_CONCURRENT_RUNNING_SESSIONS，请求入队: sid=$sid")
+        if (isCurrentRunning || overConcurrencyLimit) {
             val req = QueuedRequest(
                 id = UUID.randomUUID().toString(),
                 request = request,
@@ -2462,6 +2510,26 @@ class AIAgentViewModel @Inject constructor(
             if (accepted) R.string.queue_passive_toast else R.string.queue_passive_rejected_toast,
             android.widget.Toast.LENGTH_SHORT
         ).show()
+    }
+
+    /**
+     * 跨会话调度：本会话收尾后，若有别的会话因「并发上限」在排队，补起一个。
+     *
+     * 同会话排队由 [processNextInQueue] 消费（活跃 job 的完成回调驱动）；但并发上限入队的会话
+     * **没有活跃 job**，没人替它续跑。这里在任一会话收尾时统一补位，保证不饿死。
+     */
+    private fun processQueuesAfterSlotFreed() {
+        val runningOthers = sessionJobs.count { (_, job) -> job.isActive }
+        if (runningOthers >= MAX_CONCURRENT_RUNNING_SESSIONS) return
+        // 按会话轮转找一个能跑的队列（跳过暂停会话），一次只补一个，避免瞬间超额
+        val candidate = _queuedRequests.value.entries
+            .firstOrNull { (sid, list) ->
+                list.isNotEmpty() &&
+                    sessionJobs[sid]?.isActive != true &&
+                    sid !in pausedHandoffSessions &&
+                    sid !in _runningCommandSessions.value
+            } ?: return
+        processNextInQueue(candidate.key)
     }
 
     private fun processNextInQueue(sessionId: String) {
@@ -2637,7 +2705,12 @@ class AIAgentViewModel @Inject constructor(
 
             val sessionEntity = sessionUseCase.getSessionById(sessionId)
             val sessionDomain = sessionEntity?.toDomain()
-            val mode = sessionDomain?.mode ?: AgentMode.BUILD
+            // 语义轴（权限门禁、PLAN 拦截、子代理继承）由引擎原生档位派生：外部引擎下 mode 列
+            // 可能落后于 engineMode，以原生档位为准；内置引擎两者同源。
+            val mode = sessionDomain?.engineMode
+                ?.let { EngineModeCatalog.semantic(sessionDomain.engine, it) }
+                ?: sessionDomain?.mode
+                ?: AgentMode.BUILD
             // 子会话的 subagentType 存的是自定义 agent 名；能查到定义时提示词与工具集都按它组装。
             // 定义来自目录扫描（远程模式经 SFTP），故切到 IO，避免阻塞主线程。
             val agentDefinition = withContext(Dispatchers.IO) {
@@ -2759,7 +2832,7 @@ class AIAgentViewModel @Inject constructor(
                                 model = currentSession.model,
                                 resume = true,
                                 providerId = currentSession.providerId,
-                                mode = agentContext.permissionMode,
+                                engineMode = currentSession.engineMode,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -2785,7 +2858,7 @@ class AIAgentViewModel @Inject constructor(
                                 model = currentSession.model,
                                 resume = true,
                                 providerId = currentSession.providerId,
-                                mode = agentContext.permissionMode,
+                                engineMode = currentSession.engineMode,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -2811,7 +2884,7 @@ class AIAgentViewModel @Inject constructor(
                                 model = currentSession.model,
                                 resume = true,
                                 providerId = currentSession.providerId,
-                                mode = agentContext.permissionMode,
+                                engineMode = currentSession.engineMode,
                                 images = agentContext.inputImages,
                                 attachments = inputAttachments
                             )
@@ -3165,8 +3238,11 @@ class AIAgentViewModel @Inject constructor(
             }
             // 放在队列处理之后：flushPendingNotifications / processNextInQueue 会同步注册接替的 job，
             // 此时 hasRunningSessions 才能反映真实状态，不会刚释放又立即重新获取。
+            // 收尾后可能有会话因并发上限在等空位：补起一个（否则它会一直排着没人接）
+            processQueuesAfterSlotFreed()
+            // 排除本会话自身（它已进入收尾）：并发多会话时其它会话仍在跑就继续持锁。
             if (!hasRunningSessionsInCurrentWorkspace()) {
-                releaseKeepalive()
+                releaseKeepalive(excludingSessionId = sessionId)
             }
         }
     }.also { job ->
@@ -3558,7 +3634,8 @@ class AIAgentViewModel @Inject constructor(
         _reasoningTimings.value = emptyMap()
         _runningTools.value = emptyMap()
         _retryStates.value = emptyMap()
-        releaseKeepalive()
+        // 这里是「停止全部」，job 已批量取消，排除项无意义
+        releaseKeepalive(excludingSessionId = null)
         stoppedStates.forEach { state -> viewModelScope.launch { persistStoppedContent(state) } }
     }
 
@@ -3761,6 +3838,10 @@ class AIAgentViewModel @Inject constructor(
         floatBallSessionHub.updateModeEngine(mode, floatBallSessionHub.state.value.voiceEngine)
         viewModelScope.launch {
             sessionUseCase.updateMode(sid, mode.name)
+            // 内置引擎下原生档位与语义档位同名（BUILD/PLAN/AUTO），两列必须同步，
+            // 否则引擎切到内置后仍会按旧 engineMode 派生语义。
+            val engine = currentSessionState.value?.engine
+            if (engine == null) sessionUseCase.updateEngineMode(sid, mode.name)
             // 工作期间切换：把新模式作为系统事件投递给运行中的 agent，本轮即时生效（见 StatefulAgentWorkflow）。
             // 空闲时无需投递——下一轮开轮会按新模式注入一次提醒。
             if (sessionJobs[sid]?.isActive == true) {

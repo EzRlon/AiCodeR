@@ -7,7 +7,6 @@ import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
-import com.aicode.feature.settings.data.repository.EngineOptionsRepository
 import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -38,6 +37,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import com.aicode.feature.agent.domain.provider.NormalizedUsage
+import com.aicode.feature.agent.domain.provider.UsageNormalizer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -74,15 +75,18 @@ class OpenCodeBridge @Inject constructor(
     private val containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
-    private val engineOptionsRepository: EngineOptionsRepository,
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
-    private val deliveryRegistry: CliDeliveryRegistry
+    private val deliveryRegistry: CliDeliveryRegistry,
+    private val todoMirror: EngineTodoMirror
 ) {
     private companion object {
         const val TAG = "OpenCodeBridge"
 
         /** aicode_bridge 的交付工具名；CLI 侧实际工具名可能带前缀，用包含匹配。 */
         const val SEND_FILE_TOOL = "send_file"
+
+        /** OpenCode 原生待办工具名：todos 数组经 EngineTodoMirror 镜像进 App 待办表。 */
+        const val OPENCODE_TODO_TOOL = "todowrite"
 
         const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
 
@@ -204,14 +208,14 @@ class OpenCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
-        mode: AgentMode = AgentMode.BUILD,
+        engineMode: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
         if (resume) {
             var emittedAny = false
             try {
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, mode = mode, images = images, attachments = attachments).collect {
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect {
                     emittedAny = true
                     emit(it)
                 }
@@ -219,10 +223,10 @@ class OpenCodeBridge @Inject constructor(
                 // 已向下游发过事件就不重试：重试会重复落库/重复展示（与 ClaudeCodeBridge 同一纪律）
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "opencode 续接会话缺失，转全新回合重试: ${e.message}")
-                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
+                runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
             }
         } else {
-            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, mode = mode, images = images, attachments = attachments).collect { emit(it) }
+            runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -235,7 +239,7 @@ class OpenCodeBridge @Inject constructor(
         model: String?,
         resume: Boolean,
         providerId: String? = null,
-        mode: AgentMode = AgentMode.BUILD,
+        engineMode: String? = null,
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
@@ -253,17 +257,13 @@ class OpenCodeBridge @Inject constructor(
             FileLogger.i(TAG, "无 opencode session 映射，按全新回合执行: sid=$sessionId")
         }
 
-        // 工作模式 → 自动批准。AUTO 全放行；PLAN 用只读 plan agent 且绝不加 --auto；
-        // BUILD 沿用引擎卡开关作为默认（兼容老用户）。
-        val autoApprove = when (mode) {
-            AgentMode.AUTO -> true
-            AgentMode.PLAN -> false
-            AgentMode.BUILD -> engineOptionsRepository.isOpenCodeAutoApprove()
-        }
+        // 工作模式 → agent 身份 + 自动批准，直接用原生组合（如 build / build+auto / plan）。
+        val nativeMode = EngineModeCatalog.normalize(AgentEngines.OPENCODE, engineMode)
+        val autoApprove = EngineModeCatalog.openCodeAuto(nativeMode)
         val args = buildList {
             add("run")
             add("--format"); add("json")
-            EngineModeMapping.openCodeAgent(mode)?.let { add("--agent"); add(it) }
+            EngineModeCatalog.openCodeAgent(nativeMode)?.let { add("--agent"); add(it) }
             if (autoApprove) add("--auto")
             // 思考过程事件（session.reasoning.ended）需要该开关才外发
             add("--thinking")
@@ -367,6 +367,25 @@ class OpenCodeBridge @Inject constructor(
                     emit(event)
                     if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
                 }
+                // todowrite 全量待办镜像落库（快照式替换）：待办卡片的拉起/刷新/自动收起走既有 Flow
+                acc.pendingTodos.takeIf { it.isNotEmpty() }?.let { todos ->
+                    acc.pendingTodos = emptyList()
+                    todoMirror.mirror(sessionId, todos)
+                }
+                // step 用量落账：发一条空内容 AssistantText 承载用量，复用 VM 既有 addTokenUsage 链路
+                acc.pendingUsage?.let { usage ->
+                    acc.pendingUsage = null
+                    if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                        emit(
+                            AgentEvent.AssistantText(
+                                content = "",
+                                inputTokens = usage.inputTokens,
+                                outputTokens = usage.outputTokens,
+                                cachedInputTokens = usage.cachedInputTokens
+                            )
+                        )
+                    }
+                }
             }
 
             if (!gotResult) {
@@ -419,6 +438,10 @@ class OpenCodeBridge @Inject constructor(
         val reasoning = StringBuilder()
         var remoteSessionId: String? = null
         var emittedAny = false
+        /** 刚解析到的 todowrite 全量待办；消费端镜像落库后清空。 */
+        var pendingTodos: List<EngineTodoMirror.NativeTodo> = emptyList()
+        /** 刚解析到的 step 用量；消费端落账后清空。 */
+        var pendingUsage: NormalizedUsage? = null
     }
 
     private fun parseLine(line: String, acc: TurnAccumulator): List<AgentEvent> {
@@ -429,7 +452,22 @@ class OpenCodeBridge @Inject constructor(
         }
         (obj["sessionID"]?.jsonPrimitive?.contentOrNull)?.let { acc.remoteSessionId = it }
         return when (obj["type"]?.jsonPrimitive?.contentOrNull) {
-            "step_start", "step_finish" -> emptyList() // 步进边界与 token/cost 暂不接（无预算基准，见台账待办）
+            "step_start" -> emptyList()
+            "step_finish" -> {
+                // 用量按 step 给：tokens.input 不含缓存（实测 1.19.0），cache.read/write 单独给，
+                // 归一化口径与 Anthropic 一致，统一走 UsageNormalizer，禁止另起口径。
+                val tokens = (obj["part"] as? JsonObject)?.get("tokens") as? JsonObject
+                tokens?.let { t ->
+                    val cache = t["cache"] as? JsonObject
+                    acc.pendingUsage = UsageNormalizer.anthropic(
+                        input = t.intOf("input") ?: 0,
+                        cacheRead = cache?.intOf("read"),
+                        cacheCreation = cache?.intOf("write"),
+                        output = t.intOf("output") ?: 0
+                    )
+                }
+                emptyList()
+            }
             "text" -> {
                 val part = obj["part"] as? JsonObject ?: return emptyList()
                 // 思考随首块正文落库并清空（与 CodexBridge 一致；qa P1-1）
@@ -463,12 +501,19 @@ class OpenCodeBridge @Inject constructor(
      * 工具调用只在成败后一次性到达（session.tool.success/failed）：补发 Started+Finished 同 id 配对，
      * 保证下游「执行中」工具行被 REPLACE 而非残留。
      */
+    private fun JsonObject.intOf(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.content?.toIntOrNull()
+
     private fun parseToolUse(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
         val part = obj["part"] as? JsonObject ?: return emptyList()
         val state = part["state"] as? JsonObject ?: return emptyList()
         val id = part["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
         val toolName = part["tool"]?.jsonPrimitive?.contentOrNull ?: "tool"
         val input = state["input"] as? JsonObject ?: JsonObject(emptyMap())
+        // OpenCode 原生待办（todowrite 的 todos 数组）镜像进 App 待办表：待办卡片由此拉起/刷新/自动收起
+        if (toolName.equals(OPENCODE_TODO_TOOL, ignoreCase = true)) {
+            acc.pendingTodos = todoMirror.parseTodos(input["todos"] as? kotlinx.serialization.json.JsonArray)
+        }
         val isError = state["status"]?.jsonPrimitive?.contentOrNull == "error"
         val result = state["output"]?.jsonPrimitive?.contentOrNull
             ?: (state["error"] as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
