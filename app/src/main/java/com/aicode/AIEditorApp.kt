@@ -164,6 +164,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var mcpConfigRepository: com.aicode.feature.agent.domain.mcp.McpConfigRepository
 
+    /** 插件清理用的文件访问：与插件页同源（本地落私有目录、远程走 SFTP），保证清的是同一份残留。 */
+    @Inject
+    lateinit var pluginFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider
+
     /** 工具授权规则仓库：启动即监听 permissions.json 外部直接编辑，改动数秒内刷新规则。 */
     @Inject
     lateinit var permissionRulesRepository: com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -290,13 +294,14 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             ContainerInstaller.extractDocs(this@AIEditorApp)
         }
-        // 启动即把 multi-llm（模型顾问团）服务端源码释放到 ~/.aicode/multi-llm/（覆盖式，随 App 升级更新）
-        appScope.launch {
-            ContainerInstaller.extractMultiLlm(this@AIEditorApp)
-        }
-        // 内置原生插件清单释放到 ~/.aicode/plugins/：模型顾问团、程序分析由插件页统一启停
-        appScope.launch {
-            ContainerInstaller.extractBuiltinPlugins(this@AIEditorApp)
+        // 原生插件不再随包释放：顾问团 / 分析台等一律走「设置 → 插件 → 从文件安装」，
+        // 与主程序解耦（装、卸、启停都由插件体系管理，升级 App 不会凭空塞回来）。
+        // 老版本随包释放过的旧内置插件（清单含 builtinScenario）→ 清目录 + 摘 MCP 残留，
+        // 让升级上来的设备与全新安装表现一致：没有插件就没有入口、报错与 MCP 条目。
+        appScope.launch(Dispatchers.IO) {
+            runCatching {
+                com.aicode.feature.plugin.domain.LegacyPluginCleanup.run(pluginFileAccess, mcpConfigRepository)
+            }.onFailure { FileLogger.w(TAG, "旧内置插件残留清理失败", it) }
         }
         // 启动即把内置提示词全量释放到 ~/.aicode/prompts/（覆盖式，随 App 升级更新）；
         // 用户自定义覆盖放在 ~/.aicode/prompts.custom/，同名即覆盖，不被升级覆盖。

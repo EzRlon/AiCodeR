@@ -1,7 +1,7 @@
 #!/bin/sh
 # 场景：模型顾问团（multi-llm）——把六家大模型网页版接入为 MCP 工具，
 # 装好后 AI 可直接咨询 ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek。
-# 服务端源码由 App 启动时释放到 ~/.aicode/multi-llm/（本脚本只装运行时）。
+# 服务端源码随「顾问团」插件包分发，由插件 install.sh 释放到 ~/.aicode/multi-llm/（本脚本只装运行时）。
 # 链路（musl 容器实测）：系统 chromium + Xvfb/x11vnc（server 自动拉起）+ pip --target 隔离依赖 +
 # playwright manylinux 轮子手工解压（musl 无官方轮子）+ driver/node 软链到系统 node。
 # 登录：首次使用需经 VNC 登录各站点（App 的 VNC 小窗或 VNC Viewer 连 127.0.0.1:5901），
@@ -24,9 +24,9 @@ multillm_pip_install() {
 }
 
 install_scenario_multillm() {
-    # 0) 服务端源码必须已由 App 提取（重启 App 即重新释放）
+    # 0) 服务端源码由插件包释放；没装插件时这里会缺失。
     if [ ! -f "$MULTI_LLM_HOME/server.py" ]; then
-        echo "${C_RED}未找到 multi-llm 服务端源码（$MULTI_LLM_HOME/server.py）。请重启 App 后重试。${C_RESET}"
+        echo "${C_RED}未找到 multi-llm 服务端源码（$MULTI_LLM_HOME/server.py）。请先在「设置 → 插件」安装顾问团插件。${C_RESET}"
         plog "multi-llm 安装中止：服务端源码缺失"
         return 1
     fi

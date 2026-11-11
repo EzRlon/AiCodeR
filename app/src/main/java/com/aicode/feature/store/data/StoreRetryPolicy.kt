@@ -14,7 +14,15 @@ import java.util.TimeZone
  */
 class HttpStatusException(
     val code: Int,
-    val retryAfterMillis: Long?
+    val retryAfterMillis: Long?,
+    /**
+     * 服务端返回的是「人机安全校验页」而不是业务数据（例如 Vercel Security Checkpoint
+     * 用 429 + text/html 挡非浏览器客户端）。
+     *
+     * 这类失败和「网络不通」「请求太频繁」都不是一回事：重试不会通过、换网络也没用，
+     * 必须给用户一句如实的说明，否则「请检查网络」会把人引到错误的方向上排查。
+     */
+    val challenge: Boolean = false
 ) : Exception("HTTP $code")
 
 /**

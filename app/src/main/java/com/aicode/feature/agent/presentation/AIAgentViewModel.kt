@@ -155,6 +155,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -211,6 +212,7 @@ class AIAgentViewModel @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val modelCostCalculator: ModelCostCalculator,
+    private val providerBalanceProbe: com.aicode.feature.settings.domain.service.ProviderBalanceProbe,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val modelReasoningEffortRepository: ModelReasoningEffortRepository,
@@ -450,6 +452,64 @@ class AIAgentViewModel @Inject constructor(
             if (id == null) flowOf("") else _inputDrafts.map { it[id].orEmpty() }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    // ── 输入框润色 ──
+    private val _isPolishing = MutableStateFlow(false)
+
+    /** 润色请求进行中：按钮转圈并禁用重复点击。 */
+    val isPolishing: StateFlow<Boolean> = _isPolishing.asStateFlow()
+
+    /** 润色前的原文，供「长按撤销」一次性恢复；null 表示当前没有可撤销的内容。 */
+    private var prePolishDraft: String? = null
+
+    /**
+     * 润色当前草稿：把自然语言改写成清晰专业的表述后**替换**输入框内容。
+     *
+     * 几个刻意的取舍：
+     * - 只在有草稿且没有进行中的润色时执行，避免连点产生多次计费调用；
+     * - 结果与原文相同（模型认为已经够好）就什么都不做，不留撤销点；
+     * - 失败只提示、不动原文——润色是可选的锦上添花，不能反过来弄丢用户写的东西；
+     * - 原文存在 [prePolishDraft]，长按按钮可恢复，覆盖掉这一次替换。
+     */
+    fun polishInput() {
+        val sid = _currentSessionId.value ?: return
+        if (_isPolishing.value) return
+        val current = _inputDrafts.value[sid].orEmpty()
+        if (current.isBlank()) return
+
+        _isPolishing.value = true
+        viewModelScope.launch {
+            try {
+                val polished = agentWorkflow.polishText(sid, current)
+                when {
+                    polished.isNullOrBlank() ->
+                        Toast.makeText(context, R.string.chat_polish_failed, Toast.LENGTH_SHORT).show()
+
+                    polished == current -> Unit
+
+                    else -> {
+                        prePolishDraft = current
+                        updateInputDraft(polished)
+                        Toast.makeText(context, R.string.chat_polish_done, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "润色输入失败", e)
+                Toast.makeText(context, R.string.chat_polish_failed, Toast.LENGTH_SHORT).show()
+            } finally {
+                _isPolishing.value = false
+            }
+        }
+    }
+
+    /** 撤销最近一次润色，恢复原文；没有可撤销内容时什么都不做。 */
+    fun restoreDraftBeforePolish() {
+        val previous = prePolishDraft ?: return
+        prePolishDraft = null
+        updateInputDraft(previous)
+    }
 
     /** 草稿落盘防抖：待写入 SharedPreferences 的暂存区与合并写入任务（避免每键入一次落盘）。 */
     private val pendingDraftWrites = mutableMapOf<String, String>()
@@ -1092,6 +1152,29 @@ class AIAgentViewModel @Inject constructor(
     val currentSessionEngine: StateFlow<String?> = currentSessionState.map { it?.engine }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /**
+     * 当前会话的**估算**花费（USD）；没有可用调用记录或模型无单价时为 null。
+     *
+     * 顶栏状态条在「拿不到真实余额」时回落到这个数字（用户 2026-11-11 定：有余额显示余额、
+     * 没有就显示估算）。口径与使用量统计页一致：按「渠道 + 模型」分组后逐组算价——
+     * 只按当前模型算，会在中途切过模型或压缩用过便宜小模型时偏差很大。
+     *
+     * 刷新由会话总量变化驱动（每次 addTokenUsage 都会推新值）；数据库查询是一次性 suspend，
+     * 不做轮询，避免状态条变成隐形的高频 IO 来源。
+     */
+    val currentSessionCostUsd: StateFlow<Double?> = combine(
+        _currentSessionId,
+        currentSessionState
+    ) { sid, session ->
+        // 只把会话总量当触发键：值变了说明又记了一笔账，需要重算。
+        val totals = (session?.totalInputTokens ?: 0) to (session?.totalOutputTokens ?: 0)
+        sid to totals
+    }
+        .mapLatest { (sid, _) ->
+            if (sid == null) null else computeSessionCostUsd(sid)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** 是否有等待用户裁决的审批（授权/提问/计划审批）：底栏危险外框用。 */
     val hasPendingApproval: StateFlow<Boolean> = combine(
         toolPermissionManager.pendingRequest,
@@ -1614,6 +1697,12 @@ class AIAgentViewModel @Inject constructor(
          * 超出时新会话请求**入队等待**而不是直接拒绝，由已有任务收尾后自动续跑。
          */
         const val MAX_CONCURRENT_RUNNING_SESSIONS = 2
+
+        /**
+         * 余额探测缓存时长。5 分钟与自定义面板的默认刷新间隔一致：更短会频繁打供应商接口，
+         * 更长则余额变化后状态条长时间不更新。
+         */
+        const val BALANCE_PROBE_TTL_MS = 5 * 60 * 1000L
         /** 从后台任务通知文本中提取 <title> 内容，供系统通知正文展示。 */
         val TASK_NOTIFICATION_TITLE_REGEX = Regex("<title>([^<]+)</title>")
         /** 文件浏览排序：目录在前，同类按名称不区分大小写。 */
@@ -4164,6 +4253,60 @@ class AIAgentViewModel @Inject constructor(
         val cachedInputTokens: Long,
         val costUsd: Double
     )
+
+    /**
+     * 余额探测结果的短期缓存：providerId → (展示串, 查询时刻)。
+     *
+     * 负结果也缓存（value=null）：接口不通/没权限时状态条每次刷新都会重新探测就太吵了。
+     */
+    private val balanceProbeCache = mutableMapOf<String, Pair<String?, Long>>()
+
+    /**
+     * 查一次该渠道的真实余额（中转站/网关/官方支持的接口）。拿不到返回 null，调用方回落到估算。
+     *
+     * 配了自定义面板脚本的渠道直接返回 null——脚本是用户显式配置的来源，优先级更高，
+     * 没必要再多打一次网络。
+     */
+    suspend fun probeProviderBalance(providerId: String): String? = withContext(Dispatchers.IO) {
+        val provider = aiProviderRepository.getAllProviders().first()
+            .firstOrNull { it.id == providerId } ?: return@withContext null
+        if (provider.dashboardScriptPath.isNotBlank()) return@withContext null
+
+        val now = System.currentTimeMillis()
+        balanceProbeCache[providerId]?.let { (value, at) ->
+            if (now - at < BALANCE_PROBE_TTL_MS) return@withContext value
+        }
+        val value = runCatching { providerBalanceProbe.probe(provider) }.getOrNull()
+        balanceProbeCache[providerId] = value to now
+        value
+    }
+
+    /**
+     * 单个会话的估算花费（USD）。拿不到渠道类型或单价时按 0 计，整表失败返回 null。
+     *
+     * 与 [loadUsageSummary] 同口径，只是过滤条件换成 sessionId：顶栏状态条展示的是
+     * 「这个会话花了多少」，而不是「某个时间窗内花了多少」。
+     */
+    private suspend fun computeSessionCostUsd(sessionId: String): Double? = withContext(Dispatchers.IO) {
+        runCatching {
+            val stats = llmCallRecordDao.getSessionModelProviderCostStats(sessionId)
+            if (stats.isEmpty()) return@runCatching null
+            val providerTypes = aiProviderRepository.getAllProviders().first()
+                .associate { it.id to it.type }
+            stats.sumOf { stat ->
+                val model = stat.model ?: return@sumOf 0.0
+                modelCostCalculator.costUsd(
+                    providerId = stat.providerId.orEmpty(),
+                    providerType = stat.providerId?.let { providerTypes[it] } ?: ProviderType.OPENAI,
+                    model = model,
+                    inputTokens = stat.inputTokens,
+                    cachedInputTokens = stat.cachedInputTokens,
+                    outputTokens = stat.outputTokens,
+                    cacheCreationTokens = stat.cacheCreationTokens
+                ) ?: 0.0
+            }
+        }.getOrNull()
+    }
 
     /** 汇总自 [start] 起的调用次数、token 与预估费用；费用按「渠道 + 模型」分组逐组估算，才取得到自定义单价。 */
     private suspend fun loadUsageSummary(start: Long): UsageSummary = withContext(Dispatchers.IO) {

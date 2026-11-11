@@ -148,6 +148,12 @@ interface AgentWorkflow {
     suspend fun generateTitle(sessionId: String, request: String): String?
 
     /**
+     * 润色输入框草稿：修正错别字、理顺逻辑、换成更专业的表述，不改变原意、不执行请求。
+     * 失败或无有效输出时返回 null（调用方保留原文）。
+     */
+    suspend fun polishText(sessionId: String, text: String): String?
+
+    /**
      * 根据 Git 差异文本生成符合 Conventional Commits 规范的提交信息。
      * 默认使用全局生效的 AI 供应商及默认模型。
      * @param diff 变更内容差异文本（`git diff --cached` 或工作区差异）

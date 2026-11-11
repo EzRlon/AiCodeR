@@ -1,7 +1,7 @@
 {
   "id": "com.aicode.rea",
-  "name": "程序分析（REA）",
-  "version": "1.0.0",
+  "name": "分析台",
+  "version": "1.1.0",
   "apiVersion": 1,
   "author": "AiCodeR",
   "description": "分析 App / APK / JS 包是怎么实现的：反编译、字符串、交叉引用与证据包",
@@ -9,7 +9,7 @@
   "capabilities": {
     "provision": {
       "scenario": "rea",
-      "builtinScenario": "rea"
+      "script": "install.sh"
     },
     "mcp": [
       {

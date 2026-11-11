@@ -118,21 +118,5 @@
     "tags": [
       "签到领额度"
     ]
-  },
-  {
-    "id": "localmodel",
-    "name": "本地模型（llama.cpp）",
-    "type": "OPENAI",
-    "baseUrl": "http://127.0.0.1:8080/v1",
-    "models": [
-      "qwen2.5-0.5b-instruct-q4_k_m"
-    ],
-    "isRecommended": false,
-    "badge": null,
-    "websiteUrl": null,
-    "tags": [
-      "离线免费",
-      "需容器内先装场景并启动 llama-server，模型名=gguf 文件名（去 .gguf）"
-    ]
   }
 ]

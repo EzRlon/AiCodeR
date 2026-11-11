@@ -250,53 +250,39 @@ class PluginResourceReleaserTest {
         assertTrue(host.hookTable.isEmpty())
     }
 
-    // ── 内置场景 provision ─────────────────────────────────────────
+    // ── 插件包内安装脚本 ─────────────────────────────────────────
 
     @Test
-    fun `builtinScenario 走宿主内置场景入口`() = runBlocking {
+    fun `安装脚本走插件目录内的相对路径`() = runBlocking {
         val p = plugin(
             capabilities = PluginCapabilities(
-                provision = ProvisionSpec(scenario = "multillm", builtinScenario = "multillm")
+                provision = ProvisionSpec(scenario = "demo", script = "install.sh")
             )
         )
 
         val outcome = releaser().attach(p)
 
-        assertEquals(listOf("sh ~/.aicode/provision.sh --install 'multillm'"), engine.commands)
+        assertEquals(
+            listOf("sh ~/.aicode/plugins/com.demo.hello/install.sh"),
+            engine.commands
+        )
         assertTrue(outcome.conflicts.isEmpty())
         assertTrue(fs.exists("~/.aicode/.plugin-data/com.demo.hello/.provisioned"))
     }
 
     @Test
-    fun `builtinScenario 非法时不执行命令`() = runBlocking {
-        val p = plugin(
-            capabilities = PluginCapabilities(
-                provision = ProvisionSpec(scenario = "x", builtinScenario = "rea; rm -rf /")
-            )
-        )
-
-        val outcome = releaser().attach(p)
-
-        assertEquals(
-            listOf(ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, "x")),
-            outcome.conflicts
-        )
-        assertTrue("不得把非法场景拼进命令", engine.commands.isEmpty())
-    }
-
-    @Test
-    fun `builtinScenario 容器未就绪只记跳过`() = runBlocking {
+    fun `容器未就绪只记跳过`() = runBlocking {
         engine.ready = false
         val p = plugin(
             capabilities = PluginCapabilities(
-                provision = ProvisionSpec(scenario = "rea", builtinScenario = "rea")
+                provision = ProvisionSpec(scenario = "demo", script = "install.sh")
             )
         )
 
         val outcome = releaser().attach(p)
 
         assertEquals(
-            listOf(ReleaseConflict(ConflictKind.PROVISION_SKIPPED, "rea")),
+            listOf(ReleaseConflict(ConflictKind.PROVISION_SKIPPED, "demo")),
             outcome.conflicts
         )
         assertFalse(fs.exists("~/.aicode/.plugin-data/com.demo.hello/.provisioned"))

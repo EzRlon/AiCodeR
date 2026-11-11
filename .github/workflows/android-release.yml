@@ -110,6 +110,11 @@ jobs:
       - name: Run unit tests
         run: ./gradlew :app:testUniversalDebugUnitTest -Dkotlin.daemon.jvmargs=-Xmx1536m
 
+      # 官方原生插件（顾问团 / 分析台）不再随 APK 内置，改为 zip 分发：
+      # 每次发版同时打出插件包，与 APK 一起作为 Release 附件，用户在「设置 → 插件 → 从文件安装」取用。
+      - name: Build plugin packages
+        run: python3 scripts/build-plugin-packages.py --out dist/plugins
+
       # 一次性构建全部 flavor 的 release APK（universal/armsolo/x86solo）
       # --stacktrace：构建失败时输出完整调用栈，便于在 CI 定位 OOM/内存类根因。
       - name: Build armsolo Release APK
@@ -234,5 +239,7 @@ jobs:
             dist/aicode-x86_64-*.apk
             # R8 映射与 APK 同版本发布，反混淆崩溃报告的凭据（gzip 压缩，体积小）
             dist/aicode-universal-*mapping.txt.gz
+            # 官方原生插件包（com.aicode.<id>-<版本>.zip），装法见文档「设置 → 插件 → 从文件安装」
+            dist/plugins/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

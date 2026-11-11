@@ -65,6 +65,8 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val modelCostCalculator: ModelCostCalculator,
+    /** 顶栏状态条的余额探测；与 AIAgentViewModel 构造器参数顺序保持一致。 */
+    private val providerBalanceProbe: com.aicode.feature.settings.domain.service.ProviderBalanceProbe,
     private val aiProviderRepository: AIProviderRepository,
     private val defaultModelSettingsRepository: DefaultModelSettingsRepository,
     private val modelReasoningEffortRepository: ModelReasoningEffortRepository,
@@ -124,6 +126,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         chatSessionDao,
         llmCallRecordDao,
         modelCostCalculator,
+        providerBalanceProbe,
         aiProviderRepository,
         defaultModelSettingsRepository,
         modelReasoningEffortRepository,

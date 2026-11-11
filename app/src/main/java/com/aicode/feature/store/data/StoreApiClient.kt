@@ -126,8 +126,22 @@ class StoreApiClient @Inject constructor(
         if (isSuccessful) return
         throw HttpStatusException(
             code = code,
-            retryAfterMillis = StoreRetryPolicy.parseRetryAfterMillis(header("Retry-After"))
+            retryAfterMillis = StoreRetryPolicy.parseRetryAfterMillis(header("Retry-After")),
+            challenge = isBotChallenge()
         )
+    }
+
+    /**
+     * 是否是「人机安全校验」拦截。
+     *
+     * 判定依据：非 2xx 且正文是 HTML（正常接口一律返回 JSON），或 Vercel 明确标了
+     * `x-vercel-mitigated: challenge`。识别出来后界面会给「服务端安全校验」的提示，
+     * 而不是让用户去查网络。
+     */
+    private fun Response.isBotChallenge(): Boolean {
+        val contentType = header("Content-Type").orEmpty()
+        val vercelChallenge = header("x-vercel-mitigated").equals("challenge", ignoreCase = true)
+        return vercelChallenge || (code == 429 && contentType.startsWith("text/html", ignoreCase = true))
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
 import android.text.format.Formatter
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -8,15 +9,23 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.util.ExternalFileActions
@@ -191,6 +200,61 @@ internal fun PluginDetailSection(
                         if (index > 0) SettingsDivider()
                         SettingsRow(title = path, showChevron = false)
                     }
+                }
+            }
+        }
+
+        // 卸载：装与卸对称。卸载会先摘掉已注入的能力（MCP/钩子/释放的文件），再删插件目录。
+        item {
+            var confirmUninstall by remember { mutableStateOf(false) }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                SettingsGroup {
+                    SettingsRow(
+                        title = stringResource(R.string.plugin_uninstall),
+                        subtitle = stringResource(R.string.plugin_uninstall_desc),
+                        showChevron = false,
+                        trailing = {
+                            Text(
+                                text = stringResource(R.string.plugin_uninstall),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(Radius.sm))
+                                    .clickable(enabled = !busy) { confirmUninstall = true }
+                                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+                            )
+                        }
+                    )
+                }
+                if (confirmUninstall) {
+                    AlertDialog(
+                        onDismissRequest = { confirmUninstall = false },
+                        title = { Text(stringResource(R.string.plugin_uninstall_confirm_title)) },
+                        text = {
+                            Text(
+                                stringResource(
+                                    R.string.plugin_uninstall_confirm_text,
+                                    manifest.name
+                                )
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                confirmUninstall = false
+                                viewModel.uninstall(plugin.id)
+                            }) {
+                                Text(
+                                    text = stringResource(R.string.plugin_uninstall),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmUninstall = false }) {
+                                Text(stringResource(R.string.common_cancel))
+                            }
+                        }
+                    )
                 }
             }
         }

@@ -749,6 +749,13 @@
     <string name="chat_ssh_connecting">SSH：连接中…</string>
     <string name="chat_ssh_failed">SSH：连接失败</string>
     <string name="chat_ssh_disconnected">SSH：未连接</string>
+    <!-- 顶栏状态条：标签 + 读屏描述。数值部分在代码里格式化（k/M、金额），不进文案。 -->
+    <string name="status_strip_context">上下文</string>
+    <string name="status_strip_balance">余额</string>
+    <string name="status_strip_estimate">估算</string>
+    <string name="status_strip_cache">缓存</string>
+    <string name="status_strip_key">Key %1$d/%2$d</string>
+    <string name="status_strip_a11y">%1$s。本会话累计输入 %2$d、输出 %3$d</string>
     <string name="chat_connecting_remote">正在连接远程服务器…</string>
     <string name="chat_remote_connect_failed">远程服务器连接失败，请检查设置</string>
     <string name="chat_no_remote_connection">未连接远程服务器</string>
@@ -1046,6 +1053,19 @@
     <string name="chat_input_placeholder">输入消息，与 AI 对话…</string>
     <string name="chat_queue_hint">AI 正在处理中，回车发送将自动排队</string>
     <string name="chat_input_expand">展开输入框</string>
+    <string name="bottom_bar_collapse">收起底栏</string>
+    <string name="bottom_bar_rail_expand">展开底栏</string>
+    <string name="bottom_bar_rail_running">任务运行中</string>
+    <string name="bottom_bar_rail_progress">%1$d/%2$d</string>
+    <string name="bottom_bar_rail_queued">排队 %1$d</string>
+    <string name="bottom_bar_rail_stop">停止任务</string>
+    <string name="chat_polish">润色</string>
+    <string name="chat_polish_running">正在润色…</string>
+    <string name="chat_polish_undo">撤销润色</string>
+    <string name="chat_polish_done">已润色，长按可恢复原文</string>
+    <string name="chat_polish_failed">润色失败，请稍后再试</string>
+    <string name="bottom_bar_rail_stalled_seconds">已 %1$d 秒无输出</string>
+    <string name="bottom_bar_rail_stalled_minutes">已 %1$d 分钟无输出</string>
     <string name="chat_mention_loading">正在加载文件列表…</string>
     <string name="chat_mention_unavailable">容器未就绪，无法搜索文件</string>
     <string name="chat_mention_error">加载文件列表失败</string>
@@ -1757,6 +1777,7 @@
     <string name="store_error_search">搜索失败，请检查网络</string>
     <string name="store_error_rate_limited">商店请求过于频繁，请 %1$d 秒后重试</string>
     <string name="store_error_rate_limited_later">商店请求过于频繁，请稍后重试</string>
+    <string name="store_error_blocked">商店服务启用了安全校验，暂时无法访问，请稍后再试</string>
     <string name="store_open_source">来源</string>
     <string name="store_mcp_stdio_hint">仅提供本地包，暂不支持一键安装</string>
     <string name="schedule_page_hint_title">自动执行命令或脚本</string>
@@ -2403,6 +2424,22 @@
     <string name="plugin_problem_dir">目录 %1$s</string>
     <string name="plugin_back">返回</string>
     <string name="plugin_enabled_with_skips">已启用，%1$s 项内容没装上（详情页可查看）</string>
+    <!-- 插件包安装 / 卸载 -->
+    <string name="plugin_install_from_file">从文件安装插件</string>
+    <string name="plugin_install_from_file_desc">选择 .zip 插件包；安装后默认关闭，需在详情页开启</string>
+    <string name="plugin_installing">正在安装…</string>
+    <string name="plugin_install_success">已安装「%1$s」，去详情页开启</string>
+    <string name="plugin_install_bad_package">插件包损坏或不是 zip 格式</string>
+    <string name="plugin_install_too_large">插件包超过大小上限</string>
+    <string name="plugin_install_manifest_missing">插件包里没有 plugin.json</string>
+    <string name="plugin_install_manifest_invalid">插件清单不合法：%1$s</string>
+    <string name="plugin_install_already_installed">同名插件已安装，请先卸载再装</string>
+    <string name="plugin_install_write_failed">写入插件目录失败</string>
+    <string name="plugin_uninstall">卸载插件</string>
+    <string name="plugin_uninstall_desc">移除插件文件，并摘掉它注入的 MCP 与钩子</string>
+    <string name="plugin_uninstall_confirm_title">卸载插件？</string>
+    <string name="plugin_uninstall_confirm_text">「%1$s」会被移除，它释放进技能 / MCP 的内容会一并摘除；你自己创建的同名内容不受影响。</string>
+    <string name="plugin_uninstall_done">已卸载「%1$s」</string>
     <string name="plugin_toggle_failed">插件启用/禁用失败，详情见日志</string>
     <string name="plugin_conflicts_title">没装上的内容（%1$d）</string>
     <string name="plugin_conflict_target_exists">目标已存在同名内容，未覆盖：%1$s</string>
@@ -2558,6 +2595,7 @@
     <!-- 消息类型：「消息类型」v1 —— 控制行图标按钮 / 锚定菜单 / 气泡徽章 / 模型瞬态行 -->
     <string name="intent_chip_label">类型：%1$s</string>
     <string name="intent_none">未分类</string>
+    <string name="intent_picker_title">反馈标签</string>
     <string name="intent_picker_coding">编程方向</string>
     <string name="intent_picker_general">通用方向</string>
     <string name="intent_model_note">（本条消息类型：%1$s）</string>

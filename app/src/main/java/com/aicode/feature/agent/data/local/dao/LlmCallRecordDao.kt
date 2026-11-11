@@ -233,6 +233,27 @@ interface LlmCallRecordDao {
         model: String? = null
     ): Flow<List<ModelProviderCostStats>>
 
+    /**
+     * 单个会话按「渠道 + 模型」聚合的 token 用量，供顶栏状态条估算本会话花费。
+     *
+     * 用一次性 suspend 查询而不是 Flow：调用它的是「会话总量变了」这一事件（由会话 Flow 驱动），
+     * 不需要为每张卡片再挂一条数据库观察。
+     */
+    @Query(
+        """
+        SELECT providerId AS providerId,
+               model AS model,
+               SUM(inputTokens) AS inputTokens,
+               SUM(cachedInputTokens) AS cachedInputTokens,
+               SUM(outputTokens) AS outputTokens,
+               SUM(cacheCreationTokens) AS cacheCreationTokens
+        FROM llm_call_records
+        WHERE sessionId = :sessionId AND model IS NOT NULL AND model != ''
+        GROUP BY providerId, model
+        """
+    )
+    suspend fun getSessionModelProviderCostStats(sessionId: String): List<ModelProviderCostStats>
+
     /** 周期整体汇总（无 GROUP BY，恒返回一行）。 */
     @Query(
         """

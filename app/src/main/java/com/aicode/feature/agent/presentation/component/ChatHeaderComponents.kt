@@ -10,6 +10,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,11 +45,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
@@ -66,12 +75,17 @@ import compose.icons.feathericons.Share2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
 
-/** 顶栏顶部余量：状态栏 inset 的 55% + 8dp——按钮视觉重心落到状态栏下方舒适区，不再贴着状态栏顶边。 */
+/**
+ * 顶栏顶部余量：状态栏 inset 的 45% + 4dp。
+ *
+ * 原本是 55% + 8dp；用户 2026-11-11 要求「按钮整体往上挪一点」，好把腾出来的空间留给
+ * 下方的状态条。按钮热区仍是 40dp，只是整行上移——不会降低点击命中率。
+ */
 @Composable
 private fun statusBarComfortPadding(): Dp {
     val density = LocalDensity.current
     val inset = WindowInsets.statusBars.getTop(density)
-    return with(density) { (inset * 0.55f).toDp() + 8.dp }
+    return with(density) { (inset * 0.45f).toDp() + 4.dp }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -94,7 +108,21 @@ internal fun ChatHeader(
     showMenuButton: Boolean = true,
     terminalActive: Boolean = false,
     gitActive: Boolean = false,
-    browserActive: Boolean = false
+    browserActive: Boolean = false,
+    /** 当前上下文占用 token（最近一次请求的输入量）。 */
+    contextTokens: Int = 0,
+    /** 触发压缩的 token 线（模型输入预算 × 压缩阈值百分比）；0 表示未知，此时不显示该段。 */
+    compactionLineTokens: Int = 0,
+    /** 从自定义面板脚本里抠出来的真实余额文案（如 `$18.42`）；null 时回落到估算花费。 */
+    balanceText: String? = null,
+    /** 本会话估算花费（USD）；与 [balanceText] 二选一展示。 */
+    estimatedCostUsd: Double? = null,
+    /** 本会话缓存命中率（0..1）；null 或 0 时不显示。 */
+    cacheHitRate: Float? = null,
+    /** 多 Key 渠道当前取用的 Key 序号（序号, 总数）；单 Key 传 null。 */
+    keyIndex: Pair<Int, Int>? = null,
+    /** 长按状态条：展开底部的余额面板。 */
+    onStatusStripLongPress: () -> Unit = {}
 ) {
     Surface(
         color = MaterialTheme.colorScheme.background
@@ -107,7 +135,7 @@ internal fun ChatHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Spacing.sm, vertical = 2.dp),
+                    .padding(horizontal = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 大屏常驻侧栏时隐掉汉堡键：侧栏已经摆在左边，再给个开关反而困惑。
@@ -176,24 +204,205 @@ internal fun ChatHeader(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            // 远程模式：左边 SSH 连接状态，右边 token 累计统计
-            if (connectionState != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.md)
-                        .padding(top = 2.dp, bottom = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    ConnectionIndicator(state = connectionState)
-                    TokenStats(
-                        inputTokens = inputTokens,
-                        outputTokens = outputTokens
-                    )
+            // 一个状态条同时接管了原来的「远程模式连接 + token 累计」一行的职责：
+            // 远程时第一段是连接状态，其余段是上下文/余额/缓存。内容为空时整条不占高度。
+            val labels = StatusStripLabels(
+                context = stringResource(R.string.status_strip_context),
+                balance = stringResource(R.string.status_strip_balance),
+                estimate = stringResource(R.string.status_strip_estimate),
+                cache = stringResource(R.string.status_strip_cache),
+                sshConnecting = stringResource(R.string.chat_ssh_connecting),
+                sshFailed = stringResource(R.string.chat_ssh_failed),
+                sshDisconnected = stringResource(R.string.chat_ssh_disconnected)
+            )
+            val segments = buildStatusStripSegments(
+                labels = labels,
+                contextTokens = contextTokens,
+                compactionLineTokens = compactionLineTokens,
+                balanceText = balanceText,
+                estimatedCostUsd = estimatedCostUsd,
+                cacheHitRate = cacheHitRate,
+                connectionState = connectionState,
+                keyText = keyIndex?.let {
+                    stringResource(R.string.status_strip_key, it.first, it.second)
+                }
+            )
+            SessionStatusStrip(
+                segments = segments,
+                onLongPress = onStatusStripLongPress,
+                contentDescription = stringResource(
+                    R.string.status_strip_a11y,
+                    statusStripSummary(segments),
+                    inputTokens,
+                    outputTokens
+                )
+            )
+        }
+    }
+}
+
+/** 状态条的一段：标签用弱色、数值用正常色，中间以 `·` 分隔。 */
+internal data class StatusStripSegment(
+    val label: String?,
+    val value: String,
+    /** 语义色覆盖（连接异常时用 error 色）；null = 跟随默认弱色文本。 */
+    val tone: StripTone = StripTone.NORMAL
+)
+
+internal enum class StripTone { NORMAL, ALERT }
+
+/**
+ * 状态条的文案包。文案必须走双语 strings.xml（硬规则），而组装逻辑要保持纯函数可单测，
+ * 于是把已解析的文案作为参数传进来——测试用固定标签，运行时用 [stringResource]。
+ */
+internal data class StatusStripLabels(
+    val context: String,
+    val balance: String,
+    val estimate: String,
+    val cache: String,
+    val sshConnecting: String,
+    val sshFailed: String,
+    val sshDisconnected: String
+)
+
+/**
+ * 组装状态条内容。纯函数，单测钉住「没有余额就显示估算」和各种缺数据的降级。
+ *
+ * 段落顺序：连接（仅远程异常）→ 上下文 → 余额/估算 → 缓存。屏幕不够宽时单行省略从尾部
+ * 截断，正好先丢缓存、再丢金额，上下文永远留得住。
+ */
+internal fun buildStatusStripSegments(
+    labels: StatusStripLabels,
+    contextTokens: Int,
+    compactionLineTokens: Int,
+    balanceText: String?,
+    estimatedCostUsd: Double?,
+    cacheHitRate: Float?,
+    connectionState: com.aicode.feature.agent.domain.container.ConnectionState? = null,
+    /** 已格式化好的多 Key 片段（如 `Key 2/3`）；null 表示单 Key 或无信息。 */
+    keyText: String? = null
+): List<StatusStripSegment> {
+    val segments = mutableListOf<StatusStripSegment>()
+
+    // 连上的远程连接不占位：常态不值得一行字，异常才需要抢注意力。
+    // 文案直接复用 chat_ssh_*（自带「SSH：」前缀），所以 label 留空。
+    when (connectionState) {
+        com.aicode.feature.agent.domain.container.ConnectionState.CONNECTING ->
+            segments += StatusStripSegment(null, labels.sshConnecting, StripTone.ALERT)
+        com.aicode.feature.agent.domain.container.ConnectionState.FAILED ->
+            segments += StatusStripSegment(null, labels.sshFailed, StripTone.ALERT)
+        com.aicode.feature.agent.domain.container.ConnectionState.DISCONNECTED ->
+            segments += StatusStripSegment(null, labels.sshDisconnected, StripTone.ALERT)
+        com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED, null -> Unit
+    }
+
+    if (compactionLineTokens > 0) {
+        val percent = (contextTokens.toFloat() / compactionLineTokens * 100f)
+            .coerceIn(0f, 999f)
+            .toInt()
+        segments += StatusStripSegment(
+            label = labels.context,
+            value = "${formatStripTokens(contextTokens)}/${formatStripTokens(compactionLineTokens)} · $percent%"
+        )
+    }
+
+    // 有钱看钱：真实余额优先，拿不到才回落到估算（用户 2026-11-11 定：C 方案）。
+    if (!balanceText.isNullOrBlank()) {
+        segments += StatusStripSegment(labels.balance, balanceText)
+    } else if (estimatedCostUsd != null && estimatedCostUsd > 0) {
+        segments += StatusStripSegment(labels.estimate, formatStripUsd(estimatedCostUsd))
+    }
+
+    if (!keyText.isNullOrBlank()) {
+        segments += StatusStripSegment(null, keyText)
+    }
+
+    if (cacheHitRate != null && cacheHitRate > 0f) {
+        segments += StatusStripSegment(
+            label = labels.cache,
+            value = "${(cacheHitRate.coerceIn(0f, 1f) * 100).toInt()}%"
+        )
+    }
+
+    return segments
+}
+
+/** token 数按 k/M 缩写，去掉没意义的 `.0`（34k 而不是 34.0k）。 */
+internal fun formatStripTokens(tokens: Int): String {
+    val safe = tokens.coerceAtLeast(0)
+    return when {
+        safe >= 1_000_000 -> trimZero(safe / 1_000_000.0) + "M"
+        safe >= 1_000 -> trimZero(safe / 1_000.0) + "k"
+        else -> safe.toString()
+    }
+}
+
+private fun trimZero(value: Double): String =
+    if (value % 1.0 == 0.0) value.toInt().toString()
+    else String.format(java.util.Locale.US, "%.1f", value)
+
+/** 估算金额：不到 1 分钱时不显示 $0.00（会被读成「没花钱」），改用 `< $0.01`。 */
+internal fun formatStripUsd(usd: Double): String =
+    if (usd in 0.0..0.0049) "<\$0.01" else String.format(java.util.Locale.US, "\$%.2f", usd)
+
+/** 状态条的朗读文本：先念各段，再补上会话累计 token（给读屏用户的完整信息）。 */
+internal fun statusStripSummary(segments: List<StatusStripSegment>): String =
+    segments.joinToString("，") { seg ->
+        if (seg.label != null) "${seg.label} ${seg.value}" else seg.value
+    }
+
+/**
+ * 顶栏底部的状态条，**24dp**。
+ *
+ * 高度刻意压这么低：它承载的是「瞥一眼」的信息（上下文、余额、缓存），不是操作区。
+ * 没有可显示内容时整条不占高度（[segments] 为空直接返回），不给空数据留白。
+ * 长按展开底部余额面板——这样余额面板可以默认收起，底栏整体更矮。
+ */
+@Composable
+private fun SessionStatusStrip(
+    segments: List<StatusStripSegment>,
+    onLongPress: () -> Unit,
+    contentDescription: String
+) {
+    if (segments.isEmpty()) return
+
+    val subtle = MaterialTheme.colorScheme.onSurfaceVariant
+    val strong = MaterialTheme.colorScheme.onSurface
+    val alert = MaterialTheme.colorScheme.error
+
+    val annotated = buildAnnotatedString {
+        segments.forEachIndexed { index, segment ->
+            if (index > 0) {
+                withStyle(SpanStyle(color = subtle.copy(alpha = 0.55f))) { append(" · ") }
+            }
+            val valueColor = if (segment.tone == StripTone.ALERT) alert else strong.copy(alpha = 0.85f)
+            segment.label?.let {
+                withStyle(SpanStyle(color = subtle.copy(alpha = 0.75f))) {
+                    append(it)
+                    append(" ")
                 }
             }
+            withStyle(SpanStyle(color = valueColor, fontWeight = FontWeight.Medium)) {
+                append(segment.value)
+            }
         }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(24.dp)
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { onLongPress() }) }
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = annotated,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = Spacing.md)
+        )
     }
 }
 
@@ -295,51 +504,6 @@ private tailrec fun Context.findActivityOwner(): ViewModelStoreOwner? = when (th
     is ViewModelStoreOwner -> this
     is ContextWrapper -> baseContext.findActivityOwner()
     else -> null
-}
-
-@Composable
-private fun ConnectionIndicator(
-    state: com.aicode.feature.agent.domain.container.ConnectionState
-) {
-    val (dotColor, text) = when (state) {
-        com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED ->
-            MaterialTheme.colorScheme.primary to stringResource(R.string.chat_ssh_connected)
-        com.aicode.feature.agent.domain.container.ConnectionState.CONNECTING ->
-            MaterialTheme.colorScheme.tertiary to stringResource(R.string.chat_ssh_connecting)
-        com.aicode.feature.agent.domain.container.ConnectionState.FAILED ->
-            MaterialTheme.colorScheme.error to stringResource(R.string.chat_ssh_failed)
-        com.aicode.feature.agent.domain.container.ConnectionState.DISCONNECTED ->
-            MaterialTheme.colorScheme.outline to stringResource(R.string.chat_ssh_disconnected)
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(6.dp)
-                .clip(CircleShape)
-                .background(dotColor)
-        )
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun TokenStats(inputTokens: Int, outputTokens: Int) {
-    val inStr = formatTokenCount(inputTokens.toLong())
-    val outStr = formatTokenCount(outputTokens.toLong())
-    Text(
-        text = "↑$inStr ↓$outStr",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
 }
 
 @Composable

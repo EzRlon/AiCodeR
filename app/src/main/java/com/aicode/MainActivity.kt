@@ -644,6 +644,16 @@ fun AppNavigation(
         if (sidebarVisible) agentViewModel.refreshBrowse()
     }
 
+    // 插件驱动的侧栏入口：顾问团 / 分析台只有「插件已装且已启用」才露出。
+    // 全新安装不带任何插件，因此这两项默认不存在；用户从插件页安装并开启后，
+    // 下次侧栏出现时重新扫描即可看到入口（无需重启）。
+    val pluginViewModel: com.aicode.feature.plugin.presentation.PluginViewModel = hiltViewModel()
+    val pluginUiState by pluginViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(sidebarVisible) {
+        if (sidebarVisible) pluginViewModel.refresh()
+    }
+    val enabledPluginIds = pluginUiState.plugins.filter { it.enabled }.map { it.id }.toSet()
+
     // 右栏工作台：大屏下编辑器 / 终端 / Git 与聊天并排，窄窗仍走全屏路由。
     var paneKind by rememberSaveable { mutableStateOf(WorkbenchPaneKind.NONE) }
     var paneEditorPath by rememberSaveable { mutableStateOf("") }
@@ -855,14 +865,15 @@ fun AppNavigation(
                 annotationCanvasActive = true
                 if (!permanentDrawer) scope.launch { drawerState.close() }
             },
-            onNavigateToRea = {
+            // 入口跟随插件：未装或未启用时传 null，ChatDrawer 便不渲染该行。
+            onNavigateToRea = if (com.aicode.feature.plugin.domain.PluginIds.REA in enabledPluginIds) ({
                 navController.navigate("rea")
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
-            },
-            onNavigateToMultillm = {
+            }) else null,
+            onNavigateToMultillm = if (com.aicode.feature.plugin.domain.PluginIds.MULTILLM in enabledPluginIds) ({
                 navController.navigate("multillm")
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
-            },
+            }) else null,
             onNavigateToPreview = {
                 openWorkbench(WorkbenchPaneKind.PREVIEW)
                 if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }

@@ -28,16 +28,6 @@ object PluginManifestParser {
     /** 允许释放内容的容器根；插件不得往这之外写。 */
     private val ALLOWED_TARGET_ROOTS = listOf("~/.aicode/", "~/workspace/")
 
-    /**
-     * 允许插件调用的内置场景 id。
-     *
-     * 白名单而不是只做正则：`builtinScenario` 最终会拼进容器命令，能让第三方插件驱动任意
-     * 环境安装不是应有的能力。新增内置场景插件时在这里显式放行（与 `lib/env-common.sh`
-     * 的 `SCENARIO_IDS` 保持一致）。
-     */
-    val BUILTIN_SCENARIOS = setOf("multillm", "rea")
-
-    private val BUILTIN_SCENARIO_ID = Regex("^[a-z0-9][a-z0-9_-]*$")
     private val MCP_TOOL_NAME = Regex("^[A-Za-z0-9_.-]+$")
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -99,21 +89,10 @@ object PluginManifestParser {
 
         c.provision?.let { p ->
             if (p.scenario.isBlank()) errors += "provision.scenario 不能为空"
-            val hasScript = !p.script.isNullOrBlank()
-            val hasBuiltin = !p.builtinScenario.isNullOrBlank()
-            if (hasScript && hasBuiltin) {
-                errors += "provision.script 与 builtinScenario 只能二选一"
-            }
-            if (!hasScript && !hasBuiltin) {
-                errors += "provision 需要 script 或 builtinScenario 之一"
-            }
-            p.script?.let {
-                if (!isSafeRelativePath(it)) errors += "provision.script 必须是相对路径: $it"
-            }
-            p.builtinScenario?.let { id ->
-                if (!BUILTIN_SCENARIO_ID.matches(id) || id !in BUILTIN_SCENARIOS) {
-                    errors += "不支持的内置场景: $id"
-                }
+            if (p.script.isBlank()) {
+                errors += "provision.script 不能为空（安装脚本必须在插件包内）"
+            } else if (!isSafeRelativePath(p.script)) {
+                errors += "provision.script 必须是相对路径: ${p.script}"
             }
             p.marker?.let {
                 if (ALLOWED_TARGET_ROOTS.none { root -> it.startsWith(root) }) {

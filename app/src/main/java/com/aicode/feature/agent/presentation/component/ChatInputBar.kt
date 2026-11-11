@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +50,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -93,6 +95,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -151,6 +155,7 @@ import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Feather
 import compose.icons.feathericons.Pause
 import compose.icons.feathericons.Play
 import compose.icons.feathericons.Target
@@ -176,6 +181,22 @@ private val INPUT_BAR_MASK_HEIGHT = 110.dp
 private val INPUT_FIELD_MIN_HEIGHT = 40.dp
 private val INPUT_FIELD_MAX_HEIGHT = 140.dp
 
+/**
+ * 空闲紧凑态下的输入框地板高度。
+ *
+ * 空闲时把卡片整体再压 20dp 左右（用户 2026-11-11 提）：无内容、非忙、无附件时输入框只剩
+ * 一行占位文本，40dp 的高度显得空旷。36dp 已是视觉与命中率的折中——再低手指就容易点空，
+ * 项目此前的 40dp 本身也已低于 Material 建议的 48dp 触摸目标，继续压只会更难用。
+ */
+private val INPUT_FIELD_MIN_HEIGHT_COMPACT = 36.dp
+
+/** 控制行最小高度：空闲态同步压到 36dp，忙态/有内容时恢复 40dp，避免打字时控件「变脸」。 */
+private val CONTROL_ROW_MIN_HEIGHT = 40.dp
+private val CONTROL_ROW_MIN_HEIGHT_COMPACT = 36.dp
+
+/** 折叠态底部渐变蒙版高度：只盖住 44dp 轨道 + 一点余量，比展开态短，收起才真正省下高度。 */
+private val COLLAPSED_BAR_MASK_HEIGHT = 56.dp
+
 /** 模式说明条自动收起延时：切模式/进入非构建会话自动展开后，展示多久自动收起（用户不应长久固定显示）。 */
 private const val MODE_INFO_AUTO_COLLAPSE_MS = 6_000L
 
@@ -196,6 +217,22 @@ private val INPUT_FIELD_MIC_SLOT = 32.dp
 
 /** 文字末尾到麦克风的最小间隔，避免两者视觉相贴。 */
 private val INPUT_FIELD_MIC_GAP = 6.dp
+
+/** 「展开为全屏输入」热区：与麦克风并排放在同一右侧尾槽里，两者右边缘与竖直基线一致。 */
+private val INPUT_FIELD_EXPAND_SLOT = 28.dp
+
+/** 尾槽内两个热区之间的间隔。 */
+private val INPUT_FIELD_ACTION_GAP = 4.dp
+
+/**
+ * 右侧尾槽总宽 = 展开键 + 间隔 + 麦克风 + 文字间隔。
+ *
+ * 展开键**常驻占位**（空闲时淡到 35% 且不可点）：它原来只在文本溢出时插入布局，
+ * 一出现就把输入框宽度挤掉一截，看起来像文字区域在跳。常驻后宽度恒定，
+ * 也满足用户「空闲时这个按钮也要在同一竖直位置」的要求。
+ */
+private val INPUT_FIELD_TRAILING_WIDTH =
+    INPUT_FIELD_EXPAND_SLOT + INPUT_FIELD_ACTION_GAP + INPUT_FIELD_MIC_SLOT + INPUT_FIELD_MIC_GAP
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -289,16 +326,55 @@ internal fun ChatInputBar(
     onModelSheetDismiss: (() -> Unit)? = null,
     /** 语音离线模型引导卡片（F2/F7）：系统识别不可用且模型未就绪时由宿主提供内容，渲染在待办面板之后。 */
     voiceSetupCard: (@Composable () -> Unit)? = null,
+    /**
+     * 忙时在卡片顶边正中渲染「收起把手」并回调此函数；null 时不给折叠入口
+     * （例如宿主不在聊天页，或折叠态本就不适用）。
+     */
+    onRequestCollapse: (() -> Unit)? = null,
+    /** 顶栏状态条长按：自增信号，要求把余额面板展开一次。 */
+    dashboardExpandSignal: Int = 0,
+    /** 折叠态：只渲染 [CollapsedBottomBar]（任务轨道），整条输入卡与上方面板都不组合。 */
+    collapsed: Boolean = false,
+    /** 在轨道上点任意位置（或上滑）展开。 */
+    onToggleCollapsed: () -> Unit = {},
+    /**
+     * 任务活动信号：变化一次就重置轨道上的「无输出」计时。
+     * 宿主用「新消息 / 流式文本长度 / 当前工具 / 待办状态」拼一个稳定的键，不要把每帧都变的
+     * 实时值直接塞进来（那会让轨道高频重组）。
+     */
+    activityKey: Any? = null,
+    /** 润色请求进行中（按钮转圈并禁止重复点击）。 */
+    isPolishing: Boolean = false,
+    /** 点润色：把草稿改写成更专业的表述。 */
+    onPolish: () -> Unit = {},
+    /** 长按润色键：撤销最近一次润色，恢复原文。 */
+    onUndoPolish: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val hasContent = value.isNotBlank() || pendingAttachments.isNotEmpty()
     val canSend = hasContent
+    // 空闲紧凑态：无输入、非忙、无附件时才压高度。打字或任务进行中立刻恢复原尺寸——
+    // 否则用户一敲字输入框就「长高」，等于在输入路径上放了一次布局跳动。
+    val compactIdle = !isBusy && !hasContent
+
+    // 折叠态走早返回：整条输入卡（含 BasicTextField、待办/用量面板、所有底部弹层）都不组合，
+    // 高度真正降到轨道那 44dp。不用 AnimatedVisibility 包住整个函数体——那需要给 700 行
+    // 内容整体缩进，而这层切换本身没有需要保留的组合状态（输入文本由宿主持有）。
+    // 收起/展开的高度动画由宿主侧的 animateContentSize 负责。
+    if (collapsed) {
+        CollapsedBottomBar(
+            items = todoItems,
+            queuedCount = queuedRequests.size,
+            activityKey = activityKey,
+            onExpand = onToggleCollapsed,
+            onStop = onStop,
+            modifier = modifier
+        )
+        return
+    }
     var showAttachmentSheet by remember { mutableStateOf(false) }
-    var showToolsSheet by remember { mutableStateOf(false) }
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showIntentPicker by remember { mutableStateOf(false) }
-    var codingIntentsExpanded by remember { mutableStateOf(true) }
-    var generalIntentsExpanded by remember { mutableStateOf(false) }
     // TextField 的 String 重载在整串替换时会保留旧 selection 下标（点快捷命令补全时光标会停在中间），
     // 这里自持 TextFieldValue：外部改值时把光标移到末尾。
     var inputFieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
@@ -399,22 +475,27 @@ internal fun ChatInputBar(
             // （能看见但看不清）；高度含 IME inset 随键盘上移，渐变在 INPUT_BAR_MASK_HEIGHT 内完成，
             // 之下为纯色。注意 IME padding 不能加在外层 Box 上——align(BottomCenter) 的子项
             // 对齐在 padding 内部，会漏掉导航栏那条区域。
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(INPUT_BAR_MASK_HEIGHT + imeInset)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0f),
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
-                            ),
-                            startY = 0f,
-                            endY = maskGradientEndY
+            // 蒙版不能参与 Box 的尺寸测量：它固定 110dp 时会把「空闲更紧凑」省下的高度
+            // 原样补回来（Box 高 = max(内容, 蒙版)），用户看到的是一点没矮的卡片。
+            // 用 matchParentSize 让它只跟随内容高度、不影响测量，且声明在内容之前所以画在底层。
+            Box(modifier = Modifier.matchParentSize()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(INPUT_BAR_MASK_HEIGHT + imeInset)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+                                ),
+                                startY = 0f,
+                                endY = maskGradientEndY
+                            )
                         )
-                    )
-            )
+                )
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -423,10 +504,12 @@ internal fun ChatInputBar(
                     .then(if (contentAlpha < 1f) Modifier.graphicsLayer { alpha = contentAlpha } else Modifier)
                     // 顶部预留进度环的外扩空间：本 Column 经 graphicsLayer 图层渲染，
                     // 绘制在图层 bounds 外会被裁掉，卡片上方无兄弟节点时环顶边会缺失。
-                    .padding(top = 6.dp)
+                    // 空闲态压到 2dp，忙态恢复 6dp（环只在忙态出现）。
+                    .padding(top = if (compactIdle) 2.dp else 6.dp)
                     .padding(horizontal = Spacing.lg)
-                    // 底部留窄间隙：空闲高度尽量压缩（用户反馈），但需盖住圆角屏底部弧形区。
-                    .padding(bottom = Spacing.sm)
+                    // 底部间隙：导航栏/手势条由 imeInset 兜住，这里只是视觉留白，
+                    // 空闲态从 8dp 收到 4dp。
+                    .padding(bottom = if (compactIdle) Spacing.xs else Spacing.sm)
                     .padding(bottom = imeInset)
             ) {
             if (filteredCommands.isNotEmpty()) {
@@ -596,7 +679,8 @@ internal fun ChatInputBar(
                     onRefreshByButton = onRefreshDashboardByButton,
                     onExpandedChange = onDashboardExpandedChange,
                     maxExpandedBodyHeight = dashboardBodyMaxHeight,
-                    forceCollapse = forceCollapseDashboard
+                    forceCollapse = forceCollapseDashboard,
+                    expandSignal = dashboardExpandSignal
                 )
             }
 
@@ -617,13 +701,28 @@ internal fun ChatInputBar(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(Radius.lg))
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
+                        // 静态线框（2026-11-11 用户定）：描边颜色必须**与卡片自身底色完全一致**
+                        // （surface@0.98），才能在浅色、深色、海洋等所有主题下都融为一体——
+                        // 用 colorScheme.background 时，海洋主题的卡片 surface 比页面 background 浅，
+                        // 深色下会露出一圈深色描边。外层 TaskStateBorder 的跑马灯与心跳呼吸不受影响。
                         .border(
                             1.dp,
-                            MaterialTheme.colorScheme.outlineVariant,
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
                             RoundedCornerShape(Radius.lg)
                         )
-                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+                        // 空闲态上下内距收到 2dp：卡片看起来更薄，又不至于让输入框贴住边。
+                        .padding(
+                            horizontal = Spacing.sm,
+                            vertical = if (compactIdle) 2.dp else Spacing.xs
+                        )
                 ) {
+                    // 收起把手：忙时才出现，贴在卡片顶边正中。点击把整条底栏收成 44dp 任务轨道
+                    // （用户 2026-11-11 提；"拉链头"即 bottom sheet 的 grabber）。
+                    // 只在忙时给入口——空闲状态没有任务可看，多一条把手反而是噪音。
+                    if (isBusy && onRequestCollapse != null) {
+                        CollapseGrabber(onCollapse = onRequestCollapse)
+                    }
+
                     PendingAttachmentPreviewList(
                         attachments = pendingAttachments,
                         onRemoveAttachment = onRemoveAttachment
@@ -731,7 +830,10 @@ internal fun ChatInputBar(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .heightIn(min = INPUT_FIELD_MIN_HEIGHT, max = INPUT_FIELD_MAX_HEIGHT)
+                                .heightIn(
+                                    min = if (compactIdle) INPUT_FIELD_MIN_HEIGHT_COMPACT else INPUT_FIELD_MIN_HEIGHT,
+                                    max = INPUT_FIELD_MAX_HEIGHT
+                                )
                                 .onSizeChanged { inputFieldWidthPx = it.width },
                             contentAlignment = Alignment.CenterStart
                         ) {
@@ -743,11 +845,11 @@ internal fun ChatInputBar(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // 右侧只给麦克风热区 + 小间隔，不再叠加 16dp 内容内边距：
+                                    // 右侧留出整个尾槽（展开键 + 麦克风），不叠加 16dp 内容内边距：
                                     // 之前文字末尾到麦克风空出一大块（用户反馈）。
                                     .padding(
                                         start = INPUT_FIELD_CONTENT_PADDING,
-                                        end = INPUT_FIELD_MIC_SLOT + INPUT_FIELD_MIC_GAP
+                                        end = INPUT_FIELD_TRAILING_WIDTH
                                     ),
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                                     color = MaterialTheme.colorScheme.onSurface
@@ -777,53 +879,73 @@ internal fun ChatInputBar(
                                     inner()
                                 }
                             )
-                            // 内嵌麦克风：点击进入聆听模式；激活时亮起变色（primaryContainer 圆形底，
-                            // 各主题下与输入框底色对比都足够）
-                            // 用 Box 而非 IconButton：后者有 48dp 最小交互尺寸，会把右侧占位撑大、
-                            // 让文字与麦克风之间出现一大块空白（用户反馈）。
+                            // 右侧尾槽：展开键 + 麦克风横向并排、同一条竖直基线。
+                            // 展开键原先在输入行外面、且只在文本溢出时才出现在布局里——
+                            // 它一出现就把输入框挤窄一截，和麦克风也对不齐（用户 2026-11-11 反馈）。
+                            // 现在它常驻占位（不可用时淡到 35% 且不响应点击），宽度与位置都恒定。
                             val voiceActive = voiceTapActive || voiceHoldActive
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .size(INPUT_FIELD_MIC_SLOT)
-                                    .clip(CircleShape)
-                                    .clickable(onClick = onVoiceInput)
-                                    .then(
-                                        if (voiceActive) {
-                                            Modifier.background(
-                                                MaterialTheme.colorScheme.primaryContainer,
-                                                CircleShape
-                                            )
+                            Row(
+                                modifier = Modifier.align(Alignment.CenterEnd),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(INPUT_FIELD_ACTION_GAP)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(INPUT_FIELD_EXPAND_SLOT)
+                                        .clip(CircleShape)
+                                        .then(
+                                            if (inputOverflows) {
+                                                Modifier.clickable { showFullScreenInput = true }
+                                            } else {
+                                                Modifier
+                                            }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        FeatherIcons.Maximize,
+                                        contentDescription = if (inputOverflows) {
+                                            stringResource(R.string.chat_input_expand)
                                         } else {
-                                            Modifier
-                                        }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    FeatherIcons.Mic,
-                                    contentDescription = stringResource(R.string.chat_voice_input),
-                                    tint = if (voiceActive) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
-                        if (inputOverflows) {
-                            IconButton(
-                                onClick = { showFullScreenInput = true },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    FeatherIcons.Maximize,
-                                    contentDescription = stringResource(R.string.chat_input_expand),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                            null
+                                        },
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                                            alpha = if (inputOverflows) 1f else 0.35f
+                                        ),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                // 内嵌麦克风：点击进入聆听模式；激活时亮起变色（primaryContainer 圆形底，
+                                // 各主题下与输入框底色对比都足够）。
+                                // 用 Box 而非 IconButton：后者有 48dp 最小交互尺寸，会把右侧占位撑大。
+                                Box(
+                                    modifier = Modifier
+                                        .size(INPUT_FIELD_MIC_SLOT)
+                                        .clip(CircleShape)
+                                        .clickable(onClick = onVoiceInput)
+                                        .then(
+                                            if (voiceActive) {
+                                                Modifier.background(
+                                                    MaterialTheme.colorScheme.primaryContainer,
+                                                    CircleShape
+                                                )
+                                            } else {
+                                                Modifier
+                                            }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        FeatherIcons.Mic,
+                                        contentDescription = stringResource(R.string.chat_voice_input),
+                                        tint = if (voiceActive) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -832,8 +954,14 @@ internal fun ChatInputBar(
                         modifier = Modifier
                             .fillMaxWidth()
                             // 控制行高度保底：上层 Column 总高溢出时防测量挤压（发送按钮变形，用户反馈）。
-                            .heightIn(min = 40.dp)
-                            .padding(horizontal = Spacing.xs, vertical = 2.dp),
+                            // 空闲态同步压到 36dp 并去掉纵向内距——这是「整条底栏再矮一点」的主要来源。
+                            .heightIn(
+                                min = if (compactIdle) CONTROL_ROW_MIN_HEIGHT_COMPACT else CONTROL_ROW_MIN_HEIGHT
+                            )
+                            .padding(
+                                horizontal = Spacing.xs,
+                                vertical = if (compactIdle) 0.dp else 2.dp
+                            ),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 控制行用 FlowRow：屏幕窄时自动换行，保证每个按钮都完整可见（用户反馈：
@@ -938,121 +1066,70 @@ internal fun ChatInputBar(
                                     modifier = Modifier.heightIn(max = 320.dp),
                                     scrollState = rememberScrollState(),
                                 ) {
-                                    // 思考强度：与模型弹窗的引擎胶囊用同一套视觉语言——
-                                    // 图标 + 文字 + 选中实心主色 + 对勾，未选中描边胶囊。
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            FeatherIcons.Zap,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(12.dp)
-                                        )
-                                        Spacer(Modifier.size(4.dp))
-                                        Text(
-                                            text = stringResource(R.string.chat_reasoning_effort),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    // 档位最多 7 个，窄屏一行放不下；FlowRow 让胶囊整颗换行而不是被压成竖排。
+                                    // 思考强度：**只靠「选中即实心」表达状态**——等级前不放图标、后面不打勾
+                                    // （用户 2026-11-11 反馈：图标+对勾让一行塞不下，视觉也乱）。
+                                    // 档位数量随模型变化（3~7 个），FlowRow 自动换行，窄屏也不会被压扁。
+                                    MenuSectionLabel(
+                                        text = stringResource(R.string.chat_reasoning_effort),
+                                        icon = FeatherIcons.Zap
+                                    )
                                     @OptIn(ExperimentalLayoutApi::class)
                                     FlowRow(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                                            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 4.dp),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         availableEfforts.forEach { candidate ->
-                                            val selected = candidate == reasoningEffort
-                                            val labelColor = if (selected) {
-                                                MaterialTheme.colorScheme.onPrimary
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            }
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(50))
-                                                    .background(
-                                                        if (selected) {
-                                                            MaterialTheme.colorScheme.primary
-                                                        } else {
-                                                            MaterialTheme.colorScheme.surfaceContainerHighest
-                                                        }
-                                                    )
-                                                    .then(
-                                                        if (selected) Modifier
-                                                        else Modifier.border(
-                                                            width = 1.dp,
-                                                            color = MaterialTheme.colorScheme.outlineVariant,
-                                                            shape = RoundedCornerShape(50)
-                                                        )
-                                                    )
-                                                    .clickable(enabled = !isBusy && !selected) {
-                                                        onReasoningEffortChange(candidate)
-                                                    }
-                                                    .padding(
-                                                        start = 10.dp,
-                                                        end = if (selected) 8.dp else 10.dp,
-                                                        top = 6.dp,
-                                                        bottom = 6.dp
-                                                    )
-                                            ) {
-                                                Icon(
-                                                    FeatherIcons.Zap,
-                                                    contentDescription = null,
-                                                    tint = labelColor,
-                                                    modifier = Modifier.size(12.dp)
-                                                )
-                                                Spacer(Modifier.width(4.dp))
-                                                Text(
-                                                    text = stringResource(candidate.labelRes()),
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                                    maxLines = 1,
-                                                    softWrap = false,
-                                                    color = labelColor
-                                                )
-                                                if (selected) {
-                                                    Spacer(Modifier.width(3.dp))
-                                                    Icon(
-                                                        FeatherIcons.Check,
-                                                        contentDescription = null,
-                                                        tint = labelColor,
-                                                        modifier = Modifier.size(12.dp)
-                                                    )
-                                                }
-                                            }
+                                            OptionChip(
+                                                label = stringResource(candidate.labelRes()),
+                                                selected = candidate == reasoningEffort,
+                                                enabled = !isBusy,
+                                                onClick = { onReasoningEffortChange(candidate) }
+                                            )
                                         }
                                     }
                                     HorizontalDivider(
                                         modifier = Modifier.padding(vertical = 6.dp),
                                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
                                     )
-                                    MessageIntentMenuItem(
-                                        intent = null,
-                                        selected = intentType == null,
-                                        onClick = {
-                                            showIntentPicker = false
-                                            onIntentTypeChange(null)
-                                        }
-                                    )
-                                    MessageIntentGroupHeader(
-                                        text = stringResource(R.string.intent_picker_coding),
-                                        expanded = codingIntentsExpanded,
-                                        onToggle = { codingIntentsExpanded = !codingIntentsExpanded },
-                                    )
-                                    if (codingIntentsExpanded) {
+                                    // 反馈标签：与思考强度同一套胶囊语言——无图标、无对勾，选中实心。
+                                    // 分「编程 / 通用」两类平铺，不再折叠：折叠会把选项藏起来，用户反馈
+                                    // 希望一眼看全（选中后控制行上的标签按钮图标仍然会变，那部分保留）。
+                                    MenuSectionLabel(text = stringResource(R.string.intent_picker_title))
+                                    @OptIn(ExperimentalLayoutApi::class)
+                                    FlowRow(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 12.dp, end = 12.dp, top = 2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        OptionChip(
+                                            label = stringResource(R.string.intent_none),
+                                            selected = intentType == null,
+                                            enabled = true,
+                                            onClick = {
+                                                showIntentPicker = false
+                                                onIntentTypeChange(null)
+                                            }
+                                        )
+                                    }
+                                    MenuGroupCaption(text = stringResource(R.string.intent_picker_coding))
+                                    @OptIn(ExperimentalLayoutApi::class)
+                                    FlowRow(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 12.dp, end = 12.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
                                         MessageIntentCatalog.coding.forEach { item ->
-                                            MessageIntentMenuItem(
-                                                intent = item,
+                                            OptionChip(
+                                                label = stringResource(item.labelRes),
                                                 selected = item.key == intentType,
+                                                enabled = true,
                                                 onClick = {
                                                     showIntentPicker = false
                                                     onIntentTypeChange(item.key)
@@ -1060,16 +1137,20 @@ internal fun ChatInputBar(
                                             )
                                         }
                                     }
-                                    MessageIntentGroupHeader(
-                                        text = stringResource(R.string.intent_picker_general),
-                                        expanded = generalIntentsExpanded,
-                                        onToggle = { generalIntentsExpanded = !generalIntentsExpanded },
-                                    )
-                                    if (generalIntentsExpanded) {
+                                    MenuGroupCaption(text = stringResource(R.string.intent_picker_general))
+                                    @OptIn(ExperimentalLayoutApi::class)
+                                    FlowRow(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
                                         MessageIntentCatalog.general.forEach { item ->
-                                            MessageIntentMenuItem(
-                                                intent = item,
+                                            OptionChip(
+                                                label = stringResource(item.labelRes),
                                                 selected = item.key == intentType,
+                                                enabled = true,
                                                 onClick = {
                                                     showIntentPicker = false
                                                     onIntentTypeChange(item.key)
@@ -1113,15 +1194,21 @@ internal fun ChatInputBar(
                             },
                             dragTarget = voiceDragTarget
                         )
-                        // 两侧各占 3 个槽位（左：模式/模型/标签；右：工具/工作区/附件），
-                        // 发送键靠左右等宽的 weight(1f) 落在正中。工具入口必须占住发送键右侧这一格，
-                        // 否则右侧只有 2 个按钮分到同样的宽度，间距会被拉大、发送键看着偏左。
+                        // 两侧等宽（左：模式/模型/标签；右：润色/工作区/附件），发送键靠两个
+                        // weight(1f) 落在正中。工具入口已按用户要求移除（原来只是占位的空弹层）。
                         Row(
                             modifier = Modifier.weight(1f),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            ToolsIconButton(onClick = { showToolsSheet = true })
+                            // 润色放在工具组最前：它作用于「正在写的这条草稿」，与旁边的工具/附件
+                            // 同属「对输入做点什么」，比塞进工具弹层里少一次点击。
+                            PolishIconButton(
+                                enabled = value.isNotBlank(),
+                                running = isPolishing,
+                                onPolish = onPolish,
+                                onUndo = onUndoPolish
+                            )
                             if (workspaceViewModel != null) {
                                 WorkspaceIconButton(
                                     viewModel = workspaceViewModel,
@@ -1177,10 +1264,6 @@ internal fun ChatInputBar(
         )
     }
 
-    if (showToolsSheet) {
-        ToolsSheet(onDismiss = { showToolsSheet = false })
-    }
-
     if (showFullScreenInput) {
         FullScreenInputDialog(
             value = value,
@@ -1188,6 +1271,111 @@ internal fun ChatInputBar(
             placeholder = stringResource(if (isBusy) R.string.chat_queue_hint else R.string.chat_input_placeholder),
             onDismiss = { showFullScreenInput = false }
         )
+    }
+}
+
+/** 把手下滑多少距离算「收起」手势。 */
+private val GRABBER_SWIPE_THRESHOLD = 24.dp
+
+/**
+ * 卡片顶边正中的收起把手（bottom sheet 式 grabber）。
+ *
+ * 只占 16dp 高、触摸热区铺满整行宽度：视觉上是一条细横杠，实际点击面积远大于它——
+ * 4dp 高的可点区域在手机上几乎点不中。整行可点也让「点卡片上方正中」这一直觉成立。
+ *
+ * 除了点击，还支持**向下轻扫**收起（与 bottom sheet 的交互预期一致）。两者共存：
+ * 按下后移动超过触摸斜率就交给拖拽、不触发点击；原地抬手才走 clickable。
+ */
+@Composable
+private fun CollapseGrabber(onCollapse: () -> Unit) {
+    val description = stringResource(R.string.bottom_bar_collapse)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(16.dp)
+            .clickable(onClick = onCollapse)
+            .pointerInput(Unit) {
+                var totalDy = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { totalDy = 0f },
+                    onDragEnd = {
+                        if (totalDy > GRABBER_SWIPE_THRESHOLD.toPx()) onCollapse()
+                    },
+                    onDragCancel = { totalDy = 0f },
+                    onVerticalDrag = { change, dy ->
+                        totalDy += dy
+                        change.consume()
+                    }
+                )
+            }
+            .semantics {
+                contentDescription = description
+                role = Role.Button
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 32.dp, height = 4.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+        )
+    }
+}
+
+/**
+ * 折叠态底栏：只保留 [TaskRail] 与同款底部渐变蒙版。
+ *
+ * 与展开态共用同一套横向内边距和 IME 避让，收起/展开时卡片左右边缘不会错位。
+ * 蒙版高度独立于展开态（56dp 而非 110dp），否则「收起后底栏仍是 110dp」等于没省。
+ */
+@Composable
+internal fun CollapsedBottomBar(
+    items: List<TodoItem>,
+    queuedCount: Int,
+    activityKey: Any?,
+    onExpand: () -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val imeInset = rememberImeBottomInset()
+    val maskGradientEndY = with(LocalDensity.current) { COLLAPSED_BAR_MASK_HEIGHT.toPx() }
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        // matchParentSize：蒙版不参与测量，底栏高度由轨道本身决定（同展开态的注释）。
+        Box(modifier = Modifier.matchParentSize()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(COLLAPSED_BAR_MASK_HEIGHT + imeInset)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+                            ),
+                            startY = 0f,
+                            endY = maskGradientEndY
+                        )
+                    )
+            )
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp)
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xs)
+                .padding(bottom = imeInset)
+        ) {
+            TaskRail(
+                items = items,
+                queuedCount = queuedCount,
+                activityKey = activityKey,
+                onExpand = onExpand,
+                onStop = onStop
+            )
+        }
     }
 }
 
@@ -1325,75 +1513,95 @@ private fun IntentIconButton(
     }
 }
 
-/** 消息类型菜单条目：图标 + 名称紧凑单行，选中打勾。 */
+/**
+ * 菜单里的一个选项胶囊：**只有文字**，选中即实心主色。
+ *
+ * 刻意不做「前图标 + 后对勾」：等级与标签各有 10 来个选项，加上图标和对勾后一行放不下、
+ * 换行后参差不齐；而「选中态本身就是最强的高亮」，不需要额外符号重复表达（用户 2026-11-11 反馈）。
+ */
 @Composable
-private fun MessageIntentMenuItem(
-    intent: MessageIntent?,
+private fun OptionChip(
+    label: String,
     selected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
-    DropdownMenuItem(
-        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.xs),
-        text = {
-            Text(
-                text = stringResource(intent?.labelRes ?: R.string.intent_none),
-                style = MaterialTheme.typography.labelLarge,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+    val background = when {
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val contentColor = when {
+        !enabled && !selected -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+        selected -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .then(
+                if (selected) {
+                    Modifier
+                } else {
+                    Modifier.border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        shape = RoundedCornerShape(50)
+                    )
+                }
             )
-        },
-        leadingIcon = {
-            Icon(
-                imageVector = intent?.icon ?: FeatherIcons.Tag,
-                contentDescription = null,
-                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-        },
-        trailingIcon = if (selected) {
-            {
-                Icon(
-                    FeatherIcons.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        } else {
-            null
-        },
-        onClick = onClick
-    )
+            .clickable(enabled = enabled && !selected, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            softWrap = false,
+            color = contentColor
+        )
+    }
 }
 
-/** 消息类型菜单分组标题（左缘与菜单条目图标列对齐）。 */
+/** 菜单里的一级分区标题（可带一个语义图标，只做标记，不参与点击）。 */
 @Composable
-private fun MessageIntentGroupHeader(
-    text: String,
-    expanded: Boolean,
-    onToggle: () -> Unit
-) {
+private fun MenuSectionLabel(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .padding(start = Spacing.md, end = Spacing.md, top = Spacing.sm, bottom = Spacing.xs),
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (icon != null) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+        }
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(14.dp)
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+/** 二级分组小标题（如「编程方向 / 通用方向」），只做归类，不折叠。 */
+@Composable
+private fun MenuGroupCaption(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
+    )
 }
 
 /** 模式图标与说明层共用的名称/说明/图标。 */
@@ -1495,50 +1703,49 @@ internal fun UploadIconButton(
     }
 }
 
-@Composable
-private fun ToolsIconButton(onClick: () -> Unit) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier.size(36.dp)
-    ) {
-        Icon(
-            FeatherIcons.Tool,
-            contentDescription = stringResource(R.string.chat_tools),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-    }
-}
-
 /**
- * 工具弹窗：具体工具后续再加，这里先只放一个空态、占住入口。
+ * 润色按钮：把输入框里的自然语言改写成清晰、专业、逻辑通顺的表述。
+ *
+ * - 没有可润色的内容时置灰不可点（空输入没有任何意义）；
+ * - 请求进行中换成转圈，避免连点产生多次计费调用；
+ * - **长按撤销**：润色会直接覆盖草稿，必须给一次无成本的反悔机会，否则用户手写的原文就没了。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ToolsSheet(onDismiss: () -> Unit) {
-    val sheetState = rememberModalBottomSheetState()
-    AdaptiveModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+private fun PolishIconButton(
+    enabled: Boolean,
+    running: Boolean,
+    onPolish: () -> Unit,
+    onUndo: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .combinedClickable(
+                enabled = enabled && !running,
+                onClick = onPolish,
+                onLongClick = onUndo
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.lg)
-                .padding(bottom = Spacing.xl)
-        ) {
-            Text(
-                text = stringResource(R.string.chat_tools),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = Spacing.sm)
+        if (running) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(15.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary
             )
-            Text(
-                text = stringResource(R.string.chat_tools_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            Icon(
+                FeatherIcons.Feather,
+                contentDescription = stringResource(
+                    if (enabled) R.string.chat_polish else R.string.chat_polish_undo
+                ),
+                tint = if (enabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                },
+                modifier = Modifier.size(20.dp)
             )
         }
     }

@@ -340,8 +340,8 @@ class PluginResourceReleaser(
      * 跑一次安装，成功后写 marker。marker 存在即视为已准备（与内置开发环境同一套幂等思路）。
      * 容器没就绪不算失败、只记一条跳过：装插件本身不该要求用户先起容器。
      *
-     * `builtinScenario` 走宿主内置场景入口（场景脚本留在 assets 里，继续复用共享库与幂等标记）；
-     * 否则走插件目录内的 `script`。
+     * 一律走插件目录内的 `script`：宿主不再为任何插件保留特权安装入口，
+     * 插件要复用容器工具链就在自己的脚本里调用。
      */
     private suspend fun prepareProvision(
         plugin: InstalledPlugin,
@@ -351,21 +351,7 @@ class PluginResourceReleaser(
     ) {
         val marker = spec.marker ?: "$PLUGIN_DATA_DIR/${plugin.id}/.provisioned"
         if (fileAccess.exists(marker)) return
-        val command = when {
-            spec.builtinScenario != null -> {
-                // 清单解析时已按白名单校验；这里再挡一次，避免绕过解析直接构造的调用方拼出意外命令。
-                if (!BUILTIN_SCENARIO_ID.matches(spec.builtinScenario)) {
-                    conflicts += ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, spec.scenario)
-                    return
-                }
-                "sh $BUILTIN_PROVISION_SCRIPT --install '${spec.builtinScenario}'"
-            }
-            spec.script != null -> "sh ${pluginScriptPath(plugin.id, spec.script)}"
-            else -> {
-                conflicts += ReleaseConflict(ConflictKind.PROVISION_NO_SCRIPT, spec.scenario)
-                return
-            }
-        }
+        val command = "sh ${pluginScriptPath(plugin.id, spec.script)}"
         val result = runCatching {
             commandEngine.runCommandSyncIfReady(command, timeoutMs = PROVISION_TIMEOUT_MS)
         }.getOrNull()
@@ -392,9 +378,9 @@ class PluginResourceReleaser(
         const val PLUGIN_DATA_DIR = "~/.aicode/.plugin-data"
 
         /** 宿主内置场景的统一入口（App 启动时提取到 `~/.aicode/`）。 */
-        private const val BUILTIN_PROVISION_SCRIPT = "~/.aicode/provision.sh"
 
-        private val BUILTIN_SCENARIO_ID = Regex("^[a-z0-9][a-z0-9_-]*$")
+
+
 
         private const val KEY_SEPARATOR = "\u0000"
         private const val HOOKS_PATH = "~/.aicode/hooks.json"

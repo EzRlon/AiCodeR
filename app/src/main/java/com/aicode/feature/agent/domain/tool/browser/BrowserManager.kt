@@ -183,6 +183,9 @@ class BrowserManager @Inject constructor(
         /** 地址栏输入不像网址时，作为关键词交给该搜索引擎（Bing）。 */
         private const val SEARCH_ENGINE_URL = "https://www.bing.com/search?q="
 
+        /** 默认主页：空标签页打开时加载的页面（用户 2026-11-11 指定用必应）。 */
+        const val HOME_URL = "https://www.bing.com/"
+
         private const val NIGHT_STYLE_ID = "__bicode_night_css__"
         private val NIGHT_BG_COLOR = 0xFF121212.toInt()
 
@@ -919,7 +922,12 @@ class BrowserManager @Inject constructor(
         containerView = container
         // 面板可见时才挂 Activity context，`<select>` 下拉等依赖 Activity 窗口的能力才能生效
         tabs.forEach { it.contextWrapper.baseContext = container.context }
-        ensureActiveTab()
+        val tab = ensureActiveTab()
+        // 默认主页：首次打开面板时，空标签页直接进必应，而不是停在「输入网址」的引导页。
+        // 只在「确实空白且没在加载」时补一次，避免用户已经导航（或 AI 已在后台浏览）后被覆盖。
+        if (tab.url.isBlank() && !tab.loading) {
+            runCatching { tab.webView.loadUrl(HOME_URL) }
+        }
         updateContainerView()
         publishState()
     }
@@ -1102,6 +1110,10 @@ class BrowserManager @Inject constructor(
         val tab = createTabInternal(id, url)
         if (!url.isNullOrBlank()) {
             navigate(url, id)
+        } else if (containerView != null) {
+            // 界面上的「新建标签页」也要落到默认主页；AI 在后台建的空标签页保持空白，
+            // 免得一次 AI 调用就替用户发一次首页请求。
+            runCatching { tab.webView.loadUrl(HOME_URL) }
         }
         id
     }

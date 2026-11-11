@@ -127,6 +127,10 @@ class StatefulAgentWorkflow @Inject constructor(
         const val TITLE_GENERATOR_FILE = "agent/title-generator.md"
         const val TITLE_MAX_CHARS = 50
         const val COMMIT_GENERATOR_FILE = "agent/commit-generator.md"
+        /** 输入框「润色」的提示词文件（纯改写，不执行请求）。 */
+        const val TEXT_POLISHER_FILE = "agent/text-polisher.md"
+        /** 润色输入的长度上限：输入框草稿不该有这么长，超了只取前段，避免无谓的大请求。 */
+        const val TEXT_POLISH_MAX_INPUT_CHARS = 8_000
         /** 收尾独立验收的提示词文件（验收模型专用，见 runCompletionVerification）。 */
         const val VERIFIER_FILE = "agent/verifier.md"
         /** 验收报告落库前的字符上限（模型输出异常超长时截断，防撑爆卡片）。 */
@@ -1548,6 +1552,69 @@ class StatefulAgentWorkflow @Inject constructor(
         response.content.trim().take(TITLE_MAX_CHARS).ifBlank { null }
     }.onFailure { e ->
         FileLogger.w(TAG, "生成会话标题失败", e)
+    }.getOrNull()
+
+    /**
+     * 润色输入框草稿：修正错别字、理顺逻辑、换成更专业的表述，**不改变原意、不执行请求**。
+     *
+     * 与 [generateTitle] 同一套「一次性调用」写法：走会话当前供应商/模型（用户选的模型通常
+     * 比固定小模型更会写文案），提示词来自 `agent/text-polisher.md`，并把这次调用记进
+     * `llm_call_records`（kind=`polish`），让使用量统计里能看到它的花销。
+     *
+     * 拿不到结果（网络失败、模型拒答、空输出）一律返回 null，由调用方提示失败并保留原文。
+     */
+    override suspend fun polishText(sessionId: String, text: String): String? = runCatching {
+        val input = text.trim().take(TEXT_POLISH_MAX_INPUT_CHARS)
+        if (input.isEmpty()) return@runCatching null
+        val provider = getEffectiveProvider(sessionId)
+        val prompt = promptProvider.resolvePrompt(TEXT_POLISHER_FILE)
+            .replace(LEADING_COMMENT, "")
+        val callStartWall = System.currentTimeMillis()
+        val callStartElapsed = SystemClock.elapsedRealtime()
+        var callCompleted = false
+        var callError: String? = null
+        var usage: AIResponse? = null
+        val response = try {
+            provider.complete(
+                systemPrompt = prompt,
+                messages = listOf(AgentMessage.UserMessage(content = input)),
+                tools = emptyList()
+            ).also {
+                usage = it
+                callCompleted = true
+            }
+        } catch (e: CancellationException) {
+            callError = "cancelled"
+            throw e
+        } catch (e: Exception) {
+            callError = e.message ?: e.javaClass.simpleName
+            throw e
+        } finally {
+            val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
+            runCatching {
+                llmCallRecordDao.insert(
+                    LlmCallRecordEntity(
+                        sessionId = sessionId,
+                        providerId = provider.providerId.ifBlank { null },
+                        model = provider.model,
+                        kind = "polish",
+                        inputTokens = usage?.inputTokens ?: 0,
+                        outputTokens = usage?.outputTokens ?: 0,
+                        cachedInputTokens = usage?.cachedInputTokens ?: 0,
+                        cacheCreationTokens = usage?.cacheCreationTokens ?: 0,
+                        ttfbMillis = null,
+                        durationMillis = durationMillis,
+                        status = if (callCompleted) "success" else "error",
+                        errorMessage = callError,
+                        stopReason = usage?.stopReason,
+                        createdAt = callStartWall
+                    )
+                )
+            }
+        }
+        sanitizePolishedText(response.content)
+    }.onFailure { e ->
+        FileLogger.w(TAG, "润色输入失败", e)
     }.getOrNull()
 
     override suspend fun generateCommitMessage(diff: String): String? = runCatching {

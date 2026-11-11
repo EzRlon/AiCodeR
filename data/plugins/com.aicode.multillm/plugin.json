@@ -1,7 +1,7 @@
 {
   "id": "com.aicode.multillm",
-  "name": "模型顾问团（multi-llm）",
-  "version": "1.0.0",
+  "name": "顾问团",
+  "version": "1.1.0",
   "apiVersion": 1,
   "author": "AiCodeR",
   "description": "把六家大模型网页版接入为 MCP 工具，AI 可直接咨询 ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek",
@@ -9,7 +9,7 @@
   "capabilities": {
     "provision": {
       "scenario": "multillm",
-      "builtinScenario": "multillm"
+      "script": "install.sh"
     },
     "mcp": [
       {

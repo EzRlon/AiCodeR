@@ -135,33 +135,17 @@ class PluginManifestParserTest {
     }
 
     @Test
-    fun `builtinScenario 合法时通过`() {
-        val json = manifest(
-            capabilities = """"provision": {"scenario": "rea", "builtinScenario": "rea"}"""
-        )
-        assertEquals("rea", valid(json).capabilities.provision?.builtinScenario)
-    }
-
-    @Test
-    fun `script 与 builtinScenario 互斥`() {
-        val json = manifest(
-            capabilities = """"provision": {"scenario": "rea", "script": "s.sh", "builtinScenario": "rea"}"""
-        )
-        assertTrue(errorsOf(json).any { it.contains("只能二选一") })
-    }
-
-    @Test
-    fun `未知内置场景被拒`() {
-        val json = manifest(
-            capabilities = """"provision": {"scenario": "x", "builtinScenario": "android"}"""
-        )
-        assertTrue(errorsOf(json).any { it.startsWith("不支持的内置场景") })
-    }
-
-    @Test
-    fun `provision 缺少执行入口被拒`() {
+    fun `provision 缺少安装脚本被拒`() {
         val json = manifest(capabilities = """"provision": {"scenario": "x"}""")
-        assertTrue(errorsOf(json).any { it.contains("需要 script 或 builtinScenario") })
+        assertTrue(errorsOf(json).any { it.contains("provision.script 不能为空") })
+    }
+
+    @Test
+    fun `provision 的脚本必须是包内相对路径`() {
+        val json = manifest(
+            capabilities = """"provision": {"scenario": "x", "script": "../escape.sh"}"""
+        )
+        assertTrue(errorsOf(json).any { it.contains("必须是相对路径") })
     }
 
     @Test

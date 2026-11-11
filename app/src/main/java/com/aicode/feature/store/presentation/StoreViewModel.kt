@@ -303,12 +303,14 @@ class StoreViewModel @Inject constructor(
                 _state.update { it.copy(loading = true, error = null, searching = false) }
             }
             val fresh = fetchSkillsAggregated(PAGE_SIZE)
-            if (fresh.isNotEmpty()) {
-                catalogCache.saveSkills(CmSkillsResponse(count = fresh.size, total = fresh.size, results = fresh))
+            if (fresh.skills.isNotEmpty()) {
+                catalogCache.saveSkills(
+                    CmSkillsResponse(count = fresh.skills.size, total = fresh.skills.size, results = fresh.skills)
+                )
                 // 守卫：切 tab / 已翻页 / 搜索中（搜索结果不能被浏览列表冲掉）
                 if (_state.value.tab != StoreKind.SKILL || page != 1 ||
                     _state.value.searching || _state.value.query.isNotBlank()) return@launch
-                val incoming = fresh.map { it.toStoreItem().withSource(it.source) }
+                val incoming = fresh.skills.map { it.toStoreItem().withSource(it.source) }
                 _state.update {
                     it.copy(items = incoming, loading = false, loadingMore = false, hasMore = false)
                 }
@@ -316,7 +318,14 @@ class StoreViewModel @Inject constructor(
                 kickTranslation()
             } else if (_state.value.items.isEmpty()) {
                 _state.update {
-                    it.copy(loading = false, loadingMore = false, error = context.getString(R.string.store_error_load))
+                    it.copy(
+                        loading = false,
+                        loadingMore = false,
+                        // 用聚合里带回的真实原因：以前这里恒报「请检查网络」，
+                        // 而实际原因常常是上游的限流/安全校验，用户会被引去查网络。
+                        error = fresh.failure?.storeErrorMessage(R.string.store_error_load)
+                            ?: context.getString(R.string.store_error_load)
+                    )
                 }
             } else {
                 _state.update { it.copy(loading = false, loadingMore = false) }
@@ -329,30 +338,42 @@ class StoreViewModel @Inject constructor(
      * 单源失败静默降级为仅其它源的结果；全部失败返回空列表。
      * 结果保留为 [CmSkill]（缓存序列化需要），来源信息写入其 source 字段供展示层转换。
      */
-    private suspend fun fetchSkillsAggregated(limit: Int): List<CmSkill> = coroutineScope {
+    /** 多源聚合的结果：条目本身，外加「全部失败时」的失败原因。 */
+    private data class SkillsAggregate(
+        val skills: List<CmSkill>,
+        val failure: Throwable?
+    )
+
+    private suspend fun fetchSkillsAggregated(limit: Int): SkillsAggregate = coroutineScope {
         val srcs = sourceConfig.enabledSources()
-        if (srcs.isEmpty()) return@coroutineScope emptyList()
+        if (srcs.isEmpty()) return@coroutineScope SkillsAggregate(emptyList(), null)
         val deferred = srcs.map { src ->
             async {
                 if (src.id == "mcp-registry") return@async null
-                api.listSkills(page = 1, limit = limit, baseUrl = src.baseUrl.takeIf { src.id != "claudemarket" })
-                    .getOrNull()
-                    ?.results
-                    ?.map { r ->
-                        // 来源信息借用 CmSkill.source 字段传递（原值仅作上游出处，展示层不依赖）
-                        r.copy(source = src.id)
-                    }
-                    ?.let { src to it }
+                val result = api.listSkills(
+                    page = 1,
+                    limit = limit,
+                    baseUrl = src.baseUrl.takeIf { src.id != "claudemarket" }
+                )
+                val skills = result.getOrNull()?.results?.map { r ->
+                    // 来源信息借用 CmSkill.source 字段传递（原值仅作上游出处，展示层不依赖）
+                    r.copy(source = src.id)
+                }
+                Triple(src, skills, result.exceptionOrNull())
             }
         }
-        val pairs = deferred.awaitAll().filterNotNull()
-        if (pairs.isEmpty()) return@coroutineScope emptyList()
+        val all = deferred.awaitAll().filterNotNull()
+        val pairs = all.mapNotNull { (src, skills, _) -> skills?.let { src to it } }
+        // 全部失败时保留一个原因：界面据此区分「被安全校验拦截」和「网络真的不通」。
+        // 只取第一个失败样本即可，多源同时失败时提示不需要罗列每个源。
+        val failure = all.firstNotNullOfOrNull { it.third }
+        if (pairs.isEmpty()) return@coroutineScope SkillsAggregate(emptyList(), failure)
         // 高优先级源先入，同 slug 保留先见者
         val bySlug = LinkedHashMap<String, CmSkill>()
         for ((_, skills) in pairs.sortedByDescending { it.first.priority }) {
             for (s in skills) bySlug.putIfAbsent(s.slug, s)
         }
-        bySlug.values.toList()
+        SkillsAggregate(bySlug.values.toList(), null)
     }
 
     /** 按源 id 回填来源展示字段；内置/未知源回原样。 */
@@ -1059,12 +1080,17 @@ class StoreViewModel @Inject constructor(
      * 其余保留原始 message，缺失时用 [fallbackRes] 兜底。
      */
     private fun Throwable.storeErrorMessage(fallbackRes: Int): String {
-        if (this is HttpStatusException && code == 429) {
-            val seconds = retryAfterMillis?.let { ((it + 999L) / 1000L).toInt() }
-            return if (seconds != null && seconds > 0) {
-                context.getString(R.string.store_error_rate_limited, seconds)
-            } else {
-                context.getString(R.string.store_error_rate_limited_later)
+        if (this is HttpStatusException) {
+            // 安全校验拦截排在最前：它同样返回 429，但「稍后重试」和「检查网络」都不解决问题，
+            // 必须如实告诉用户是服务端在拦，别再让他去排查自己的网络。
+            if (challenge) return context.getString(R.string.store_error_blocked)
+            if (code == 429) {
+                val seconds = retryAfterMillis?.let { ((it + 999L) / 1000L).toInt() }
+                return if (seconds != null && seconds > 0) {
+                    context.getString(R.string.store_error_rate_limited, seconds)
+                } else {
+                    context.getString(R.string.store_error_rate_limited_later)
+                }
             }
         }
         return message ?: context.getString(fallbackRes)

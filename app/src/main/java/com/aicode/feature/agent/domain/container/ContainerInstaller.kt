@@ -38,7 +38,6 @@ class ContainerInstaller @Inject constructor(
     companion object {
         private const val TAG = "ContainerInstaller"
         @Volatile private var docsExtractedSession = false
-        @Volatile private var multiLlmExtractedSession = false
 
         /** 内置技能已释放到的 App versionCode 标记文件（与 skills 同级，不随技能目录被备份带走）。 */
         private const val SKILLS_VERSION_STAMP = ".builtin_skills_version"
@@ -46,8 +45,6 @@ class ContainerInstaller @Inject constructor(
         /** 内置技能指纹清单（与 skills 同级）：记录上次释放内容，用于识别用户改动、避免升级覆盖。 */
         private const val SKILLS_MANIFEST_FILE = ".builtin_skills_manifest.json"
 
-        /** 内置原生插件清单的 assets 目录（每个子目录一个插件，目录名 = 清单 id）。 */
-        private const val BUILTIN_PLUGINS_ASSET_DIR = "builtin-plugins"
 
         /**
          * 从 assets 提取文档到 ~/.aicode/docs (内置使用指导)，支持 guide/ advanced/ 等分类子目录。
@@ -66,26 +63,6 @@ class ContainerInstaller @Inject constructor(
                 docsExtractedSession = true
             }.onFailure {
                 FileLogger.w(TAG, "提取内置文档失败: ${it.message}", it)
-            }
-        }
-
-        /**
-         * 从 assets 提取 multi-llm（模型顾问团）服务端源码到 ~/.aicode/multi-llm/。
-         * 提取前整目录删除：源码随 App 升级演进，只覆盖不清理会残留旧模块；
-         * 运行时（pip 依赖目录）在相邻的 multi-llm-venv/，互不影响。
-         */
-        fun extractMultiLlm(context: Context) {
-            if (multiLlmExtractedSession) return
-            val destDir = File(File(context.filesDir, "aicode"), "multi-llm")
-            runCatching {
-                // 不能用 deleteRecursively：会跟随目录符号链接下钻（multi-llm 是用户/AI 可改动的
-                // 源码目录，链接到相邻 venv 等外部时会误删目标）；SafeDelete 为 NOFOLLOW 遍历。
-                SafeDelete.deleteTree(destDir)
-                destDir.mkdirs()
-                extractAssetsRecursive(context, "aicode/multi-llm", destDir)
-                multiLlmExtractedSession = true
-            }.onFailure {
-                FileLogger.w(TAG, "提取 multi-llm 服务端源码失败: ${it.message}", it)
             }
         }
 
@@ -207,24 +184,6 @@ class ContainerInstaller @Inject constructor(
                     // 目录项：assets.open 对目录抛 IOException，递归处理
                     extractAssetsRecursive(context, assetPath, destFile)
                 }
-            }
-        }
-
-        /**
-         * 从 assets 提取内置原生插件清单到 ~/.aicode/plugins/（每个插件一个目录）。
-         *
-         * 只覆盖随包文件（plugin.json）；`state.json` 与用户自己放进来的插件目录一概不碰。
-         * 内置插件因此每次升级都会刷新清单，想停用走插件页开关（禁用只改状态，不删目录）。
-         */
-        fun extractBuiltinPlugins(context: Context) {
-            val destRoot = File(File(context.filesDir, "aicode"), "plugins")
-            runCatching {
-                val ids = context.assets.list(BUILTIN_PLUGINS_ASSET_DIR) ?: return@runCatching
-                ids.forEach { id ->
-                    extractAssetsRecursive(context, "$BUILTIN_PLUGINS_ASSET_DIR/$id", File(destRoot, id))
-                }
-            }.onFailure {
-                FileLogger.w(TAG, "提取内置插件清单失败: ${it.message}", it)
             }
         }
 

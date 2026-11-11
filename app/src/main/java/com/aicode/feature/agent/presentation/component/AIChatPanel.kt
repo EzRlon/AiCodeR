@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,6 +20,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -96,6 +98,8 @@ import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
+import com.aicode.feature.agent.domain.model.TodoStatus
 import com.aicode.feature.schedule.presentation.component.QuickSchedule
 import com.aicode.feature.schedule.presentation.component.ScheduleExecutionSheet
 import com.aicode.feature.schedule.presentation.component.ScheduledAiTaskSheet
@@ -400,7 +404,14 @@ internal fun buildChatItems(
         val expanded = turnOverrides[turn.key] ?: running
         // 过程项挂在轮头 item 里一起展开（保证展开动画是整体高度变化）；常显项与结果另作独立 item。
         // 分组展开默认值跟随轮头：运行中的轮「N 次工具调用」直接铺开，完成后一并收进构造过程。
-        val process = buildTurnProcessItems(turn.messages, resultId, groupOverrides, expandGroups = expanded)
+        val process = buildTurnProcessItems(
+            turn.messages,
+            resultId,
+            groupOverrides,
+            expandGroups = expanded,
+            // 运行中只铺开最新一组工具调用；历史组随新链出现自动收起（用户手动值优先）。
+            latestGroupOnly = running
+        )
         // 结果置前：常显项与结果先排（结论先看），过程区（轮头 + 过程项）整体排到轮末。
         items += buildTurnPersistentItems(turn.messages, resultId)
         // 本轮产物聚合块跟随结果区（提示型工具逐条展示之外，给交付物一个统一位置；双份展示是有意设计）
@@ -509,6 +520,20 @@ private fun AgentUIMessage.isResultCandidate(): Boolean =
     role == MessageRole.ASSISTANT && !isPersistentInTurn() && content.hasVisibleContent()
 
 /**
+ * 过程项里「有可展开细节」的项：思考卡、带思考的助手消息、工具组、单条工具消息。
+ *
+ * 运行中的轮只自动展开当前思考链（见 [startsReasoningChain]），更早的保持收起——
+ * 长任务不会把历史过程全摊开。整轮没有思考时，退化为只展开最后一条这类项。
+ */
+private fun ChatRenderItem.isAutoExpandableProcessItem(): Boolean =
+    startsReasoningChain() || toolGroup != null || message.role == MessageRole.TOOL
+
+/** 该过程项是否开启一条新的思考链（思考卡，或带思考内容的助手消息）。 */
+private fun ChatRenderItem.startsReasoningChain(): Boolean =
+    contentType == REASONING_CONTENT_TYPE ||
+        (message.role == MessageRole.ASSISTANT && !message.reasoning.isNullOrEmpty())
+
+/**
  * 轮内「过程」项（保持原序）：思考、连续工具调用分组、中间助手正文。挂在轮头 item 内一起展开。
  *
  * 结果消息的思考归过程（抽为一个 [REASONING_CONTENT_TYPE] 项）；压缩摘要/后台通知/带附件工具等
@@ -519,7 +544,35 @@ private fun buildTurnProcessItems(
     resultId: String?,
     groupOverrides: Map<String, Boolean>,
     expandGroups: Boolean = false,
+    /**
+     * 运行中的轮只自动展开「当前思考链」（最后一条带思考的助手消息及其后的工具组）。
+     *
+     * 若把所有工具组都铺开，长任务的历史调用会占满整屏；这条规则与思考卡一致：
+     * 新思考链出现时，上一链的思考与工具自动收回。
+     */
+    latestGroupOnly: Boolean = false,
 ): List<ChatRenderItem> {
+    // 当前链起点 = 最后一条带思考的助手消息所在下标；其后（含）的工具组才算「当前链」。
+    // 整轮没有思考时 chainStart 为 -1，退化为只展开最后一个成组工具组。
+    val chainStart: Int = if (expandGroups && latestGroupOnly) {
+        messages.indexOfLast { it.role == MessageRole.ASSISTANT && !it.reasoning.isNullOrEmpty() }
+    } else -1
+    val latestGroupKey: String? = if (expandGroups && latestGroupOnly) {
+        var last: String? = null
+        var k = 0
+        while (k < messages.size) {
+            if (messages[k].isGroupableTool()) {
+                var end = k
+                while (end < messages.size && messages[end].isGroupableTool()) end++
+                if (end - k >= 2) last = toolGroupKey(messages[k])
+                k = end
+            } else {
+                k++
+            }
+        }
+        last
+    } else null
+
     val out = ArrayList<ChatRenderItem>(messages.size)
     var i = 0
     while (i < messages.size) {
@@ -538,8 +591,14 @@ private fun buildTurnProcessItems(
                     key = key,
                     contentType = TOOL_GROUP_CONTENT_TYPE,
                     toolGroup = members,
-                    // 手动选择优先；未点过时跟随轮头展开态（最新轮默认铺开，见调用处）。
-                    groupExpanded = groupOverrides[key] ?: expandGroups,
+                    // 手动选择优先；未点过时跟随轮头展开态。运行中只铺开当前思考链里的组，
+                    // 更早的组随新链出现自动收起；整轮无思考时只铺开最后一组。
+                    groupExpanded = groupOverrides[key] ?: when {
+                        !expandGroups -> false
+                        !latestGroupOnly -> true
+                        chainStart >= 0 -> i >= chainStart
+                        else -> key == latestGroupKey
+                    },
                 )
             }
             i = j
@@ -718,6 +777,7 @@ fun AIChatPanel(
     val runningTool by viewModel.runningTool.collectAsStateWithLifecycle()
     val isCompacting by viewModel.isCompacting.collectAsStateWithLifecycle()
     val retryState by viewModel.retryState.collectAsStateWithLifecycle()
+    val isPolishing by viewModel.isPolishing.collectAsStateWithLifecycle()
     val keySwitchState by viewModel.keySwitchState.collectAsStateWithLifecycle()
     val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
     val streamingReasoning by viewModel.streamingReasoning.collectAsStateWithLifecycle()
@@ -953,6 +1013,37 @@ fun AIChatPanel(
     val providerDashboards by (settingsViewModel?.providerDashboards?.collectAsStateWithLifecycle() ?: remember { mutableStateOf(emptyMap()) })
     val currentDashboardState = activeProvider?.let { providerDashboards[it.id] } ?: ProviderDashboardState.Idle
 
+    // ── 顶栏状态条的数据 ──
+    // 余额只能来自用户配的面板脚本（官方 API 大多没有余额接口）；拿不到就回落到本会话估算花费。
+    // 注意这里是「尽力提取」，提取失败必须返回 null 而不是猜一个数字，否则会把 token 余量当余额显示。
+    val dashboardBalanceText = remember(currentDashboardState) {
+        (currentDashboardState as? ProviderDashboardState.Success)
+            ?.let { com.aicode.feature.settings.domain.service.ProviderBalanceExtractor.extract(it.result.card) }
+    }
+    // 面板脚本拿不到余额时，直接问一次供应商接口（OpenRouter / DeepSeek / OpenAI 兼容中转站）。
+    // 缓存与失败降级都在 VM 里，这里只负责在切换渠道时触发一次。
+    val probedBalance by produceState<String?>(initialValue = null, activeProvider?.id) {
+        value = activeProvider?.let { viewModel.probeProviderBalance(it.id) }
+    }
+    val effectiveBalanceText = dashboardBalanceText ?: probedBalance
+    val sessionCostUsd by viewModel.currentSessionCostUsd.collectAsStateWithLifecycle()
+    val sessionCachedInputTokens = currentSession?.totalCachedInputTokens ?: 0
+    val sessionCacheHitRate = if (sessionInputTokens > 0) {
+        sessionCachedInputTokens.toFloat() / sessionInputTokens
+    } else {
+        null
+    }
+    // 压缩线 = 模型输入预算 × 用户设定的压缩阈值百分比。分母刻意用压缩线而不是上下文窗口：
+    // 用户真正关心的是「离被迫压缩还有多远」，额度环那边才用窗口。
+    val compactionPercent = settingsViewModel?.compactionThresholdPercent
+        ?.collectAsStateWithLifecycle()?.value ?: 90
+    val compactionLineTokens = run {
+        val budget = activeModelMetadata
+            ?.let { com.aicode.feature.settings.domain.model.ModelContextPolicy.effectiveInputBudget(it) }
+            ?: com.aicode.feature.settings.domain.model.ModelContextPolicy.DEFAULT_CONTEXT_TOKENS
+        (budget * compactionPercent / 100.0).toInt()
+    }
+
     // 键盘弹出时收起面板，避免输入框被挤压
     val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
     val imeVisible = imeBottomPx > 0
@@ -971,6 +1062,16 @@ fun AIChatPanel(
     // 故叠加可见性，只在面板当前可见且展开时才折叠叠加面板。
     val dashboardBarVisible = activeProvider?.dashboardScriptPath?.isNotBlank() == true
     val dashboardCollapseActive = (dashboardExpanded && dashboardBarVisible) || (todoExpanded && currentTodoItems.isNotEmpty())
+
+    // ── 底栏折叠（长任务时收成任务轨道）──
+    // 状态按会话重置（remember 的 key 是会话 id）：切回来一律展开。不落盘是刻意的——
+    // 「我上次收起了这个会话」跨天复现只会让人以为任务没在跑。
+    // 事件接线在底栏调用点附近（planApproval/budgetApproval 在那一层才可见）。
+    var bottomBarCollapse by rememberSaveable(currentSessionId, stateSaver = BottomBarCollapseState.Saver) {
+        mutableStateOf(BottomBarCollapseState())
+    }
+    // 顶栏状态条长按 → 底栏余额面板展开一次。自增值做信号，重复长按也能重新触发。
+    var dashboardExpandSignal by remember { mutableStateOf(0) }
 
     fun buildDashboardContext(
         lastInput: Int = 0,
@@ -1733,7 +1834,23 @@ fun AIChatPanel(
                         exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            item.turnProcess.forEach { child -> RenderChatItem(child, header.running) }
+                            // 运行中只自动铺开「当前思考链」：最后一条带思考的助手消息及其之后的
+                            // 工具调用默认展开；更早的思考链/工具调用随新链出现自动收起，长任务不会
+                            // 把历史过程全摊开铺满整屏。整轮没有思考时退化为「只展开最后一条过程项」。
+                            // 用户手动开关过的项仍以手动值为准（override 快照优先级高于这里的默认值）。
+                            val process = item.turnProcess
+                            val lastChainStart = process.indexOfLast { it.startsReasoningChain() }
+                            val autoExpandFrom = if (lastChainStart >= 0) {
+                                lastChainStart
+                            } else {
+                                process.indexOfLast { it.isAutoExpandableProcessItem() }
+                            }
+                            process.forEachIndexed { idx, child ->
+                                RenderChatItem(
+                                    child,
+                                    autoExpandCards = header.running && autoExpandFrom >= 0 && idx >= autoExpandFrom
+                                )
+                            }
                         }
                     }
                 }
@@ -1850,7 +1967,18 @@ fun AIChatPanel(
                 showMenuButton = showMenuButton,
                 terminalActive = terminalActive,
                 gitActive = gitActive,
-                browserActive = browserActive
+                browserActive = browserActive,
+                contextTokens = sessionLastInputTokens,
+                compactionLineTokens = compactionLineTokens,
+                balanceText = effectiveBalanceText,
+                estimatedCostUsd = sessionCostUsd,
+                cacheHitRate = sessionCacheHitRate,
+                keyIndex = keySwitchState?.let { it.newIndex to it.total },
+                onStatusStripLongPress = {
+                    // 面板在底栏里，收起态下先展开底栏，再让面板自己展开。
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.USER_EXPANDED)
+                    dashboardExpandSignal++
+                }
             )
         }
     ) { padding ->
@@ -2037,6 +2165,11 @@ fun AIChatPanel(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    // 底栏折叠/展开、面板伸缩都改由这里统一补高度动画：ChatInputBar 折叠时是
+                    // 早返回（整段不组合），内容高度会在一帧内跳变，没有这层就会「啪」地抽走半屏。
+                    .animateContentSize(
+                        animationSpec = spring(dampingRatio = 0.86f, stiffness = 380f)
+                    )
                     // 实测悬浮层实际高度作为滚动留白，横幅/面板/输入框任何形态都不遮挡最后一条
                     .onGloballyPositioned { if (it.size.height > 0) floatingLayerHeightPx = it.size.height }
             ) {
@@ -2207,6 +2340,85 @@ fun AIChatPanel(
 
             // 悬浮球（FB2）：模型选择已下沉至 FloatBallSessionHub 自足提供（不依赖页面存活），此处无需注册
 
+            // ── 底栏折叠事件接线 ──
+            // 放在这里而不是状态声明处，是因为计划/预算审批状态在本层作用域才可见。
+
+            // 阻塞型事件（授权/提问/计划审批/预算审批）：不展开用户就没法继续，必须打断手动折叠。
+            val collapseBlocking = pendingPermission != null || pendingQuestion != null ||
+                planApproval != null || budgetApproval != null
+            LaunchedEffect(collapseBlocking) {
+                if (collapseBlocking) {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.BLOCKING)
+                }
+            }
+
+            // 需介入：目标受阻/预算耗尽，或回合出错。
+            val goalNeedsHelp = currentGoal?.status == GoalStatus.BLOCKED ||
+                currentGoal?.status == GoalStatus.EXHAUSTED
+            val turnErrored = agentState is AgentUIState.Error
+            LaunchedEffect(goalNeedsHelp, turnErrored) {
+                if (goalNeedsHelp || turnErrored) {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.NEED_INTERVENTION)
+                }
+            }
+
+            // 用户发了新消息 = 意图变了：展开并清掉本轮的「手动收起」粘性。
+            val lastUserMessageId = messages.lastOrNull {
+                it.role == MessageRole.USER && !it.isBackgroundNotification
+            }?.id
+            LaunchedEffect(lastUserMessageId) {
+                if (lastUserMessageId != null) {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.USER_SENT)
+                }
+            }
+
+            // 任务全部完成且空闲：通知级展开（用户本轮手动收起过就不打扰，见 BottomBarCollapse）。
+            val allTodosDone = currentTodoItems.isNotEmpty() &&
+                currentTodoItems.all { it.status == TodoStatus.COMPLETED }
+            LaunchedEffect(allTodosDone, isBusy) {
+                if (allTodosDone && !isBusy) {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.COMPLETED)
+                }
+            }
+
+            // 交付物：AI 发来带附件的消息（send_file）也算「需要你看一眼」，与完成同级。
+            val lastDeliveryId = messages.lastOrNull {
+                it.role == MessageRole.ASSISTANT && it.attachments.isNotEmpty()
+            }?.id
+            LaunchedEffect(lastDeliveryId) {
+                if (lastDeliveryId != null) {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.DELIVERY)
+                }
+            }
+
+            // 验收报告 = 用户说的「需要测试」：AI 已自测完，轮到人看结果，必须展开。
+            val lastVerificationId = messages.lastOrNull { it.isVerificationReport }?.id
+            LaunchedEffect(lastVerificationId) {
+                if (lastVerificationId != null) {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.NEED_INTERVENTION)
+                }
+            }
+
+            val showsTaskRail = bottomBarCollapse.showsRail(isBusy)
+
+            // 轨道「卡住告警」的活动信号：任一项变化就说明任务还在动。
+            // 用 remember 包一层让列表身份稳定，否则每次重组都是新对象、计时被无限重置。
+            val railActivityKey = remember(
+                messages.size,
+                streamingText?.length,
+                runningTool,
+                currentTodoItems,
+                isCompacting
+            ) {
+                listOf(
+                    messages.size,
+                    streamingText?.length ?: 0,
+                    runningTool,
+                    currentTodoItems.map { it.status },
+                    isCompacting
+                )
+            }
+
             ChatInputBar(
                 value = inputText,
                 onValueChange = viewModel::updateInputDraft,
@@ -2337,6 +2549,18 @@ fun AIChatPanel(
                 forceOpenModelSheet = onboardingStep == OnboardingStep.SIMULATE_CHOOSE_MODEL,
                 onModelSheetDismiss = onDismissModelSheetInOnboarding,
                 onSelectModelInOnboarding = onSelectModelInOnboarding,
+                onRequestCollapse = {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.USER_COLLAPSED)
+                },
+                dashboardExpandSignal = dashboardExpandSignal,
+                collapsed = showsTaskRail,
+                activityKey = railActivityKey,
+                isPolishing = isPolishing,
+                onPolish = { viewModel.polishInput() },
+                onUndoPolish = { viewModel.restoreDraftBeforePolish() },
+                onToggleCollapsed = {
+                    bottomBarCollapse = bottomBarCollapse.reduce(BottomBarCollapseEvent.USER_EXPANDED)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .onboardingTarget(OnboardingStep.SEND_MESSAGE)

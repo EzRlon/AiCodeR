@@ -10,6 +10,10 @@ import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.plugin.data.PluginStateStore
 import com.aicode.feature.plugin.domain.DefaultPluginHostConfig
 import com.aicode.feature.plugin.domain.InstalledPlugin
+import com.aicode.feature.plugin.domain.LegacyPluginCleanup
+import com.aicode.feature.plugin.domain.PluginInstallError
+import com.aicode.feature.plugin.domain.PluginInstallResult
+import com.aicode.feature.plugin.domain.PluginInstaller
 import com.aicode.feature.plugin.domain.PluginProblem
 import com.aicode.feature.plugin.domain.PluginRegistry
 import com.aicode.feature.plugin.domain.PluginResourceReleaser
@@ -51,8 +55,8 @@ data class PluginUiState(
  */
 @HiltViewModel
 class PluginViewModel @Inject constructor(
-    fileAccess: FileAccessProvider,
-    mcpConfig: McpConfigRepository,
+    private val fileAccess: FileAccessProvider,
+    private val mcpConfig: McpConfigRepository,
     commandEngine: CommandEngine
 ) : ViewModel() {
 
@@ -65,15 +69,87 @@ class PluginViewModel @Inject constructor(
         commandEngine = commandEngine,
         stateStore = stateStore
     )
+    private val installer = PluginInstaller(fileAccess, pluginsRoot, stateStore)
 
     private val _state = MutableStateFlow(PluginUiState())
     val state: StateFlow<PluginUiState> = _state.asStateFlow()
 
     fun refresh() {
+        viewModelScope.launch { scanNow() }
+    }
+
+    /** 重新扫描并写回状态。安装/卸载/启停之后都要走一次。 */
+    private suspend fun scanNow() {
+        // 扫描前先清一次旧版内置插件残留：本地/远程各自跟随当前 FileAccess，
+        // 用户在远程模式下打开插件页也能把服务器上的旧目录与 MCP 条目清干净（幂等）。
+        withContext(Dispatchers.IO) {
+            runCatching { LegacyPluginCleanup.run(fileAccess, mcpConfig) }
+                .onFailure { FileLogger.w(TAG, "清理旧内置插件残留失败", it) }
+        }
+        val result = withContext(Dispatchers.IO) { registry.scan() }
+        _state.update {
+            it.copy(plugins = result.plugins, problems = result.problems, loading = false)
+        }
+    }
+
+    /**
+     * 从插件包（zip 字节）安装。
+     *
+     * 安装**不等于启用**：装完默认关闭，用户仍需去详情页读免责说明并打开开关——
+     * 安装是文件落盘，授权是能力注入，两件事分开才能让「我不想给它权限」保持可用。
+     */
+    fun installPackage(bytes: ByteArray, displayName: String? = null) {
+        if (_state.value.busyId != null) return
+        _state.update { it.copy(busyId = INSTALL_BUSY_ID) }
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { registry.scan() }
+            val result = installer.installFromZip(bytes)
+            val message = when (result) {
+                is PluginInstallResult.Success -> {
+                    scanNow()
+                    _state.update {
+                        it.copy(
+                            busyId = null,
+                            messageRes = R.string.plugin_install_success,
+                            messageArgs = listOf(
+                                displayName?.takeIf { n -> n.isNotBlank() } ?: result.manifest.name
+                            )
+                        )
+                    }
+                    return@launch
+                }
+                is PluginInstallResult.Failed -> when (result.error) {
+                    PluginInstallError.BAD_PACKAGE -> R.string.plugin_install_bad_package
+                    PluginInstallError.TOO_LARGE -> R.string.plugin_install_too_large
+                    PluginInstallError.MANIFEST_MISSING -> R.string.plugin_install_manifest_missing
+                    PluginInstallError.MANIFEST_INVALID -> R.string.plugin_install_manifest_invalid
+                    PluginInstallError.ALREADY_INSTALLED -> R.string.plugin_install_already_installed
+                    PluginInstallError.WRITE_FAILED -> R.string.plugin_install_write_failed
+                }
+            }
             _state.update {
-                it.copy(plugins = result.plugins, problems = result.problems, loading = false)
+                it.copy(
+                    busyId = null,
+                    messageRes = message,
+                    messageArgs = listOfNotNull((result as? PluginInstallResult.Failed)?.detail)
+                )
+            }
+        }
+    }
+
+    /** 卸载：摘能力 → 删目录 → 清状态。装与卸都不碰用户自己的同名资源（见 PluginResourceReleaser 的归属记账）。 */
+    fun uninstall(id: String) {
+        if (_state.value.busyId != null) return
+        val plugin = _state.value.plugins.firstOrNull { it.id == id } ?: return
+        _state.update { it.copy(busyId = id) }
+        viewModelScope.launch {
+            installer.uninstall(id) { detachId -> releaser.detach(detachId) }
+            scanNow()
+            _state.update {
+                it.copy(
+                    busyId = null,
+                    messageRes = R.string.plugin_uninstall_done,
+                    messageArgs = listOf(plugin.manifest.name)
+                )
             }
         }
     }
@@ -146,8 +222,11 @@ class PluginViewModel @Inject constructor(
 
     fun consumeConflicts() = _state.update { it.copy(conflicts = emptyList()) }
 
-    private companion object {
-        const val TAG = "PluginViewModel"
-        const val DIR_NAME = "plugins"
+    companion object {
+        private const val TAG = "PluginViewModel"
+        private const val DIR_NAME = "plugins"
+
+        /** 「正在安装」占住 busyId 的哨兵值：没有具体插件 id 可标，但要挡住重复点击。UI 用它判断安装行是否在转圈。 */
+        const val INSTALL_BUSY_ID = "__install__"
     }
 }

@@ -54,19 +54,18 @@ data class AssetMapping(
 )
 
 /**
- * 容器内环境准备：跑安装脚本，用 marker 文件做幂等判定。
+ * 容器内环境准备：跑插件自带的安装脚本，用 marker 文件做幂等判定。
  *
- * [script] 与 [builtinScenario] 二选一：
- * - [script]：插件目录内的相对路径，按 `sh <插件目录>/<script>` 执行；
- * - [builtinScenario]：宿主内置场景 id（见 `lib/scenarios` 下的场景脚本），按
- *   `sh ~/.aicode/provision.sh --install <id>` 执行。场景脚本留在宿主 assets 里，
- *   继续复用共享库（`lib/env-common.sh`）与幂等标记，插件只声明「要哪个场景」。
+ * [script] 是**插件目录内**的相对路径，按 `sh <插件目录>/<script>` 执行。脚本自己决定
+ * 怎么装（可以调用容器的通用工具链，例如 `~/.aicode/provision.sh`），宿主不再为某个
+ * 插件内置特权场景——插件与主程序之间只有清单契约，没有代码级特例。
  */
 @Serializable
 data class ProvisionSpec(
-    val scenario: String,
-    val script: String? = null,
-    val builtinScenario: String? = null,
+    // 两个字段都给默认空串：缺失时**留到语义校验**去报「不能为空」，
+    // 否则 kotlinx.serialization 会先抛缺字段异常，用户只能看到一句笼统的解析失败。
+    val scenario: String = "",
+    val script: String = "",
     val marker: String? = null
 )
 
