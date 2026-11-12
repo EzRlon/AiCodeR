@@ -29,14 +29,11 @@ import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.container.RootfsSource
 import com.aicode.feature.agent.domain.container.displayLabel
 import com.aicode.feature.settings.presentation.component.DevEnvProbe
-import com.aicode.feature.agent.domain.mcp.McpConfigRepository
-import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.mcp.McpScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
 import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
-import com.aicode.feature.agent.domain.mcp.auth.McpOAuthCancelledException
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.PermissionRule
@@ -406,8 +403,7 @@ class SettingsViewModel @Inject constructor(
     private val teamConfigRepository: TeamConfigRepository,
     private val storeTranslationStore: StoreTranslationStore,
     private val languageSettingsRepository: LanguageSettingsRepository,
-    private val mcpConfigRepository: McpConfigRepository,
-    private val mcpManager: McpManager,
+    private val mcpState: McpSettingsStateHolder,
     private val permissionRulesRepository: PermissionRulesRepository,
     private val toolSafetySettingsRepository: ToolSafetySettingsRepository,
     private val skillRepository: SkillRepository,
@@ -743,8 +739,9 @@ class SettingsViewModel @Inject constructor(
     private val _languageTag = MutableStateFlow<String?>(null)
     val languageTag: StateFlow<String?> = _languageTag.asStateFlow()
 
-    private val _mcpEntries = MutableStateFlow<List<McpServerEntry>>(emptyList())
-    val mcpEntries: StateFlow<List<McpServerEntry>> = _mcpEntries.asStateFlow()
+    // MCP 域已拆到 McpSettingsStateHolder（见该类注释）；此处保留同名属性委托，
+    // UI 与既有调用点无需改动。
+    val mcpEntries: StateFlow<List<McpServerEntry>> get() = mcpState.mcpEntries
 
     private val _skills = MutableStateFlow<List<SkillUiEntry>>(emptyList())
     val skills: StateFlow<List<SkillUiEntry>> = _skills.asStateFlow()
@@ -769,16 +766,13 @@ class SettingsViewModel @Inject constructor(
     private val _subAgentDeleting = MutableStateFlow<String?>(null)
     val subAgentDeleting: StateFlow<String?> = _subAgentDeleting.asStateFlow()
 
-    val mcpStatuses: StateFlow<List<McpServerStatus>> = mcpManager.statuses
+    val mcpStatuses: StateFlow<List<McpServerStatus>> get() = mcpState.mcpStatuses
 
-    private val _mcpReloading = MutableStateFlow(false)
-    val mcpReloading: StateFlow<Boolean> = _mcpReloading.asStateFlow()
+    val mcpReloading: StateFlow<Boolean> get() = mcpState.mcpReloading
 
-    private val _mcpAuthState = MutableStateFlow(McpAuthUiState())
-    val mcpAuthState: StateFlow<McpAuthUiState> = _mcpAuthState.asStateFlow()
+    val mcpAuthState: StateFlow<McpAuthUiState> get() = mcpState.mcpAuthState
 
-    private val _mcpImportState = MutableStateFlow(McpImportUiState())
-    val mcpImportState: StateFlow<McpImportUiState> = _mcpImportState.asStateFlow()
+    val mcpImportState: StateFlow<McpImportUiState> get() = mcpState.mcpImportState
 
     private val _fetchState = MutableStateFlow<FetchState>(FetchState.Idle)
     val fetchState: StateFlow<FetchState> = _fetchState.asStateFlow()
@@ -956,6 +950,8 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     init {
+        // MCP 域状态持有者挂到本 VM 的作用域（生命周期随之绑定）
+        mcpState.attach(viewModelScope)
         // 先同步拿本地目录（内存 → 磁盘缓存 → 内置 assets），保证首帧就有列表、断网也不为空
         containerImageCatalog.load()
         // 目录快照变化时同步刷新列表与源选项：启动预热从仓库拉到最新版本号后会在这里反映出来
@@ -1297,12 +1293,6 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
-                mcpConfigRepository.effectiveEntriesFlow.collectLatest {
-                    _mcpEntries.value = it
-                }
-            }
-
-            launch {
                 skillConfigRepository.changes.collectLatest {
                     refreshSkills()
                 }
@@ -1456,45 +1446,10 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun upsertMcpServer(originalName: String?, initialScope: McpScope?, config: McpServerConfig, scope: McpScope) {
-        viewModelScope.launch {
-            saveMcpServerInternal(originalName, initialScope, config, scope)
-        }
-    }
+    // ── MCP（委托 McpSettingsStateHolder；方法签名保持稳定，UI 调用点无需改）──
 
-    private suspend fun saveMcpServerInternal(
-        originalName: String?,
-        initialScope: McpScope?,
-        config: McpServerConfig,
-        scope: McpScope
-    ) {
-        // 作用域迁移：仅当保存作用域与原来不同时，从原作用域移除旧条目，
-        // 避免残留条目在合并时（项目优先）继续覆盖新作用域的配置。
-        if (originalName != null && initialScope != null && initialScope != scope) {
-            val oldBase = if (initialScope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-            val oldUpdated = oldBase.filterNot { it.name == originalName }
-            if (initialScope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(oldUpdated) else mcpConfigRepository.setProjectServers(oldUpdated)
-        }
-        val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-        val ordered = LinkedHashMap<String, McpServerConfig>()
-        base.forEach { ordered[it.name] = it }
-        if (originalName != null && originalName != config.name) {
-            ordered.remove(originalName)
-        }
-        ordered[config.name] = config
-        val updated = ordered.values.toList()
-        if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated) else mcpConfigRepository.setProjectServers(updated)
-        _mcpReloading.value = true
-        try {
-            // 仅重连被改动的 server，其他 server 不受影响；重命名时先断开旧名。
-            if (originalName != null && originalName != config.name) {
-                mcpManager.removeServer(originalName)
-            }
-            mcpManager.reloadServer(config.name)
-        } finally {
-            _mcpReloading.value = false
-        }
-    }
+    fun upsertMcpServer(originalName: String?, initialScope: McpScope?, config: McpServerConfig, scope: McpScope) =
+        mcpState.upsertMcpServer(originalName, initialScope, config, scope)
 
     /** 保存最新表单配置并立即发起 OAuth 授权，确保弹窗中修改的 client_id 等字段即时生效。 */
     fun saveAndAuthorizeMcpServer(
@@ -1502,140 +1457,32 @@ class SettingsViewModel @Inject constructor(
         initialScope: McpScope?,
         config: McpServerConfig,
         scope: McpScope
-    ) {
-        if (_mcpAuthState.value.inProgress) return
-        viewModelScope.launch {
-            saveMcpServerInternal(originalName, initialScope, config, scope)
-            _mcpAuthState.value = McpAuthUiState(serverName = config.name, inProgress = true)
-            val result = mcpManager.authorize(config.name)
-            _mcpAuthState.value = when {
-                result.isSuccess -> McpAuthUiState(serverName = config.name, success = true)
-                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
-                else -> McpAuthUiState(serverName = config.name, error = result.exceptionOrNull()?.message)
-            }
-        }
-    }
+    ) = mcpState.saveAndAuthorizeMcpServer(originalName, initialScope, config, scope)
 
-    fun deleteMcpServer(name: String, scope: McpScope) {
-        viewModelScope.launch {
-            val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-            val updated = base.filterNot { it.name == name }
-            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated) else mcpConfigRepository.setProjectServers(updated)
-            _mcpReloading.value = true
-            try {
-                mcpManager.removeServer(name)
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
+    fun deleteMcpServer(name: String, scope: McpScope) = mcpState.deleteMcpServer(name, scope)
 
-    fun setMcpServerEnabled(name: String, enabled: Boolean, scope: McpScope) {
-        viewModelScope.launch {
-            val base = if (scope == McpScope.GLOBAL) mcpConfigRepository.getGlobalServers() else mcpConfigRepository.getProjectServers()
-            val updated = base.map { if (it.name == name) it.copy(enabled = enabled) else it }
-            if (scope == McpScope.GLOBAL) mcpConfigRepository.setGlobalServers(updated) else mcpConfigRepository.setProjectServers(updated)
-            _mcpReloading.value = true
-            try {
-                mcpManager.reloadServer(name)
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
+    fun setMcpServerEnabled(name: String, enabled: Boolean, scope: McpScope) =
+        mcpState.setMcpServerEnabled(name, enabled, scope)
 
     /** 触发某个 server 的 OAuth 授权，结果（含失败原因）写入 [mcpAuthState] 供编辑弹窗展示。 */
-    fun authorizeMcpServer(name: String) {
-        if (_mcpAuthState.value.inProgress) return
-        viewModelScope.launch {
-            _mcpAuthState.value = McpAuthUiState(serverName = name, inProgress = true)
-            val result = mcpManager.authorize(name)
-            _mcpAuthState.value = when {
-                result.isSuccess -> McpAuthUiState(serverName = name, success = true)
-                result.exceptionOrNull() is McpOAuthCancelledException -> McpAuthUiState()
-                else -> McpAuthUiState(serverName = name, error = result.exceptionOrNull()?.message)
-            }
-        }
-    }
+    fun authorizeMcpServer(name: String) = mcpState.authorizeMcpServer(name)
 
-    fun cancelMcpAuthorize(name: String) {
-        mcpManager.cancelAuthorize(name)
-    }
+    fun cancelMcpAuthorize(name: String) = mcpState.cancelMcpAuthorize(name)
 
     /** 从标准 mcpServers JSON 批量导入到指定作用域；同名覆盖。 */
-    fun importMcpServersFromJson(raw: String, scope: McpScope) {
-        viewModelScope.launch {
-            _mcpImportState.value = McpImportUiState(inProgress = true)
-            val parsed = runCatching { mcpConfigRepository.parse(raw) }.getOrElse {
-                _mcpImportState.value = McpImportUiState(error = it.message)
-                return@launch
-            }
-            val valid = parsed.filter { McpServerConfig.isValidName(it.name) }
-            if (valid.isEmpty()) {
-                _mcpImportState.value = McpImportUiState(error = context.getString(R.string.mcp_json_import_empty))
-                return@launch
-            }
-            runCatching {
-                val existing = if (scope == McpScope.GLOBAL) {
-                    mcpConfigRepository.getGlobalServers()
-                } else {
-                    mcpConfigRepository.getProjectServers()
-                }
-                val merged = LinkedHashMap<String, McpServerConfig>()
-                existing.forEach { merged[it.name] = it }
-                valid.forEach { merged[it.name] = it }
-                val list = merged.values.toList()
-                if (scope == McpScope.GLOBAL) {
-                    mcpConfigRepository.setGlobalServers(list)
-                } else {
-                    mcpConfigRepository.setProjectServers(list)
-                }
-            }.onSuccess {
-                _mcpImportState.value = McpImportUiState(importedCount = valid.size)
-                mcpManager.reload()
-            }.onFailure {
-                _mcpImportState.value = McpImportUiState(error = it.message)
-            }
-        }
-    }
+    fun importMcpServersFromJson(raw: String, scope: McpScope) =
+        mcpState.importMcpServersFromJson(context, raw, scope)
 
-    fun clearMcpImportState() {
-        _mcpImportState.value = McpImportUiState()
-    }
+    fun clearMcpImportState() = mcpState.clearMcpImportState()
 
-    fun logoutMcpServer(name: String) {
-        viewModelScope.launch {
-            mcpManager.logout(name)
-            _mcpAuthState.value = McpAuthUiState()
-        }
-    }
+    fun logoutMcpServer(name: String) = mcpState.logoutMcpServer(name)
 
-    fun clearMcpAuthState() {
-        _mcpAuthState.value = McpAuthUiState()
-    }
+    fun clearMcpAuthState() = mcpState.clearMcpAuthState()
 
-    fun reloadMcp() {
-        viewModelScope.launch {
-            _mcpReloading.value = true
-            try {
-                mcpManager.reload()
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
+    fun reloadMcp() = mcpState.reloadMcp()
 
     /** 仅重连指定 server（编辑弹窗右上角刷新工具用）。 */
-    fun reloadMcpServer(name: String) {
-        viewModelScope.launch {
-            _mcpReloading.value = true
-            try {
-                mcpManager.reloadServer(name)
-            } finally {
-                _mcpReloading.value = false
-            }
-        }
-    }
+    fun reloadMcpServer(name: String) = mcpState.reloadMcpServer(name)
 
     /** 重新扫描技能（进入设置页 / 启停切换后调用，反映磁盘上增删改）。 */
     fun refreshSkills() {
@@ -1858,10 +1705,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun getMcpServerTools(serverName: String?): List<McpToolDescriptor> {
-        if (serverName.isNullOrBlank()) return emptyList()
-        return mcpManager.getServerTools(serverName)
-    }
+    fun getMcpServerTools(serverName: String?): List<McpToolDescriptor> = mcpState.getMcpServerTools(serverName)
 
     fun setLogLevel(level: LogLevel) {
         viewModelScope.launch {
