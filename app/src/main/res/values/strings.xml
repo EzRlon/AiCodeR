@@ -881,6 +881,7 @@
     <string name="backup_stat_ai_assets">· AI 资产文件 %1$s 个</string>
     <string name="backup_stat_keys">· 密钥文件 %1$s 个</string>
     <string name="backup_stat_scheduled_tasks">· 定时任务 %1$s 条</string>
+    <string name="backup_sensitive_needs_password">备份包含 API Key / 凭据 / 私钥，必须设置口令加密后才能导出</string>
     <string name="backup_keys_password_warning">备份包含密钥私钥，强烈建议设置口令（留空将明文导出）</string>
     <string name="backup_settings_covered">主题、保活、日志、识图、同步偏好已覆盖</string>
     <string name="backup_restore_workspaces_title">恢复工作区</string>

@@ -238,14 +238,17 @@ internal fun BackupScreen(
         }
     }
 
-    // 导出：输口令（可留空）；勾选了密钥库时给出额外警示
+    // 导出：输口令。勾选了任一敏感段（providers / remoteConnections / aiAssets / keys）时
+    // 必须设置口令（这些段含明文 API Key、git token、SSH 凭据，不允许明文落盘）。
     if (pendingAction == PendingAction.ExportPassword) {
+        val sensitiveSelected = exportOptions.providers || exportOptions.remoteConnections ||
+            exportOptions.aiAssets || exportOptions.keys
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = if (exportOptions.keys) {
-                stringResource(R.string.backup_keys_password_warning)
-            } else {
-                stringResource(R.string.backup_password_hint)
+            subtitle = when {
+                sensitiveSelected -> stringResource(R.string.backup_sensitive_needs_password)
+                exportOptions.keys -> stringResource(R.string.backup_keys_password_warning)
+                else -> stringResource(R.string.backup_password_hint)
             },
             confirmText = stringResource(R.string.backup_export_btn),
             password = password,
@@ -260,7 +263,8 @@ internal fun BackupScreen(
             onDismiss = {
                 password = ""
                 pendingAction = null
-            }
+            },
+            requirePassword = sensitiveSelected
         )
     }
 
@@ -316,11 +320,11 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传口令
+    // 上传口令：云上传一律强制口令（明文备份不允许上传远端，见 uploadToTarget 的兜底校验）。
     uploadTarget?.let { target ->
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = stringResource(R.string.backup_net_upload_password_required),
             confirmText = stringResource(R.string.backup_net_upload),
             password = uploadPassword,
             onPasswordChange = { uploadPassword = it },
@@ -334,7 +338,8 @@ internal fun BackupScreen(
                     viewModel.uploadToTarget(t, pw)
                 }
             },
-            onDismiss = { uploadTarget = null; uploadPassword = "" }
+            onDismiss = { uploadTarget = null; uploadPassword = "" },
+            requirePassword = true
         )
     }
 
@@ -860,7 +865,9 @@ private fun PasswordDialog(
     password: String,
     onPasswordChange: (String) -> Unit,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** true 时口令不允许留空：确认按钮禁用直到输入非空（导出含凭据/私钥时必须加密）。 */
+    requirePassword: Boolean = false
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -884,7 +891,12 @@ private fun PasswordDialog(
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = !requirePassword || password.isNotEmpty()
+            ) { Text(confirmText) }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } }
     )
 }
