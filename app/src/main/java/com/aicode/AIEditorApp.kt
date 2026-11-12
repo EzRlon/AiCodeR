@@ -256,6 +256,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
 
+    /** 全局代理设置仓库：初始化时把 SharedPreferences 读取源挂到 AppProxy（依赖倒置进 core）。 */
+    @Inject
+    lateinit var proxySettingsRepository: com.aicode.feature.settings.data.repository.ProxySettingsRepository
+
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -280,6 +284,9 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
+        // 把全局代理配置读取源（SharedPreferences 实现）挂到 AppProxy——core 层只依赖
+        // 读取函数，不感知 feature 的 Repository 实现（依赖倒置，见 core/net/ProxyModels.kt）。
+        AppProxy.registerConfigSource { com.aicode.feature.settings.data.repository.ProxySettingsRepository.readConfig(this) }
         // 注册完整版 BouncyCastle 放后台 IO 协程，避免在主线程加载大量密码学类阻塞首屏；
         // 远程 SSH 连接在 appScope 中执行，使用前完成注册即可。
         appScope.launch(Dispatchers.IO) {

@@ -1,5 +1,7 @@
 package com.aicode.feature.settings.data.repository
 
+import com.aicode.core.net.ProviderProxyEntry
+import com.aicode.core.net.ProviderProxyLookup
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ProxyType
@@ -12,19 +14,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-/** 提供商级代理条目：由 [ProviderProxyRegistry] 按目标 URL 查表得到。 */
-data class ProviderProxyEntry(
-    val providerId: String,
-    val type: ProxyType,
-    val host: String,
-    val port: Int,
-    val username: String,
-    val password: String,
-    /** baseUrl 的路径前缀（已归一化：去尾斜杠；根路径为空串，匹配该主机全部请求）。 */
-    val basePath: String = ""
-) {
-    val valid: Boolean get() = host.isNotBlank() && port in 1..65535
-}
+// ProviderProxyEntry 的事实源在 core/net/ProxyModels.kt（AppProxy 不能反向依赖 feature），
+// 此处 typealias re-export 保兼容旧 import 路径。
+/** @see com.aicode.core.net.ProviderProxyEntry */
+typealias ProviderProxyEntry = com.aicode.core.net.ProviderProxyEntry
 
 /**
  * 提供商级代理注册表：把「配了独立代理的 provider」按 baseUrl 的 host + 路径前缀建索引。
@@ -36,7 +29,7 @@ data class ProviderProxyEntry(
 @Singleton
 class ProviderProxyRegistry @Inject constructor(
     aiProviderRepository: AIProviderRepository
-) {
+) : ProviderProxyLookup {
     // 应用级作用域：单例生命周期与 App 进程一致（随进程退出而消亡），无需外部取消。
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -70,7 +63,7 @@ class ProviderProxyRegistry @Inject constructor(
      * 匹配该主机全部请求）、请求路径与 basePath 相等、或请求路径以 basePath + "/" 开头。
      * 多条命中取 basePath 最长者（最具体优先）；同长重复条目取最先配置者。
      */
-    fun findByUrl(host: String, path: String?): ProviderProxyEntry? {
+    override fun findByUrl(host: String, path: String?): ProviderProxyEntry? {
         val candidates = byHost[host.lowercase()] ?: return null
         val reqPath = path?.takeIf { it.isNotBlank() } ?: "/"
         val matched = candidates.filter { e ->
@@ -82,7 +75,7 @@ class ProviderProxyRegistry @Inject constructor(
     }
 
     /** 按代理服务器地址（而非目标 host）查找：SOCKS5 握手认证时按连接所用的代理匹配凭据。 */
-    fun findByProxyHost(proxyHost: String): ProviderProxyEntry? =
+    override fun findByProxyHost(proxyHost: String): ProviderProxyEntry? =
         byHost.values.flatten().firstOrNull { it.host.equals(proxyHost, ignoreCase = true) && it.username.isNotBlank() }
 
     private fun AIProviderConfig.toEntry(basePath: String) = ProviderProxyEntry(

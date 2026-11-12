@@ -1,12 +1,6 @@
 package com.aicode.core.net
 
 import android.content.Context
-import com.aicode.feature.settings.data.repository.DEFAULT_NO_PROXY
-import com.aicode.feature.settings.data.repository.ProviderProxyEntry
-import com.aicode.feature.settings.data.repository.ProviderProxyRegistry
-import com.aicode.feature.settings.data.repository.ProxyConfig
-import com.aicode.feature.settings.data.repository.ProxySettingsRepository
-import com.aicode.feature.settings.domain.model.ProxyType
 import okhttp3.Authenticator
 import okhttp3.Credentials
 import okhttp3.Route
@@ -38,9 +32,15 @@ object AppProxy {
     @Volatile
     private var appContext: Context? = null
 
-    /** 提供商级代理注册表（DI 注入后注册）：按目标 host 分派 provider 专属代理。 */
+    /** 提供商级代理注册表（DI 装配后注册）：按目标 host 分派 provider 专属代理。 */
     @Volatile
-    private var providerRegistry: ProviderProxyRegistry? = null
+    private var providerRegistry: ProviderProxyLookup? = null
+
+    /** 全局配置读取源。默认实现直接读 ProxySettingsRepository 同名 SharedPreferences——
+     *  保证 attachBaseContext（applyGlobal）到 onCreate（DI 挂载）之间的请求也能读到代理
+     *  配置（与旧行为一致：原先就是静态 readConfig）；DI 挂载后由 repository 提供同源实现。 */
+    @Volatile
+    private var configSource: () -> ProxyConfig = { defaultPrefsConfig() }
 
     /** 在 Application.attachBaseContext 中调用（早于 OkHttpClient 首次构建）。 */
     fun applyGlobal(context: Context) {
@@ -53,14 +53,37 @@ object AppProxy {
     }
 
     /** 由 DI 层在启动装配后注册（AIEditorApp.onCreate），此后 selector 按 host 分派 provider 代理。 */
-    fun registerProviderProxyRegistry(registry: ProviderProxyRegistry) {
+    fun registerProviderProxyRegistry(registry: ProviderProxyLookup) {
         providerRegistry = registry
     }
 
-    private fun config(): ProxyConfig {
-        val ctx = appContext ?: return ProxyConfig()
-        return ProxySettingsRepository.readConfig(ctx)
+    /** 由 ProxySettingsRepository 在初始化时挂载：把 SharedPreferences 读取实现注入 core。 */
+    fun registerConfigSource(source: () -> ProxyConfig) {
+        configSource = source
     }
+
+    /**
+     * attachBaseContext 阶段的默认读取：与 ProxySettingsRepository 同名 SharedPreferences
+     * 同 key 读取，保证 DI 挂载前后的行为无缝衔接（core 不 import feature，按约定共享 schema）。
+     */
+    private fun defaultPrefsConfig(): ProxyConfig {
+        val context = appContext ?: return ProxyConfig()
+        val prefs = context.getSharedPreferences("proxy_settings", Context.MODE_PRIVATE)
+        val type = runCatching {
+            ProxyType.valueOf(prefs.getString("type", ProxyType.HTTP.name) ?: ProxyType.HTTP.name)
+        }.getOrDefault(ProxyType.HTTP)
+        return ProxyConfig(
+            enabled = prefs.getBoolean("enabled", false),
+            type = type,
+            host = prefs.getString("host", "") ?: "",
+            port = prefs.getInt("port", 0),
+            username = prefs.getString("username", "") ?: "",
+            password = prefs.getString("password", "") ?: "",
+            noProxy = prefs.getString("no_proxy", null) ?: DEFAULT_NO_PROXY
+        )
+    }
+
+    private fun config(): ProxyConfig = configSource()
 
     /** 某次 select 选中的代理（provider 级优先于全局）与对应凭据。 */
     private data class SelectedProxy(
@@ -164,7 +187,7 @@ object AppProxy {
 
     /** 容器内进程的代理环境变量；未启用或配置不完整时返回空 map（直连）。 */
     fun proxyEnv(context: Context): Map<String, String> {
-        val cfg = ProxySettingsRepository.readConfig(context)
+        val cfg = configSource()
         if (!cfg.enabled || !cfg.valid) return emptyMap()
         val noProxy = cfg.noProxy.ifBlank { DEFAULT_NO_PROXY }
         return when (cfg.type) {
