@@ -75,9 +75,38 @@ class AIProviderRepositoryImpl @Inject constructor(
             val current = aiProviderDao.getProviderById(provider.id)
             val sortOrder = current?.sortOrder ?: (aiProviderDao.getMaxSortOrder() + 1)
             FileLogger.i(TAG, "保存提供商 id=${provider.id} name=${provider.name} sortOrder=$sortOrder")
-            aiProviderDao.insertProvider(provider.copy(sortOrder = sortOrder).sanitized().toEntity())
+            val entity = provider.copy(sortOrder = sortOrder).sanitized().toEntity()
+            // 解密失败防线：域模型里敏感字段为空，但库里同字段仍是「解密失败」的密文——说明空值
+            // 是 Keystore 解密失败被静默置空的产物，不是用户主动清空。此时**原样保留库中的旧密文**
+            // （entity 级替换，不经过加密），否则一次只改名字的保存就会把凭据永久覆盖成空串。
+            // 用户真想清空的场景：编辑器中该字段本就显示为空、用户点保存前没有其它改动——与
+            // 「解密失败」在域层不可区分，为安全起见保留旧值；用户重新填入新值（非空）则正常覆盖。
+            val merged = if (current != null) {
+                entity.copy(
+                    apiKey = preserveUndecryptable(current.apiKey, entity.apiKey, "apiKey"),
+                    apiKeys = preserveUndecryptable(current.apiKeys, entity.apiKeys, "apiKeys"),
+                    proxyPassword = preserveUndecryptable(current.proxyPassword, entity.proxyPassword, "proxyPassword"),
+                    customHeaders = preserveUndecryptable(current.customHeaders, entity.customHeaders, "customHeaders"),
+                    scriptParams = preserveUndecryptable(current.scriptParams, entity.scriptParams, "scriptParams")
+                )
+            } else {
+                entity
+            }
+            aiProviderDao.insertProvider(merged)
         }
     }
+
+    /**
+     * 解密失败保留策略：新值为空且旧值是「解密失败」的密文时返回旧密文（原样落库），
+     * 否则返回新值。带 [field] 名打 ERROR 日志便于事后定位凭据异常。
+     */
+    private fun preserveUndecryptable(oldValue: String, newValue: String, field: String): String =
+        if (newValue.isEmpty() && KeystoreCipher.isDecryptFailed(oldValue)) {
+            FileLogger.e(TAG, "provider 敏感字段 $field 解密失败且被保存为空：保留原密文不覆盖")
+            oldValue
+        } else {
+            newValue
+        }
 
     /**
      * 按传入顺序重排提供商。只写 id + sortOrder 两列，

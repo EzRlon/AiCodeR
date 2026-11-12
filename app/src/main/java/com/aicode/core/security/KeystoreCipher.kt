@@ -83,6 +83,26 @@ object KeystoreCipher {
 
     fun isEncryptedString(value: String?): Boolean = value != null && value.startsWith(STRING_PREFIX)
 
+    /**
+     * 判断字符串密文是否解密失败（密文格式合法但 Keystore 密钥不匹配/数据损坏）。
+     *
+     * [decryptString] 对失败输入返回空串——调用方无法区分「本来没填」与「解密失败」。
+     * 读-改-写路径（读出 → 用户编辑 → 写回）必须先用本方法检测：解密失败时**不得**把空串
+     * 写回，否则一次无感保存就把原密文永久覆盖成空串（凭据丢失）。
+     */
+    fun isDecryptFailed(value: String?): Boolean {
+        if (!isEncryptedString(value)) return false
+        val body = runCatching {
+            Base64.getDecoder().decode(value!!.removePrefix(STRING_PREFIX))
+        }.getOrNull() ?: return true
+        // 密文结构合法（magic + IV + 至少 16 字节 tag）但解密产出为空 = 解密失败。
+        // decryptBytes 对失败返回 ByteArray(0)，对成功明文为空串时也不会经过此分支：
+        // 明文空串加密后密文结构仍是完整 GCM 块，解密产出长度为 0 —— 空明文与失败在此不可区分，
+        // 但空明文本就不值得加密（encryptString 空串原样返回），存量空明文不会带前缀，故安全。
+        if (!isEncryptedBytes(body)) return true
+        return decryptBytes(body).isEmpty()
+    }
+
     /** 加密字符串；空串原样返回，避免把「未填写」变成非空密文。 */
     fun encryptString(plain: String): String {
         if (plain.isEmpty()) return plain
