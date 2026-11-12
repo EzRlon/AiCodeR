@@ -128,7 +128,7 @@ import com.aicode.feature.settings.domain.model.ModelMetadata
 import com.aicode.feature.settings.domain.model.MAX_KEY_WEIGHT
 import com.aicode.feature.settings.domain.model.ProviderKey
 import com.aicode.feature.settings.domain.model.ProviderType
-import com.aicode.feature.settings.data.repository.ProxyConfig
+import com.aicode.core.net.ProxyConfig
 import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.feature.settings.domain.model.mergeModelMetadata
 import com.aicode.feature.settings.domain.model.modelMetadataKey

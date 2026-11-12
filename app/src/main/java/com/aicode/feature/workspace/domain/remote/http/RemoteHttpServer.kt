@@ -77,7 +77,8 @@ internal class RemoteHttpServer(
                 else -> jsonError(Response.Status.NOT_FOUND, "未知接口")
             }
         } catch (e: Exception) {
-            FileLogger.e(TAG, "处理请求失败 [$uri]: ${e.message}", e)
+            // 只记 path：查询串里带访问令牌（?t=），不能落进可导出的日志文件。
+            FileLogger.e(TAG, "处理请求失败 [${uri.substringBefore('?')}]: ${e.message}", e)
             jsonError(Response.Status.INTERNAL_ERROR, e.message ?: "内部错误")
         }
     }

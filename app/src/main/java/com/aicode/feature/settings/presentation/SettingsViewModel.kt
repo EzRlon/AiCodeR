@@ -92,7 +92,7 @@ import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepos
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
-import com.aicode.feature.settings.data.repository.ProxyConfig
+import com.aicode.core.net.ProxyConfig
 import com.aicode.feature.settings.data.repository.ProxySettingsRepository
 import com.aicode.feature.settings.data.repository.ScreenOnSettingsRepository
 import com.aicode.feature.settings.data.repository.StartupSessionMode

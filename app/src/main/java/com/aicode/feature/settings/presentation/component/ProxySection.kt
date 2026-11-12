@@ -43,7 +43,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
-import com.aicode.feature.settings.data.repository.ProxyConfig
+import com.aicode.core.net.ProxyConfig
 import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.feature.settings.presentation.SettingsViewModel.ProxyTestUiState
 import compose.icons.FeatherIcons

@@ -11,11 +11,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
-// ProxyConfig / DEFAULT_NO_PROXY 的事实源在 core/net/ProxyModels.kt（AppProxy 不能反向
-// 依赖 feature），此处 typealias re-export 保兼容旧 import 路径。
-/** @see com.aicode.core.net.ProxyConfig */
-typealias ProxyConfig = com.aicode.core.net.ProxyConfig
-
 /**
  * 全局代理设置。用 SharedPreferences 存储（而非 DataStore）：
  * 需要支持 Application.attachBaseContext 阶段的同步读取（见 [AppProxy]），

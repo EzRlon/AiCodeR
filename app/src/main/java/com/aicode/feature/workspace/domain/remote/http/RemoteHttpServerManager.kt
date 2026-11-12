@@ -126,7 +126,8 @@ class RemoteHttpServerManager @Inject constructor(
             server = srv
             _isRunning.value = true
             updateServerUrl()
-            FileLogger.i(TAG, "远程管理服务已启动: ${_serverUrl.value}, 根目录: $rootPath")
+            // 日志只记地址不记令牌：令牌等同于局域网文件管理权限，不能落进可导出的日志文件。
+            FileLogger.i(TAG, "远程管理服务已启动: http://${getLocalIpAddress()}:$DEFAULT_PORT, 根目录: $rootPath")
             return true
         } catch (e: Exception) {
             FileLogger.e(TAG, "启动远程管理服务失败: ${e.message}", e)

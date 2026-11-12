@@ -14,11 +14,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-// ProviderProxyEntry 的事实源在 core/net/ProxyModels.kt（AppProxy 不能反向依赖 feature），
-// 此处 typealias re-export 保兼容旧 import 路径。
-/** @see com.aicode.core.net.ProviderProxyEntry */
-typealias ProviderProxyEntry = com.aicode.core.net.ProviderProxyEntry
-
 /**
  * 提供商级代理注册表：把「配了独立代理的 provider」按 baseUrl 的 host + 路径前缀建索引。
  *
