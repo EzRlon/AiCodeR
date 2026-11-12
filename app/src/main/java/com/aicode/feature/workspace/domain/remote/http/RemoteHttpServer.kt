@@ -17,19 +17,22 @@ import java.io.OutputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 /**
  * 远程管理的 HTTP 服务端（NanoHTTPD）。
  *
  * 提供内嵌网页（assets/remote/index.html）与文件管理 API：
  * `/api/list`、`/api/download`、`/api/upload`、`/api/delete`、`/api/rename`、`/api/mkdir`。
- * 仅面向局域网（v1 无鉴权，同 MT 管理器）；所有路径操作经 [resolve] 限制在 [root] 子树内，
- * 删除走 [SafeDelete]（不跟随符号链接）。
+ * 仅面向局域网；每次启动由 [RemoteHttpServerManager] 生成随机 [token]，所有请求必须携带
+ * （网页地址 `?t=<token>` / `X-Auth-Token` 头），防止同网段任意设备直连接口操作 `/sdcard`。
+ * 所有路径操作经 [resolve] 限制在 [root] 子树内，删除走 [SafeDelete]（不跟随符号链接）。
  */
 internal class RemoteHttpServer(
     private val context: Context,
     port: Int,
-    private val root: File
+    private val root: File,
+    private val token: String
 ) : NanoHTTPD(port) {
 
     private companion object {
@@ -41,11 +44,24 @@ internal class RemoteHttpServer(
         /** 写接口防 CSRF：跨站页面无法携带自定义头（no-cors 简单请求受限），同源网页端自行带上。 */
         const val CSRF_HEADER = "x-requested-with"
         const val CSRF_VALUE = "AiCodeRemote"
+
+        /** 访问令牌的查询参数名与请求头名。 */
+        const val TOKEN_PARAM = "t"
+        const val TOKEN_HEADER = "x-auth-token"
     }
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri ?: ""
         return try {
+            // 鉴权：网页与全部 API 都要求令牌（查询参数或请求头），防同网段任意设备直连。
+            // 首页不带令牌时返回提示页，其余接口返回 403 JSON。
+            if (!isAuthorized(session)) {
+                return if (session.method == Method.GET && (uri == "/" || uri == "/index.html")) {
+                    tokenHintPage()
+                } else {
+                    jsonError(Response.Status.FORBIDDEN, "访问令牌缺失或不匹配，请从 App 显示的完整地址打开")
+                }
+            }
             // 写接口要求自定义头，防跨站请求（CSRF）。
             if (session.method == Method.POST && session.headers[CSRF_HEADER] != CSRF_VALUE) {
                 return jsonError(Response.Status.FORBIDDEN, "缺少写操作校验头，已拒绝（防止跨站请求）")
@@ -188,6 +204,36 @@ internal class RemoteHttpServer(
     }
 
     // ── 工具 ──
+
+    /** 校验请求携带的令牌：查询参数 `?t=` 或 `X-Auth-Token` 头任一匹配即通过（常量时间比较）。 */
+    private fun isAuthorized(session: IHTTPSession): Boolean {
+        val provided = session.parameters[TOKEN_PARAM]?.firstOrNull()
+            ?: session.headers[TOKEN_HEADER]
+            ?: return false
+        return MessageDigest.isEqual(
+            provided.toByteArray(StandardCharsets.UTF_8),
+            token.toByteArray(StandardCharsets.UTF_8)
+        )
+    }
+
+    /** 未带令牌访问首页时的提示页（不泄露任何文件信息）。 */
+    private fun tokenHintPage(): Response {
+        val html = """
+            <!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>需要访问令牌</title></head>
+            <body style="font:14px/1.6 sans-serif;display:flex;align-items:center;justify-content:center;min-height:80vh;margin:0">
+            <div style="max-width:420px;padding:24px;text-align:center">
+              <p><b>缺少访问令牌</b></p>
+              <p>请从 App「远程管理」页面显示的<b>完整地址</b>（含 ?t= 参数）打开本页面。</p>
+            </div></body></html>
+        """.trimIndent()
+        return newFixedLengthResponse(
+            Response.Status.FORBIDDEN,
+            "text/html; charset=utf-8",
+            html
+        )
+    }
 
     private fun IHTTPSession.param(name: String): String =
         parameters[name]?.firstOrNull().orEmpty()

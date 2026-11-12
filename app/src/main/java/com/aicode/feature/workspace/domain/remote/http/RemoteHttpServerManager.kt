@@ -33,9 +33,16 @@ class RemoteHttpServerManager @Inject constructor(
 
         /** 默认端口：避开 2121（内置 FTP）与常见开发端口（3000/5173/8000/8080）。 */
         const val DEFAULT_PORT = 8300
+
+        /** 访问令牌长度（hex 字符数 = 128 位随机熵）。 */
+        const val TOKEN_HEX_CHARS = 32
     }
 
     private var server: RemoteHttpServer? = null
+
+    /** 本次服务启动期间有效的访问令牌（停止后失效，下次启动重新生成）。 */
+    @Volatile
+    private var accessToken: String? = null
 
     /** 启停互斥：快速连点开关时避免并发交错产生「已监听但显示未开启」的状态。 */
     private val switchLock = Mutex()
@@ -72,7 +79,9 @@ class RemoteHttpServerManager @Inject constructor(
     }
 
     private fun updateServerUrl() {
-        _serverUrl.value = "http://${getLocalIpAddress()}:$DEFAULT_PORT"
+        // URL 直接携带令牌：浏览器打开完整地址即可用，无需手动输入；令牌不落盘、停止即失效。
+        val t = accessToken.orEmpty()
+        _serverUrl.value = "http://${getLocalIpAddress()}:$DEFAULT_PORT/?t=$t"
     }
 
     suspend fun toggleServer(): Boolean = withContext(Dispatchers.IO) {
@@ -110,7 +119,9 @@ class RemoteHttpServerManager @Inject constructor(
                 return false
             }
 
-            val srv = RemoteHttpServer(context, DEFAULT_PORT, root)
+            val token = newToken()
+            val srv = RemoteHttpServer(context, DEFAULT_PORT, root, token)
+            accessToken = token
             srv.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
             server = srv
             _isRunning.value = true
@@ -129,10 +140,18 @@ class RemoteHttpServerManager @Inject constructor(
         try {
             server?.stop()
             server = null
+            accessToken = null
             _isRunning.value = false
             FileLogger.i(TAG, "远程管理服务已停止")
         } catch (e: Exception) {
             FileLogger.e(TAG, "停止远程管理服务出错: ${e.message}", e)
         }
+    }
+
+    /** 生成 128 位随机 hex 令牌（SecureRandom，不落盘）。 */
+    private fun newToken(): String {
+        val bytes = ByteArray(TOKEN_HEX_CHARS / 2)
+        java.security.SecureRandom().nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 }

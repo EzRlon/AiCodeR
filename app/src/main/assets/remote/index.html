@@ -138,6 +138,10 @@
   var currentPath = '/';
   var uploading = false;
 
+  // 访问令牌：从页面地址的 ?t= 取，之后所有 API 请求带上（X-Auth-Token 头或查询参数）。
+  var token = new URLSearchParams(location.search).get('t') || '';
+  function withToken(url) { return url + (url.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(token); }
+
   var $ = function (id) { return document.getElementById(id); };
   var listEl = $('list'), emptyEl = $('empty'), statusEl = $('status');
   var crumbEl = $('breadcrumb'), toastEl = $('toast');
@@ -183,7 +187,9 @@
     toastTimer = setTimeout(function () { toastEl.hidden = true; }, 3200);
   }
   async function api(url, opts) {
-    var r = await fetch(url, opts);
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers, { 'X-Auth-Token': token });
+    var r = await fetch(withToken(url), opts);
     var j = null;
     try { j = await r.json(); } catch (e) {}
     if (!r.ok || (j && j.ok === false)) {
@@ -272,7 +278,7 @@
   // ── 文件操作 ──
   function download(name) {
     var a = document.createElement('a');
-    a.href = '/api/download?path=' + enc(joinPath(currentPath, name));
+    a.href = withToken('/api/download?path=' + enc(joinPath(currentPath, name)));
     a.download = name;
     document.body.appendChild(a);
     a.click();
@@ -360,9 +366,10 @@
       }
       var f = files[idx++];
       var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload?dir=' + enc(currentPath) + '&name=' + enc(f.name));
+      xhr.open('POST', withToken('/api/upload?dir=' + enc(currentPath) + '&name=' + enc(f.name)));
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.setRequestHeader('X-Requested-With', 'AiCodeRemote');
+      xhr.setRequestHeader('X-Auth-Token', token);
       uploadLabel.textContent = '上传「' + f.name + '」';
       xhr.upload.onprogress = function (ev) {
         var pct = total > 0 ? Math.round((loadedAll + ev.loaded) / total * 100) : 0;
