@@ -78,6 +78,7 @@ class RemoteSftpFileAccess @Inject constructor(
      * 业务错误（文件不存在/已存在、SFTP 状态码错误）不重建。不做自动重试——写操作重试可能重复落盘。
      */
     private fun <T> withSftp(block: (SFTPClient) -> T): T = runBlocking {
+        assertNotMainThread()
         withContext(Dispatchers.IO) {
             sftpMutex.withLock {
                 val sftp = try {
@@ -95,7 +96,15 @@ class RemoteSftpFileAccess @Inject constructor(
      * 一次读取，`yield` 在锁外，调用方中途放弃迭代时不会把 [sftpMutex] 永久占住。
      */
     private fun <T> onSftp(block: () -> T): T = runBlocking {
+        assertNotMainThread()
         withContext(Dispatchers.IO) { sftpMutex.withLock { guarded(block) } }
+    }
+
+    /** 主线程调用同步 SFTP 即 ANR：`runBlocking` 网络等待可卡住主线程数十秒，宁可早炸快查。 */
+    private fun assertNotMainThread() {
+        check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            "RemoteSftpFileAccess 的同步 SFTP 操作禁止在主线程调用（网络阻塞会 ANR）"
+        }
     }
 
     /** 传输层异常时丢弃 SFTP 通道（下次调用自动重建）后原样抛出；业务错误不重建。 */

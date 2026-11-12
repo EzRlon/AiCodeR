@@ -296,19 +296,24 @@ class CodexBridge @Inject constructor(
             ?.baseUrl?.trim()?.trimEnd('/')
             ?.takeIf { it.isNotEmpty() && !it.contains("api.openai.com") }
             ?.let { if (it.substringAfterLast('/').matches(Regex("v\\d+[a-z]*"))) it else "$it/v1" }
-        // 供应商未声明 Responses API 支持时，经容器内转换网关（Responses→chat）接入
-        val needsConverter = directResponsesBase != null && provider?.useResponseApi == false
+        // 供应商未声明 Responses API 支持时，经容器内转换网关（Responses→chat）接入。
+        // directResponsesBase 非 null 蕴含 provider 非 null——局部非空绑定替代 provider!!，
+        // 避免跨 4 行推断链在重构时被破坏。
+        val converterProvider = directResponsesBase?.let { provider }
+        val needsConverter = converterProvider != null && provider?.useResponseApi == false
         val gatewayPort = if (needsConverter) OpenAiCompatGateway.ensureStarted() else 0
-        if (needsConverter) {
+        if (converterProvider != null && needsConverter) {
             OpenAiCompatGateway.registerUpstream(
-                OpenAiCompatGateway.codexKey(provider!!.id),
-                provider.baseUrl,
-                provider.firstUsableApiKey,
-                provider.useFullUrl,
+                OpenAiCompatGateway.codexKey(converterProvider.id),
+                converterProvider.baseUrl,
+                converterProvider.firstUsableApiKey,
+                converterProvider.useFullUrl,
             )
         }
         val providerBaseUrl = when {
-            needsConverter -> OpenAiCompatGateway.codexConverterBaseUrl(OpenAiCompatGateway.codexKey(provider!!.id), gatewayPort)
+            needsConverter -> OpenAiCompatGateway.codexConverterBaseUrl(
+                OpenAiCompatGateway.codexKey(requireNotNull(converterProvider).id), gatewayPort
+            )
             else -> directResponsesBase
         }
         val providerKeyEnv = providerBaseUrl?.let { "AICODE_CODEX_PROVIDER_KEY" }
@@ -346,7 +351,13 @@ class CodexBridge @Inject constructor(
                         FileLogger.w(TAG, "MCP 服务器 ${server.name} 的 env 键名非法，跳过映射")
                         continue
                     }
-                    add("-c"); add("mcp_servers.${server.name}.command=${tomlString(server.command!!)}")
+                    // stdio 型 server 缺 command 属配置损坏：跳过并告警，不用 !! 把坏数据炸成进程崩溃
+                    val cmd = server.command
+                    if (cmd.isNullOrBlank()) {
+                        FileLogger.w(TAG, "MCP stdio 服务器 ${server.name} 缺 command，跳过映射")
+                        continue
+                    }
+                    add("-c"); add("mcp_servers.${server.name}.command=${tomlString(cmd)}")
                     if (server.args.isNotEmpty()) {
                         val tomlArgs = server.args.joinToString(",") { tomlString(it) }
                         add("-c"); add("mcp_servers.${server.name}.args=[$tomlArgs]")
@@ -374,7 +385,7 @@ class CodexBridge @Inject constructor(
             }
             // 关启动更新自检：CLI 内置 Update now 走 npm 先删后装，弱网中断会把 codex 删空（曾致引擎 not found）
             add("-c"); add("check_for_update_on_startup=false")
-            if (effectiveResume) { add("resume"); add(resumeThreadId!!) }
+            if (effectiveResume) { add("resume"); add(requireNotNull(resumeThreadId)) }
             add("-") // 提示词走 stdin
         }
         val extraEnv = buildMap {
