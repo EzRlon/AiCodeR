@@ -245,10 +245,10 @@ internal fun BackupScreen(
             exportOptions.aiAssets || exportOptions.keys
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = when {
-                sensitiveSelected -> stringResource(R.string.backup_sensitive_needs_password)
-                exportOptions.keys -> stringResource(R.string.backup_keys_password_warning)
-                else -> stringResource(R.string.backup_password_hint)
+            subtitle = if (sensitiveSelected) {
+                stringResource(R.string.backup_sensitive_needs_password)
+            } else {
+                stringResource(R.string.backup_password_hint)
             },
             confirmText = stringResource(R.string.backup_export_btn),
             password = password,

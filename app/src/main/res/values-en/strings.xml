@@ -880,7 +880,6 @@
     <string name="backup_stat_keys">· Key Files: %1$s</string>
     <string name="backup_stat_scheduled_tasks">· Scheduled Tasks: %1$s</string>
     <string name="backup_sensitive_needs_password">The backup contains API keys / credentials / private keys and must be exported with a password</string>
-    <string name="backup_keys_password_warning">The backup contains private keys. Strongly recommended to set a password (empty exports in plain text)</string>
     <string name="backup_settings_covered">Theme, keepalive, logging, vision, and sync preferences covered</string>
     <string name="backup_restore_workspaces_title">Restore workspaces</string>
     <string name="backup_restore_workspaces_warning">Files in local workspaces with the same name will be overwritten and cannot be undone. Select carefully.</string>
