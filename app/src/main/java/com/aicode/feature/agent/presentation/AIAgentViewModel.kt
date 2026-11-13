@@ -2359,6 +2359,17 @@ class AIAgentViewModel @Inject constructor(
         val sid = _currentSessionId.value ?: return
         val queue = _queuedRequests.value[sid] ?: return
         val req = queue.firstOrNull { it.id == id } ?: return
+        // 外部 CLI 引擎一次回合一个进程，stdin 写完后立即关闭，没有「本轮内再注入用户消息」的通道。
+        // 原先仍把条目移出队列并提示「随本轮生效」，实际却只能等到回合结束，停止时还可能被清掉。
+        // 保留在队列中，由收尾的 processNextInQueue 正常发送，并明确告知用户。
+        if (currentSessionEngine.value != null) {
+            android.widget.Toast.makeText(
+                context,
+                R.string.queue_interject_unsupported,
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         _queuedRequests.value = _queuedRequests.value + (sid to queue.filterNot { it.id == id })
         android.widget.Toast.makeText(
             context,
@@ -2439,11 +2450,16 @@ class AIAgentViewModel @Inject constructor(
         //   启动 agent 回合（同会话状态竞态）；命令 finally 收尾时会自行接续队列；
         // - 队列为空：无事可做。
         val takenOverByActiveJob = sessionJobs[sessionId]?.isActive == true
+        // 跨会话并发上限：本会话虽空闲，但其它会话已占满名额时不能启动，留给补位入口。
+        val overConcurrencyLimit =
+            sessionJobs.count { (otherSid, job) -> job.isActive && otherSid != sessionId } >=
+                MAX_CONCURRENT_RUNNING_SESSIONS
         if (!SessionRunState.shouldConsumeQueue(
                 isOwnJob = !takenOverByActiveJob,
                 queuedCount = queue.size,
                 paused = sessionId in pausedHandoffSessions,
-                commandRunning = sessionId in _runningCommandSessions.value
+                commandRunning = sessionId in _runningCommandSessions.value,
+                overConcurrencyLimit = overConcurrencyLimit
             )
         ) return
         val next = queue.firstOrNull() ?: return

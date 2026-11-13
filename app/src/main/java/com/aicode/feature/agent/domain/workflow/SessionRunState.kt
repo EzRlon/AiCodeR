@@ -42,11 +42,15 @@ object SessionRunState {
         isOwnJob: Boolean,
         queuedCount: Int,
         paused: Boolean = false,
-        commandRunning: Boolean = false
+        commandRunning: Boolean = false,
+        overConcurrencyLimit: Boolean = false
     ): Boolean {
         if (!isOwnJob) return false
         if (paused) return false
         if (commandRunning) return false
+        // 跨会话并发占满：本会话即使空闲也不能启动，等 processQueuesAfterSlotFreed 补位。
+        // 缺这条守卫时，因超限入队的请求会被紧随其后的补派立即消费，上限形同虚设。
+        if (overConcurrencyLimit) return false
         return queuedCount > 0
     }
 

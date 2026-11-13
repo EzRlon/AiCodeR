@@ -473,6 +473,7 @@
     <string name="engine_pick_title">切换引擎（对当前会话生效）</string>
     <string name="engine_switch_running">回合进行中，停止后可切换</string>
     <string name="queue_interject_toast">已注入，将随本轮生效</string>
+    <string name="queue_interject_unsupported">当前引擎不支持本轮注入，已保留排队，本轮结束后自动发送</string>
     <string name="queue_passive_toast">已排队，当前工作结束后自动发送</string>
     <string name="queue_passive_rejected_toast">未发送：当前会话已暂停（上下文达上限），请先交接</string>
     <string name="engine_go_login">去浏览器登录</string>
@@ -1055,6 +1056,7 @@
     <!-- Chat Input Bar -->
     <string name="chat_input_placeholder">输入消息，与 AI 对话…</string>
     <string name="chat_queue_hint">AI 正在处理中，回车发送将自动排队</string>
+    <string name="chat_queued_toast">已排队，本轮结束后自动发送</string>
     <string name="chat_input_expand">展开输入框</string>
     <string name="bottom_bar_collapse">收起底栏</string>
     <string name="bottom_bar_rail_expand">展开底栏</string>

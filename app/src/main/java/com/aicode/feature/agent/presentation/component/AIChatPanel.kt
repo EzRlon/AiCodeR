@@ -1693,6 +1693,7 @@ fun AIChatPanel(
             val images = if (modelSupportsVision) attachments.toAgentImages() else emptyList()
             // 统一走队列：AI 忙时入队（等本轮结束后自动发送下一条），空闲时直接发送。
             // 斜杠命令在 ViewModel 内（agent workflow 之前）分流执行，无需在此区分。
+            val queuedBefore = viewModel.queuedRequests.value.size
             val accepted = viewModel.enqueueAgentRequest(
                 request = text,
                 modelRequest = modelRequest,
@@ -1712,6 +1713,15 @@ fun AIChatPanel(
                     android.widget.Toast.LENGTH_LONG
                 ).show()
                 return@sendMessage
+            }
+            // 入队必须有可见反馈：队列面板会被 IME/审批浮层强制折叠，
+            // 用户看不到「排队中」就会以为消息被吞了（外部引擎跑长任务时尤其明显）。
+            if (viewModel.queuedRequests.value.size > queuedBefore) {
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.chat_queued_toast),
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
             viewModel.clearInputDraft()
             pendingAttachments = emptyList()
@@ -2133,7 +2143,11 @@ fun AIChatPanel(
                             followBottom = false
                             scope.launch { listState.animateScrollToItem(node.itemIndex) }
                         },
-                        modifier = Modifier.align(Alignment.CenterEnd)
+                        // 向上收到底栏悬浮层之上：底栏 Surface 覆盖整行全宽，其占位 pointerInput
+                        // 会吞掉落在卡片范围内的触摸；不留白时轨道下段既被遮挡又点不到。
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(bottom = with(LocalDensity.current) { inputBarReservePx.toDp() })
                     )
                 }
             }

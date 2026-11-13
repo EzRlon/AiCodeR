@@ -471,6 +471,7 @@
     <string name="engine_pick_title">Switch engine (applies to this session)</string>
     <string name="engine_switch_running">A turn is running. Stop it before switching.</string>
     <string name="queue_interject_toast">Added. It will take effect in this turn.</string>
+    <string name="queue_interject_unsupported">This engine can\'t inject mid-turn. Kept in the queue and sent after this turn.</string>
     <string name="queue_passive_toast">Queued. It will be sent automatically when the current work finishes.</string>
     <string name="queue_passive_rejected_toast">Not sent: this session is paused (context limit reached). Hand off first.</string>
     <string name="engine_builtin_sub">Full tools, teams, annotation, memory, recall</string>
@@ -1053,6 +1054,7 @@
     <!-- Chat Input Bar -->
     <string name="chat_input_placeholder">Type a message to chat with AI…</string>
     <string name="chat_queue_hint">AI is busy, press enter to queue the message</string>
+    <string name="chat_queued_toast">Queued — it will be sent after this turn</string>
     <string name="chat_input_expand">Expand input box</string>
     <string name="bottom_bar_collapse">Collapse bottom bar</string>
     <string name="bottom_bar_rail_expand">Expand bottom bar</string>

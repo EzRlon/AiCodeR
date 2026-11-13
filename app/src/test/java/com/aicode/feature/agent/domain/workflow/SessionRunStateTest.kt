@@ -93,6 +93,18 @@ class SessionRunStateTest {
         )
     }
 
+    @Test
+    fun `跨会话并发占满时不消费`() {
+        assertFalse(
+            "超限入队后若立即补派，MAX_CONCURRENT_RUNNING_SESSIONS 就失效了",
+            SessionRunState.shouldConsumeQueue(
+                isOwnJob = true,
+                queuedCount = 1,
+                overConcurrencyLimit = true
+            )
+        )
+    }
+
     // ── isRunning ────────────────────────────────────────────────
 
     @Test
