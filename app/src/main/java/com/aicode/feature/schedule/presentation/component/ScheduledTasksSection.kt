@@ -31,9 +31,9 @@ import com.aicode.feature.schedule.domain.ScheduleMode
 import com.aicode.feature.schedule.domain.ScheduledTask
 import com.aicode.feature.schedule.domain.ScheduledTaskType
 import com.aicode.feature.schedule.presentation.ScheduledTasksUiState
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
-import com.aicode.feature.settings.presentation.component.SettingsRow
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

@@ -69,7 +69,7 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.feature.onboarding.domain.OnboardingStep
+import com.aicode.core.ui.onboarding.OnboardingStep
 import kotlinx.coroutines.launch
 import kotlin.math.hypot
 import kotlin.math.roundToInt

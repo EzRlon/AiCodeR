@@ -1,5 +1,10 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.settingsPageBackground
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -140,8 +145,8 @@ import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Layers
 import compose.icons.feathericons.Zap
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.onboardingTarget
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.settings.data.local.ProviderPreset
 import com.aicode.feature.terminal.data.repository.TerminalSettings
 import com.aicode.feature.terminal.presentation.component.TerminalSettingsSheet

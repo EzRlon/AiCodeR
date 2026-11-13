@@ -1,4 +1,4 @@
-package com.aicode.feature.settings.presentation.component
+package com.aicode.core.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

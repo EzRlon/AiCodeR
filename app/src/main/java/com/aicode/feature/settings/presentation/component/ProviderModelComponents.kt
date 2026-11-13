@@ -1,5 +1,6 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsDivider
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

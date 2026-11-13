@@ -54,7 +54,7 @@ import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import com.aicode.feature.settings.presentation.component.ModelSelectionContent
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 

@@ -95,9 +95,9 @@ import com.aicode.feature.agent.domain.tool.browser.BrowserLink
 import com.aicode.feature.agent.domain.tool.browser.BrowserManager
 import com.aicode.feature.agent.domain.tool.browser.BrowserTabState
 import com.aicode.feature.agent.domain.tool.browser.BrowserUserAgentPreset
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsRow
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.Check

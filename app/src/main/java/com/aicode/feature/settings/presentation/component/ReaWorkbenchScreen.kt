@@ -1,5 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.settingsPageBackground
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns

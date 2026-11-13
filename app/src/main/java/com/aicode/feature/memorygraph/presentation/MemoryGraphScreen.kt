@@ -64,7 +64,7 @@ import com.aicode.core.ui.AppTextField
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.settingsPageBackground
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.core.theme.TokenStatsPalette
 import com.aicode.feature.agent.domain.engine.AgentEngines

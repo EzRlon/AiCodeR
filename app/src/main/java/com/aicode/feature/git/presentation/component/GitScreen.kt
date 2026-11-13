@@ -74,7 +74,7 @@ import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.settingsPageBackground
 import com.aicode.feature.git.domain.model.GitStatus
 import com.aicode.feature.git.domain.model.GitTab
 import com.aicode.feature.git.presentation.GitViewModel

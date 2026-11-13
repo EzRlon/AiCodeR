@@ -1,5 +1,6 @@
 package com.aicode.feature.onboarding.domain
 
+import com.aicode.core.ui.onboarding.OnboardingStep
 import com.aicode.feature.onboarding.data.OnboardingStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

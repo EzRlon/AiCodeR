@@ -61,7 +61,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.aicode.feature.settings.presentation.component.rememberSheetFlingFix
+import com.aicode.core.ui.rememberSheetFlingFix
 import com.aicode.feature.agent.domain.container.SshLoginKey
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.model.RemoteMount

@@ -1,4 +1,4 @@
-package com.aicode.feature.onboarding.domain
+package com.aicode.core.ui.onboarding
 
 import androidx.annotation.StringRes
 import com.aicode.R

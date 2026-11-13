@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsGroupHeader
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 

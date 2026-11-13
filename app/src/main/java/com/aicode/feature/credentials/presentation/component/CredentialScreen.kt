@@ -65,11 +65,11 @@ import com.aicode.feature.credentials.domain.model.GitCredential
 import com.aicode.feature.credentials.presentation.CredentialViewModel
 import com.aicode.feature.credentials.presentation.QuickLoginUiState
 import com.aicode.feature.git.presentation.component.SectionHeader
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsLightMode
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.settingsLightMode
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ChevronRight

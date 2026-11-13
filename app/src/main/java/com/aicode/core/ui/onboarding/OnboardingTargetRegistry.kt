@@ -1,4 +1,4 @@
-package com.aicode.feature.onboarding.presentation
+package com.aicode.core.ui.onboarding
 
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.compositionLocalOf
@@ -8,7 +8,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import com.aicode.feature.onboarding.domain.OnboardingStep
+import com.aicode.core.ui.onboarding.OnboardingStep
 
 /**
  * 引导目标组件注册表：集中记录各步骤高亮组件在 Root 坐标系中的边界矩形。

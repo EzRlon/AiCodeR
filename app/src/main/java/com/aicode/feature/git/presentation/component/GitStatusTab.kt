@@ -64,7 +64,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.feature.git.domain.model.GitFileChange
 import com.aicode.feature.git.domain.model.GitStash
 import com.aicode.feature.git.domain.model.GitStatus
-import com.aicode.feature.settings.presentation.component.SettingsDivider
+import com.aicode.core.ui.settings.SettingsDivider
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
 import compose.icons.FeatherIcons

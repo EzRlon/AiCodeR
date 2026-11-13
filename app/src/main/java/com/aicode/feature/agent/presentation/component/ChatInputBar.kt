@@ -122,8 +122,8 @@ import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.rememberImeBottomInset
 import com.aicode.core.ui.TaskDangerLevel
 import com.aicode.core.ui.TaskStateBorder
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.onboardingTarget
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
 import com.aicode.feature.agent.domain.command.SlashCommandKind
 import com.aicode.feature.agent.domain.engine.AgentEngines

@@ -115,8 +115,8 @@ import com.aicode.feature.agent.presentation.HandoffPrompt
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.QueuedRequest
 import com.aicode.feature.agent.presentation.hasVisibleContent
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.onboardingTarget
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.settings.presentation.SettingsViewModel
 import com.aicode.feature.settings.data.repository.VoiceEngine
 import com.aicode.feature.settings.domain.model.DashboardContext

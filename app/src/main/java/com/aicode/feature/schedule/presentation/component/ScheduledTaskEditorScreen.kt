@@ -41,9 +41,9 @@ import com.aicode.core.ui.AppTextField
 import com.aicode.feature.schedule.domain.ScheduleMode
 import com.aicode.feature.schedule.domain.ScheduledTaskType
 import com.aicode.feature.schedule.domain.TaskSchedule
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import java.text.SimpleDateFormat

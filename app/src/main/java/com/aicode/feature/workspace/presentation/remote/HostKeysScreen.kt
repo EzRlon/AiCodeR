@@ -50,11 +50,11 @@ import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.container.SshLoginKey
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsLightMode
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.settingsLightMode
+import com.aicode.core.ui.settings.settingsPageBackground
 import com.aicode.R
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft

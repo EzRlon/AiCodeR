@@ -1,5 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.rememberSheetFlingFix
+import com.aicode.core.ui.settings.ModelSearchField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement

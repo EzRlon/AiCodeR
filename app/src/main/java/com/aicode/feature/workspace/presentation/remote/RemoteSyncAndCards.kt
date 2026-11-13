@@ -53,9 +53,9 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.settingsLightMode
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.settingsLightMode
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.model.RemoteMount
 import com.aicode.feature.workspace.domain.model.RemoteProtocol

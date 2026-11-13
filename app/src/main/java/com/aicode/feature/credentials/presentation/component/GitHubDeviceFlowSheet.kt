@@ -60,7 +60,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.feature.credentials.data.remote.GITHUB_APP_INSTALL_URL
 import com.aicode.feature.credentials.presentation.QuickLoginUiState
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Check

@@ -1,5 +1,8 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas

@@ -116,10 +116,10 @@ import com.aicode.feature.git.presentation.component.GitScreen
 import com.aicode.feature.onboarding.data.OnboardingStatus
 import com.aicode.feature.onboarding.domain.OnboardingCoordinator
 import com.aicode.feature.onboarding.domain.OnboardingStateHolder
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.LocalOnboardingTargetRegistry
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.LocalOnboardingTargetRegistry
 import com.aicode.feature.onboarding.presentation.OnboardingOverlay
-import com.aicode.feature.onboarding.presentation.OnboardingTargetRegistry
+import com.aicode.core.ui.onboarding.OnboardingTargetRegistry
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.BackgroundSettingsRepository
