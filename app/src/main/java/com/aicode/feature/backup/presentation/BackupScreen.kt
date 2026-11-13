@@ -63,6 +63,7 @@ import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.containsSecrets
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.remote.BackupTarget
@@ -241,8 +242,7 @@ internal fun BackupScreen(
     // 导出：输口令。勾选了任一敏感段（providers / remoteConnections / aiAssets / keys）时
     // 必须设置口令（这些段含明文 API Key、git token、SSH 凭据，不允许明文落盘）。
     if (pendingAction == PendingAction.ExportPassword) {
-        val sensitiveSelected = exportOptions.providers || exportOptions.remoteConnections ||
-            exportOptions.aiAssets || exportOptions.keys
+        val sensitiveSelected = exportOptions.containsSecrets()
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
             subtitle = if (sensitiveSelected) {

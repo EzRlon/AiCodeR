@@ -102,7 +102,9 @@ class RemoteSftpFileAccess @Inject constructor(
 
     /** 主线程调用同步 SFTP 即 ANR：`runBlocking` 网络等待可卡住主线程数十秒，宁可早炸快查。 */
     private fun assertNotMainThread() {
-        check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+        // 纯 JVM 单测（unitTests.isReturnDefaultValues）下两个 Looper 都是 null，无可断言对象，跳过。
+        val main = android.os.Looper.getMainLooper() ?: return
+        check(android.os.Looper.myLooper() != main) {
             "RemoteSftpFileAccess 的同步 SFTP 操作禁止在主线程调用（网络阻塞会 ANR）"
         }
     }

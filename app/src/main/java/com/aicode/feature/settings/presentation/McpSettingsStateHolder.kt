@@ -34,8 +34,9 @@ class McpSettingsStateHolder @Inject constructor(
 ) {
     private lateinit var coroutineScope: CoroutineScope
 
-    /** 由 SettingsViewModel 构造时注入自己的 viewModelScope。 */
+    /** 由 SettingsViewModel 构造时注入自己的 viewModelScope；重复调用无副作用（防重复订阅）。 */
     fun attach(scope: CoroutineScope) {
+        if (::coroutineScope.isInitialized) return
         coroutineScope = scope
         coroutineScope.launch {
             mcpConfigRepository.effectiveEntriesFlow.collectLatest {

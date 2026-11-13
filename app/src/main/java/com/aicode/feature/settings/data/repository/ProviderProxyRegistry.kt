@@ -4,7 +4,6 @@ import com.aicode.core.net.ProviderProxyEntry
 import com.aicode.core.net.ProviderProxyLookup
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.settings.domain.model.AIProviderConfig
-import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import javax.inject.Inject
 import javax.inject.Singleton

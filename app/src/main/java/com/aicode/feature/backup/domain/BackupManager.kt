@@ -77,6 +77,13 @@ data class BackupOptions(
     val keys: Boolean = false
 )
 
+/**
+ * 导出选项是否包含明文凭据/私钥（providers 的 API Key、远端连接密码、git 凭据、密钥库）。
+ * 命中时导出必须设置口令：UI 禁用空口令确认，VM 侧再兜底拒绝。
+ */
+fun BackupOptions.containsSecrets(): Boolean =
+    providers || remoteConnections || aiAssets || keys
+
 /** 导入时文件段已写入磁盘、但后续步骤失败：磁盘上留下部分导入内容，异常文案必须告知用户。 */
 class PartialRestoreException(
     val writtenFiles: Int,

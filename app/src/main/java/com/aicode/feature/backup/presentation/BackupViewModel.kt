@@ -8,6 +8,7 @@ import com.aicode.feature.backup.data.BackupTargetRepository
 import com.aicode.feature.backup.domain.BackupDecryptionException
 import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.containsSecrets
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.remote.BackupTarget
@@ -125,6 +126,12 @@ class BackupViewModel @Inject constructor(
 
     /** 流式导出到 [output]（调用方打开，本方法负责关闭）。 */
     fun export(password: String, options: BackupOptions, output: OutputStream) {
+        // 兜底：含凭据/私钥的段必须加密（UI 已禁用空口令确认，此处防未来绕过 UI 的调用路径）。
+        if (options.containsSecrets() && password.isEmpty()) {
+            _state.value = BackupState.Error(context.getString(R.string.backup_sensitive_needs_password))
+            runCatching { output.close() }
+            return
+        }
         _state.value = BackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
