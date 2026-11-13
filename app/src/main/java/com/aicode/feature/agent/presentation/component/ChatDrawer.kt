@@ -117,6 +117,7 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.rememberImeBottomInset
+import com.aicode.core.ui.settings.CollapsibleGroupHeader
 import com.aicode.core.ui.settings.ModelSearchField
 import com.aicode.core.ui.settings.SettingsDivider
 import com.aicode.core.ui.settings.SettingsGroup
@@ -944,6 +945,13 @@ private fun SessionListContent(
             restore = { it.toSet() }
         )
     ) { mutableStateOf(emptySet<String>()) }
+    // 分组折叠态：按分组 key 记忆，切换会话/切页后保留；默认全部展开。
+    var collapsedGroups by rememberSaveable(
+        stateSaver = listSaver<Set<String>, String>(
+            save = { it.toList() },
+            restore = { it.toSet() }
+        )
+    ) { mutableStateOf(emptySet<String>()) }
     val groups = remember(sessions) {
         val now = System.currentTimeMillis()
         val pinned = sessions.filter { it.isPinned }
@@ -972,11 +980,22 @@ private fun SessionListContent(
         // 每个分组占一个 item、组内 forEach 全量渲染会让 LazyColumn 失去惰性：
         // 「最近 30 天」这种分组有上百个会话时，一个 item 就要组合上百行。分组头与会话各自成 item。
         groups.forEach { group ->
+            val groupExpanded = group.groupKey !in collapsedGroups
             item(key = "group-${group.groupKey}", contentType = "group-header") {
-                SettingsGroupHeader(
-                    text = sessionGroupLabel(group.groupKey, group.sessions.first())
+                CollapsibleGroupHeader(
+                    text = sessionGroupLabel(group.groupKey, group.sessions.first()),
+                    expanded = groupExpanded,
+                    count = group.sessions.size,
+                    onToggle = {
+                        collapsedGroups = if (groupExpanded) {
+                            collapsedGroups + group.groupKey
+                        } else {
+                            collapsedGroups - group.groupKey
+                        }
+                    }
                 )
             }
+            if (!groupExpanded) return@forEach
             itemsIndexed(
                 items = group.sessions,
                 key = { _, session -> session.id },
@@ -1045,6 +1064,7 @@ private fun SessionListContent(
                                             subState is AgentUIState.Streaming,
                                         awaitingPermission = sub.id in awaitingPermissionSessionIds,
                                         pinned = false,
+                                        compact = true,
                                         selectionMode = selectionMode,
                                         checked = sub.id in selectedSessionIds,
                                         onCheckedChange = { onToggleSelectSession(sub) },

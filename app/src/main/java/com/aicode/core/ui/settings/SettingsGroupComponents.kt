@@ -71,12 +71,16 @@ import compose.icons.feathericons.Search
 internal fun settingsLightMode(): Boolean =
     MaterialTheme.colorScheme.background.luminance() > 0.5f
 
-/** 可折叠分组标题：点击展开/收起，右侧 chevron 指示状态。与工具授权页的分组一致。 */
+/**
+ * 可折叠分组标题：点击展开/收起，右侧 chevron 指示状态。与工具授权页的分组一致。
+ * [count] 非空时在标题右侧显示条目数，便于折叠态下仍知道组内规模。
+ */
 @Composable
 internal fun CollapsibleGroupHeader(
     text: String,
     expanded: Boolean,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    count: Int? = null
 ) {
     Row(
         modifier = Modifier
@@ -88,9 +92,19 @@ internal fun CollapsibleGroupHeader(
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.4.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
+        if (count != null) {
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                color = MaterialTheme.semanticColors.subtleText
+            )
+            Spacer(Modifier.width(Spacing.xs))
+        }
         ExpandableChevronIcon(
             expanded = expanded,
             style = ChevronRotationStyle.RIGHT_DOWN,
@@ -105,14 +119,14 @@ internal fun CollapsibleGroupHeader(
 internal fun settingsPageBackground(): Color =
     MaterialTheme.semanticColors.pageBackground
 
-/** 分组小标题：卡片上方灰色小字，左对齐。 */
+/** 分组小标题：卡片上方灰色小字，左对齐。[fontSize] 供需要更大层级的场景（如会话抽屉）覆盖。 */
 @Composable
-internal fun SettingsGroupHeader(text: String) {
+internal fun SettingsGroupHeader(text: String, fontSize: androidx.compose.ui.unit.TextUnit = 12.sp) {
     Text(
         text = text,
         // 分组标题是导航层的分类锚点，要压得住下面的会话标题：
         // 字号略大 + 中粗 + 次要文字色，靠字重和间距分层，不靠抢眼颜色。
-        style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
+        style = MaterialTheme.typography.labelLarge.copy(fontSize = fontSize),
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.4.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,

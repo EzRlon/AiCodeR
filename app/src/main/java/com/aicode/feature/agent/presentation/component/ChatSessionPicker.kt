@@ -52,6 +52,8 @@ fun ChatSessionRow(
     isExecuting: Boolean = false,
     awaitingPermission: Boolean = false,
     pinned: Boolean = false,
+    /** 子代理行等更低层级：字号再降一档，与二级会话标题拉开层次。 */
+    compact: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     trailing: (@Composable () -> Unit)? = null,
@@ -114,8 +116,16 @@ fun ChatSessionRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = session.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    // 层级：分组标题(一级) > 会话标题(二级) > 子代理(三级，compact)
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = if (compact) 11.sp else 12.sp,
+                        lineHeight = if (compact) 14.sp else 16.sp
+                    ),
+                    color = when {
+                        selected -> MaterialTheme.colorScheme.primary
+                        compact -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -140,7 +150,7 @@ fun ChatSessionRow(
             // 会话 id 小字：与 ai-logs/session-<id>.log 等文件名逐字对应，方便手动到开发目录找内容。
             Text(
                 text = session.id,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compact) 9.sp else 10.sp),
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.semanticColors.subtleText,
                 maxLines = 1,
