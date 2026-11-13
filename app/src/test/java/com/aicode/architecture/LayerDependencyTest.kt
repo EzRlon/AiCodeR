@@ -14,9 +14,7 @@ class LayerDependencyTest {
 
     private companion object {
         /** 已知 core→feature 依赖（历史债务，待逐步清偿）。 */
-        val KNOWN_DEBT = setOf(
-            "watch/FileChangeHub.kt"
-        )
+        val KNOWN_DEBT = emptySet<String>()
 
         val FEATURE_IMPORT = Regex("""^\s*import\s+com\.aicode\.feature\.""", RegexOption.MULTILINE)
     }

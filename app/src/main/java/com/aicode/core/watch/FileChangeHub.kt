@@ -2,11 +2,7 @@ package com.aicode.core.watch
 
 import android.os.FileObserver
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.domain.container.ContainerInstaller
-import com.aicode.feature.settings.data.repository.ExecutionMode
-import com.aicode.feature.settings.data.repository.ExecutionModeHolder
-import com.aicode.feature.workspace.data.repository.WorkspaceRepository
-import com.aicode.feature.workspace.domain.WorkspacePathMapper
+
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -48,10 +44,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class FileChangeHub @Inject constructor(
-    private val workspaceRepository: WorkspaceRepository,
-    private val containerInstaller: ContainerInstaller,
-    private val pathMapper: WorkspacePathMapper,
-    private val executionModeHolder: ExecutionModeHolder
+    private val watchContext: WorkspaceWatchContext
 ) {
     companion object {
         private const val TAG = "FileChangeHub"
@@ -90,10 +83,10 @@ class FileChangeHub @Inject constructor(
         private const val MAX_PENDING_BATCHES = 256
 
         /** AI 看到的工作区根路径。 */
-        const val CONTAINER_ROOT = WorkspacePathMapper.CONTAINER_ROOT
+        const val CONTAINER_ROOT = "~/workspace"
 
         /** AI 配置目录在容器内的根路径。 */
-        const val AICODE_ROOT = WorkspacePathMapper.AICODE_ROOT
+        const val AICODE_ROOT = "/root/.aicode"
 
         private const val IN_IGNORED = 0x00008000
 
@@ -150,15 +143,14 @@ class FileChangeHub @Inject constructor(
         fallbackPoll: Boolean = true,
         batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
         pollIntervalMs: Long = POLL_INTERVAL_MS
-    ): Flow<FileChangeBatch> = workspaceRepository.current
-        .map { workspaceRepository.currentPath() }
+    ): Flow<FileChangeBatch> = watchContext.workspacePathFlow
         .distinctUntilChanged()
         .flatMapLatest {
-            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH) {
+            if (watchContext.isRemoteMode()) {
                 emptyFlow()
             } else {
                 watchHostDir(
-                    hostDir = pathMapper.toHostFile(containerSubPath),
+                    hostDir = watchContext.toHostFile(containerSubPath),
                     containerRootPath = containerSubPath.trimEnd('/'),
                     root = ChangeRoot.WORKSPACE,
                     recursive = recursive,
@@ -181,7 +173,7 @@ class FileChangeHub @Inject constructor(
     ): Flow<FileChangeBatch> {
         val sub = containerSubPath.trim('/')
         return watchHostDir(
-            hostDir = if (sub.isEmpty()) containerInstaller.aicodeDir else File(containerInstaller.aicodeDir, sub),
+            hostDir = if (sub.isEmpty()) watchContext.aicodeHostDir else File(watchContext.aicodeHostDir, sub),
             containerRootPath = if (sub.isEmpty()) AICODE_ROOT else "$AICODE_ROOT/$sub",
             root = ChangeRoot.AICODE,
             recursive = recursive,
@@ -412,7 +404,7 @@ class FileChangeHub @Inject constructor(
         }
 
         private fun containerPathOf(hostPath: String): String {
-            val base = containerRootPath ?: return pathMapper.toContainerPath(hostPath)
+            val base = containerRootPath ?: return watchContext.toContainerPath(hostPath)
             val rel = relativePartsOf(rootDir, File(hostPath)).joinToString("/")
             return if (rel.isEmpty()) base else "$base/$rel"
         }
