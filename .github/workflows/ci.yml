@@ -75,4 +75,30 @@ jobs:
       # 只跑 universal debug 变体：单测逻辑与 flavor 无关（flavor 仅影响 abiFilters/assets），
       # 跑全 flavor 6 变体是重复编译，无额外覆盖。
       - name: Run unit tests
+        # 测试方法名含中文：强制 UTF-8，否则某些环境下测试类文件名编码失败
+        # （本容器曾因 sun.jnu.encoding=ANSI_X3.4-1968 复现）。
+        env:
+          LC_ALL: C.utf8
+          LANG: C.utf8
         run: ./gradlew :app:testUniversalDebugUnitTest
+
+      # 静态检查（detekt，只开 bug 类规则：potential-bugs / exceptions / coroutines）。
+      # 只扫本次改动文件：存量代码从没跑过 detekt，全量扫描会立刻被历史问题拦死。
+      # jar 不入库（84MB），脚本按需从 Maven Central 拉固定版本。
+      - name: Static analysis (detekt, changed files)
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            BASE="origin/${{ github.base_ref }}"
+          else
+            BASE="HEAD^"
+          fi
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE"...HEAD -- 'app/src/main/java/**/*.kt' || true)
+          if [ -z "$FILES" ]; then
+            echo "无 Kotlin 源码改动，跳过 detekt"
+            exit 0
+          fi
+          echo "扫描改动文件："
+          echo "$FILES"
+          ./tools/detekt/run-detekt.sh $FILES
