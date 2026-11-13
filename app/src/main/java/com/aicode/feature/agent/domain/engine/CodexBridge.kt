@@ -1,7 +1,6 @@
 package com.aicode.feature.agent.domain.engine
 
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
@@ -9,7 +8,6 @@ import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
-import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.domain.workflow.AgentEvent
@@ -65,15 +63,18 @@ import javax.inject.Singleton
 class CodexBridge @Inject constructor(
     private val containerEngine: LinuxContainerEngine,
     private val permissionBridgeServer: PermissionBridgeServer,
-    private val cliAgentManager: CliAgentManager,
+    cliAgentManager: CliAgentManager,
     private val fileAccess: FileAccessProvider,
-    private val pathHomeResolver: PathHomeResolver,
-    private val containerSettingsRepository: ContainerSettingsRepository,
+    pathHomeResolver: PathHomeResolver,
+    containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val todoMirror: EngineTodoMirror
-) {
+) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
+
+    override val cliCommand: String = "codex"
+
     private companion object {
         const val TAG = "CodexBridge"
 
@@ -84,8 +85,6 @@ class CodexBridge @Inject constructor(
         val TOOL_ITEM_TYPES = setOf(
             "command_execution", "file_change", "mcp_tool_call", "web_search", "todo_list", "collab_tool_call"
         )
-
-        const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
 
         /** 终端标签专用 CODEX_HOME：与用户 ~/.codex 隔离，避免覆盖其自定义 provider 与登录态。 */
         const val CODEX_TAB_HOME_SUFFIX = "/codex-tab"
@@ -100,51 +99,25 @@ class CodexBridge @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val assetsMutex = Mutex()
 
-    private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
-
-    /**
-     * 容器内的工作区路径：CLI 参数（`-C`）与桥接环境变量都必须是容器视角路径。
-     * 调用方传的 projectPath 是宿主真实目录（仅用于 proot `-b` 绑定），直接透给容器内 CLI 会 ENOENT。
-     */
-    private fun containerWorkspacePath(): String = pathHomeResolver.home().trimEnd('/') + "/workspace"
-    private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
+    // bridgeDir / containerWorkspacePath / dataBridgeScript 由 AbstractCliBridge 提供
+    //（containerWorkspacePath 用于 `-C` 参数与桥接环境变量，必须是容器视角路径）。
     private fun threadsPath(): String = bridgeDir() + THREADS_FILE
 
     /** 内存映射缓存；进程被杀/应用重启后回退读 threads 文件。并发回合（悬浮球/定时任务）下也有读写。 */
     private val threadIds = ConcurrentHashMap<String, String>()
 
-    @Volatile private var cachedAvailable: Boolean? = null
-    @Volatile private var cachedAtMs: Long = 0
-
-    @Volatile private var cachedAuthHint: String? = null
-    @Volatile private var cachedAuthAtMs: Long = 0
-
-    /** 引擎是否可用：本地 PRoot 容器 + codex 已安装。远程 SSH 不支持。 */
-    suspend fun isAvailable(): Boolean {
-        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
-        cachedAvailable?.let { cached ->
-            if (System.currentTimeMillis() - cachedAtMs < 5 * 60_000L) return cached
-        }
-        val codex = CliAgentCatalog.ALL.firstOrNull { it.command == "codex" } ?: return false
-        val available = cliAgentManager.detectVersion(codex) != null
-        cachedAvailable = available
-        cachedAtMs = System.currentTimeMillis()
-        return available
-    }
+    // 可用性/认证缓存字段与 isAvailable() 由 AbstractCliBridge 提供。
 
     /**
      * 认证状态：null = 已可用（ChatGPT 登录凭据在，或将透传 App 内 OpenAI key）；
      * 非 null = 未认证引导文案。探测为轻量 test 命令，不拉起 codex。
      */
     suspend fun authHint(providerId: String? = null): String? {
-        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (isRemote()) return null
         if (transmittableOpenAIProvider(providerId) != null) return null
-        cachedAuthHint?.let { cached ->
-            if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
-        }
+        if (authHintCacheFresh()) cachedAuthHint?.let { return it }
         val hint = probeAuthHint()
-        cachedAuthHint = hint
-        cachedAuthAtMs = System.currentTimeMillis()
+        rememberAuthHint(hint)
         return hint
     }
 
@@ -220,12 +193,6 @@ class CodexBridge @Inject constructor(
             ),
         )
     }.onFailure { e -> FileLogger.w(TAG, "CLI 标签供应商注入失败: ${e.message}") }.getOrNull()
-
-    private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
-        val id = containerSettingsRepository.activeProfileIdFlow.first()
-        val profiles = containerSettingsRepository.customProfilesFlow.first()
-        return profiles.firstOrNull { it.id == id } ?: com.aicode.feature.agent.domain.container.ContainerProfile.BUILTIN_ALPINE
-    }
 
     /**
      * 跑一个用户回合。[resume] 为 true 时先尝试 `exec resume` 续接（映射缺失或续接失败自动转全新回合）。

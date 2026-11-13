@@ -3,7 +3,6 @@ package com.aicode.feature.agent.domain.engine
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
-import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.cliagent.CliTabInjection
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
@@ -14,7 +13,6 @@ import com.aicode.feature.agent.domain.provider.NormalizedUsage
 import com.aicode.feature.agent.domain.provider.UsageNormalizer
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
-import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.domain.workflow.AgentEvent
@@ -72,22 +70,22 @@ internal class ResumeSessionMissingException(message: String) : RuntimeException
 class ClaudeCodeBridge @Inject constructor(
     private val containerEngine: LinuxContainerEngine,
     private val permissionBridgeServer: PermissionBridgeServer,
-    private val cliAgentManager: CliAgentManager,
+    cliAgentManager: CliAgentManager,
     private val fileAccess: FileAccessProvider,
-    private val pathHomeResolver: PathHomeResolver,
-    private val containerSettingsRepository: ContainerSettingsRepository,
+    pathHomeResolver: PathHomeResolver,
+    containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val llmCallRecordDao: LlmCallRecordDao,
     private val todoMirror: EngineTodoMirror
-) {
+) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
+
+    override val cliCommand: String = "claude"
+
     private companion object {
         const val TAG = "ClaudeCodeBridge"
-
-        /** 容器内桥接资产目录：/root/.aicode 独立于 rootfs（升级不丢），且是 node 可用的绝对路径。 */
-        const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
 
         /** aicode_bridge 的交付工具名；CLI 侧实际工具名形如 mcp__aicode_bridge__send_file，用包含匹配。 */
         const val SEND_FILE_TOOL = "send_file"
@@ -106,15 +104,10 @@ class ClaudeCodeBridge @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val assetsMutex = Mutex()
 
-    private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
-
-    /**
-     * 容器内的工作区路径：桥接环境变量必须是容器视角路径。
-     * 调用方传的 projectPath 是宿主真实目录（仅用于 proot `-b` 绑定），直接透给容器内脚本会找不到。
-     */
-    private fun containerWorkspacePath(): String = pathHomeResolver.home().trimEnd('/') + "/workspace"
+    // bridgeDir / containerWorkspacePath / dataBridgeScript 由 AbstractCliBridge 提供。
+    // 注意：containerWorkspacePath 的语义说明——调用方传的 projectPath 是宿主真实目录
+    //（仅用于 proot `-b` 绑定），直接透给容器内脚本会找不到，故桥接环境变量一律用容器视角路径。
     private fun bridgeScript(): String = bridgeDir() + "/claude-permission-bridge.mjs"
-    private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
     private fun mcpConfigPath(): String = bridgeDir() + "/mcp-config.json"
 
     private fun ccKeyBase(providerId: String): String = providerId.replace(Regex("[^\\w.-]"), "_")
@@ -140,26 +133,8 @@ class ClaudeCodeBridge @Inject constructor(
     /** App 智能体定义生成给 claude `--agents` 的文件（App 管理区，不写用户 .claude/agents）。 */
     private fun agentsConfigPath(): String = bridgeDir() + "/agents.json"
 
-    /** 引擎可用性缓存（5 分钟 TTL）：避免每次打开模型弹窗都拉起容器进程跑版本检测（optimizer #6）。 */
-    @Volatile private var cachedAvailable: Boolean? = null
-    @Volatile private var cachedAtMs: Long = 0
-
-    /** 认证探测缓存（60 秒 TTL）：每条消息都拉容器进程跑 test 代价过高，登录态变化频率极低。 */
-    @Volatile private var cachedAuthHint: String? = null
-    @Volatile private var cachedAuthAtMs: Long = 0
-
-    /** 引擎是否可用：本地 PRoot 容器 + claude 已安装。远程 SSH 一期不支持。 */
-    suspend fun isAvailable(): Boolean {
-        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
-        cachedAvailable?.let { cached ->
-            if (System.currentTimeMillis() - cachedAtMs < 5 * 60_000L) return cached
-        }
-        val claude = CliAgentCatalog.ALL.firstOrNull { it.command == "claude" } ?: return false
-        val available = cliAgentManager.detectVersion(claude) != null
-        cachedAvailable = available
-        cachedAtMs = System.currentTimeMillis()
-        return available
-    }
+    // 可用性/认证缓存字段与 isAvailable() 由 AbstractCliBridge 提供
+    //（缓存 TTL：可用性 5 分钟，认证提示 60 秒级，登录态变化频率极低，避免每条消息拉起容器进程）。
 
     /**
      * 认证状态：null = 已可用（oauth 凭据在，或将透传 App 内 Anthropic key）；
@@ -167,14 +142,11 @@ class ClaudeCodeBridge @Inject constructor(
      * 探测为一条轻量 test 命令（不拉起 claude、不耗 token）。
      */
     suspend fun authHint(providerId: String? = null): String? {
-        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (isRemote()) return null
         if (resolveCcProvider(providerId) != null) return null
-        cachedAuthHint?.let { cached ->
-            if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
-        }
+        if (authHintCacheFresh()) cachedAuthHint?.let { return it }
         val hint = probeAuthHint()
-        cachedAuthHint = hint
-        cachedAuthAtMs = System.currentTimeMillis()
+        rememberAuthHint(hint)
         return hint
     }
 
@@ -221,12 +193,6 @@ class ClaudeCodeBridge @Inject constructor(
         }.getOrNull()
 
     /** 当前激活 profile（本地模式；与 McpManager 同一解析规则）。 */
-    private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
-        val id = containerSettingsRepository.activeProfileIdFlow.first()
-        val profiles = containerSettingsRepository.customProfilesFlow.first()
-        return profiles.firstOrNull { it.id == id } ?: com.aicode.feature.agent.domain.container.ContainerProfile.BUILTIN_ALPINE
-    }
-
     /**
      * 跑一个用户回合。命令文本即 [userRequest]；[model] 透传 `--model`（CLI 侧模型名或 App 供应商模型名）；
      * [providerId] 为会话选定的 App 供应商（对齐透传的 Key/baseURL，null = 引擎自带模型）；

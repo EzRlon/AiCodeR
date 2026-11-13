@@ -1,13 +1,11 @@
 package com.aicode.feature.agent.domain.engine
 
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
-import com.aicode.feature.settings.data.repository.ExecutionMode
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.domain.workflow.AgentEvent
@@ -69,16 +67,19 @@ import javax.inject.Singleton
 class OpenCodeBridge @Inject constructor(
     private val containerEngine: LinuxContainerEngine,
     private val permissionBridgeServer: PermissionBridgeServer,
-    private val cliAgentManager: CliAgentManager,
+    cliAgentManager: CliAgentManager,
     private val fileAccess: FileAccessProvider,
-    private val pathHomeResolver: PathHomeResolver,
-    private val containerSettingsRepository: ContainerSettingsRepository,
+    pathHomeResolver: PathHomeResolver,
+    containerSettingsRepository: ContainerSettingsRepository,
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val todoMirror: EngineTodoMirror
-) {
+) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
+
+    override val cliCommand: String = "opencode"
+
     private companion object {
         const val TAG = "OpenCodeBridge"
 
@@ -87,8 +88,6 @@ class OpenCodeBridge @Inject constructor(
 
         /** OpenCode 原生待办工具名：todos 数组经 EngineTodoMirror 镜像进 App 待办表。 */
         const val OPENCODE_TODO_TOOL = "todowrite"
-
-        const val BRIDGE_DIR_SUFFIX = "/.aicode/bridge"
 
         /** App sessionId → opencode sessionID 映射文件（容器内路径）。 */
         const val SESSIONS_FILE = "/opencode-sessions.json"
@@ -107,51 +106,25 @@ class OpenCodeBridge @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val assetsMutex = Mutex()
 
-    private fun bridgeDir(): String = pathHomeResolver.aicodeRoot().trimEnd('/') + BRIDGE_DIR_SUFFIX
-
-    /**
-     * 容器内的工作区路径：CLI 参数（`--dir`）与桥接环境变量都必须是容器视角路径。
-     * 调用方传的 projectPath 是宿主真实目录（仅用于 proot `-b` 绑定），直接透给容器内 CLI 会报目录不存在。
-     */
-    private fun containerWorkspacePath(): String = pathHomeResolver.home().trimEnd('/') + "/workspace"
-    private fun dataBridgeScript(): String = bridgeDir() + "/aicode-bridge.mjs"
+    // bridgeDir / containerWorkspacePath / dataBridgeScript 由 AbstractCliBridge 提供
+    //（containerWorkspacePath 用于 `--dir` 参数与桥接环境变量，必须是容器视角路径）。
     private fun sessionsPath(): String = bridgeDir() + SESSIONS_FILE
 
     private val sessionIds = ConcurrentHashMap<String, String>()
 
-    @Volatile private var cachedAvailable: Boolean? = null
-    @Volatile private var cachedAtMs: Long = 0
-
-    @Volatile private var cachedAuthHint: String? = null
-    @Volatile private var cachedAuthAtMs: Long = 0
-
-    /** 引擎是否可用：本地 PRoot 容器 + opencode 已安装。远程 SSH 不支持。 */
-    suspend fun isAvailable(): Boolean {
-        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return false
-        cachedAvailable?.let { cached ->
-            if (System.currentTimeMillis() - cachedAtMs < 5 * 60_000L) return cached
-        }
-        val opencode = CliAgentCatalog.ALL.firstOrNull { it.command == "opencode" } ?: return false
-        val available = cliAgentManager.detectVersion(opencode) != null
-        cachedAvailable = available
-        cachedAtMs = System.currentTimeMillis()
-        return available
-    }
+    // 可用性/认证缓存字段与 isAvailable() 由 AbstractCliBridge 提供。
 
     /**
      * 认证状态：null = 已可用（auth.json 凭据在，或将透传 App 内 OpenAI/Anthropic key）；
      * 非 null = 未认证引导文案。探测为轻量 test 命令，不拉起 opencode。
      */
     suspend fun authHint(providerId: String? = null): String? {
-        if (resolveRuntimeProfile().mode == ExecutionMode.REMOTE_SSH) return null
+        if (isRemote()) return null
         if (providerId != null && resolveProvider(providerId) != null) return null
         if (transmittableProvider(ProviderType.OPENAI) != null || transmittableProvider(ProviderType.ANTHROPIC) != null) return null
-        cachedAuthHint?.let { cached ->
-            if (System.currentTimeMillis() - cachedAuthAtMs < 5 * 60_000L) return cached
-        }
+        if (authHintCacheFresh()) cachedAuthHint?.let { return it }
         val hint = probeAuthHint()
-        cachedAuthHint = hint
-        cachedAuthAtMs = System.currentTimeMillis()
+        rememberAuthHint(hint)
         return hint
     }
 
@@ -187,12 +160,6 @@ class OpenCodeBridge @Inject constructor(
                     it.isEnabled && it.hasUsableApiKey
             }
         }.getOrNull()
-    }
-
-    private suspend fun resolveRuntimeProfile(): com.aicode.feature.agent.domain.container.ContainerProfile {
-        val id = containerSettingsRepository.activeProfileIdFlow.first()
-        val profiles = containerSettingsRepository.customProfilesFlow.first()
-        return profiles.firstOrNull { it.id == id } ?: com.aicode.feature.agent.domain.container.ContainerProfile.BUILTIN_ALPINE
     }
 
     /**
