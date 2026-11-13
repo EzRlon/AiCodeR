@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -102,9 +103,9 @@ private const val BAR_PREF_NAME = "live_annotation_bar"
 private const val BAR_PREF_X = "x"
 private const val BAR_PREF_Y = "y"
 
-/** 布局版本：默认位置改成居中后自增，旧版存下的贴角坐标作废。 */
+/** 布局版本：默认位置改成屏幕正中后自增，旧版存下的坐标作废。 */
 private const val BAR_PREF_LAYOUT_VERSION = "layout_version"
-private const val BAR_LAYOUT_VERSION = 2
+private const val BAR_LAYOUT_VERSION = 3
 
 /**
  * 标注中心统一画布（反馈 6）：一块画布 + 一条工具架，活标注与截屏标注在同一界面完成。
@@ -150,6 +151,8 @@ internal fun AnnotationCanvasScreen(
     var loadingAnnotation by remember { mutableStateOf(false) }
     var barOffset by remember { mutableStateOf<Offset?>(null) }
     var barSize by remember { mutableStateOf(IntSize.Zero) }
+    // 用户拖过之后不再自动重居中；否则定格前后工具数变化会重置用户摆放的位置
+    var barDragged by remember { mutableStateOf(false) }
     var hostCanvasSize by remember { mutableStateOf(IntSize.Zero) }
     val barPrefs = remember { context.getSharedPreferences(BAR_PREF_NAME, Context.MODE_PRIVATE) }
     val decodeSpec = rememberViewerDecodeSpec()
@@ -349,23 +352,6 @@ internal fun AnnotationCanvasScreen(
             }
         }
 
-        // ── 2) 占位引导（活标注态且无标注时） ──
-        if (baseImage == null && marks.isEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(Radius.pill),
-                color = Color.Black.copy(alpha = 0.55f),
-                modifier = Modifier.align(Alignment.Center)
-            ) {
-                Text(
-                    text = stringResource(R.string.annotation_canvas_guide),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                )
-            }
-        }
-
         // ── 3) 「选择」态手势层：先判已画元素（拖动），再判真实组件（虚线高亮）──
         if (selectMode) {
             Box(
@@ -407,21 +393,25 @@ internal fun AnnotationCanvasScreen(
             val maxY = (screenHeightPx - barHeightForClamp - marginPx).coerceAtLeast(marginPx)
             return Offset(raw.x.coerceIn(marginPx, maxX), raw.y.coerceIn(marginPx, maxY))
         }
+        fun centeredOffset(): Offset = Offset(
+            ((screenWidthPx - barWidthForClamp) / 2f).coerceAtLeast(16f),
+            ((screenHeightPx - barHeightForClamp) / 2f).coerceAtLeast(16f)
+        )
         LaunchedEffect(hostCanvasSize, barSize) {
-            if (barOffset == null && hostCanvasSize.width > 0) {
+            if (hostCanvasSize.width <= 0 || barSize.width <= 0) return@LaunchedEffect
+            if (barOffset == null) {
                 val layoutStale = barPrefs.getInt(BAR_PREF_LAYOUT_VERSION, 1) < BAR_LAYOUT_VERSION
                 val saved = if (!layoutStale && barPrefs.contains(BAR_PREF_X) && barPrefs.contains(BAR_PREF_Y)) {
                     Offset(barPrefs.getFloat(BAR_PREF_X, 0f), barPrefs.getFloat(BAR_PREF_Y, 0f))
                 } else {
                     null
                 }
-                // 默认位置：水平居中、垂直略偏上（避开底部录制/保存条），不再贴左上角。
-                val fallback = Offset(
-                    ((screenWidthPx - barWidthForClamp) / 2f).coerceAtLeast(16f),
-                    (screenHeightPx * if (screenWidthPx > screenHeightPx) 0.4f else 0.62f)
-                        .coerceAtLeast(16f)
-                )
-                barOffset = clampBar(saved ?: fallback)
+                // 默认位置：屏幕正中（横竖都居中）
+                barOffset = clampBar(saved ?: centeredOffset())
+            } else if (!barDragged) {
+                // 定格/退出定格局，工具数量变化会改变浮窗尺寸；未手动拖动过就重新居中，
+                // 否则左上角坐标不动会让浮窗看起来偏出一截。
+                barOffset = clampBar(centeredOffset())
             }
         }
         val offset = barOffset ?: Offset(16f, 16f)
@@ -434,6 +424,7 @@ internal fun AnnotationCanvasScreen(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragEnd = {
+                            barDragged = true
                             barOffset?.let {
                                 barPrefs.edit()
                                     .putFloat(BAR_PREF_X, it.x)
@@ -452,6 +443,20 @@ internal fun AnnotationCanvasScreen(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                // 引导文案并入浮窗内部（纵向排在工具并列行之上）：浮窗居中后不再与屏幕中央
+                // 的独立提示叠在一起；同时跟着浮窗一起拖动，不会被压在其他元素下面。
+                if (baseImage == null && marks.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.annotation_canvas_guide),
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.labelMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .widthIn(max = 260.dp)
+                            .padding(horizontal = 4.dp)
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     // 颜色：点击循环切换四种标注类型色
                     Surface(
