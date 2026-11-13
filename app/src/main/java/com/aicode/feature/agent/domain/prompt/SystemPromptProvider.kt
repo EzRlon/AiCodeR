@@ -430,9 +430,12 @@ class SystemPromptProvider @Inject constructor(
                 return null
             }
             if (entries.isEmpty()) return null
-            val haystack = ctx.history.lastOrNull { it is AgentMessage.UserMessage }
-                ?.let { (it as AgentMessage.UserMessage).content }
-                .orEmpty()
+            // 优先用本轮输入：系统提示词构建早于消息入 history，只看 history 会拿到上一轮（首轮为空）。
+            val haystack = ctx.currentUserRequest.ifBlank {
+                ctx.history.lastOrNull { it is AgentMessage.UserMessage }
+                    ?.let { (it as AgentMessage.UserMessage).content }
+                    .orEmpty()
+            }
             return LorebookStore.render(LorebookStore.recall(entries, haystack))
         }
     }

@@ -702,7 +702,9 @@ class StatefulAgentWorkflow @Inject constructor(
             promptProvider.build(
                 currentContext.copy(
                     modelName = aiProvider.model,
-                    modelContextTokens = metadata.contextTokens
+                    modelContextTokens = metadata.contextTokens,
+                    // 本轮输入尚未进入 history，显式传入供世界书等按输入召回的来源使用。
+                    currentUserRequest = userRequest
                 )
             )
         }

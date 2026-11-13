@@ -91,7 +91,14 @@ data class AgentContext(
     /** 当前模型名（注入运行时上下文，供 AI 知晓自己所用模型）。 */
     val modelName: String? = null,
     /** 当前模型最大上下文窗口（tokens）；0 = 未知。注入后保持会话内稳定，不破坏 KV Cache。 */
-    val modelContextTokens: Int = 0
+    val modelContextTokens: Int = 0,
+    /**
+     * 本轮用户输入原文。
+     *
+     * 系统提示词在本轮消息拼进 [history] 之前构建，按输入召回的内容（世界书）不能只看
+     * history 最后一条 UserMessage——那会是上一轮输入（首轮则为空），导致永不命中/滞后一轮。
+     */
+    val currentUserRequest: String = ""
 ) {
     /**
      * 工具授权判定用的有效模式：goal 自主循环激活期间按 AUTO 放行（保留灾难性安全防护），

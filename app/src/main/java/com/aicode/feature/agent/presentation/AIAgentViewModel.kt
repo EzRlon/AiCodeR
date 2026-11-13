@@ -2632,7 +2632,8 @@ class AIAgentViewModel @Inject constructor(
                 goal = sessionDomain?.goal,
                 goalStatus = sessionDomain?.goalStatus,
                 reasoningEffort = sessionDomain?.reasoningEffort?.apiValue,
-                agentDefinition = agentDefinition
+                agentDefinition = agentDefinition,
+                currentUserRequest = request
             )
 
             val allTools = toolRegistry.getAvailableTools().let { list ->
