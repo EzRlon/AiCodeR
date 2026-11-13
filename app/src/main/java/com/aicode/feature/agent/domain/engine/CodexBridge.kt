@@ -610,10 +610,12 @@ class CodexBridge @Inject constructor(
         return AgentEvent.Failed(error = message)
     }
 
-    /** 命令执行→bash、文件改动→file_edit、MCP 工具→server.tool，其余用协议类型名。 */
+    /** 命令执行→bash、文件改动→file_edit、MCP 工具→server.tool、子代理协作→task，其余用协议类型名。 */
     private fun displayToolName(type: String?, item: JsonObject): String = when (type) {
         "command_execution" -> "bash"
         "file_change" -> "file_edit"
+        // Codex 的 collab_tool_call 就是派发/操控子代理，归一成内置的 task（图标/文案/成员名同源）
+        "collab_tool_call" -> EngineSubagent.TOOL_NAME
         "mcp_tool_call" -> {
             val server = item["server"]?.jsonPrimitive?.contentOrNull ?: ""
             val tool = item["tool"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -627,6 +629,9 @@ class CodexBridge @Inject constructor(
 
     private fun argsPreview(item: JsonObject): String = when (item["type"]?.jsonPrimitive?.contentOrNull) {
         "command_execution" -> item["command"]?.jsonPrimitive?.contentOrNull ?: ""
+        // 子代理：优先展示任务描述，取不到再退回完整参数，避免工具行只有协议名
+        "collab_tool_call" -> EngineSubagent.memberName(item.toString())
+            ?: (item["prompt"]?.jsonPrimitive?.contentOrNull ?: item.toString())
         "mcp_tool_call" -> item["arguments"]?.toString() ?: ""
         "file_change" -> (item["changes"] as? kotlinx.serialization.json.JsonArray)
             ?.joinToString(", ") { (it as? JsonObject)?.get("path")?.jsonPrimitive?.contentOrNull ?: "" }

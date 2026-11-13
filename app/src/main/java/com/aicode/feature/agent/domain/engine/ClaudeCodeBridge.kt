@@ -93,6 +93,9 @@ class ClaudeCodeBridge @Inject constructor(
         /** Claude 原生待办工具名：todos 数组经 EngineTodoMirror 镜像进 App 待办表。 */
         const val CLAUDE_TODO_TOOL = "TodoWrite"
 
+        /** 后台子代理完成时 CLI 注入的纯文本通知标签（headless stream-json 的 user 消息）。 */
+        const val TASK_NOTIFICATION_TAG = "<task-notification>"
+
         const val MCP_SERVER_NAME = "permission_bridge"
         const val MCP_TOOL_NAME = "request_permission"
 
@@ -607,6 +610,8 @@ class ClaudeCodeBridge @Inject constructor(
         var pendingUsage: NormalizedUsage? = null
         /** 刚解析到的 TodoWrite 全量待办；消费端镜像落库后清空（与 pendingUsage 同一节奏）。 */
         var pendingTodos: List<EngineTodoMirror.NativeTodo> = emptyList()
+        /** 已后台启动、尚未收到完成通知的子代理 tool_use id（Claude 异步 Task）。 */
+        val asyncToolIds = mutableSetOf<String>()
         fun resetBlocks() { text.clear(); reasoning.clear() }
     }
 
@@ -622,7 +627,7 @@ class ClaudeCodeBridge @Inject constructor(
             "assistant" -> parseAssistantMessage(obj, acc)
             "user" -> parseToolResult(obj, acc)
             "system" -> listOfNotNull(parseSystem(obj))
-            "result" -> listOfNotNull(parseResult(obj))
+            "result" -> parseResult(obj, acc)
             else -> emptyList()
         }
     }
@@ -638,7 +643,12 @@ class ClaudeCodeBridge @Inject constructor(
                 val block = event["content_block"] as? JsonObject
                 if (block?.get("type")?.jsonPrimitive?.contentOrNull == "tool_use") {
                     val name = block["name"]?.jsonPrimitive?.contentOrNull
-                    if (name != null) listOf(AgentEvent.ToolCallPreparing(toolName = name)) else emptyList()
+                    // 参数流式阶段就把 Task/Agent 说成「正在启动子代理」，与内置引擎一致
+                    if (name != null) {
+                        listOf(AgentEvent.ToolCallPreparing(toolName = EngineSubagent.normalizeToolName(name)))
+                    } else {
+                        emptyList()
+                    }
                 } else emptyList()
             }
             "content_block_delta" -> {
@@ -675,12 +685,14 @@ class ClaudeCodeBridge @Inject constructor(
                     val input = b["input"] as? JsonObject ?: JsonObject(emptyMap())
                     val id = b["id"]?.jsonPrimitive?.contentOrNull ?: ""
                     val name = b["name"]?.jsonPrimitive?.contentOrNull ?: ""
-                    acc.toolNames[id] = name
+                    // Claude 的 Task/Agent 归一成内置的 task：图标、场景文案、成员名复用同一条链路
+                    val displayName = EngineSubagent.normalizeToolName(name)
+                    acc.toolNames[id] = displayName
                     // Claude 的 TodoWrite（todos 数组）镜像进 App 待办表：待办卡片由此拉起/刷新/自动收起
                     if (name.equals(CLAUDE_TODO_TOOL, ignoreCase = true)) {
                         acc.pendingTodos = todoMirror.parseTodos(input["todos"] as? kotlinx.serialization.json.JsonArray)
                     }
-                    toolCalls.add(ToolCall(id = id, name = name, arguments = input))
+                    toolCalls.add(ToolCall(id = id, name = displayName, arguments = input))
                 }
             }
         }
@@ -719,13 +731,36 @@ class ClaudeCodeBridge @Inject constructor(
     private fun parseToolResult(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
         val message = obj["message"] as? JsonObject ?: return emptyList()
         val content = message["content"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
-        return content.mapNotNull { block ->
-            val b = block as? JsonObject ?: return@mapNotNull null
-            if (b["type"]?.jsonPrimitive?.contentOrNull != "tool_result") return@mapNotNull null
-            val toolUseId = b["tool_use_id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+        val events = mutableListOf<AgentEvent>()
+        // 后台子代理完成时 CLI 会把 <task-notification> 以纯文本 user 消息注入。
+        // 原实现只认 tool_result 块，这类通知被静默丢弃；这里把它配对到待完成的工具行。
+        val notification = content.mapNotNull { block ->
+            (block as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull
+        }.firstOrNull { it.contains(TASK_NOTIFICATION_TAG) }
+        if (notification != null && acc.asyncToolIds.isNotEmpty()) {
+            val id = acc.asyncToolIds.first()
+            acc.asyncToolIds.remove(id)
+            events += AgentEvent.ToolCallFinished(
+                id = id,
+                toolName = acc.toolNames[id] ?: EngineSubagent.TOOL_NAME,
+                result = notification.take(4000),
+                isError = notification.contains("status>failed", ignoreCase = true)
+            )
+        }
+        content.forEach { block ->
+            val b = block as? JsonObject ?: return@forEach
+            if (b["type"]?.jsonPrimitive?.contentOrNull != "tool_result") return@forEach
+            val toolUseId = b["tool_use_id"]?.jsonPrimitive?.contentOrNull ?: return@forEach
             val name = acc.toolNames[toolUseId] ?: ""
             val failed = b["is_error"]?.jsonPrimitive?.contentOrNull == "true" ||
                 (b["is_error"] as? JsonPrimitive)?.content == "true"
+            val resultText = extractText(b["content"])
+            // 后台子代理：Task 工具立即返回 async_launched，子代理仍在跑。
+            // 此时不能把工具行判为完成，保持「正在启动子代理」，等完成通知或回合结束再收尾。
+            if (!failed && EngineSubagent.isSubagentTool(name) && EngineSubagent.isAsyncLaunch(resultText)) {
+                acc.asyncToolIds += toolUseId
+                return@forEach
+            }
             // send_file 的交付语义在 App 侧登记（见 PermissionBridgeServer.handleSendFile），
             // 这里取出来挂成文件卡片；失败时不取，避免把半份交付渲染出来。
             val attachments = if (!failed && name.contains(SEND_FILE_TOOL)) {
@@ -733,14 +768,15 @@ class ClaudeCodeBridge @Inject constructor(
             } else {
                 emptyList()
             }
-            AgentEvent.ToolCallFinished(
+            events += AgentEvent.ToolCallFinished(
                 id = toolUseId,
                 toolName = name,
-                result = extractText(b["content"]),
+                result = resultText,
                 isError = failed,
                 attachments = attachments
             )
         }
+        return events
     }
 
     /** tool_result.content 可能是字符串或 [{type:"text",text:...}] 数组。 */
@@ -765,10 +801,22 @@ class ClaudeCodeBridge @Inject constructor(
     }
 
     /** 回合收尾：success → Completed；error_* / is_error → Failed。 */
-    private fun parseResult(obj: JsonObject): AgentEvent? {
-        val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull ?: return null
+    private fun parseResult(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
+        val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
         val isError = (obj["is_error"] as? JsonPrimitive)?.content == "true" || subtype.startsWith("error")
-        return if (isError) {
+        // 回合结束前仍未收到通知的后台子代理：收尾工具行，避免 UI 永远停在「执行中」。
+        // 子代理进程可能仍在 CLI 里跑，文案如实说明，不伪造成功/失败。
+        val events = mutableListOf<AgentEvent>()
+        acc.asyncToolIds.forEach { id ->
+            events += AgentEvent.ToolCallFinished(
+                id = id,
+                toolName = acc.toolNames[id] ?: EngineSubagent.TOOL_NAME,
+                result = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。",
+                isError = false
+            )
+        }
+        acc.asyncToolIds.clear()
+        if (isError) {
             val detail = obj["result"]?.jsonPrimitive?.contentOrNull
                 ?: obj["error"]?.jsonPrimitive?.contentOrNull
                 ?: (obj["errors"] as? JsonArray)?.firstOrNull()?.jsonPrimitive?.contentOrNull
@@ -776,10 +824,11 @@ class ClaudeCodeBridge @Inject constructor(
             // claude 2.1.29x 把启动类失败包装成 error_during_execution 的 result 事件而非裸退出；
             // 无论本回合是否已产出流式事件都按启动失败分类，是否重试由外层「已产出事件」门把关
             if (subtype == "error_during_execution") throw classifyEarlyExit(detail)
-            AgentEvent.Failed(error = detail)
+            events += AgentEvent.Failed(error = detail)
         } else {
-            AgentEvent.Completed
+            events += AgentEvent.Completed
         }
+        return events
     }
 
     private fun JsonObject.intOf(key: String): Int = (this[key] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0

@@ -75,6 +75,7 @@ import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.feature.agent.domain.engine.EngineSubagent
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.core.ui.ExpandableChevronIcon
@@ -1189,11 +1190,6 @@ private fun extractFilePathArg(argsJson: String?): String? {
  * 都没有则不加名字标识，避免把普通任务调用也标注成成员。
  */
 private fun taskMemberName(argsJson: String?, toolName: String?): String? {
-    if (toolName != "task" || argsJson.isNullOrBlank()) return null
-    return runCatching {
-        val obj = Json.parseToJsonElement(argsJson).jsonObject
-        listOf("agent", "description").firstNotNullOfOrNull { key ->
-            (obj[key] as? JsonPrimitive)?.contentOrNull
-        }
-    }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+    if (!EngineSubagent.isSubagentTool(toolName) || argsJson.isNullOrBlank()) return null
+    return EngineSubagent.memberName(argsJson)
 }
