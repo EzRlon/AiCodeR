@@ -643,6 +643,12 @@ fun AppNavigation(
     LaunchedEffect(sidebarVisible) {
         if (sidebarVisible) agentViewModel.refreshBrowse()
     }
+    // 侧栏打开时收起输入框焦点：文本光标与选择手柄是独立 Popup 窗口，会浮在抽屉之上
+    // 出现「蓝色块/光标跑出来」的错位（中文输入法候选栏同理）。收起焦点后一并消失。
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(sidebarVisible) {
+        if (sidebarVisible) focusManager.clearFocus()
+    }
 
     // 插件驱动的侧栏入口：顾问团 / 分析台只有「插件已装且已启用」才露出。
     // 全新安装不带任何插件，因此这两项默认不存在；用户从插件页安装并开启后，
@@ -785,6 +791,8 @@ fun AppNavigation(
             deliverables = deliverables,
             deliverablesScanning = deliverablesScanning,
             onRefreshDeliverables = { agentViewModel.refreshDeliverables() },
+            onRemoveDeliverable = { agentViewModel.removeDeliverableFromList(it) },
+            onDeleteDeliverableCompletely = { item, cb -> agentViewModel.deleteDeliverableCompletely(item, cb) },
             deliverableFileAccess = agentViewModel.fileAccess,
             trashedSessions = trashedSessions,
             onRestoreSession = { agentViewModel.restoreSession(it) },
