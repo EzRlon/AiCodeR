@@ -37,7 +37,6 @@ import com.aicode.feature.settings.data.repository.LiveNotificationSettingsRepos
 import com.aicode.feature.settings.data.repository.ApprovalNotificationSettingsRepository
 import com.aicode.feature.settings.data.repository.ContainerSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelReasoningEffortRepository
-import com.aicode.feature.settings.data.repository.VoiceSettingsRepository
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.terminal.domain.TerminalSessionManager
@@ -108,8 +107,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val fileAccess: FileAccessProvider,
     private val fileChangeHub: FileChangeHub,
     private val scheduledTaskRepository: ScheduledTaskRepository,
-    private val voiceSettingsRepository: VoiceSettingsRepository,
-    private val voskModelManager: com.aicode.feature.agent.domain.voice.VoskModelManager,
+    private val voiceState: com.aicode.feature.agent.presentation.VoiceStateHolder,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
@@ -168,8 +166,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         fileAccess,
         fileChangeHub,
         scheduledTaskRepository,
-        voiceSettingsRepository,
-        voskModelManager,
+        voiceState,
         floatBallStateStore,
         floatBallSessionHub,
         claudeCodeBridge,
