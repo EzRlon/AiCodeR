@@ -23,6 +23,7 @@
 | --- | --- |
 | 冒烟编译（日常默认） | `./gradlew :app:assembleUniversalDebug` |
 | 推送前单测 | `./gradlew :app:testUniversalDebugUnitTest` |
+| 推送前一键验证（真跑单测 + 迁移对账 + detekt） | `sh scripts/verify-all.sh`（`--fast` 放行 Gradle 缓存，日常自查用） |
 | 推送前迁移对账 | `python3 scripts/check_migrations.py`（或 `./gradlew checkMigrations`） |
 | 发版构建 APK / AAB | `./gradlew assembleRelease` / `./gradlew bundleRelease` |
 
