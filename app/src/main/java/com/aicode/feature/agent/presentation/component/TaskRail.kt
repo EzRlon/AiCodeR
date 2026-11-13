@@ -142,11 +142,13 @@ internal fun TaskRail(
         label = "task-rail-dot-alpha"
     )
 
+    // 描边与卡片底色完全一致：收起后仍能靠形状/渐变蒙版分辨边界，但不露出一圈色差线框，
+    // 与展开态输入卡（ChatInputBar 的同色描边）保持一致，任何主题下都融为一体。
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.lg),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
     ) {
         Row(
             modifier = Modifier
