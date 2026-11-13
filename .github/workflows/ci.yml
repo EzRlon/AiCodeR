@@ -80,7 +80,7 @@ jobs:
         env:
           LC_ALL: C.utf8
           LANG: C.utf8
-        run: ./gradlew :app:testUniversalDebugUnitTest
+        run: ./gradlew :app:testUniversalDebugUnitTest :terminal-emulator:testDebugUnitTest
 
       # 静态检查（detekt，只开 bug 类规则：potential-bugs / exceptions / coroutines）。
       # 只扫本次改动文件：存量代码从没跑过 detekt，全量扫描会立刻被历史问题拦死。
