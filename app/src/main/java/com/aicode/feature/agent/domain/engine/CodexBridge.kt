@@ -299,7 +299,9 @@ class CodexBridge @Inject constructor(
             // 同时注入知识块（知识库索引 + 世界书命中）；TOML 重复 key 会覆盖，语言指令与知识块合并成一条
             val developerExtras = listOfNotNull(
                 EngineLocale.replyLanguageDirective(),
-                CliKnowledgeInjection.build(containerWorkspacePath(), userRequest ?: "")
+                // 注意传宿主路径：CliKnowledgeInjection 按宿主文件系统读 notes/lorebook，
+                    // 传容器路径（/root/workspace）会读不到，注入内容恒为空。
+                    CliKnowledgeInjection.build(projectPath ?: "", userRequest ?: "")
             )
             if (developerExtras.isNotEmpty()) {
                 add("-c"); add("developer_instructions=${tomlString(developerExtras.joinToString("\n\n"))}")
