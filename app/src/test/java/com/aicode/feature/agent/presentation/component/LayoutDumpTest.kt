@@ -33,7 +33,9 @@ class LayoutDumpTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private val outDir = File("/root/workspace/aicoder/build/layout-dumps").apply { mkdirs() }
+    // 落模块构建目录（Gradle 测试工作目录即 app/）：本地与 CI（/home/runner）都能写。
+    // 曾硬编码 /root/workspace/aicoder，CI runner 无 /root 权限，mkdirs 失败后 writeText 抛 FileNotFoundException。
+    private val outDir = File("build/layout-dumps").apply { mkdirs() }
 
     @Test
     fun `导出底栏布局-构建模式`() = dump("input-bar-build") { renderBar(AgentMode.BUILD) }
