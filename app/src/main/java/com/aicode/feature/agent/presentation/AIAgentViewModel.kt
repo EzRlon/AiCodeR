@@ -253,6 +253,7 @@ class AIAgentViewModel @Inject constructor(
     private val scheduledTaskRepository: com.aicode.feature.schedule.data.ScheduledTaskRepository,
     private val voiceState: VoiceStateHolder,
     private val deliverablesState: DeliverablesStateHolder,
+    private val chatSearchStateHolder: ChatSearchStateHolder,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
@@ -371,12 +372,6 @@ class AIAgentViewModel @Inject constructor(
     private val _messageLimit = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val defaultLimit = 30
     private val loadedMessageLimits = mutableMapOf<String, Int>()
-
-    /** 聊天记录搜索：命中条数上限、输入防抖、片段上下文宽度、定位时预留的分页余量。 */
-    private val chatSearchLimit = 50
-    private val chatSearchDebounceMs = 300L
-    private val snippetContext = 40
-    private val messageLimitMargin = 5
 
     /**
      * 各会话各自的输入草稿，按会话区分持久化到磁盘：进程重启后草稿依然保留。
@@ -603,7 +598,7 @@ class AIAgentViewModel @Inject constructor(
         // 切到新工作区：恢复该工作区上次持久化的展开状态（无记录则只展开根）。
         _expandedPaths.value = loadExpansion(path)
         // 搜索限定当前工作区，切区后旧结果无意义，一并清空。
-        _chatSearchQuery.value = ""
+        chatSearchStateHolder.updateQuery("")
     }
 
     val sessions: StateFlow<List<ChatSession>> = _currentWorkspace
@@ -628,99 +623,19 @@ class AIAgentViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    // ── 聊天记录全局搜索（限当前工作区）──
-    private val _chatSearchQuery = MutableStateFlow("")
-    val chatSearchQuery: StateFlow<String> = _chatSearchQuery.asStateFlow()
+    // ── 聊天记录全局搜索（委托 ChatSearchStateHolder；属性/方法签名保持稳定）──
+    val chatSearchQuery: StateFlow<String> get() = chatSearchStateHolder.chatSearchQuery
+    val pendingScrollMessage: StateFlow<Pair<String, String>?> get() = chatSearchStateHolder.pendingScrollMessage
+    val chatSearchState: StateFlow<ChatSearchState> get() = chatSearchStateHolder.chatSearchState
 
-    /** 待定位的消息（会话 id to 消息 id）；聊天页滚动到位或确认无法定位后消费清除。 */
-    private val _pendingScrollMessage = MutableStateFlow<Pair<String, String>?>(null)
-    val pendingScrollMessage: StateFlow<Pair<String, String>?> = _pendingScrollMessage.asStateFlow()
+    fun updateChatSearchQuery(query: String) = chatSearchStateHolder.updateQuery(query)
 
-    /**
-     * 搜索状态：工作区与关键词变化时防抖后查询，命中映射为带片段的 UI 模型。
-     * 查询走 IO 调度器，避免 LIKE 全表扫描卡住主线程。
-     */
-    val chatSearchState: StateFlow<ChatSearchState> =
-        combine(_currentWorkspace, _chatSearchQuery) { ws, q -> ws to q }
-            .debounce(chatSearchDebounceMs)
-            .flatMapLatest { (workspace, query) ->
-                val keyword = query.trim()
-                if (workspace.isBlank() || keyword.isEmpty()) {
-                    flowOf(ChatSearchState(query = query))
-                } else {
-                    flow {
-                        emit(ChatSearchState(query = query, loading = true))
-                        val hits = withContext(Dispatchers.IO) {
-                            agentMessageDao.searchInWorkspace(
-                                workspace,
-                                escapeLikePattern(keyword),
-                                chatSearchLimit
-                            ).map { m ->
-                                ChatSearchHit(
-                                    sessionId = m.sessionId,
-                                    sessionTitle = m.sessionTitle,
-                                    messageId = m.messageId,
-                                    snippet = buildSnippet(m.content, keyword),
-                                    timestamp = m.timestamp
-                                )
-                            }
-                        }
-                        emit(ChatSearchState(query = query, hits = hits))
-                    }
-                }
-            }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, ChatSearchState())
+    fun clearChatSearch() = chatSearchStateHolder.clear()
 
-    fun updateChatSearchQuery(query: String) {
-        _chatSearchQuery.value = query
-    }
+    /** 打开一条搜索命中：切换到对应会话并登记待定位消息（滚动由聊天页完成）。 */
+    fun openChatSearchHit(hit: ChatSearchHit) = chatSearchStateHolder.openHit(hit)
 
-    fun clearChatSearch() {
-        _chatSearchQuery.value = ""
-        _pendingScrollMessage.value = null
-    }
-
-    /**
-     * 打开一条搜索命中：切到对应会话，把该会话分页上限抬到足够包含目标消息，并登记待定位消息。
-     * 实际滚动由聊天页在消息就绪后完成。搜索词与结果保留，重开侧边栏仍停在结果列表。
-     */
-    fun openChatSearchHit(hit: ChatSearchHit) {
-        selectSession(hit.sessionId)
-        viewModelScope.launch {
-            val timestamp = withContext(Dispatchers.IO) {
-                agentMessageDao.getMessageById(hit.messageId)?.timestamp
-            }
-            if (timestamp != null) {
-                val needed = withContext(Dispatchers.IO) {
-                    agentMessageDao.countMessagesFromTimestamp(hit.sessionId, timestamp)
-                } + messageLimitMargin
-                val current = _messageLimit.value[hit.sessionId] ?: defaultLimit
-                if (needed > current) {
-                    _messageLimit.value = _messageLimit.value + (hit.sessionId to needed)
-                }
-            }
-            _pendingScrollMessage.value = hit.sessionId to hit.messageId
-        }
-    }
-
-    fun consumePendingScroll() {
-        _pendingScrollMessage.value = null
-    }
-
-    /** 转义 LIKE 通配符，配合 SQL 里的 ESCAPE '!'（转义字符本身需最先处理）。 */
-    /** 以命中词为中心截取片段：折叠换行空白，两端按需加省略号；未命中时退回开头一段。 */
-    private fun buildSnippet(content: String, keyword: String): String {
-        val flat = content.replace(Regex("\\s+"), " ").trim()
-        val index = flat.indexOf(keyword, ignoreCase = true)
-        if (index < 0) return flat.take(snippetContext * 2)
-        val start = (index - snippetContext).coerceAtLeast(0)
-        val end = (index + keyword.length + snippetContext).coerceAtMost(flat.length)
-        return buildString {
-            if (start > 0) append('\u2026')
-            append(flat, start, end)
-            if (end < flat.length) append('\u2026')
-        }
-    }
+    fun consumePendingScroll() = chatSearchStateHolder.consumePendingScroll()
 
     /** 侧边栏「文件」Tab 已展开的目录集合（容器路径）。含工作区根：根也可折叠，默认展开；按工作区持久化。 */
     private val _expandedPaths = MutableStateFlow(setOf(WorkspacePathMapper.CONTAINER_ROOT))
@@ -1614,6 +1529,18 @@ class AIAgentViewModel @Inject constructor(
         voiceState.attach(viewModelScope)
         // 交付物域：作用域 + 当前工作区路径读取函数
         deliverablesState.attach(viewModelScope) { _currentWorkspace.value }
+        // 聊天搜索域：工作区流 + 切换会话 + 按需抬高分页上限
+        chatSearchStateHolder.attach(
+            scope = viewModelScope,
+            workspaceFlow = _currentWorkspace,
+            onSelectSession = { selectSession(it) },
+            onEnsureMessageLimit = { sessionId, needed ->
+                val current = _messageLimit.value[sessionId] ?: defaultLimit
+                if (needed > current) {
+                    _messageLimit.value = _messageLimit.value + (sessionId to needed)
+                }
+            }
+        )
         // 悬浮球 mini 会话窗口（FB1）：把当前会话的消息快照/标题/运行态镜像到进程级 Hub，
         // 悬浮窗面板只读消费；发送/停止命令仍走 FloatBallCommandCenter（主界面注册）。
         viewModelScope.launch {
