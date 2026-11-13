@@ -600,7 +600,10 @@ class FloatBallOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = breathState?.value ?: 1f }
+                    // 呼吸只在执行中挂层；待机摘层，避免浮球内文字缓存旧主题色。
+                    .then(
+                        if (breathState != null) Modifier.graphicsLayer { alpha = breathState?.value ?: 1f } else Modifier
+                    )
                     .then(
                         if (form == BallForm.SPHERE) {
                             Modifier
@@ -809,13 +812,17 @@ class FloatBallOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .offset(x = slideOffset.dp)
-                .graphicsLayer {
-                    alpha = appear.coerceIn(0f, 1f)
-                    val scale = 0.88f + 0.12f * appear
-                    scaleX = scale
-                    scaleY = scale
-                    transformOrigin = TransformOrigin(if (fromLeft) 0f else 1f, 0.5f)
-                }
+                // 进出场结束后摘掉图层：常驻 graphicsLayer 的离屏缓存不随主题切换刷新，
+                // 会让悬浮窗里的文字停在旧配色（与其它页面同一根因）。
+                .then(
+                    if (appear >= 1f) Modifier else Modifier.graphicsLayer {
+                        alpha = appear.coerceIn(0f, 1f)
+                        val scale = 0.88f + 0.12f * appear
+                        scaleX = scale
+                        scaleY = scale
+                        transformOrigin = TransformOrigin(if (fromLeft) 0f else 1f, 0.5f)
+                    }
+                )
         ) {
             Column(
                 modifier = Modifier

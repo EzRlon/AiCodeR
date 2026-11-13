@@ -274,6 +274,8 @@ class AIEditorApp : Application(), Configuration.Provider {
             return
         }
         super.onCreate()
+        // 追踪前台 Activity：商店人机校验需要临时挂一个不可见 WebView 到当前窗口。
+        com.aicode.core.util.ActivityTracker.install(this)
         logDeviceInfo()
         // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
         appScope.launch { reportAbnormalExits() }

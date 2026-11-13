@@ -145,7 +145,7 @@ internal fun TaskRail(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(Radius.lg),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        color = MaterialTheme.colorScheme.background,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(

@@ -22,9 +22,12 @@ import okhttp3.Response
  */
 @Singleton
 class StoreApiClient @Inject constructor(
-    baseClient: OkHttpClient
+    baseClient: OkHttpClient,
+    private val challengeSolver: StoreChallengeSolver
 ) {
     private val client: OkHttpClient = baseClient.newBuilder()
+        // 与 WebView 共享 Cookie：人机校验通过后 OkHttp 后续请求直接复用校验态。
+        .cookieJar(WebViewCookieJar())
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .callTimeout(45, TimeUnit.SECONDS)
@@ -105,7 +108,7 @@ class StoreApiClient @Inject constructor(
     }
 
     private suspend inline fun <reified T> getJson(url: String): Result<T> = withContext(Dispatchers.IO) {
-        withRetry {
+        val direct = withRetry {
             runCatching {
                 val request = Request.Builder()
                     .url(url)
@@ -118,7 +121,19 @@ class StoreApiClient @Inject constructor(
                     json.decodeFromString<T>(body.string())
                 }
             }
-        }.onFailure { FileLogger.w(TAG, "商店请求失败: $url", it) }
+        }
+        // Vercel 人机校验只有浏览器内核能通过：改走 WebView 取回同一份 JSON。
+        val error = direct.exceptionOrNull()
+        if (error is HttpStatusException && error.challenge) {
+            FileLogger.w(TAG, "命中安全校验，改走 WebView 取数: $url")
+            val body = challengeSolver.fetchJsonViaWebView(url)
+            if (body != null) {
+                val solved = runCatching { json.decodeFromString<T>(body) }
+                if (solved.isSuccess) return@withContext solved
+                FileLogger.w(TAG, "WebView 返回内容解析失败: $url", solved.exceptionOrNull())
+            }
+        }
+        direct.onFailure { FileLogger.w(TAG, "商店请求失败: $url", it) }
     }
 
     /** 非 2xx 抛出带状态码与 `Retry-After` 的异常，交由 [withRetry] 判断是否重试。 */

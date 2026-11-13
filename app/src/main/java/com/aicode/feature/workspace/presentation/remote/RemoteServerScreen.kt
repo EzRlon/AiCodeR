@@ -207,10 +207,14 @@ fun RemoteServerScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .zIndex(if (isDragging) 1f else 0f)
-                                            .graphicsLayer {
-                                                scaleX = dragScale
-                                                scaleY = dragScale
-                                            }
+                                            // 只在拖拽缩放偏离 1f 时挂层：常驻离屏图层不随主题切换刷新，
+                                            // 会让连接卡片文字停在旧配色。
+                                            .then(
+                                                if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                                    scaleX = dragScale
+                                                    scaleY = dragScale
+                                                }
+                                            )
                                     ) {
                                         RemoteConnectionCard(
                                             conn = conn,

@@ -157,13 +157,18 @@ private fun FloatingTabIndicator(
     scaleYRatio: () -> Float,
     glass: FloatingTabGlass
 ) {
+    val scaleXNow = scaleXRatio()
+    val scaleYNow = scaleYRatio()
     Box(
         modifier = modifier
             .offset { IntOffset(x.roundToInt(), 0) }
-            .graphicsLayer {
-                scaleX = scaleXRatio()
-                scaleY = scaleYRatio()
-            }
+            // 静止（缩放为 1）时不挂层：否则指示器底色会缓存旧主题色。
+            .then(
+                if (scaleXNow == 1f && scaleYNow == 1f) Modifier else Modifier.graphicsLayer {
+                    scaleX = scaleXNow
+                    scaleY = scaleYNow
+                }
+            )
             .width(width)
             .height(44.dp)
             .shadow(
@@ -215,10 +220,14 @@ private fun FloatingTabCell(
         modifier = Modifier
             .onGloballyPositioned { onBounds(it.boundsInParent()) }
             .widthIn(min = 84.dp)
-            .graphicsLayer {
-                scaleX = tabScale
-                scaleY = tabScale
-            }
+            // 按下缩放只在动画值偏离 1f 时挂层：常驻离屏图层不随主题切换刷新，
+            // 会把 tab 文字/图标缓存成旧配色（主题色切换后文字不变色的老问题）。
+            .then(
+                if (tabScale == 1f) Modifier else Modifier.graphicsLayer {
+                    scaleX = tabScale
+                    scaleY = tabScale
+                }
+            )
             .clip(RoundedCornerShape(16.dp))
             .clickable(
                 interactionSource = interactionSource,
@@ -234,10 +243,12 @@ private fun FloatingTabCell(
             contentDescription = null,
             modifier = Modifier
                 .size(20.dp)
-                .graphicsLayer {
-                    scaleX = iconScale
-                    scaleY = iconScale
-                },
+                .then(
+                    if (iconScale == 1f) Modifier else Modifier.graphicsLayer {
+                        scaleX = iconScale
+                        scaleY = iconScale
+                    }
+                ),
             tint = fgColor
         )
         Spacer(Modifier.height(3.dp))
@@ -318,7 +329,8 @@ fun FloatingTabBar(
         Box(
             modifier = Modifier
                 .padding(bottom = 6.dp)
-                .graphicsLayer { alpha = contentAlpha }
+                // 同上：滚动淡出结束后摘掉图层，避免整条 tab 栏（含文字）缓存旧主题色。
+                .then(if (contentAlpha < 1f) Modifier.graphicsLayer { alpha = contentAlpha } else Modifier)
                 .shadow(
                     elevation = 8.dp,
                     shape = RoundedCornerShape(Radius.pill),

@@ -1416,9 +1416,15 @@ class AIAgentViewModel @Inject constructor(
         // 把交付物复制一份到真机存储 下载/AiCodeR/（不是容器映射）：交付页展示与
         // 「MT 管理器打开」「文件管理器中查看」都用这份真机副本，长按菜单才能真正跳转。
         withContext(Dispatchers.IO) {
+            // 源文件与真机副本都不在的条目（工作区已清理、旧包已删）不再展示。
+            val missing = mutableListOf<String>()
             byPath.values.forEach { item ->
                 runCatching {
-                    val local = resolveLocalFile(item.attachment, fileAccess) ?: return@runCatching
+                    val local = resolveLocalFile(item.attachment, fileAccess)
+                    if (local == null) {
+                        missing += item.attachment.containerPath
+                        return@runCatching
+                    }
                     val name = item.attachment.fileName.ifBlank { local.name }
                     val existing = ExternalFileActions.findExported(name)
                     if (existing == null || existing.length() != local.length()) {
@@ -1426,6 +1432,7 @@ class AIAgentViewModel @Inject constructor(
                     }
                 }.onFailure { FileLogger.w(TAG, "导出交付物到真机失败: ${item.attachment.fileName}", it) }
             }
+            missing.forEach { byPath.remove(it) }
         }
         return byPath.values.sortedByDescending { it.timestamp }
     }

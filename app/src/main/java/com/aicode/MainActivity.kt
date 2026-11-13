@@ -1258,10 +1258,14 @@ fun AppNavigation(
                         modifier = Modifier
                             .width(drawerWidth() + sidebarTabOverhang)
                             .fillMaxHeight()
-                            .graphicsLayer {
-                                translationX = -(1f - sidebarProgress) * size.width * 0.18f
-                                alpha = 0.35f + 0.65f * sidebarProgress
-                            }
+                            // 只在展开/收起动画进行中挂层：常驻 graphicsLayer 的离屏缓存
+                            // 不随主题切换刷新，会让侧栏文字停在旧配色（反复复现的老问题）。
+                            .then(
+                                if (sidebarProgress < 1f) Modifier.graphicsLayer {
+                                    translationX = -(1f - sidebarProgress) * size.width * 0.18f
+                                    alpha = 0.35f + 0.65f * sidebarProgress
+                                } else Modifier
+                            )
                     ) {
                         sidebarStateHolder.SaveableStateProvider("chat-sidebar") {
                             drawerBody()

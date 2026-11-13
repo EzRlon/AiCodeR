@@ -2,8 +2,6 @@ package com.aicode.feature.credentials.presentation.component
 
 import android.content.ClipData
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -58,6 +56,8 @@ import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import com.aicode.feature.credentials.data.GitHubAuthChannel
+import com.aicode.feature.credentials.data.GitHubAuthLauncher
 import com.aicode.feature.credentials.data.remote.GITHUB_APP_INSTALL_URL
 import com.aicode.feature.credentials.presentation.QuickLoginUiState
 import com.aicode.feature.settings.presentation.component.settingsPageBackground
@@ -85,12 +85,38 @@ internal fun GitHubDeviceFlowSheet(
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    // 设备是否装有 GitHub 官方客户端：装有则优先拉起客户端，未装走浏览器。
+    val clientInstalled = remember(context) { GitHubAuthLauncher.isClientInstalled(context) }
 
     // 成功后短暂展示反馈再自动收起；未安装 App 时保留弹层供用户继续操作
     LaunchedEffect(state) {
         if (state is QuickLoginUiState.Success && !state.needsInstall) {
             delay(1400)
             onSuccessDismiss()
+        }
+    }
+
+    // 设备码就绪后自动打开授权页：用户点「使用 GitHub 账号授权」已表达意图，
+    // 这里只自动跳一次（同一设备码不重复拉起），避免反复切走 App。
+    var autoOpenedCode by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state) {
+        val awaiting = state as? QuickLoginUiState.Awaiting ?: return@LaunchedEffect
+        if (autoOpenedCode == awaiting.userCode) return@LaunchedEffect
+        autoOpenedCode = awaiting.userCode
+        scope.launch {
+            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("device-code", awaiting.userCode)))
+        }
+        val channel = GitHubAuthLauncher.openDeviceAuthorization(
+            context = context,
+            verificationUri = awaiting.verificationUri,
+            userCode = awaiting.userCode
+        )
+        if (channel == GitHubAuthChannel.NONE) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.credential_device_open_failed, awaiting.verificationUri),
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -120,7 +146,7 @@ internal fun GitHubDeviceFlowSheet(
                     AwaitingContent(
                         userCode = state.userCode,
                         verificationUri = state.verificationUri,
-                        context = context,
+                        clientInstalled = clientInstalled,
                         onCopyCode = {
                             scope.launch {
                                 clipboard.setClipEntry(
@@ -139,15 +165,42 @@ internal fun GitHubDeviceFlowSheet(
                                     ClipEntry(ClipData.newPlainText("device-code", state.userCode))
                                 )
                             }
+                            val channel = GitHubAuthLauncher.openDeviceAuthorization(
+                                context = context,
+                                verificationUri = state.verificationUri,
+                                userCode = state.userCode
+                            )
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.credential_device_code_copied_opening),
+                                context.getString(
+                                    when (channel) {
+                                        GitHubAuthChannel.CLIENT ->
+                                            R.string.credential_device_code_copied_opening_client
+                                        GitHubAuthChannel.BROWSER ->
+                                            R.string.credential_device_code_copied_opening
+                                        GitHubAuthChannel.NONE ->
+                                            R.string.credential_device_open_failed
+                                    },
+                                    state.verificationUri
+                                ),
                                 Toast.LENGTH_SHORT
                             ).show()
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(state.verificationUri))
-                                )
+                        },
+                        onOpenBrowser = {
+                            val channel = GitHubAuthLauncher.openDeviceAuthorizationInBrowser(
+                                context = context,
+                                verificationUri = state.verificationUri,
+                                userCode = state.userCode
+                            )
+                            if (channel == GitHubAuthChannel.NONE) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.credential_device_open_failed,
+                                        state.verificationUri
+                                    ),
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
                         }
                     )
@@ -252,9 +305,10 @@ private fun RequestingCodeContent() {
 private fun AwaitingContent(
     userCode: String,
     verificationUri: String,
-    context: Context,
+    clientInstalled: Boolean,
     onCopyCode: () -> Unit,
-    onAuthorizeAndOpen: () -> Unit
+    onAuthorizeAndOpen: () -> Unit,
+    onOpenBrowser: () -> Unit
 ) {
     var justCopied by remember { mutableStateOf(false) }
 
@@ -435,6 +489,25 @@ private fun AwaitingContent(
             )
         }
 
+        // 装了 GitHub 客户端时，客户端可能不认设备码页（拉起即退）：留一个强制浏览器入口。
+        if (clientInstalled) {
+            TextButton(
+                onClick = onOpenBrowser,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.ExternalLink,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.credential_device_open_browser),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+
         // 底部轮询等待指示条
         Row(
             modifier = Modifier
@@ -545,11 +618,7 @@ private fun SuccessContent(
                     ) {
                         Button(
                             onClick = {
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_APP_INSTALL_URL))
-                                    )
-                                }
+                                GitHubAuthLauncher.openInstallPage(context, GITHUB_APP_INSTALL_URL)
                             },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(Radius.mdLarge)
