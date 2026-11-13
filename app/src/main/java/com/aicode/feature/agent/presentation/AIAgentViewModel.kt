@@ -256,9 +256,7 @@ class AIAgentViewModel @Inject constructor(
     private val chatSearchStateHolder: ChatSearchStateHolder,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
-    private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
-    private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
-    private val openCodeBridge: com.aicode.feature.agent.domain.engine.OpenCodeBridge,
+    private val engineTurnRouter: EngineTurnRouter,
     private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
@@ -2698,92 +2696,25 @@ class AIAgentViewModel @Inject constructor(
             }
             // 引擎分流：CLI 桥接会话把各自 CLI 的 JSON 输出翻译成 AgentEvent，
             // 下游落库/UI/停止/队列全部复用本体链路；resume 恒为 true，首回合续接失败自动转全新。
-            val eventFlow: Flow<AgentEvent> = when (currentSession?.engine) {
-                AgentEngines.CLAUDE_CODE -> {
-                    if (!claudeCodeBridge.isAvailable()) {
-                        kotlinx.coroutines.flow.flow {
-                            emit(AgentEvent.Failed(error = context.getString(R.string.engine_bridge_unavailable)))
-                        }
-                    } else {
-                        // 发送前认证预检：未登录/无可透传 key 时直接给引导，不空跑一回合才发现
-                        val authHint = claudeCodeBridge.authHint(currentSession.providerId)
-                        if (authHint != null) {
-                            kotlinx.coroutines.flow.flow {
-                                emit(AgentEvent.Failed(error = authHint))
-                            }
-                        } else {
-                            claudeCodeBridge.runTurn(
-                                sessionId = sessionId,
-                                userRequest = modelRequest,
-                                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
-                                model = currentSession.model,
-                                resume = true,
-                                providerId = currentSession.providerId,
-                                engineMode = currentSession.engineMode,
-                                images = agentContext.inputImages,
-                                attachments = inputAttachments
-                            )
-                        }
-                    }
+            val eventFlow: Flow<AgentEvent> = engineTurnRouter.buildEventFlow(
+                engine = currentSession?.engine,
+                sessionId = sessionId,
+                userRequest = modelRequest,
+                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
+                model = currentSession?.model,
+                providerId = currentSession?.providerId,
+                engineMode = currentSession?.engineMode,
+                images = agentContext.inputImages,
+                attachments = inputAttachments,
+                nativeFlow = {
+                    agentWorkflow.executeEvents(
+                        userRequest = modelRequest,
+                        context = agentContext,
+                        tools = tools
+                    )
                 }
-                AgentEngines.CODEX -> {
-                    if (!codexBridge.isAvailable()) {
-                        kotlinx.coroutines.flow.flow {
-                            emit(AgentEvent.Failed(error = context.getString(R.string.engine_codex_unavailable)))
-                        }
-                    } else {
-                        val authHint = codexBridge.authHint(currentSession.providerId)
-                        if (authHint != null) {
-                            kotlinx.coroutines.flow.flow {
-                                emit(AgentEvent.Failed(error = authHint))
-                            }
-                        } else {
-                            codexBridge.runTurn(
-                                sessionId = sessionId,
-                                userRequest = modelRequest,
-                                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
-                                model = currentSession.model,
-                                resume = true,
-                                providerId = currentSession.providerId,
-                                engineMode = currentSession.engineMode,
-                                images = agentContext.inputImages,
-                                attachments = inputAttachments
-                            )
-                        }
-                    }
-                }
-                AgentEngines.OPENCODE -> {
-                    if (!openCodeBridge.isAvailable()) {
-                        kotlinx.coroutines.flow.flow {
-                            emit(AgentEvent.Failed(error = context.getString(R.string.engine_opencode_unavailable)))
-                        }
-                    } else {
-                        val authHint = openCodeBridge.authHint(currentSession.providerId)
-                        if (authHint != null) {
-                            kotlinx.coroutines.flow.flow {
-                                emit(AgentEvent.Failed(error = authHint))
-                            }
-                        } else {
-                            openCodeBridge.runTurn(
-                                sessionId = sessionId,
-                                userRequest = modelRequest,
-                                projectPath = agentContext.projectRoot.takeIf { it.isNotBlank() },
-                                model = currentSession.model,
-                                resume = true,
-                                providerId = currentSession.providerId,
-                                engineMode = currentSession.engineMode,
-                                images = agentContext.inputImages,
-                                attachments = inputAttachments
-                            )
-                        }
-                    }
-                }
-                else -> agentWorkflow.executeEvents(
-                    userRequest = modelRequest,
-                    context = agentContext,
-                    tools = tools
-                )
-            }
+            )
+
             eventFlow.collect { event ->
                 when (event) {
                     is AgentEvent.AssistantDelta -> {

@@ -112,9 +112,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val chatSearchStateHolder: com.aicode.feature.agent.presentation.ChatSearchStateHolder,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
-    private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
-    private val codexBridge: com.aicode.feature.agent.domain.engine.CodexBridge,
-    private val openCodeBridge: com.aicode.feature.agent.domain.engine.OpenCodeBridge,
+    private val engineTurnRouter: com.aicode.feature.agent.presentation.EngineTurnRouter,
     private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
     @param:ApplicationContext private val context: Context
 ) {
@@ -173,9 +171,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         chatSearchStateHolder,
         floatBallStateStore,
         floatBallSessionHub,
-        claudeCodeBridge,
-        codexBridge,
-        openCodeBridge,
+        engineTurnRouter,
         handoffStateRepository,
         context
     )
