@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
@@ -333,6 +334,8 @@ fun ChatDrawerContent(
     /** 交付物列表（左栏第三页）：当前工作区的会话附件（AI 交付的文件与安装包），时间倒序。 */
     deliverables: List<DeliverableItem> = emptyList(),
     deliverablesScanning: Boolean = false,
+    onRemoveDeliverable: (DeliverableItem) -> Unit = {},
+    onDeleteDeliverableCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) },
     onRefreshDeliverables: () -> Unit = {},
     /** 交付物操作菜单所需的文件访问（保存到手机/MT/分享等）；null 时行点击仅提示。 */
     deliverableFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider? = null,
@@ -577,7 +580,9 @@ fun ChatDrawerContent(
                                 deliverables = deliverables,
                                 scanning = deliverablesScanning,
                                 onRefresh = onRefreshDeliverables,
-                                fileAccess = deliverableFileAccess
+                                fileAccess = deliverableFileAccess,
+                                onRemoveFromList = onRemoveDeliverable,
+                                onDeleteCompletely = onDeleteDeliverableCompletely
                             )
                         }
                     }
@@ -2142,7 +2147,9 @@ private fun DeliverablesTab(
     deliverables: List<DeliverableItem>,
     scanning: Boolean,
     onRefresh: () -> Unit,
-    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
+    onRemoveFromList: (DeliverableItem) -> Unit = {},
+    onDeleteCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) }
 ) {
     LaunchedEffect(Unit) { onRefresh() }
     if (deliverables.isEmpty()) {
@@ -2176,7 +2183,12 @@ private fun DeliverablesTab(
                 SettingsGroupHeader(text = deliverableGroupTitle(key))
             }
             items(list, key = { it.attachment.containerPath }) { item ->
-                DeliverableRow(item = item, fileAccess = fileAccess)
+                DeliverableRow(
+                    item = item,
+                    fileAccess = fileAccess,
+                    onRemoveFromList = onRemoveFromList,
+                    onDeleteCompletely = onDeleteCompletely
+                )
             }
         }
     }
@@ -2217,7 +2229,9 @@ private fun deliverableGroupTitle(key: String): String = stringResource(
 @Composable
 private fun DeliverableRow(
     item: DeliverableItem,
-    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
+    onRemoveFromList: (DeliverableItem) -> Unit = {},
+    onDeleteCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) }
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -2274,6 +2288,8 @@ private fun DeliverableRow(
                 item = item,
                 fileAccess = fileAccess,
                 actionScope = actionScope,
+                onRemoveFromList = onRemoveFromList,
+                onDeleteCompletely = onDeleteCompletely,
                 onDismiss = { menuOpen = false }
             )
         }
@@ -2287,9 +2303,12 @@ private fun DeliverableActionSheet(
     item: DeliverableItem,
     fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
     actionScope: kotlinx.coroutines.CoroutineScope,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onRemoveFromList: (DeliverableItem) -> Unit = {},
+    onDeleteCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) }
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    var confirmDelete by remember { mutableStateOf(false) }
     AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -2343,6 +2362,88 @@ private fun DeliverableActionSheet(
                     modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
                 )
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // 仅从交付列表移除：不碰磁盘，文件仍可在工作区/真机副本里找到。
+            SheetMenuItem(
+                icon = FeatherIcons.X,
+                label = stringResource(R.string.deliverables_remove_from_list),
+                tint = MaterialTheme.colorScheme.onSurface
+            ) {
+                onDismiss()
+                onRemoveFromList(item)
+            }
+
+            // 彻底删除：列表条目 + 容器/工作区文件 + 真机副本，二次确认后执行。
+            SheetMenuItem(
+                icon = FeatherIcons.Trash2,
+                label = stringResource(R.string.deliverables_delete_completely),
+                tint = MaterialTheme.colorScheme.error
+            ) {
+                confirmDelete = true
+            }
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.deliverables_delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.deliverables_delete_confirm_body,
+                        item.attachment.fileName
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onDismiss()
+                    onDeleteCompletely(item) { ok ->
+                        if (!ok) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.deliverables_delete_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }) {
+                    Text(
+                        stringResource(R.string.deliverables_delete_completely),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+}
+
+/** 交付物操作弹层里的一行（图标 + 文案），与 attachmentActionEntries 渲染保持一致。 */
+@Composable
+private fun SheetMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = tint)
+        Spacer(Modifier.width(Spacing.md))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = tint)
     }
 }

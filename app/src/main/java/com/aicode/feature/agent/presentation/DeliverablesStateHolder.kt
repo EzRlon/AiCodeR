@@ -1,13 +1,10 @@
 package com.aicode.feature.agent.presentation
 
-import android.content.Context
 import com.aicode.core.util.ExternalFileActions
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
-import com.aicode.feature.agent.presentation.component.resolveLocalFile
 import com.aicode.feature.workspace.domain.FileAccessProvider
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,7 +18,9 @@ import javax.inject.Inject
 /** 一条交付物：附件元数据 + 产生时间（用于倒序排列与分组）。 */
 data class DeliverableItem(
     val attachment: AgentAttachment,
-    val timestamp: Long
+    val timestamp: Long,
+    /** 所属消息 id；删除时需要回写该消息的附件列表。 */
+    val messageId: String = ""
 )
 
 /**
@@ -29,10 +28,9 @@ data class DeliverableItem(
  * `下载/AiCodeR/` 维护一份副本供外部应用打开。
  *
  * 从 AIAgentViewModel 拆出的又一独立域：只依赖 AgentMessageDao / FileAccessProvider /
- * context 与「当前工作区路径」（由 VM 注入提供函数）。
+ * 与「当前工作区路径」（由 VM 注入提供函数）。
  */
 class DeliverablesStateHolder @Inject constructor(
-    @param:ApplicationContext private val context: Context,
     private val agentMessageDao: AgentMessageDao,
     private val fileAccessProvider: FileAccessProvider
 ) {
@@ -92,26 +90,70 @@ class DeliverablesStateHolder @Inject constructor(
                     if (attachment.containerPath.isNotBlank()) {
                         byPath.putIfAbsent(
                             attachment.containerPath,
-                            DeliverableItem(attachment, row.timestamp)
+                            DeliverableItem(attachment, row.timestamp, row.messageId)
                         )
                     }
                 }
             }
         }.onFailure { FileLogger.w(TAG, "读取消息附件失败", it) }
-        // 把交付物复制一份到真机存储 下载/AiCodeR/（不是容器映射）：交付页展示与
-        // 「MT 管理器打开」「文件管理器中查看」都用这份真机副本，长按菜单才能真正跳转。
-        withContext(Dispatchers.IO) {
-            byPath.values.forEach { item ->
-                runCatching {
-                    val local = resolveLocalFile(item.attachment, fileAccessProvider) ?: return@runCatching
-                    val name = item.attachment.fileName.ifBlank { local.name }
-                    val existing = ExternalFileActions.findExported(name)
-                    if (existing == null || existing.length() != local.length()) {
-                        ExternalFileActions.exportToSharedFile(context, local, name)
-                    }
-                }.onFailure { FileLogger.w(TAG, "导出交付物到真机失败: ${item.attachment.fileName}", it) }
-            }
-        }
+        // 不再对全部交付物预导出到真机 下载/AiCodeR/：那会给每个历史交付物留一份常驻副本
+        // （纯浪费空间），而真正需要真机文件的动作（MT 打开 / 文件管理器查看 / 分享 / 安装）
+        // 都会在按下时按需导出（见 attachmentActionEntries → prepareLocal → exportToSharedFile）。
         return byPath.values.sortedByDescending { it.timestamp }
+    }
+
+    /**
+     * 从交付列表移除一条（不删除磁盘文件）。
+     *
+     * 交付列表的事实源是会话消息的附件列，所以这里的语义是「把这条附件从它所属消息里摘掉」，
+     * 该行其余附件保持不变；摘空则写 null，让 [AgentMessageDao.messagesWithAttachments] 的
+     * 查询条件自然排除该行。宿主文件与真机副本都保留，供用户继续打开/分享。
+     */
+    suspend fun removeFromList(item: DeliverableItem) = withContext(Dispatchers.IO) {
+        if (item.messageId.isBlank()) return@withContext
+        val raw = agentMessageDao.attachmentsJsonOf(item.messageId) ?: return@withContext
+        val remaining = AgentMessageEntity.decodeAttachments(raw).filterNot {
+            it.containerPath == item.attachment.containerPath
+        }
+        agentMessageDao.updateAttachmentsJson(
+            item.messageId,
+            if (remaining.isEmpty()) null else AgentMessageEntity.encodeAttachments(remaining)
+        )
+        _deliverables.value = _deliverables.value.filterNot {
+            it.attachment.containerPath == item.attachment.containerPath
+        }
+        FileLogger.i(TAG, "已从交付列表移除: ${item.attachment.fileName}")
+    }
+
+    /**
+     * 彻底删除：交付列表条目 + 容器/工作区文件（同一份，容器内 `/root/workspace`
+     * 就是工作区目录的 bind 挂载）+ 真机 `下载/AiCodeR` 副本。
+     *
+     * 三条路径都清掉才算「完全删除」，否则会留下用户看不见但仍占空间的残留。
+     * 目录走递归删除（[FileAccessProvider.deleteRecursively]）。
+     */
+    suspend fun deleteCompletely(item: DeliverableItem): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            removeFromList(item)
+
+            val containerPath = item.attachment.containerPath
+            if (containerPath.isNotBlank() && fileAccessProvider.exists(containerPath)) {
+                if (fileAccessProvider.isDirectory(containerPath)) {
+                    fileAccessProvider.deleteRecursively(containerPath)
+                } else {
+                    fileAccessProvider.delete(containerPath)
+                }
+            }
+
+            // 真机副本：按显示名匹配 `下载/AiCodeR` 下该文件的全部变体（唯一名会带 -1/-2 后缀）
+            ExternalFileActions.findExportedAll(item.attachment.fileName).forEach { exported ->
+                runCatching { exported.delete() }
+                    .onFailure { FileLogger.w(TAG, "删除真机副本失败: ${exported.absolutePath}", it) }
+            }
+        }.onSuccess {
+            FileLogger.i(TAG, "已彻底删除交付物: ${item.attachment.fileName}")
+        }.onFailure {
+            FileLogger.e(TAG, "彻底删除交付物失败: ${item.attachment.fileName}", it)
+        }
     }
 }

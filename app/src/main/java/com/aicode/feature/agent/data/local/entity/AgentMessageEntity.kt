@@ -11,6 +11,7 @@ import com.aicode.feature.agent.presentation.VERIFICATION_REPORT_TOOL_NAME
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 @Entity(
@@ -92,5 +93,9 @@ data class AgentMessageEntity(
             if (value.isNullOrBlank()) return emptyList()
             return runCatching { json.decodeFromString<List<AgentAttachment>>(value) }.getOrDefault(emptyList())
         }
+
+        /** 编码附件列表回 JSON（交付物删除后回写剩余附件用）。 */
+        internal fun encodeAttachments(attachments: List<AgentAttachment>): String =
+            json.encodeToString(attachments)
     }
 }

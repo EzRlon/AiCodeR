@@ -175,6 +175,21 @@ object ExternalFileActions {
     }.getOrNull()
 
     /** 在导出目录里找同名副本（含 `-2`/`-3` 去重后缀），取最新一份；没有则 null。 */
+    /**
+     * 找出 `下载/AiCodeR` 下与 [displayName] 同名的**全部**变体（唯一名会追加 -1/-2 后缀）。
+     * 彻底删除交付物时用：只删最新一份会留下历史副本继续占空间。
+     */
+    fun findExportedAll(displayName: String): List<File> = runCatching {
+        val dir = sharedDir()
+        if (!dir.isDirectory) return@runCatching emptyList()
+        val stem = displayName.substringBeforeLast('.', displayName)
+        val ext = if (displayName.contains('.')) "." + displayName.substringAfterLast('.') else ""
+        dir.listFiles { f -> f.isFile && (f.name == displayName || f.name.startsWith("$stem-")) }
+            ?.filter { ext.isBlank() || it.name.endsWith(ext) }
+            ?.toList()
+            .orEmpty()
+    }.getOrDefault(emptyList())
+
     fun findExported(displayName: String): File? = runCatching {
         val dir = sharedDir()
         if (!dir.isDirectory) return@runCatching null

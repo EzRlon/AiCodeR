@@ -1226,6 +1226,18 @@ class AIAgentViewModel @Inject constructor(
     /** 刷新交付物：进入交付物页时调用（扫描只在用户打开该页时发生，重入忽略）。 */
     fun refreshDeliverables() = deliverablesState.refresh()
 
+    /** 从交付列表移除（保留磁盘文件）。 */
+    fun removeDeliverableFromList(item: DeliverableItem) = viewModelScope.launch {
+        runCatching { deliverablesState.removeFromList(item) }
+            .onFailure { FileLogger.w(TAG, "移除交付物失败", it) }
+    }
+
+    /** 彻底删除交付物：列表条目 + 容器/工作区文件 + 真机副本。 */
+    fun deleteDeliverableCompletely(item: DeliverableItem, onResult: (Boolean) -> Unit = {}) =
+        viewModelScope.launch {
+            onResult(deliverablesState.deleteCompletely(item).isSuccess)
+        }
+
     val streamingText: StateFlow<String?> = _currentSessionId
         .flatMapLatest { id ->
             if (id == null) flowOf(null)

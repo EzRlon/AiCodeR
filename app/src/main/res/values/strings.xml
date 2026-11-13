@@ -986,6 +986,11 @@
     <string name="trash_purge_confirm_message">确定彻底删除「%1$s」？消息、检查点与待办会一并清除，无法恢复。</string>
     <string name="trash_empty_action">清空回收站</string>
     <string name="trash_empty_confirm_message">确定清空回收站？其中 %1$d 个会话会被彻底删除，无法恢复。</string>
+    <string name="deliverables_remove_from_list">仅从交付列表移除（保留文件）</string>
+    <string name="deliverables_delete_completely">彻底删除</string>
+    <string name="deliverables_delete_confirm_title">彻底删除交付物？</string>
+    <string name="deliverables_delete_confirm_body">将删除「%1$s」的交付记录、容器/工作区中的文件，以及真机「下载/AiCodeR」中的副本。此操作不可撤销。</string>
+    <string name="deliverables_delete_failed">删除失败，请检查存储权限</string>
     <string name="deliverables_unavailable">文件操作不可用</string>
     <string name="drawer_expand_subagents">展开子代理</string>
     <string name="drawer_collapse_subagents">收起子代理</string>

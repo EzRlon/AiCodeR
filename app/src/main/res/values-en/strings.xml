@@ -998,6 +998,11 @@
     <string name="trash_purge_confirm_message">Delete &quot;%1$s&quot; forever? Its messages, checkpoints and todos will be removed. This cannot be undone.</string>
     <string name="trash_empty_action">Empty trash</string>
     <string name="trash_empty_confirm_message">Empty the trash? %1$d sessions will be permanently deleted.</string>
+    <string name="deliverables_remove_from_list">Remove from list (keep file)</string>
+    <string name="deliverables_delete_completely">Delete completely</string>
+    <string name="deliverables_delete_confirm_title">Delete this deliverable?</string>
+    <string name="deliverables_delete_confirm_body">This removes the delivery record for "%1$s", the file in the container/workspace, and the copy in Downloads/AiCodeR. This cannot be undone.</string>
+    <string name="deliverables_delete_failed">Delete failed, check storage permission</string>
     <string name="deliverables_unavailable">File actions unavailable</string>
     <string name="drawer_expand_subagents">Expand subagents</string>
     <string name="drawer_collapse_subagents">Collapse subagents</string>

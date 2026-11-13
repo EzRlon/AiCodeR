@@ -308,20 +308,31 @@ interface AgentMessageDao {
      * 只投影解析附件所需的三列，避免把 content/reasoning 等大字段读进内存。
      */
     @Query(
-        "SELECT m.role AS role, m.timestamp AS timestamp, m.attachmentsJson AS attachmentsJson " +
+        "SELECT m.role AS role, m.timestamp AS timestamp, m.attachmentsJson AS attachmentsJson, " +
+            "m.id AS messageId " +
             "FROM agent_messages m JOIN chat_sessions s ON s.id = m.sessionId " +
             "WHERE s.workspacePath = :workspacePath AND s.deletedAt IS NULL AND m.role != 'USER' " +
             "AND m.attachmentsJson IS NOT NULL AND m.attachmentsJson != '[]' " +
             "ORDER BY m.timestamp DESC LIMIT 300"
     )
     suspend fun messagesWithAttachments(workspacePath: String): List<AttachmentMessageRow>
+
+    /** 交付物删除后回写该行剩余附件（空列表写 null，让查询条件直接排除该行）。 */
+    @Query("UPDATE agent_messages SET attachmentsJson = :attachmentsJson WHERE id = :id")
+    suspend fun updateAttachmentsJson(id: String, attachmentsJson: String?)
+
+    /** 按 id 读取附件列（删除交付物时先取原值再过滤，避免整行读出大字段）。 */
+    @Query("SELECT attachmentsJson FROM agent_messages WHERE id = :id")
+    suspend fun attachmentsJsonOf(id: String): String?
 }
 
 /** 交付物页的消息附件投影。 */
 data class AttachmentMessageRow(
     val role: String,
     val timestamp: Long,
-    val attachmentsJson: String?
+    val attachmentsJson: String?,
+    /** 所属消息 id：删除交付物时用于回写该行的附件列表。 */
+    val messageId: String
 )
 
 /** 跨会话聊天记录搜索的命中投影（[AgentMessageDao.searchInWorkspace] 的投影）。 */
