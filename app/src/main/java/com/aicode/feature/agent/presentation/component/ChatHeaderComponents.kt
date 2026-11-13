@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +55,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
@@ -75,17 +78,32 @@ import compose.icons.feathericons.Share2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
 
+/** 顶栏四周的自适应安全余量。 */
+private data class HeaderInsets(val top: Dp, val left: Dp, val right: Dp)
+
 /**
- * 顶栏顶部余量：状态栏 inset 的 45% + 4dp。
+ * 顶栏安全余量（异形屏 / 灵动岛 / 横屏侧挖孔）。
  *
- * 原本是 55% + 8dp；用户 2026-11-11 要求「按钮整体往上挪一点」，好把腾出来的空间留给
- * 下方的状态条。按钮热区仍是 40dp，只是整行上移——不会降低点击命中率。
+ * - 顶部：常规设备沿用「状态栏 45% + 4dp」的紧凑值（2026-11-11 用户要求整行上移）；
+ *   居中挖孔或灵动岛会落在这段余量里，此时至少下移到开孔下沿再留 6dp，取两者较大值。
+ * - 左右：竖屏通常为 0；横屏时刘海/挖孔可能移到侧边，按 displayCutout 的侧边安全
+ *   inset 额外让位，避免两侧按钮被遮住（0 时完全不增加内距）。
  */
 @Composable
-private fun statusBarComfortPadding(): Dp {
+private fun headerInsets(): HeaderInsets {
     val density = LocalDensity.current
-    val inset = WindowInsets.statusBars.getTop(density)
-    return with(density) { (inset * 0.45f).toDp() + 4.dp }
+    val layoutDirection = LocalLayoutDirection.current
+    val statusBarTop = WindowInsets.statusBars.getTop(density)
+    val cutoutTop = WindowInsets.displayCutout.getTop(density)
+    val cutoutLeft = WindowInsets.displayCutout.getLeft(density, layoutDirection)
+    val cutoutRight = WindowInsets.displayCutout.getRight(density, layoutDirection)
+    return with(density) {
+        HeaderInsets(
+            top = maxOf(statusBarTop * 0.45f + 4.dp.toPx(), cutoutTop + 6.dp.toPx()).toDp(),
+            left = if (cutoutLeft > 0) (cutoutLeft + 4.dp.toPx()).toDp() else 0.dp,
+            right = if (cutoutRight > 0) (cutoutRight + 4.dp.toPx()).toDp() else 0.dp
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -124,13 +142,14 @@ internal fun ChatHeader(
     /** 长按状态条：展开底部的余额面板。 */
     onStatusStripLongPress: () -> Unit = {}
 ) {
+    val insets = headerInsets()
     Surface(
         color = MaterialTheme.colorScheme.background
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = statusBarComfortPadding())
+                .padding(top = insets.top, start = insets.left, end = insets.right)
         ) {
             Row(
                 modifier = Modifier
@@ -142,7 +161,7 @@ internal fun ChatHeader(
                 if (showMenuButton) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(HEADER_ICON_BUTTON_SIZE)
                             .onboardingTarget(OnboardingStep.OPEN_SIDEBAR)
                             .clickable(onClick = onOpenDrawer),
                         contentAlignment = Alignment.Center
@@ -151,7 +170,7 @@ internal fun ChatHeader(
                             // 侧栏入口用常规汉堡菜单图标：这是「打开侧栏」的通用语义。
                             FeatherIcons.Menu,
                             contentDescription = stringResource(R.string.chat_open_sidebar),
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(HEADER_ICON_SIZE),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
@@ -188,7 +207,7 @@ internal fun ChatHeader(
                 )
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(HEADER_ICON_BUTTON_SIZE)
                         .combinedClickable(
                             onClick = onNewChat,
                             onLongClick = onNewChatLongClick
@@ -200,7 +219,7 @@ internal fun ChatHeader(
                         // 用 Edit 而非 Edit3：Edit3 笔画集中在中部，同尺寸下视觉重量只有邻键一半。
                         FeatherIcons.Edit,
                         contentDescription = stringResource(R.string.chat_new_session),
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(HEADER_ICON_SIZE),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -394,14 +413,19 @@ private fun SessionStatusStrip(
             .height(24.dp)
             .pointerInput(Unit) { detectTapGestures(onLongPress = { onLongPress() }) }
             .semantics { this.contentDescription = contentDescription },
-        contentAlignment = Alignment.CenterStart
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = annotated,
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = Spacing.md)
+            // 用户 2026-11-12 定：无论内容多少，状态条始终从屏幕中线向两侧展开，
+            // 不再左对齐——左对齐会让短状态看起来像贴在侧边的标签。
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md)
         )
     }
 }
@@ -414,40 +438,39 @@ private fun WorkbenchIconButton(
     active: Boolean,
     onClick: () -> Unit
 ) {
-    // 用 40dp 热区代替 IconButton：IconButton 会撑到 48dp 最小交互尺寸，顶栏高度就压不下来。
+    // 触控/按下卡片与底栏图标按钮统一为 36dp（底栏 IconButton 同尺寸、20dp 图标）：
+    // 之前 40dp 热区 + 32dp 高亮底，比底栏大一圈，顶栏显得臃肿。
     Box(
         modifier = Modifier
-            .size(40.dp)
+            .size(HEADER_ICON_BUTTON_SIZE)
+            .then(
+                if (active) {
+                    Modifier
+                        .clip(RoundedCornerShape(Radius.sm))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                } else {
+                    Modifier
+                }
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .then(
-                    if (active) {
-                        Modifier
-                            .clip(RoundedCornerShape(Radius.sm))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                    } else {
-                        Modifier
-                    }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                icon,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(20.dp),
-                tint = if (active) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            )
-        }
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(HEADER_ICON_SIZE),
+            tint = if (active) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
     }
 }
+
+/** 顶栏按钮尺寸：与底栏图标按钮（36dp / 20dp 图标）完全一致。 */
+private val HEADER_ICON_BUTTON_SIZE = 36.dp
+private val HEADER_ICON_SIZE = 20.dp
 
 /** 顶栏 VNC 悬浮小窗入口：单击弹出，双击收起；小窗开着时高亮（同工作台按钮的 active 态）。 */
 @OptIn(ExperimentalFoundationApi::class)
@@ -464,38 +487,32 @@ private fun VncHeaderIconButton() {
     val overlayOpen = window.visible && !window.minimized
     Box(
         modifier = Modifier
-            .size(40.dp)
+            .size(HEADER_ICON_BUTTON_SIZE)
+            .then(
+                if (overlayOpen) {
+                    Modifier
+                        .clip(RoundedCornerShape(Radius.sm))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                } else {
+                    Modifier
+                }
+            )
             .combinedClickable(
                 onClick = viewModel::onHeaderSingleTap,
                 onDoubleClick = viewModel::onHeaderDoubleTap,
             ),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(28.dp)
-                .then(
-                    if (overlayOpen) {
-                        Modifier
-                            .clip(RoundedCornerShape(Radius.sm))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                    } else {
-                        Modifier
-                    }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                FeatherIcons.Monitor,
-                contentDescription = stringResource(R.string.vnc_toggle_window),
-                modifier = Modifier.size(20.dp),
-                tint = if (overlayOpen) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            )
-        }
+        Icon(
+            FeatherIcons.Monitor,
+            contentDescription = stringResource(R.string.vnc_toggle_window),
+            modifier = Modifier.size(HEADER_ICON_SIZE),
+            tint = if (overlayOpen) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
     }
 }
 

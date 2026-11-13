@@ -107,6 +107,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -120,8 +121,6 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.rememberImeBottomInset
-import com.aicode.core.ui.TaskDangerLevel
-import com.aicode.core.ui.TaskStateBorder
 import com.aicode.core.ui.onboarding.OnboardingStep
 import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.agent.domain.command.SlashCommand
@@ -201,12 +200,6 @@ private val COLLAPSED_BAR_MASK_HEIGHT = 56.dp
 private const val MODE_INFO_AUTO_COLLAPSE_MS = 6_000L
 
 /**
- * 小于该字符数时直接判定「未超出」：三行高以内装不下这么多字（含宽字符也不超），
- * 省掉键入路径上的全文测量。阈值取保守值，宁可多测不可误判为不溢出。
- */
-private const val OVERFLOW_MEASURE_MIN_CHARS = 120
-
-/**
  * M3 无标签 TextField 的默认 contentPadding（上下左右各 16dp）。
  * 文本是否超过输入框高度要先用相同约束实测一遍，反推文本可视区域得靠这个值。
  */
@@ -225,14 +218,14 @@ private val INPUT_FIELD_EXPAND_SLOT = 28.dp
 private val INPUT_FIELD_ACTION_GAP = 4.dp
 
 /**
- * 右侧尾槽总宽 = 展开键 + 间隔 + 麦克风 + 文字间隔。
+ * 右侧尾槽总宽 = 展开键与麦克风的较宽者 + 文字间隔。
  *
- * 展开键**常驻占位**（空闲时淡到 35% 且不可点）：它原来只在文本溢出时插入布局，
- * 一出现就把输入框宽度挤掉一截，看起来像文字区域在跳。常驻后宽度恒定，
- * 也满足用户「空闲时这个按钮也要在同一竖直位置」的要求。
+ * 展开键叠在麦克风**正上方**（同一竖直中轴），不再横向并排，所以不额外占宽；
+ * 空闲时它完全不进布局。尾槽宽度与「是否显示展开键」无关，输入框可占字数因此恒定，
+ * 不会出现按钮一出现文字区就跳窄一截的问题。
  */
 private val INPUT_FIELD_TRAILING_WIDTH =
-    INPUT_FIELD_EXPAND_SLOT + INPUT_FIELD_ACTION_GAP + INPUT_FIELD_MIC_SLOT + INPUT_FIELD_MIC_GAP
+    maxOf(INPUT_FIELD_EXPAND_SLOT, INPUT_FIELD_MIC_SLOT) + INPUT_FIELD_MIC_GAP
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -429,26 +422,28 @@ internal fun ChatInputBar(
         }
     }
 
-    // 文本是否已经超出输入框高度（超出后框内滚动，展开按钮才有意义）。
-    // 按换行符数硬编码阈值在长行自动折行时会判断错，这里按 TextField 的实际宽度实测文本高度。
-    // 测量是同步且全量的，每敲一个字跑一次会把长文本压在键入路径上：短文本直接判否（不可能超高三行），
-    // 长文本则走 derivedStateOf，只在高度判定结果变化时重组，不必每次重组都重新测量。
+    // 文本是否已经多行（卡片向上延伸）。按 TextField 实际可占宽度实测文本高度：
+    // 宽度要用「输入框宽 - 左内距 - 右侧尾槽」，以前只减左右各 16dp，把尾槽那 38dp
+    // 也算进可用宽度，导致换行判定偏晚、可占字数对不上（用户 2026-11-12 反馈）。
+    // 走 derivedStateOf：只在「是否多行」结果变化时触发重组，不必每次键入都重绘整条底栏。
     val textMeasurer = rememberTextMeasurer()
     val inputDensity = LocalDensity.current
     var inputFieldWidthPx by remember { mutableStateOf(0) }
     val inputTextStyle = MaterialTheme.typography.bodyLarge
-    val inputOverflows by remember(value, inputFieldWidthPx, inputDensity, inputTextStyle) {
+    val inputGrew by remember(value, inputFieldWidthPx, inputDensity, inputTextStyle) {
         derivedStateOf {
-            val horizontalPaddingPx = with(inputDensity) { INPUT_FIELD_CONTENT_PADDING.toPx() }
-            val contentWidthPx = inputFieldWidthPx - (horizontalPaddingPx * 2).toInt()
-            val maxTextHeightPx = with(inputDensity) {
-                (INPUT_FIELD_MAX_HEIGHT - INPUT_FIELD_CONTENT_PADDING * 2).toPx()
-            }
-            contentWidthPx > 0 && value.length > OVERFLOW_MEASURE_MIN_CHARS && textMeasurer.measure(
+            if (inputFieldWidthPx <= 0 || value.isEmpty()) return@derivedStateOf false
+            val startPx = with(inputDensity) { INPUT_FIELD_CONTENT_PADDING.toPx() }
+            val endPx = with(inputDensity) { INPUT_FIELD_TRAILING_WIDTH.toPx() }
+            val contentWidthPx = inputFieldWidthPx - startPx.toInt() - endPx.toInt()
+            if (contentWidthPx <= 0) return@derivedStateOf false
+            val textHeightPx = textMeasurer.measure(
                 text = AnnotatedString(value),
                 style = inputTextStyle,
                 constraints = Constraints(maxWidth = contentWidthPx)
-            ).size.height > maxTextHeightPx
+            ).size.height
+            // bodyLarge 行高 24sp（见 AppTypography）；超过一行半即视为已换行。
+            textHeightPx > with(inputDensity) { 24.sp.toPx() } * 1.5f
         }
     }
 
@@ -487,8 +482,11 @@ internal fun ChatInputBar(
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0f),
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+                                    // 蒙版是「页面背景」向滚动内容的过渡，必须取 background 而不是
+                                    // surface：深色/非默认主题下二者不同色，用 surface 会在底栏下方
+                                    // 露出一条与页面不一致的色板。
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0.98f)
                                 ),
                                 startY = 0f,
                                 endY = maskGradientEndY
@@ -700,16 +698,10 @@ internal fun ChatInputBar(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(Radius.lg))
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
-                        // 静态线框（2026-11-11 用户定）：描边颜色必须**与卡片自身底色完全一致**
-                        // （surface@0.98），才能在浅色、深色、海洋等所有主题下都融为一体——
-                        // 用 colorScheme.background 时，海洋主题的卡片 surface 比页面 background 浅，
-                        // 深色下会露出一圈深色描边。外层 TaskStateBorder 的跑马灯与心跳呼吸不受影响。
-                        .border(
-                            1.dp,
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-                            RoundedCornerShape(Radius.lg)
-                        )
+                        // 卡片底色必须取页面背景色（不是 surface）：深色主题里 surface 比
+                        // background 明显更亮（如 #191B1F vs #101114），用 surface 会让底栏
+                        // 在深色下浮出一块异色底板，与页面分成两种颜色（用户反复反馈）。
+                        .background(MaterialTheme.colorScheme.background)
                         // 空闲态上下内距收到 2dp：卡片看起来更薄，又不至于让输入框贴住边。
                         .padding(
                             horizontal = Spacing.sm,
@@ -879,41 +871,32 @@ internal fun ChatInputBar(
                                     inner()
                                 }
                             )
-                            // 右侧尾槽：展开键 + 麦克风横向并排、同一条竖直基线。
-                            // 展开键原先在输入行外面、且只在文本溢出时才出现在布局里——
-                            // 它一出现就把输入框挤窄一截，和麦克风也对不齐（用户 2026-11-11 反馈）。
-                            // 现在它常驻占位（不可用时淡到 35% 且不响应点击），宽度与位置都恒定。
+                            // 右侧尾槽：录音键贴底；卡片因文本变高向上延伸时，全屏键出现在
+                            // 录音键**正上方**（同一竖直中轴）。空闲/未换行时全屏键完全不进布局，
+                            // 也不占宽——尾槽宽度只由麦克风决定，输入框可占字数恒定。
                             val voiceActive = voiceTapActive || voiceHoldActive
-                            Row(
-                                modifier = Modifier.align(Alignment.CenterEnd),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(INPUT_FIELD_ACTION_GAP)
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(bottom = 2.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(INPUT_FIELD_ACTION_GAP)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(INPUT_FIELD_EXPAND_SLOT)
-                                        .clip(CircleShape)
-                                        .then(
-                                            if (inputOverflows) {
-                                                Modifier.clickable { showFullScreenInput = true }
-                                            } else {
-                                                Modifier
-                                            }
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        FeatherIcons.Maximize,
-                                        contentDescription = if (inputOverflows) {
-                                            stringResource(R.string.chat_input_expand)
-                                        } else {
-                                            null
-                                        },
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                                            alpha = if (inputOverflows) 1f else 0.35f
-                                        ),
-                                        modifier = Modifier.size(16.dp)
-                                    )
+                                if (inputGrew) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(INPUT_FIELD_EXPAND_SLOT)
+                                            .clip(CircleShape)
+                                            .clickable { showFullScreenInput = true },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            FeatherIcons.Maximize,
+                                            contentDescription = stringResource(R.string.chat_input_expand),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                                 // 内嵌麦克风：点击进入聆听模式；激活时亮起变色（primaryContainer 圆形底，
                                 // 各主题下与输入框底色对比都足够）。
@@ -1228,17 +1211,6 @@ internal fun ChatInputBar(
                     }
                 }
 
-                if (isBusy || awaitingApproval) {
-                    TaskStateBorder(
-                        modifier = Modifier.matchParentSize(),
-                        danger = if (awaitingApproval) TaskDangerLevel.AWAITING_APPROVAL else TaskDangerLevel.RUNNING,
-                        cornerRadius = Radius.lg,
-                        // 颜色与发送按钮状态语义同步：执行中=忙色（Brand.Orange），等待审批=红（最高危）
-                        runningColor = com.aicode.core.theme.Brand.Orange,
-                        awaitingColor = MaterialTheme.colorScheme.error,
-                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
-                    )
-                }
             }
         }
         }
@@ -1351,8 +1323,9 @@ internal fun CollapsedBottomBar(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0f),
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+                                // 同上：折叠态蒙版同样跟随页面背景，避免深色主题下出现异色底板。
+                                MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.98f)
                             ),
                             startY = 0f,
                             endY = maskGradientEndY

@@ -582,7 +582,10 @@ private fun EditorSurface(
     val scrolledByUser = remember { mutableStateOf(false) }
 
     AndroidView(
-        modifier = modifier.graphicsLayer { alpha = contentAlpha },
+        // 入场淡入结束后摘掉图层：常驻离屏缓存不随主题切换刷新。
+        modifier = modifier.then(
+            if (contentAlpha < 1f) Modifier.graphicsLayer { alpha = contentAlpha } else Modifier
+        ),
         factory = { ctx ->
             TextMateSetup.applyTheme(dark)
             // sora 默认把 8 秒内的连续输入并成一条撤销记录，一次撤销会吞掉整段输入。

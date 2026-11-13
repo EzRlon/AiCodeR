@@ -209,11 +209,19 @@ class ContainerInstaller @Inject constructor(
             }
         }
 
-        /** 默认随版本释放的专家（其余 assets/agents 资产作为专家团成员，由在线商店按需安装）。 */
-        private val DEFAULT_RELEASED_AGENTS = setOf("explore.md", "qa.md", "optimizer.md")
+        /**
+         * 默认随版本释放的专家（其余 assets/agents 资产作为专家团成员，由在线商店按需安装）。
+         *
+         * frontend / backend 同时分别是 dev-squad 与 design-squad 的成员：先在这里释放，
+         * 商店安装专家团时 `commitTeam` 只写不存在的文件，同名定义不会互相覆盖；
+         * 独立释放后它们也能被主代理直接派发，并出现在「设置 → 智能体模型」里单独选模型。
+         */
+        private val DEFAULT_RELEASED_AGENTS = setOf(
+            "explore.md", "qa.md", "optimizer.md", "frontend.md", "backend.md"
+        )
 
         /**
-         * 从 assets 提取默认内置子代理（Explore / qa / optimizer）到 `~/.aicode/agents/`。
+         * 从 assets 提取默认内置子代理（Explore / qa / optimizer / Frontend / Backend）到 `~/.aicode/agents/`。
          * 若文件已存在则不覆盖（保留用户修改）；其余专家资产不自动释放，由商店按需安装。
          *
          * optimizer 不属于任何内置专家团的成员，只能靠这里释放；发版前的优化审查流程依赖它。

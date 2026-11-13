@@ -30,7 +30,6 @@ import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.model.TodoItem
-import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.data.local.entity.FailureEventKind
 import com.aicode.feature.agent.domain.container.ContainerInitState

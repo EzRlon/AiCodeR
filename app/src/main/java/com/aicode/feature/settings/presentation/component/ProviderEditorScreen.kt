@@ -1014,10 +1014,14 @@ fun ProviderEditorScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .zIndex(if (isDragging) 1f else 0f)
-                                            .graphicsLayer {
-                                                scaleX = dragScale
-                                                scaleY = dragScale
-                                            }
+                                            // 只在拖拽缩放偏离 1f 时挂层：常驻离屏图层不随主题切换刷新，
+                                            // 会让模型行文字停在旧配色。
+                                            .then(
+                                                if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                                    scaleX = dragScale
+                                                    scaleY = dragScale
+                                                }
+                                            )
                                     ) {
                                         ProviderModelRow(
                                             model = model,
@@ -2265,10 +2269,13 @@ private fun ProviderKeysPage(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .zIndex(if (isDragging) 1f else 0f)
-                                .graphicsLayer {
-                                    scaleX = dragScale
-                                    scaleY = dragScale
-                                }
+                                // 同上：拖拽结束立即摘层，保证 Key 卡片文字跟随主题刷新。
+                                .then(
+                                    if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                        scaleX = dragScale
+                                        scaleY = dragScale
+                                    }
+                                )
                         ) {
                             SwipeToDeleteRow(
                                 onDelete = {

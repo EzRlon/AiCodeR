@@ -2610,7 +2610,10 @@ fun AIChatPanel(
                     .align(Alignment.BottomEnd)
                     .padding(end = Spacing.lg)
                     .padding(bottom = with(LocalDensity.current) { (floatingLayerHeightPx + permissionOffsetPx + FLOATING_LAYER_GAP_DP.toPx()).toDp() })
-                    .graphicsLayer { alpha = if (listState.isScrollInProgress) 0.4f else 1f },
+                    // 仅在滚动中挂层做淡出；静止时摘层，避免按钮图标缓存旧主题色。
+                    .then(
+                        if (listState.isScrollInProgress) Modifier.graphicsLayer { alpha = 0.4f } else Modifier
+                    ),
                 enter = fadeIn() + scaleIn(),
                 exit = fadeOut() + scaleOut()
             ) {

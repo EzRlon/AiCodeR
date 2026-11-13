@@ -634,7 +634,8 @@ internal fun ToolStatusIcon(running: Boolean, isError: Boolean, toolName: String
             modifier = Modifier
                 // 与思考行同一格宽：两行的图标中心与后续文字左边缘才对得齐
                 .size(ChatStyle.rowIconSize)
-                .graphicsLayer { alpha = pulseAlpha }
+                // 仅在执行中挂呼吸层；结束后摘层，避免图标 tint 缓存旧主题色。
+                .then(if (running) Modifier.graphicsLayer { alpha = pulseAlpha } else Modifier)
         )
     }
 }

@@ -174,7 +174,10 @@ internal fun QueuedRequestPanel(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .zIndex(if (isDragging) 1f else 0f)
-                                .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
+                                // 拖拽中才挂位移层；静止时摘层，避免行内文字缓存旧主题色。
+                                .then(
+                                    if (isDragging) Modifier.graphicsLayer { translationY = dragOffset } else Modifier
+                                )
                                 .clip(RoundedCornerShape(Radius.sm))
                                 .background(
                                     if (isDragging) MaterialTheme.colorScheme.surfaceVariant

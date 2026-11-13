@@ -72,7 +72,6 @@ import compose.icons.feathericons.Camera
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Minimize2
-import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Type
 import compose.icons.feathericons.User
@@ -824,19 +823,6 @@ private fun CliEngineRows(
                 }
             }
         )
-        // 引擎行为不再用卡上开关：沙箱 / 自动批准已由会话底栏的模式菜单按引擎原生档位控制
-        // （见 EngineModeCatalog），卡上只留一句引导，避免出现拨了不生效的死开关。
-        when (state.agent.id) {
-            "codex", "opencode" -> {
-                SettingsDivider()
-                SettingsRow(
-                    icon = FeatherIcons.Sliders,
-                    title = stringResource(R.string.engine_mode_in_card_title),
-                    subtitle = stringResource(R.string.engine_mode_in_card_hint),
-                    showChevron = false
-                )
-            }
-        }
     }
 }
 

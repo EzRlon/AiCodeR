@@ -480,8 +480,6 @@
     <string name="cli_model_builtin_group">引擎模型</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
-    <string name="engine_mode_in_card_title">工作模式在会话底栏设置</string>
-    <string name="engine_mode_in_card_hint">沙箱 / 自动批准等档位已随模式菜单移到聊天右下角，按引擎原生档位逐会话设置</string>
     <string name="engine_mode_note_codex_build">Codex 引擎无逐次审批：构建模式在工作区内自动执行，区外被拦截</string>
     <string name="engine_mode_note_codex_plan">Codex 引擎以只读沙箱执行，任何写入都会被底层拒绝</string>
 
@@ -1308,12 +1306,14 @@
     <string name="credential_device_tap_to_copy">点击复制</string>
     <string name="credential_device_code_copied">已复制设备码</string>
     <string name="credential_device_code_copied_opening">已复制设备码，正在打开浏览器…</string>
+    <string name="credential_device_code_copied_opening_client">已复制设备码，正在打开 GitHub 客户端…</string>
+    <string name="credential_device_open_failed">未找到可打开 GitHub 授权页的应用，请在浏览器手动访问 %1$s</string>
     <string name="credential_device_authorize_and_open">复制并前往授权</string>
     <string name="credential_device_copy_code">仅复制设备码</string>
-    <string name="credential_device_open_browser">打开浏览器</string>
+    <string name="credential_device_open_browser">改用浏览器打开</string>
     <string name="credential_device_step_1">1. 复制上方 8 位设备验证码</string>
     <string name="credential_device_step_2">2. 前往 GitHub 验证页面粘贴并确认授权</string>
-    <string name="credential_device_waiting">等待浏览器授权完成…</string>
+    <string name="credential_device_waiting">等待 GitHub 授权完成…</string>
     <string name="credential_device_waiting_desc">完成授权后将自动绑定并保存凭据</string>
     <string name="credential_device_success_title">授权成功</string>
     <string name="credential_device_success">已成功关联账号 %1$s 并保存凭据</string>

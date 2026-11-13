@@ -27,16 +27,36 @@ data class CliAgent(
     val launchCommand: String = command
 ) {
     /**
-     * 固定版本的安装命令；npm 缺失时提示先装 Node.js 环境（aicode 菜单）。
+     * 固定版本的安装命令；npm 缺失时**自动补装 Node.js**（全自动，不再让用户去跑 aicode 菜单）。
+     *
+     * 补装优先复用容器内的 `~/.aicode/lib/env-common.sh`（已处理各发行版包管理器、镜像与
+     * 官方二进制兜底）；旧容器没有该库时再按 apk/apt/dnf/yum/pacman 直接安装。
      *
      * 下载主体是数百 MB 的平台二进制，无 VPN 直连 npmjs 官方源极易超时：国内镜像
      * （npmmirror）优先、探测不可达回退官方源；镜像安装失败时再回退官方源重试一次。
      * 不写入 /root/.npmrc，海外环境仍可走官方源。
      */
     val installCommand: String =
-        "if ! command -v npm >/dev/null 2>&1; then " +
-            "echo '未检测到 Node.js/npm：请先在终端执行 aicode，选择安装 Node.js 环境后重试'; exit 127; fi; " +
-            "REG=https://registry.npmmirror.com; " +
+        "ensure_npm() { " +
+            "command -v npm >/dev/null 2>&1 && return 0; " +
+            "echo '未检测到 Node.js/npm，正在自动安装 Node.js 环境…'; " +
+            "if [ -f \"\$HOME/.aicode/lib/env-common.sh\" ]; then " +
+                ". \"\$HOME/.aicode/lib/env-common.sh\"; detect_pmgr; " +
+                "env_ensure_node 18.0.0 >/dev/null 2>&1 || true; " +
+                "command -v npm >/dev/null 2>&1 || { [ -n \"\$PMGR\" ] && pkg_add npm >/dev/null 2>&1 || true; }; " +
+            "fi; " +
+            "command -v npm >/dev/null 2>&1 && return 0; " +
+            "if command -v apk >/dev/null 2>&1; then apk add --no-cache nodejs npm; " +
+            "elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update -y && apt-get install -y nodejs npm; " +
+            "elif command -v dnf >/dev/null 2>&1; then dnf install -y nodejs npm; " +
+            "elif command -v yum >/dev/null 2>&1; then yum install -y nodejs npm; " +
+            "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm nodejs npm; " +
+            "fi; " +
+            "command -v npm >/dev/null 2>&1; " +
+        "}; " +
+        "ensure_npm || { echo 'Node.js 自动安装失败：请检查网络/代理后重试'; exit 127; }; " +
+        "echo \"Node: \$(node -v 2>/dev/null) / npm: \$(npm -v 2>/dev/null)\"; " +
+        "REG=https://registry.npmmirror.com; " +
             "if command -v curl >/dev/null 2>&1; then " +
             "curl -fsI --max-time 4 \"\$REG/\" >/dev/null 2>&1 || REG=https://registry.npmjs.org; " +
             "elif command -v wget >/dev/null 2>&1; then " +
@@ -62,12 +82,18 @@ data class CliAgent(
             "if command -v $command >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
             "else P=\$(npm prefix -g 2>/dev/null)/bin; " +
-            // npm 已报安装成功但 PATH 探测不到：大概率是全局 bin 目录不在当前会话 PATH。
-            // 探测真实 bin 目录后直接给出可复制的 export 命令，省去用户盲猜与重启。
+            // npm 已报安装成功但 PATH 探测不到：全局 bin 目录不在 PATH。先尝试软链到
+            // /usr/local/bin（恒在 PATH 中），让「点安装」直接可用；仍不行才提示手动 export。
+            "mkdir -p /usr/local/bin 2>/dev/null; " +
             "if [ -x \"\$P/$command\" ]; then " +
-            "echo '已安装但当前会话未检测到（PATH 未含全局 bin），执行下面这行立即可用，重启容器永久生效：'; " +
-            "echo \"export PATH=\$P:\$PATH\"; " +
-            "else echo '安装流程结束但未检测到命令，请重启容器后重试'; fi; fi"
+            "ln -sf \"\$P/$command\" /usr/local/bin/$command 2>/dev/null; " +
+            "hash -r 2>/dev/null; fi; " +
+            "if command -v $command >/dev/null 2>&1; then " +
+            "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
+            "else if [ -x \"\$P/$command\" ]; then " +
+            "echo \"已安装但当前会话未检测到，请执行 export PATH=\$P:\$PATH（重启容器永久生效）\"; " +
+            // 真失败必须返回非零，让设置页如实显示「安装失败」，而不是假成功。
+            "else echo '安装失败：未生成可执行命令，请检查网络/代理后重试'; exit 1; fi; fi; fi"
 
     /** 检测命令：已安装则输出首行版本号，未安装静默失败。 */
     val detectCommand: String =

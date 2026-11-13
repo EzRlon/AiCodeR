@@ -98,7 +98,8 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 nameRes = R.string.dev_env_static_web,
                 descRes = R.string.dev_env_static_web_desc,
                 promptRes = R.string.dev_env_static_web_prompt,
-                probeCmd = "command -v python3 >/dev/null 2>&1"
+                // 静态网页不需要任何工具链：此前用 python3 代判，装了 Python 就会误标「已安装」。
+                probeCmd = null
             ),
             DevEnvScenario(
                 id = "frontend",
@@ -106,7 +107,8 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 nameRes = R.string.dev_env_frontend,
                 descRes = R.string.dev_env_frontend_desc,
                 promptRes = R.string.dev_env_frontend_prompt,
-                probeCmd = "command -v node >/dev/null 2>&1"
+                // 前端场景安装的是 Node + npm，且 Vite 等脚手架依赖 npx：三者齐全才算装好。
+                probeCmd = "command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && command -v npx >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "android",
@@ -114,7 +116,12 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 nameRes = R.string.dev_env_android,
                 descRes = R.string.dev_env_android_desc,
                 promptRes = R.string.dev_env_android_prompt,
-                probeCmd = "command -v gradle >/dev/null 2>&1 || ls -d /opt/gradle-* >/dev/null 2>&1 || [ -n \"\$ANDROID_HOME\" ]"
+                // 场景要求 JDK + Gradle + Android SDK 三者齐全：只装了 JDK，或只设了 ANDROID_HOME
+                // 变量（SDK 并未下载）都不算可用，不能误标「已安装」。
+                probeCmd = "command -v javac >/dev/null 2>&1 && " +
+                    "(command -v gradle >/dev/null 2>&1 || ls -d /opt/gradle-* >/dev/null 2>&1) && " +
+                    "([ -d \"\$ANDROID_HOME/platform-tools\" ] || [ -d \"\$HOME/Android/Sdk/platform-tools\" ] || " +
+                    "[ -d /opt/android-sdk/platform-tools ])"
             )
         )
     ),
@@ -127,7 +134,8 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 nameRes = R.string.dev_env_python,
                 descRes = R.string.dev_env_python_desc,
                 promptRes = R.string.dev_env_python_prompt,
-                probeCmd = "command -v python3 >/dev/null 2>&1"
+                // 场景会一并安装 pip 与 venv；只有 python3 不够。
+                probeCmd = "command -v python3 >/dev/null 2>&1 && command -v pip3 >/dev/null 2>&1 && python3 -c \"import venv\" >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "node",
@@ -143,7 +151,7 @@ private val devEnvGroups: List<DevEnvGroup> = listOf(
                 nameRes = R.string.dev_env_java,
                 descRes = R.string.dev_env_java_desc,
                 promptRes = R.string.dev_env_java_prompt,
-                probeCmd = "command -v javac >/dev/null 2>&1"
+                probeCmd = "command -v javac >/dev/null 2>&1 && command -v java >/dev/null 2>&1"
             ),
             DevEnvScenario(
                 id = "go",
