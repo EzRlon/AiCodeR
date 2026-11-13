@@ -59,6 +59,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
+import com.aicode.feature.agent.presentation.DeliverableItem
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -330,7 +331,7 @@ fun ChatDrawerContent(
     /** 标注中心入口：活标注/截屏标注/账本统一界面；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
     /** 交付物列表（左栏第三页）：当前工作区的会话附件（AI 交付的文件与安装包），时间倒序。 */
-    deliverables: List<AIAgentViewModel.DeliverableItem> = emptyList(),
+    deliverables: List<DeliverableItem> = emptyList(),
     deliverablesScanning: Boolean = false,
     onRefreshDeliverables: () -> Unit = {},
     /** 交付物操作菜单所需的文件访问（保存到手机/MT/分享等）；null 时行点击仅提示。 */
@@ -2138,7 +2139,7 @@ private fun sessionGroupLabel(groupKey: String, anchorSession: ChatSession): Str
 /** 交付物页：AI 发进会话的附件，按后缀分组、组内时间倒序；行点击弹出操作菜单。 */
 @Composable
 private fun DeliverablesTab(
-    deliverables: List<AIAgentViewModel.DeliverableItem>,
+    deliverables: List<DeliverableItem>,
     scanning: Boolean,
     onRefresh: () -> Unit,
     fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?
@@ -2215,7 +2216,7 @@ private fun deliverableGroupTitle(key: String): String = stringResource(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DeliverableRow(
-    item: AIAgentViewModel.DeliverableItem,
+    item: DeliverableItem,
     fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -2283,7 +2284,7 @@ private fun DeliverableRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DeliverableActionSheet(
-    item: AIAgentViewModel.DeliverableItem,
+    item: DeliverableItem,
     fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
     actionScope: kotlinx.coroutines.CoroutineScope,
     onDismiss: () -> Unit

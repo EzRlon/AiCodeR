@@ -161,8 +161,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import android.media.MediaScannerConnection
-import com.aicode.core.util.ExternalFileActions
-import com.aicode.feature.agent.presentation.component.resolveLocalFile
 import java.io.OutputStream
 import java.util.Calendar
 import java.util.UUID
@@ -254,6 +252,7 @@ class AIAgentViewModel @Inject constructor(
     private val fileChangeHub: FileChangeHub,
     private val scheduledTaskRepository: com.aicode.feature.schedule.data.ScheduledTaskRepository,
     private val voiceState: VoiceStateHolder,
+    private val deliverablesState: DeliverablesStateHolder,
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val claudeCodeBridge: com.aicode.feature.agent.domain.engine.ClaudeCodeBridge,
@@ -1306,71 +1305,13 @@ class AIAgentViewModel @Inject constructor(
         text.trim().replace('\n', ' ').take(160)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    // ── 交付物（左栏「交付物」页数据源：当前工作区的会话附件）──────────
+    // ── 交付物（委托 DeliverablesStateHolder；类型与签名保持稳定）──────────
 
-    /** 一条交付物：附件元数据 + 产生时间（用于倒序排列与分组）。 */
-    data class DeliverableItem(
-        val attachment: com.aicode.feature.agent.presentation.AgentAttachment,
-        val timestamp: Long
-    )
-
-    private val _deliverables = MutableStateFlow<List<DeliverableItem>>(emptyList())
-    val deliverables: StateFlow<List<DeliverableItem>> = _deliverables.asStateFlow()
-    private val _deliverablesScanning = MutableStateFlow(false)
-    val deliverablesScanning: StateFlow<Boolean> = _deliverablesScanning.asStateFlow()
-    private var deliverablesJob: Job? = null
+    val deliverables: StateFlow<List<DeliverableItem>> get() = deliverablesState.deliverables
+    val deliverablesScanning: StateFlow<Boolean> get() = deliverablesState.deliverablesScanning
 
     /** 刷新交付物：进入交付物页时调用（扫描只在用户打开该页时发生，重入忽略）。 */
-    fun refreshDeliverables() {
-        if (deliverablesJob?.isActive == true) return
-        deliverablesJob = viewModelScope.launch {
-            _deliverablesScanning.value = true
-            try {
-                _deliverables.value = withContext(Dispatchers.IO) { loadDeliverables() }
-            } finally {
-                _deliverablesScanning.value = false
-            }
-        }
-    }
-
-    /**
-     * 聚合当前工作区的会话附件（AI 交付出来的文件与安装包），去重后按时间倒序。
-     *
-     * 只认会话附件：交付事件就是「AI 把它发进了会话」。工作区里存在同后缀文件并不等于交付——
-     * 构建中间产物、历史归档、往批留下的包都在工作区里，按后缀递归盲扫会把它们全当成交付物，
-     * 混进与本次开发无关的安装包。工作区产物的去处是「设置 → 存储 → 工作区产物」。
-     */
-    private suspend fun loadDeliverables(): List<DeliverableItem> {
-        val workspacePath = _currentWorkspace.value
-        val byPath = LinkedHashMap<String, DeliverableItem>()
-        runCatching {
-            agentMessageDao.messagesWithAttachments(workspacePath).forEach { row ->
-                AgentMessageEntity.decodeAttachments(row.attachmentsJson).forEach { attachment ->
-                    if (attachment.containerPath.isNotBlank()) {
-                        byPath.putIfAbsent(
-                            attachment.containerPath,
-                            DeliverableItem(attachment, row.timestamp)
-                        )
-                    }
-                }
-            }
-        }.onFailure { FileLogger.w(TAG, "读取消息附件失败", it) }
-        // 把交付物复制一份到真机存储 下载/AiCodeR/（不是容器映射）：交付页展示与
-        // 「MT 管理器打开」「文件管理器中查看」都用这份真机副本，长按菜单才能真正跳转。
-        withContext(Dispatchers.IO) {
-            byPath.values.forEach { item ->
-                runCatching {
-                    val local = resolveLocalFile(item.attachment, fileAccess) ?: return@runCatching
-                    val name = item.attachment.fileName.ifBlank { local.name }
-                    val existing = ExternalFileActions.findExported(name)
-                    if (existing == null || existing.length() != local.length()) {
-                        ExternalFileActions.exportToSharedFile(context, local, name)
-                    }
-                }.onFailure { FileLogger.w(TAG, "导出交付物到真机失败: ${item.attachment.fileName}", it) }
-            }
-        }
-        return byPath.values.sortedByDescending { it.timestamp }
-    }
+    fun refreshDeliverables() = deliverablesState.refresh()
 
     val streamingText: StateFlow<String?> = _currentSessionId
         .flatMapLatest { id ->
@@ -1671,6 +1612,8 @@ class AIAgentViewModel @Inject constructor(
     init {
         // 语音域状态持有者挂到本 VM 作用域（生命周期随之绑定）
         voiceState.attach(viewModelScope)
+        // 交付物域：作用域 + 当前工作区路径读取函数
+        deliverablesState.attach(viewModelScope) { _currentWorkspace.value }
         // 悬浮球 mini 会话窗口（FB1）：把当前会话的消息快照/标题/运行态镜像到进程级 Hub，
         // 悬浮窗面板只读消费；发送/停止命令仍走 FloatBallCommandCenter（主界面注册）。
         viewModelScope.launch {
@@ -1734,7 +1677,7 @@ class AIAgentViewModel @Inject constructor(
             _currentWorkspace.collect {
                 slashCommandRegistry.refresh()
                 // 交付物按工作区聚合：切工作区后清空，下次进入交付物页重新扫描。
-                _deliverables.value = emptyList()
+                deliverablesState.clear()
             }
         }
 
