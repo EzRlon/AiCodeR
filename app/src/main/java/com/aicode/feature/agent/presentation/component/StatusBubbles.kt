@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.core.ui.markdown.MarkdownContent
+import com.aicode.core.ui.markdown.MarkdownRenderCache
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn

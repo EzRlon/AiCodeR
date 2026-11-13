@@ -1,4 +1,4 @@
-package com.aicode.feature.agent.presentation.component
+package com.aicode.core.ui.markdown
 
 import org.jsoup.parser.Parser
 import java.util.Base64

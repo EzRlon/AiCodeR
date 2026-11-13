@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.core.ui.markdown.DiffExpandToggle
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
@@ -969,34 +970,6 @@ private fun looksLikeUnifiedDiff(text: String): Boolean {
         }
     }
     return markers >= 1 && changes >= 2
-}
-
-/** 长差异的页脚切换 */
-@Composable
-internal fun DiffExpandToggle(expanded: Boolean, hiddenCount: Int, onToggle: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.sm))
-            .clickable(onClick = onToggle)
-            .padding(vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        ExpandableChevronIcon(
-            expanded = expanded,
-            contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
-            tint = Brand.IconGray,
-            size = 16.dp
-        )
-        Spacer(Modifier.width(Spacing.xs))
-        Text(
-            text = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.tool_expand_remaining, hiddenCount),
-            color = MaterialTheme.colorScheme.primary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium
-        )
-    }
 }
 
 /** editFile 单处编辑的差异片段。 */

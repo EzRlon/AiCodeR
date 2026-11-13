@@ -1,4 +1,4 @@
-package com.aicode.feature.agent.presentation.component
+package com.aicode.core.ui.markdown
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.DragInteraction

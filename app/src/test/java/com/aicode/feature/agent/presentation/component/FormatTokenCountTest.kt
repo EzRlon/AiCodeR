@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.core.ui.markdown.formatTokenCount
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

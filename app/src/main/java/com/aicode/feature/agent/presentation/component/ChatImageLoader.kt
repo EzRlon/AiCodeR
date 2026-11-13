@@ -76,14 +76,3 @@ internal fun AgentAttachment.toViewerRequest(): ImageViewerRequest = ImageViewer
     ),
     title = fileName
 )
-
-/**
- * Markdown 内嵌图片的查看请求：link 就是 AI 视角的容器路径。
- *
- * 库把 alt 直接交给 Image 当 contentDescription，不经过 transformer，所以这里拿不到它，
- * 退而取路径末段的文件名当标题。
- */
-internal fun markdownViewerRequest(link: String): ImageViewerRequest = ImageViewerRequest(
-    sources = listOf(ImageSource.ContainerPath(link)),
-    title = link.trimEnd('/').substringAfterLast('/')
-)

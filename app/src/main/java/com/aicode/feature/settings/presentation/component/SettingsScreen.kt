@@ -84,9 +84,9 @@ import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
-import com.aicode.feature.agent.presentation.component.MarkdownContent
+import com.aicode.core.ui.markdown.MarkdownContent
 import com.aicode.feature.agent.presentation.AIAgentViewModel
-import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
+import com.aicode.core.ui.markdown.MarkdownRenderCache
 import com.aicode.feature.backup.presentation.BackupScreen
 import com.aicode.feature.editor.presentation.CodeEditorScreen
 import com.aicode.feature.schedule.domain.ScheduledTask

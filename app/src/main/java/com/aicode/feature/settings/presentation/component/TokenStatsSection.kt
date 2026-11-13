@@ -63,7 +63,7 @@ import com.aicode.feature.agent.data.local.dao.ProviderCallStats
 import com.aicode.feature.agent.data.local.dao.RecentCallRecord
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.engine.AgentEngines
-import com.aicode.feature.agent.presentation.component.formatTokenCount
+import com.aicode.core.ui.markdown.formatTokenCount
 import com.aicode.feature.settings.presentation.TokenStatsPeriod
 import com.aicode.feature.settings.presentation.TokenStatsUiState
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost

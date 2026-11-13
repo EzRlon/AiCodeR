@@ -1,5 +1,7 @@
-package com.aicode.feature.agent.presentation.component
+package com.aicode.core.ui.markdown
 
+import com.aicode.core.ui.ImageViewerRequest
+import com.aicode.core.ui.ImageSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -21,7 +23,7 @@ import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.MARKDOWN_MAX_EDGE
 import com.aicode.core.ui.decodeSampledBitmap
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.core.io.FileAccessProvider
 import com.mikepenz.markdown.model.ImageData
 import com.mikepenz.markdown.model.ImageTransformer
 import kotlinx.coroutines.Dispatchers
@@ -98,3 +100,14 @@ internal class MarkdownImageTransformer(
         val MAX_HEIGHT_DP = 320.dp
     }
 }
+
+/**
+ * Markdown 内嵌图片的查看请求：link 就是 AI 视角的容器路径。
+ *
+ * 库把 alt 直接交给 Image 当 contentDescription，不经过 transformer，所以这里拿不到它，
+ * 退而取路径末段的文件名当标题。
+ */
+internal fun markdownViewerRequest(link: String): ImageViewerRequest = ImageViewerRequest(
+    sources = listOf(ImageSource.ContainerPath(link)),
+    title = link.trimEnd('/').substringAfterLast('/')
+)

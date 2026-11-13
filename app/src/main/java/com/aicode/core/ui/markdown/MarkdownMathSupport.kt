@@ -1,4 +1,4 @@
-package com.aicode.feature.agent.presentation.component
+package com.aicode.core.ui.markdown
 
 import android.graphics.Bitmap
 import android.graphics.Canvas

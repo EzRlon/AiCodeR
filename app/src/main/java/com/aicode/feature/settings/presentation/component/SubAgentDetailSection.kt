@@ -24,8 +24,8 @@ import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppSwitch
 import com.aicode.feature.agent.domain.subagent.InjectPart
-import com.aicode.feature.agent.presentation.component.MarkdownContent
-import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
+import com.aicode.core.ui.markdown.MarkdownContent
+import com.aicode.core.ui.markdown.MarkdownRenderCache
 import com.aicode.feature.settings.presentation.SubAgentUiEntry
 
 /**

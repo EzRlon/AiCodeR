@@ -23,7 +23,7 @@ import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
-import com.aicode.feature.agent.presentation.component.MarkdownContent
+import com.aicode.core.ui.markdown.MarkdownContent
 
 /**
  * 提示词片段详情页：只读预览——编号/名称/来源、摘要、正文（Markdown）。

@@ -123,7 +123,7 @@ import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificat
 import com.aicode.feature.agent.presentation.notification.AgentApprovalNotificationManager.ApprovalKind
 import com.aicode.feature.agent.presentation.component.RewindOption
 import com.aicode.feature.agent.presentation.component.toolRunningLabelRes
-import com.aicode.feature.agent.presentation.component.formatTokenCount
+import com.aicode.core.ui.markdown.formatTokenCount
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
