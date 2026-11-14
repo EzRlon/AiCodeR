@@ -530,11 +530,9 @@ class AnthropicAdapter @Inject constructor(
 
     private class ClaudeGeneration(val family: String, val major: Int, val minor: Int)
 
-    /** 400 文案学到的白名单优先：请求档位不在白名单时向下钳到最近档。 */
-    private fun clampLearned(effort: String): String {
-        val learned = ReasoningLearning.recall(providerId, model) ?: return effort
-        return ReasoningLearning.clamp(effort, learned)
-    }
+    /** 按 400 文案学到的「被拒档位」收紧请求档位：被证伪时降到最近可用档，否则原样返回。 */
+    private fun clampLearned(effort: String): String =
+        ReasoningLearning.tighten(effort, providerId, model)
 
     /** 是否支持 adaptive thinking：4.6+ 及 5 系（claude-<family>-4-6/4-7/4-8 或主版本 5）。 */
     private fun supportsAdaptiveThinking(): Boolean {

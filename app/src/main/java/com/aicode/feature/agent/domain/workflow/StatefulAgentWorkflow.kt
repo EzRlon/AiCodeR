@@ -57,6 +57,7 @@ import com.aicode.feature.agent.domain.provider.AnthropicAdapter
 import com.aicode.feature.agent.domain.provider.GeminiAdapter
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
+import com.aicode.feature.agent.domain.provider.ReasoningLearning
 import com.aicode.feature.agent.domain.provider.StreamApiException
 import com.aicode.feature.agent.domain.provider.reasoningAuditOf
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
@@ -843,6 +844,9 @@ class StatefulAgentWorkflow @Inject constructor(
                             val (persistedImages, attachments) =
                                 if (aiResponse.images.isNotEmpty()) persistModelImages(aiResponse.images) else emptyList<AgentImage>() to emptyList()
                             callCompleted = true
+                            // 自愈：本轮实际发出的档位被服务端接受，即可推翻历史「被拒」记录，
+                            // 防止一次抽风 400 造成的降级长期粘住（见 ReasoningLearning.markUsed）。
+                            ReasoningLearning.markUsed(providerInUse.providerId, providerInUse.model, providerInUse.reasoningWireUsed)
                             if (aiResponse.stopReason == "model_context_window_exceeded" && overflowRecoveryStreakNow() < MAX_OVERFLOW_RECOVERIES) {
                                 noteOverflowRecovery()
                                 // 连续第 2 次起跳过工作集回注：回注会把刚压缩完的上下文重新吹胖，

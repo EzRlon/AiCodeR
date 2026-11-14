@@ -17,6 +17,8 @@ import com.aicode.core.util.TombstoneParser
 import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpManager
+import com.aicode.feature.agent.domain.provider.ReasoningLearning
+import com.aicode.feature.agent.domain.provider.SharedPrefsReasoningLearningStore
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
@@ -127,6 +129,9 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 会不留任何痕迹，故把日志与全局崩溃处理器提到 attachBaseContext 最前。
         FileLogger.init(base)
         AILogger.init(base)
+        // 思考档位学习结果落盘：避免每次冷启动都重新踩同一个 400。副作用有三重兜底
+        // （元数据优先 + TTL 过期 + 成功即自愈），坏值不可能长期生效。
+        ReasoningLearning.init(SharedPrefsReasoningLearningStore(base))
         installCrashHandler()
         // 全局代理入口：必须在任何 Hilt 注入 / OkHttpClient 构建之前设置，
         // 使 App 侧全部 HTTP 链路（对话、MCP、更新检查等）按需走全局/提供商代理。

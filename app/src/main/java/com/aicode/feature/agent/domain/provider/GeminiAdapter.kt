@@ -409,11 +409,9 @@ class GeminiAdapter @Inject constructor(
         }
     }
 
-    /** 400 文案学到的白名单优先：请求档位不在白名单时向下钳到最近档。 */
-    private fun clampLearned(effort: String): String {
-        val learned = ReasoningLearning.recall(providerId, model) ?: return effort
-        return ReasoningLearning.clamp(effort, learned)
-    }
+    /** 按 400 文案学到的「被拒档位」收紧请求档位：被证伪时降到最近可用档，否则原样返回。 */
+    private fun clampLearned(effort: String): String =
+        ReasoningLearning.tighten(effort, providerId, model)
 
     /**
      * Interactions 的非流式请求。结果从 `steps` 时间线解析（见 [parseInteractionSteps]），

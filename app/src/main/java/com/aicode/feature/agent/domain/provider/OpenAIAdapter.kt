@@ -167,9 +167,10 @@ class OpenAIAdapter @Inject constructor(
     /**
      * 思考强度 → OpenAI reasoning_effort。
      *
-     * 优先按模型声明的档位（[reasoningLevels]）判断：支持 max/xhigh 的模型（gpt-5.6、gpt-6 等）
-     * 如实透传，不再被压成 high；模型确实不支持的低档位向下取最近档，未知模型按保守集合发送。
-     * 从 400 文案学到的白名单（[ReasoningLearning.recall]）是实测真相，优先于声明档位。
+     * **元数据（[reasoningLevels]）为准**：支持 max/xhigh 的模型（gpt-5.6、gpt-6 等）如实透传，
+     * 不再被压成 high；模型确实不支持的低档位向下取最近档，未知模型按保守集合发送。
+     * 400 文案学到的「被拒档位」（[ReasoningLearning]）只在其允许范围内**进一步收窄**，
+     * 永不反过来覆盖元数据——一条异常 400 不该让模型永久失去元数据已声明的档位。
      *
      * OpenAI 官方 Chat Completions 的 reasoning_effort 仅接受 low/medium/high（gpt-5 系额外支持
      * none/minimal，但 o 系列不接受），"none"/"minimal" 原样透传会在多数推理模型上 400。
@@ -177,7 +178,10 @@ class OpenAIAdapter @Inject constructor(
      */
     private fun normalizeReasoningEffort(effort: String?): String? {
         if (effort == null) return null
-        val declared = ReasoningLearning.recall(providerId, model) ?: reasoningLevels?.takeIf { it.isNotEmpty() }
+        val denied = ReasoningLearning.rejectedLevels(providerId, model)
+        val declared = reasoningLevels?.takeIf { it.isNotEmpty() }
+            ?.filter { it !in denied }
+            ?.takeIf { it.isNotEmpty() }
         if (declared != null) {
             if (effort in declared) return effort
             // 档位高于最高档：向下取最近档；低于最低档：向上取最近档。
@@ -192,16 +196,21 @@ class OpenAIAdapter @Inject constructor(
             }
             return null
         }
-        return when (effort) {
-            "none", "minimal" -> null
+        // 无元数据（或元数据档位全被证伪）：按协议保守集合发送，并避开已证伪的档位。
+        val conservative = when (effort) {
+            "none", "minimal" -> return null
             "xhigh", "max" -> "high"
             else -> effort
         }
+        return if (conservative in denied) ReasoningLearning.clamp(conservative, ALL_EFFORTS - denied) else conservative
     }
 
     private companion object {
         /** 档位由弱到强的顺序，用于在模型声明档位内找最近档。 */
         val REASONING_ORDER = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+        /** 全部档位：无元数据时从中剔除已证伪档位，得到可用的保守集合。 */
+        val ALL_EFFORTS = REASONING_ORDER.toSet()
     }
 
     /**
