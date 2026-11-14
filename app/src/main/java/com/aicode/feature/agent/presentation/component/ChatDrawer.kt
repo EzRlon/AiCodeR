@@ -329,6 +329,8 @@ fun ChatDrawerContent(
     onPasteOverwrite: () -> Unit,
     onCancelPasteOverwrite: () -> Unit,
     onClearClipboard: () -> Unit,
+    /** 子代理成员标识 → 显示名（如 backend → 后端）；用于子代理行的成员徽章。 */
+    memberNameOf: (String) -> String = { it },
     onNavigateToBrowser: (() -> Unit)? = null,
     /** 标注中心入口：活标注/截屏标注/账本统一界面；null 则隐藏该入口。 */
     onNavigateToAnnotations: (() -> Unit)? = null,
@@ -557,7 +559,8 @@ fun ChatDrawerContent(
                                 trashedSessions = trashedSessions,
                                 onRestoreSession = onRestoreSession,
                                 onPurgeSession = onPurgeSession,
-                                onEmptyTrash = onEmptyTrash
+                                onEmptyTrash = onEmptyTrash,
+                                memberNameOf = memberNameOf
                             )
                             1 -> FileBrowserTab(
                                 state = browseState,
@@ -876,7 +879,8 @@ private fun SessionListTab(
     trashedSessions: List<ChatSession> = emptyList(),
     onRestoreSession: (String) -> Unit = {},
     onPurgeSession: (String) -> Unit = {},
-    onEmptyTrash: () -> Unit = {}
+    onEmptyTrash: () -> Unit = {},
+    memberNameOf: (String) -> String = { it }
 ) {
     if (searchQuery.isBlank()) {
         SessionListContent(
@@ -894,7 +898,8 @@ private fun SessionListTab(
             trashedSessions = trashedSessions,
             onRestoreSession = onRestoreSession,
             onPurgeSession = onPurgeSession,
-            onEmptyTrash = onEmptyTrash
+            onEmptyTrash = onEmptyTrash,
+            memberNameOf = memberNameOf
         )
     } else {
         ChatSearchResults(state = searchState, onOpenHit = onOpenSearchHit)
@@ -918,7 +923,8 @@ private fun SessionListContent(
     trashedSessions: List<ChatSession> = emptyList(),
     onRestoreSession: (String) -> Unit = {},
     onPurgeSession: (String) -> Unit = {},
-    onEmptyTrash: () -> Unit = {}
+    onEmptyTrash: () -> Unit = {},
+    memberNameOf: (String) -> String = { it }
 ) {
     var trashOpen by remember { mutableStateOf(false) }
     var purgeTarget by remember { mutableStateOf<ChatSession?>(null) }
@@ -1065,6 +1071,11 @@ private fun SessionListContent(
                                         awaitingPermission = sub.id in awaitingPermissionSessionIds,
                                         pinned = false,
                                         compact = true,
+                                        // 子代理行显示成员名（subagentType 即成员标识），
+                                        // 让用户一眼看出这条子会话属于哪位专家，而非只有任务描述。
+                                        memberName = sub.subagentType
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { memberNameOf(it) },
                                         selectionMode = selectionMode,
                                         checked = sub.id in selectedSessionIds,
                                         onCheckedChange = { onToggleSelectSession(sub) },

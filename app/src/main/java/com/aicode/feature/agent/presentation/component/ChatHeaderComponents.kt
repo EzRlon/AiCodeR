@@ -120,6 +120,8 @@ internal fun ChatHeader(
     onNavigateToBrowser: () -> Unit = {},
     onNavigateToMemoryGraph: () -> Unit = {},
     onOpenTeams: (() -> Unit)? = null,
+    /** 当前会话已召唤的专家团名；非 null 时按钮高亮，让用户一眼看到「已选」。 */
+    activeTeamName: String? = null,
     currentMode: AgentMode,
     onToggleMode: (AgentMode) -> Unit,
     connectionState: com.aicode.feature.agent.domain.container.ConnectionState? = null,
@@ -182,8 +184,13 @@ internal fun ChatHeader(
                 onOpenTeams?.let { openTeams ->
                     WorkbenchIconButton(
                         icon = FeatherIcons.Users,
-                        contentDescription = stringResource(R.string.team_picker_title),
-                        active = false,
+                        contentDescription = if (activeTeamName != null) {
+                            stringResource(R.string.team_header_active, activeTeamName)
+                        } else {
+                            stringResource(R.string.team_picker_title)
+                        },
+                        // 已有专家团生效时按钮高亮：这是「当前选中了什么」最直接的一处反馈。
+                        active = activeTeamName != null,
                         onClick = openTeams
                     )
                 }

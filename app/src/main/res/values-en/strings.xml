@@ -2545,6 +2545,16 @@
     <string name="settings_team_deleted">Expert team deleted</string>
     <string name="settings_team_delete_failed">Failed to delete expert team, check the logs</string>
     <string name="team_picker_title">Expert teams</string>
+    <string name="team_header_active">Team: %1$s (tap to change)</string>
+    <string name="team_banner_label">Team · %1$s</string>
+    <string name="team_banner_change">Change team</string>
+    <string name="team_banner_clear">Remove team</string>
+    <string name="team_toast_selected">Summoned team \"%1$s\"</string>
+    <string name="team_toast_cleared">Team removed</string>
+    <string name="team_picker_group_builtin">Built-in</string>
+    <string name="team_picker_group_global">Global</string>
+    <string name="team_picker_group_project">Project</string>
+    <string name="member_translation_note">Member agent</string>
     <string name="team_picker_none">No team</string>
     <string name="team_picker_empty">No team definitions yet</string>
     <string name="team_members_count">%1$d members</string>

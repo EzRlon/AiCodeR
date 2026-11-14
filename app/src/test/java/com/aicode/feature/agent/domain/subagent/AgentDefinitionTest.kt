@@ -121,6 +121,37 @@ class AgentDefinitionTest {
         prompt = "p"
     )
 
+    private fun defNamed(name: String, filePath: String?) = AgentDefinition(
+        name = name,
+        description = "",
+        prompt = "p",
+        filePath = filePath
+    )
+
+    /**
+     * 内置团队按文件名引用成员（`members: [product-manager, ...]`），而 `product-manager.md`
+     * 的定义名是缩写 `PM`——只认定义名会让派发直接失败。这里钉住「文件名也算命中」。
+     */
+    @Test
+    fun matchesDefinitionName_acceptsFileNameWhenDiffersFromName() {
+        val pm = defNamed(name = "PM", filePath = "/home/.aicode/agents/product-manager.md")
+
+        assertTrue(AgentDefinitionRepository.matchesDefinitionName(pm, "product-manager"))
+        assertTrue(AgentDefinitionRepository.matchesDefinitionName(pm, "PM"))
+        assertTrue(AgentDefinitionRepository.matchesDefinitionName(pm, "pm"))
+        assertEquals(false, AgentDefinitionRepository.matchesDefinitionName(pm, "architect"))
+    }
+
+    /** 商店安装按定义名写 members，两种写法都要命中同一份定义，避免安装后派发失灵。 */
+    @Test
+    fun matchesDefinitionName_acceptsDefinitionNameAndIsCaseInsensitive() {
+        val backend = defNamed(name = "Backend", filePath = "/home/.aicode/agents/backend.md")
+
+        assertTrue(AgentDefinitionRepository.matchesDefinitionName(backend, "backend"))
+        assertTrue(AgentDefinitionRepository.matchesDefinitionName(backend, "Backend"))
+        assertTrue(AgentDefinitionRepository.matchesDefinitionName(backend, "backend.md".removeSuffix(".md")))
+    }
+
     /** 白名单未列 messageParent 时也默认保留：基线提示词教子代理用它汇报，裁掉会变成教模型调不存在的工具。 */
     @Test
     fun filter_allowlistKeepsMessageParentByDefault() {

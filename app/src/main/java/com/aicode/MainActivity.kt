@@ -538,6 +538,7 @@ fun AppNavigation(
     val agentStates by agentViewModel.agentStates.collectAsStateWithLifecycle()
     val awaitingPermissionSessionIds by agentViewModel.awaitingPermissionSessionIds.collectAsStateWithLifecycle()
     val subSessionsByParent by agentViewModel.subSessionsByParent.collectAsStateWithLifecycle()
+    val teamMemberNames by agentViewModel.teamMemberNames.collectAsStateWithLifecycle()
     val expandedPaths by agentViewModel.expandedPaths.collectAsStateWithLifecycle()
     val expandingPath by agentViewModel.expandingPath.collectAsStateWithLifecycle()
     val fileOpPaths by agentViewModel.fileOpPaths.collectAsStateWithLifecycle()
@@ -798,6 +799,8 @@ fun AppNavigation(
             onRestoreSession = { agentViewModel.restoreSession(it) },
             onPurgeSession = { agentViewModel.purgeSession(it) },
             onEmptyTrash = { agentViewModel.emptyTrash() },
+            // 侧栏子代理行按成员标识查显示名（与输入栏横幅同源，见 teamMemberNames）。
+            memberNameOf = { id -> teamMemberNames[id] ?: id },
             expandedPaths = expandedPaths,
             expandingPath = expandingPath,
             fileOpPaths = fileOpPaths,

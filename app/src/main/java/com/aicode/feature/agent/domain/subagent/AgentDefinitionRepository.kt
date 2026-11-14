@@ -45,14 +45,25 @@ class AgentDefinitionRepository @Inject constructor(
 
     /** 按名称查找可派发的定义（忽略大小写）；不存在或已被禁用时返回 null。 */
     fun find(name: String): AgentDefinition? =
-        listEnabled().firstOrNull { it.definition.name.equals(name, ignoreCase = true) }?.definition
+        listEnabled().firstOrNull { it.matchesNameOrFile(name) }?.definition
 
     /**
      * 按名称查找定义，包含已禁用的。已经派出去的子会话要用它还原自己的提示词与工具集——
      * 禁用只该拦住新的派发，不该让在跑的子代理中途换一套配置。
      */
     fun findIncludingDisabled(name: String): AgentDefinition? =
-        listAll().firstOrNull { it.definition.name.equals(name, ignoreCase = true) }?.definition
+        listAll().firstOrNull { it.matchesNameOrFile(name) }?.definition
+
+    /**
+     * 名称匹配：定义名（frontmatter `name`）或文件名（不含 `.md`）任一命中即可（忽略大小写）。
+     *
+     * 为什么两种都认：团队定义里的 `members` 引用成员时有两种自然写法——写定义名（商店安装按
+     * `name:` 生成，天然一致），或写文件名（内置团队按文件名引用，而 `product-manager.md` 的
+     * 定义名是缩写 `PM`）。只认定义名会让后一种写法直接派发失败（AGENT_NOT_FOUND），
+     * 因此这里按文件名兜底，让两种写法都能正确解析到同一定义。
+     */
+    private fun AgentDefinitionEntry.matchesNameOrFile(name: String): Boolean =
+        matchesDefinitionName(definition, name)
 
     /** 当前被禁用的子代理名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
     fun disabledNames(): Set<String> = configRepository.disabledNames()
@@ -147,6 +158,16 @@ class AgentDefinitionRepository @Inject constructor(
 
     companion object {
         private const val TAG = "AgentDefinitionRepository"
+
+        /**
+         * 定义是否响应某个引用名：定义名或文件名（不含 `.md`）任一命中即算命中（忽略大小写）。
+         * 抽成纯函数便于单测钉住「团队成员按文件名引用内置成员」这一约定。
+         */
+        internal fun matchesDefinitionName(definition: AgentDefinition, name: String): Boolean {
+            if (definition.name.equals(name, ignoreCase = true)) return true
+            val fileName = definition.filePath?.substringAfterLast('/')?.removeSuffix(".md")
+            return fileName != null && fileName.equals(name, ignoreCase = true)
+        }
 
         /** 名称同时用作文件名，禁掉路径分隔符与保留字符；长度上限防止极端文件名。 */
         internal fun isValidName(name: String): Boolean {

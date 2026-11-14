@@ -123,6 +123,7 @@ import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
 import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.store.data.StoreTranslation
+import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import compose.icons.FeatherIcons
@@ -1791,6 +1792,9 @@ fun AIChatPanel(
     val executionMode = settingsViewModel?.executionMode?.collectAsStateWithLifecycle()?.value
     val connectionState = settingsViewModel?.connectionState?.collectAsStateWithLifecycle()?.value
     val isRemote = executionMode == com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH
+    // 当前专家团：顶栏按钮高亮 + 输入栏横幅共用（在顶栏之前收集，供 ChatHeader 读取）。
+    val teamName by viewModel.teamName.collectAsStateWithLifecycle()
+    val activeTeam by viewModel.activeTeam.collectAsStateWithLifecycle()
 
     val markdownImageTransformer = remember(viewModel.fileAccess) {
         MarkdownImageTransformer(viewModel.fileAccess)
@@ -1974,6 +1978,7 @@ fun AIChatPanel(
                 onNavigateToBrowser = onNavigateToBrowser,
                 onNavigateToMemoryGraph = onNavigateToMemoryGraph,
                 onOpenTeams = { showTeamPicker = true },
+                activeTeamName = teamName,
                 currentMode = currentMode,
                 onToggleMode = { viewModel.setSessionMode(it) },
                 connectionState = connectionState?.takeIf { isRemote },
@@ -2286,7 +2291,6 @@ fun AIChatPanel(
                 }
             }
 
-            val teamName by viewModel.teamName.collectAsStateWithLifecycle()
             if (showTeamPicker) {
                 // 每次打开实时扫描专家团目录，用户改动定义文件后立即可见
                 val teams = remember(showTeamPicker) { viewModel.listTeams() }
@@ -2297,9 +2301,23 @@ fun AIChatPanel(
                     teams = teams,
                     translations = teamTranslations,
                     currentTeam = teamName,
+                    memberNameOf = { viewModel.memberDisplayName(it, teamTranslations) },
                     onSelect = { name ->
                         viewModel.setSessionTeam(name)
                         showTeamPicker = false
+                        // 选中即刻给可见反馈（此前除弹层里的勾外毫无提示，用户不知道选了什么）。
+                        val label = name?.let { picked ->
+                            val entry = teams.firstOrNull { it.definition.name == picked }
+                            entry?.let {
+                                StoreTranslationStore.find(
+                                    teamTranslations,
+                                    "EXPERT:${it.definition.filePath?.substringAfterLast('/').orEmpty()}",
+                                    it.definition.name,
+                                    it.definition.description
+                                )?.nameZh?.takeIf { n -> n.isNotBlank() }
+                            } ?: picked
+                        }
+                        toastTeamSelected(context, label)
                     },
                     onDismiss = { showTeamPicker = false }
                 )
@@ -2497,6 +2515,9 @@ fun AIChatPanel(
                 intentType = draftIntentType,
                 onIntentTypeChange = viewModel::updateDraftIntentType,
                 currentGoal = currentGoal,
+                activeTeam = activeTeam,
+                onOpenTeamPicker = { showTeamPicker = true },
+                onClearTeam = { viewModel.setSessionTeam(null) },
                 onSetGoalPaused = { viewModel.setGoalPaused(it) },
                 onClearGoal = { viewModel.clearGoal() },
                 reasoningEffort = reasoningEffort,
@@ -2857,6 +2878,15 @@ private fun ScrollToBottomButton(
 }
 
 /** 定时任务创建成功提示（待排期用专属文案）。 */
+private fun toastTeamSelected(context: android.content.Context, label: String?) {
+    val msg = if (label == null) {
+        context.getString(R.string.team_toast_cleared)
+    } else {
+        context.getString(R.string.team_toast_selected, label)
+    }
+    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+}
+
 private fun toastScheduledCreated(context: android.content.Context, quick: QuickSchedule) {
     val msg = if (quick == QuickSchedule.PENDING) {
         context.getString(R.string.schedule_created_pending_toast)

@@ -281,3 +281,19 @@ data class SessionGoalUi(
     val status: GoalStatus,
     val turnCount: Int
 )
+
+/**
+ * 当前会话已召唤专家团的 UI 快照：供输入栏横幅展示「用的是哪个团、有谁」。
+ *
+ * [displayName] 优先取商店译文名，[memberNames] 是各成员的显示名（见 TeamMemberNaming），
+ * 一处解析、多处复用，保证横幅、选择面板、消息流显示同一个名字。
+ */
+@Immutable
+data class TeamBannerUi(
+    /** 团标识（db 里的 teamName）。 */
+    val name: String,
+    /** 展示名（译文优先，缺省退回标识）。 */
+    val displayName: String,
+    /** 成员显示名列表（顺序与定义一致）。 */
+    val memberNames: List<String>
+)

@@ -99,7 +99,9 @@ import com.aicode.feature.agent.domain.tool.question.AskUserQuestionManager
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import com.aicode.feature.agent.domain.team.TeamDefinition
 import com.aicode.feature.agent.domain.team.TeamDefinitionEntry
+import com.aicode.feature.agent.domain.team.TeamMemberNaming
 import com.aicode.feature.agent.domain.team.TeamRepository
 import kotlinx.coroutines.flow.Flow
 import com.aicode.feature.agent.domain.engine.AgentEngines
@@ -3290,6 +3292,59 @@ class AIAgentViewModel @Inject constructor(
     /** 当前会话召唤的专家团名；null 表示未使用专家团。 */
     val teamName: StateFlow<String?> = _teamName.asStateFlow()
 
+    /**
+     * 当前专家团的展示快照（团名 + 成员显示名），供输入栏横幅渲染；未召唤或无定义时为 null。
+     *
+     * 由 [teamName] 派生：团名变化才重新解析定义与译文，避免每帧读盘。
+     */
+    val activeTeam: StateFlow<TeamBannerUi?> = _teamName
+        .map { name ->
+            if (name.isNullOrBlank()) {
+                _teamMemberNames.value = emptyMap()
+                return@map null
+            }
+            val definition = teamRepository.resolve(name)
+            if (definition == null) {
+                _teamMemberNames.value = emptyMap()
+                return@map null
+            }
+            buildTeamBanner(definition)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val _teamMemberNames = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * 当前专家团「成员标识 → 显示名」表，供侧栏子代理徽章等处查询。
+     * 与 [activeTeam] 同一次解析产出，保证同一成员在各处显示同一个名字。
+     */
+    val teamMemberNames: StateFlow<Map<String, String>> = _teamMemberNames.asStateFlow()
+
+    /** 组装专家团横幅数据：团名走商店译文，成员名走 [TeamMemberNaming] 统一命名。 */
+    private suspend fun buildTeamBanner(definition: TeamDefinition): TeamBannerUi {
+        val translations = runCatching { storeTranslationStore.all() }.getOrDefault(emptyMap())
+        val translation = StoreTranslationStore.find(
+            translations,
+            "EXPERT:${definition.filePath?.substringAfterLast('/').orEmpty()}",
+            definition.name,
+            definition.description
+        )
+        val displayName = translation?.nameZh?.takeIf { it.isNotBlank() } ?: definition.name
+        val nameById = definition.members.associateWith { memberId ->
+            TeamMemberNaming.displayName(
+                memberId = memberId,
+                definition = runCatching { agentDefinitionRepository.find(memberId) }.getOrNull(),
+                translations = translations
+            )
+        }
+        _teamMemberNames.value = nameById
+        return TeamBannerUi(
+            name = definition.name,
+            displayName = displayName,
+            memberNames = definition.members.mapNotNull { nameById[it] }
+        )
+    }
+
     private val floatBallSendBridge: (String) -> Boolean = { text ->
         text.isNotBlank() && enqueueAgentRequest(text.trim())
     }
@@ -3441,6 +3496,17 @@ class AIAgentViewModel @Inject constructor(
 
     /** 商店条目译文（专家团选择器按名称显示中文名与描述）。 */
     suspend fun teamTranslations(): Map<String, StoreTranslation> = storeTranslationStore.all()
+
+    /**
+     * 成员标识 → 显示名（供选择面板/侧栏等处复用，保证与横幅同一套命名）。
+     * 见 [TeamMemberNaming]：商店译文 → 定义描述首段 → 英文标识兜底。
+     */
+    fun memberDisplayName(memberId: String, translations: Map<String, StoreTranslation>): String =
+        TeamMemberNaming.displayName(
+            memberId = memberId,
+            definition = runCatching { agentDefinitionRepository.find(memberId) }.getOrNull(),
+            translations = translations
+        )
 
     fun resolveToolPermission(id: String, choice: PermissionChoice) {
         toolPermissionManager.resolve(id, choice)

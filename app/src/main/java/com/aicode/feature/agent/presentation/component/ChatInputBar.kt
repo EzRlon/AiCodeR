@@ -130,6 +130,7 @@ import com.aicode.feature.agent.domain.engine.EngineModeCatalog
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.presentation.SessionGoalUi
+import com.aicode.feature.agent.presentation.TeamBannerUi
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.domain.permission.PermissionChoice
@@ -157,7 +158,9 @@ import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Feather
 import compose.icons.feathericons.Pause
 import compose.icons.feathericons.Play
+import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Target
+import compose.icons.feathericons.Users
 import compose.icons.feathericons.X
 import compose.icons.feathericons.Maximize
 import compose.icons.feathericons.Mic
@@ -279,6 +282,12 @@ internal fun ChatInputBar(
     intentType: String? = null,
     onIntentTypeChange: (String?) -> Unit = {},
     currentGoal: SessionGoalUi? = null,
+    /** 当前生效的专家团（含成员显示名）；null 时不显示横幅。 */
+    activeTeam: TeamBannerUi? = null,
+    /** 点横幅「更换」：打开选择面板。 */
+    onOpenTeamPicker: () -> Unit = {},
+    /** 点横幅「移除」：清除本会话的专家团绑定。 */
+    onClearTeam: () -> Unit = {},
     onSetGoalPaused: (Boolean) -> Unit = {},
     onClearGoal: () -> Unit = {},
     reasoningEffort: ReasoningEffort,
@@ -687,6 +696,16 @@ internal fun ChatInputBar(
                     goal = goal,
                     onSetPaused = onSetGoalPaused,
                     onClear = onClearGoal
+                )
+            }
+
+            // 已召唤专家团横幅：选中后此前除弹层里的勾外无任何反馈，用户不知道当前用的是哪个团。
+            activeTeam?.let { team ->
+                TeamBannerRow(
+                    teamName = team.displayName,
+                    memberNames = team.memberNames,
+                    onChange = onOpenTeamPicker,
+                    onClear = onClearTeam
                 )
             }
 
@@ -2470,6 +2489,88 @@ private fun GoalBannerRow(
                 Icon(
                     imageVector = FeatherIcons.X,
                     contentDescription = stringResource(R.string.chat_goal_clear),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 已召唤专家团横幅：把「当前用的是哪个团、成员有谁」摆在输入栏上方。
+ *
+ * 之所以要有这一条：召唤后此前唯一的反馈是选择弹层里的一个勾，合上弹层就再也看不到
+ * 用的是哪个团；这条横幅与顶栏按钮高亮一起构成「已选中」的可见反馈。
+ * 排版沿用 [GoalBannerRow]（同卡片、同圆角、同图标规格），保持输入区上方一致。
+ */
+@Composable
+private fun TeamBannerRow(
+    teamName: String,
+    memberNames: List<String>,
+    onChange: () -> Unit,
+    onClear: () -> Unit
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = Spacing.sm),
+        shape = RoundedCornerShape(Radius.lg),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Users,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.team_banner_label, teamName),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (memberNames.isNotEmpty()) {
+                    Text(
+                        text = memberNames.joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            IconButton(onClick = onChange, modifier = Modifier.size(30.dp)) {
+                Icon(
+                    imageVector = FeatherIcons.RefreshCw,
+                    contentDescription = stringResource(R.string.team_banner_change),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            IconButton(onClick = onClear, modifier = Modifier.size(30.dp)) {
+                Icon(
+                    imageVector = FeatherIcons.X,
+                    contentDescription = stringResource(R.string.team_banner_clear),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )

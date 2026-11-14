@@ -54,6 +54,8 @@ fun ChatSessionRow(
     pinned: Boolean = false,
     /** 子代理行等更低层级：字号再降一档，与二级会话标题拉开层次。 */
     compact: Boolean = false,
+    /** 子代理成员显示名（如「后端」）；非空时在标题前渲染一枚成员徽章。 */
+    memberName: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     trailing: (@Composable () -> Unit)? = null,
@@ -114,6 +116,24 @@ fun ChatSessionRow(
             verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // 成员徽章：子代理行冠以成员名（如「后端」），把「哪个专家在做」摆到行首；
+                // 标题随后给出任务描述，两者分工明确（成员 = 谁，标题 = 做什么）。
+                if (memberName != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = memberName,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
                     text = session.title,
                     // 层级：分组标题(一级) > 会话标题(二级) > 子代理(三级，compact)
