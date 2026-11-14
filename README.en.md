@@ -83,7 +83,7 @@ Build and delete patches for musl/PRoot; directory removal uses NOFOLLOW-safe de
 - **Annotation center** — one canvas plus a tool rack: annotate the live screen before freezing (dialogs still pop), then refine after; each item sent to the AI carries structured coordinates
 - **Deliverables page** — installers and files delivered by the AI across sessions, installable, openable externally, savable to phone storage, shareable
 - **Web preview / VNC overlay** — view frontend services and the container's graphical output without leaving the app
-- **File handoff menu** — one long-press menu for chat files, test builds and storage artifacts: save, open in a file manager, share, copy container path
+- **File handoff menu** — one long-press menu for chat files, deliverables and storage artifacts: save, open in a file manager, share, copy container path
 
 ### Automation and unattended work
 

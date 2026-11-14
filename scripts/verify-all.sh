@@ -77,6 +77,14 @@ if [ "$RUN_TESTS" = 1 ]; then
   [ "$rc" -ne 0 ] && FAILED=1
 fi
 
+echo "=== DOCS CONSISTENCY ==="
+# 侧栏死链 / 孤儿文档 / 三方索引 / 中英 strings 配对 / 已删功能名残留。
+# 纯本地秒级；拦下「功能删了文档没删」「改名了侧栏没改」这类发版当天才炸的问题。
+python3 scripts/check-doc-consistency.py
+rc=$?
+echo "DOCS_EXIT=$rc"
+[ "$rc" -ne 0 ] && FAILED=1
+
 echo "=== MIGRATIONS ==="
 python3 scripts/check_migrations.py
 rc=$?
