@@ -58,6 +58,7 @@ import com.aicode.feature.agent.domain.provider.GeminiAdapter
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.ModelContextPolicy
 import com.aicode.feature.agent.domain.provider.StreamApiException
+import com.aicode.feature.agent.domain.provider.reasoningAuditOf
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import kotlinx.coroutines.CancellationException
@@ -829,6 +830,8 @@ class StatefulAgentWorkflow @Inject constructor(
                             // 发送前按实际模型的视觉能力处理图片（同 execute 路径）。
                             val supportsVision = activeModelSupportsVision(currentContext.sessionId)
                             val messagesToSend = sanitizeImagesForModel(compactedMessages, supportsVision)
+                            // 清空上一轮的实发档位；适配器构造请求时会写入本轮实际发出的值，供调用记录落库。
+                            providerInUse.reasoningWireUsed = null
                             providerInUse.completeStream(systemPrompt, messagesToSend, currentTools, currentContext.reasoningEffort)
                                 .collect { stream.onChunk(it) }
                             // 节流窗口内可能还压着最新累积文本：补发，保证 UI 尾巴拿到完整文本再交接落库。
@@ -963,12 +966,18 @@ class StatefulAgentWorkflow @Inject constructor(
                             val durationMillis = (SystemClock.elapsedRealtime() - callStartElapsed).toInt()
                             val usage = stream.finalResponse
                             runCatching {
+                                val reasoningAudit = reasoningAuditOf(
+                                    currentContext.reasoningEffort,
+                                    providerInUse.reasoningWireUsed
+                                )
                                 llmCallRecordDao.insert(
                                     LlmCallRecordEntity(
                                         sessionId = currentContext.sessionId,
                                         providerId = providerInUse.providerId.ifBlank { null },
                                         model = providerInUse.model,
                                         reasoningEffort = currentContext.reasoningEffort,
+                                        reasoningWire = reasoningAudit.wire,
+                                        reasoningClampedFrom = reasoningAudit.clampedFrom,
                                         kind = callKind,
                                         inputTokens = usage?.inputTokens ?: 0,
                                         outputTokens = usage?.outputTokens ?: 0,

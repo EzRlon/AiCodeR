@@ -253,6 +253,20 @@ internal class Migration74To75 : Migration(74, 75) {
     }
 }
 
+/**
+ * 75→76：调用记录新增「实际发出的思考参数」与「降级前用户选的档位」。
+ *
+ * `reasoningWire` 记录适配器真正会发给服务端的思考档位（含 `minimal→low` 归一与白名单钳制后的结果）；
+ * `reasoningClampedFrom` 只在发生降级时记下用户原本选的档位。两者与既有的 `reasoningEffort`
+ * （用户所选）对照，即可在 Token 统计页分辨「选了但服务端没照做」「档位被静默降级」这类问题。
+ */
+internal class Migration75To76 : Migration(75, 76) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "llm_call_records", "reasoningWire", "ALTER TABLE `llm_call_records` ADD COLUMN `reasoningWire` TEXT")
+        addColumnIfMissing(db, "llm_call_records", "reasoningClampedFrom", "ALTER TABLE `llm_call_records` ADD COLUMN `reasoningClampedFrom` TEXT")
+    }
+}
+
 /** 列是否存在；检查失败按「已存在」处理（与 [addColumnIfMissing] 同一保守口径）。 */
 private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
     runCatching {

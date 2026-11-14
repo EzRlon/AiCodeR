@@ -122,4 +122,24 @@ class MigrationTest {
             tables.contains("backup_targets")
         )
     }
+
+    /** 迁移 76：调用记录补「实际发出的思考参数」与「降级前所选档位」两列（Token 统计页据此辨别静默降级）。 */
+    @Test
+    fun migrate_75_to_76_adds_reasoning_wire_columns() {
+        helper.createDatabase(dbName, 75).close()
+
+        val db = Room.databaseBuilder(context, AgentDatabase::class.java, dbName)
+            .addMigrations(*MigrationLoader.loadMigrations(context))
+            .build()
+        val columns = mutableSetOf<String>()
+        db.openHelper.writableDatabase
+            .query("PRAGMA table_info(`llm_call_records`)")
+            .use { cursor -> while (cursor.moveToNext()) columns += cursor.getString(1) }
+        db.close()
+
+        assertTrue(
+            "迁移 76 应新增 reasoningWire / reasoningClampedFrom 两列，实际列：$columns",
+            columns.containsAll(listOf("reasoningWire", "reasoningClampedFrom"))
+        )
+    }
 }

@@ -93,6 +93,8 @@ Your values take priority; unfilled ones fall back to auto-detected results. If 
 
 **Thinking effort**: the lightning icon button above the input box is always available. If the current model's supported levels can be detected, only those are listed; otherwise (model has no level info, or the relay renamed it) all levels are shown — `Off` / `Lowest` / `Low` / `Medium` / `High` / `Highest` / `Max` — and you decide. Some relay models force reasoning on but use non-standard names, and this still lets you adjust manually. The choice is remembered and carried over when a new session uses this model.
 
+Sometimes the level you pick cannot be sent as-is: when the model does not support it, the app steps down to the closest supported level, and some models have their own normalization rules (for example, a model with no "lowest" level falls back to "low"). In Settings, the Token stats per-call detail records both the requested and the actually-sent level — when they differ it shows `requested→sent` and flags "reasoning effort downgraded", so you can tell whether the model ignored your choice or the app downgraded it.
+
 **Test**: every model row has a "Test" button that sends one real request to verify connectivity, with the result shown below the row.
 
 **Reorder**: long-press and drag the model name area to reorder. Changes take effect immediately (the model picker and default model list both follow this order) and survive restart.

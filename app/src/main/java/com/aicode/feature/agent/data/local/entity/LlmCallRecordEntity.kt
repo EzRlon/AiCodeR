@@ -25,6 +25,16 @@ data class LlmCallRecordEntity(
     val model: String? = null,
     /** 本次调用的思考强度（ReasoningEffort.apiValue，如 "medium"）；未设置/无档位模型为 null。 */
     val reasoningEffort: String? = null,
+    /**
+     * 本次调用实际发给服务端的思考档位（apiValue）：含 `minimal→low` 归一与白名单钳制后的结果。
+     * 与 [reasoningEffort] 对照即可发现「选了但没生效」「被降级」这类静默问题；无思考档位时为 null。
+     */
+    val reasoningWire: String? = null,
+    /**
+     * 发生降级时记录「用户原本选的档位」；未降级为 null。
+     * 用于区分「服务端没照做」与「我方主动降级」两种不同的静默问题。
+     */
+    val reasoningClampedFrom: String? = null,
     /** 调用类型：chat（普通对话）/ compaction（上下文压缩）。历史数据含已废弃的 vision（识图轮）。 */
     val kind: String = "chat",
     val inputTokens: Int = 0,

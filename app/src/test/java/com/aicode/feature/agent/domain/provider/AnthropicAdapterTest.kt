@@ -309,4 +309,34 @@ class AnthropicAdapterTest {
         assertEquals("disabled", api.lastRequest?.thinking?.type)
         assertNull(api.lastRequest?.output_config)
     }
+
+    @Test
+    fun reasoning_wire_records_effective_effort_on_adaptive_model() = runTest {
+        // 落库审计要拿到「实际发出」而非「用户所选」：minimal 归一成 low 后如实记录。
+        val api = FakeApi(response())
+        val sut = adapter(api).apply { model = "claude-opus-4-7" }
+        sut.complete("sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "minimal")
+
+        assertEquals("low", api.lastRequest?.output_config?.effort)
+        assertEquals("low", sut.reasoningWireUsed)
+    }
+
+    @Test
+    fun reasoning_wire_records_budget_form_on_legacy_model() = runTest {
+        // 旧模型按 budget 直传，没有可比档位：如实记预算形态，供 ReasoningAudit 判定为「非降级」。
+        val api = FakeApi(response())
+        val sut = adapter(api).apply { model = "claude-3-5-sonnet-20241022" }
+        sut.complete("sys", listOf(AgentMessage.UserMessage(content = "hi")), reasoningEffort = "high")
+
+        assertEquals("budget:8192", sut.reasoningWireUsed)
+    }
+
+    @Test
+    fun reasoning_wire_is_null_when_effort_absent() = runTest {
+        val api = FakeApi(response())
+        val sut = adapter(api)
+        sut.complete("sys", listOf(AgentMessage.UserMessage(content = "hi")))
+
+        assertNull(sut.reasoningWireUsed)
+    }
 }

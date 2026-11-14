@@ -1117,8 +1117,20 @@ private fun CallRecordCard(
                 DetailCell(stringResource(R.string.settings_token_stats_col_duration), formatDuration(r.durationMillis?.toDouble()))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
-                DetailCell(stringResource(R.string.settings_token_stats_col_reasoning_effort), r.reasoningEffort ?: "-")
+                DetailCell(
+                    stringResource(R.string.settings_token_stats_col_reasoning_effort),
+                    formatReasoningEffort(r.reasoningEffort, r.reasoningWire)
+                )
                 DetailCell(stringResource(R.string.settings_token_stats_retries_short), r.retryCount.toString())
+            }
+            // 仅在实际发出的档位与所选不一致时给出「已降级」提示：把静默降级显式化。
+            r.reasoningClampedFrom?.takeIf { it.isNotBlank() }?.let { from ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_token_stats_reasoning_clamped, from, r.reasoningWire ?: "-"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.semanticColors.warning
+                )
             }
             r.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
                 Spacer(Modifier.height(4.dp))
@@ -1164,6 +1176,16 @@ private fun formatCache(context: android.content.Context, cachedRead: Long, cach
 
 private fun formatCallTime(epochMillis: Long): String =
     SimpleDateFormat("yyyy/M/d HH:mm", Locale.getDefault()).format(Date(epochMillis))
+
+/**
+ * 「思考强度」单元格：所选与实际一致时只显示一档（如 `high`）；不一致时显示 `所选→实发`
+ * （如 `max→high`），让降级一眼可见。实际档位缺失（旧记录 / 未发思考字段）时退回只显示所选。
+ */
+private fun formatReasoningEffort(requested: String?, wire: String?): String {
+    if (requested == null) return wire ?: "-"
+    if (wire == null || wire == requested) return requested
+    return "$requested→$wire"
+}
 
 /** 单次调用缓存命中率：缓存输入 / 总输入（inputTokens 含缓存命中部分，各 provider 适配器已统一该口径）。 */
 private fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {

@@ -66,6 +66,7 @@ class OpenAIAdapter @Inject constructor(
 
     // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
     override var reasoningLevels: List<String>? = null
+    override var reasoningWireUsed: String? = null
 
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
@@ -107,11 +108,13 @@ class OpenAIAdapter @Inject constructor(
         }
 
         val url = resolveApiUrl()
+        val effectiveEffort = normalizeReasoningEffort(reasoningEffort)
+        reasoningWireUsed = effectiveEffort
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = effectiveEffort,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = false,
@@ -231,7 +234,9 @@ class OpenAIAdapter @Inject constructor(
             request["tool_choice"] = "auto"
         }
         if (stream) request["stream"] = true
-        normalizeReasoningEffort(reasoningEffort)?.let { effort ->
+        val effectiveEffort = normalizeReasoningEffort(reasoningEffort)
+        reasoningWireUsed = effectiveEffort
+        effectiveEffort?.let { effort ->
             if (isDeepSeek) {
                 request["reasoning"] = mapOf("effort" to effort)
             } else {
@@ -328,11 +333,13 @@ class OpenAIAdapter @Inject constructor(
 
         val url = resolveApiUrl()
 
+        val effectiveEffort = normalizeReasoningEffort(reasoningEffort)
+        reasoningWireUsed = effectiveEffort
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = effectiveEffort,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = true,

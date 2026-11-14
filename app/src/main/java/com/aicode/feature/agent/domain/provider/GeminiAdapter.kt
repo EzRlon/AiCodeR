@@ -50,6 +50,7 @@ class GeminiAdapter @Inject constructor(
 
     // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
     override var reasoningLevels: List<String>? = null
+    override var reasoningWireUsed: String? = null
 
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
@@ -382,11 +383,15 @@ class GeminiAdapter @Inject constructor(
     }
 
     /** 思考强度 → `thinking_level`，仅支持 minimal/low/medium/high；none 见 [gemini3DisableLevel]，xhigh/max 归一到 high。 */
-    private fun interactionsThinkingLevel(reasoningEffort: String?): String? = when (reasoningEffort) {
-        null -> null
-        "none" -> gemini3DisableLevel()?.let { clampLearned(it) }
-        "xhigh", "max" -> clampLearned("high")
-        else -> clampLearned(reasoningEffort)
+    private fun interactionsThinkingLevel(reasoningEffort: String?): String? {
+        val level = when (reasoningEffort) {
+            null -> null
+            "none" -> gemini3DisableLevel()?.let { clampLearned(it) }
+            "xhigh", "max" -> clampLearned("high")
+            else -> clampLearned(reasoningEffort)
+        }
+        reasoningWireUsed = level
+        return level
     }
 
     /**
@@ -694,13 +699,17 @@ class GeminiAdapter @Inject constructor(
      * 2.5 系仅 Flash / Flash-Lite 支持预算 0 关闭，Pro 最低预算 128，发 0 直接 400，退最低预算。
      */
     private fun buildThinkingConfig(reasoningEffort: String?): Map<String, Any>? {
-        if (reasoningEffort == null) return null
+        if (reasoningEffort == null) {
+            reasoningWireUsed = null
+            return null
+        }
         return if (model.contains("gemini-3")) {
             val level = when (reasoningEffort) {
-                "none" -> clampLearned(gemini3DisableLevel() ?: return null)
+                "none" -> clampLearned(gemini3DisableLevel() ?: run { reasoningWireUsed = null; return null })
                 "xhigh", "max" -> clampLearned("high")
                 else -> clampLearned(reasoningEffort)
             }
+            reasoningWireUsed = level
             mapOf("thinkingLevel" to level, "includeThoughts" to true)
         } else {
             val is25Pro = model.contains("gemini-2.5") && model.contains("pro")
@@ -711,12 +720,14 @@ class GeminiAdapter @Inject constructor(
                 "low" -> 1024
                 "medium" -> 4096
                 "none" -> if (is25Pro) 1024 else 0
-                else -> return null
+                else -> run { reasoningWireUsed = null; return null }
             }
             if (budget == 0) {
                 // 关闭思考：预算 0 不能与 includeThoughts=true 并存。
+                reasoningWireUsed = "none"
                 mapOf("thinkingBudget" to 0)
             } else {
+                reasoningWireUsed = "budget:$budget"
                 mapOf("thinkingBudget" to budget, "includeThoughts" to true)
             }
         }
