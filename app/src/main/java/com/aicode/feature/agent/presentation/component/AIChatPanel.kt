@@ -153,6 +153,14 @@ private const val AUTO_SCROLL_TOLERANCE_PX = 2
 /** AI 收工后继续逐帧校准的时长（ms）：md 异步解析仍可能改高度，不能一停就收手。 */
 private const val CALIBRATE_TAIL_MS = 1_200L
 
+/**
+ * 跟随滚动校准的定频 tick 间隔（ms），30Hz。
+ *
+ * 有意不逐帧（`withFrameNanos`）：校准只做「看布局 + 必要时滚回锚点」，无需逐帧精度，
+ * 定频观感一致而高刷屏唤醒次数从 120/秒降到 30/秒（与打字机、任务轨道同一条功耗纪律）。
+ */
+private const val AUTO_SCROLL_TICK_MS = 33L
+
 /** 滚动到底部按钮直径（dp）。 */
 private const val SCROLL_TO_BOTTOM_BTN_SIZE = 34
 
@@ -1504,15 +1512,17 @@ fun AIChatPanel(
         }
     }
 
-    // 只在「跟随中且内容可能还在动」时逐帧校准。原来是无条件 while(true)，followBottom
+    // 只在「跟随中且内容可能还在动」时校准校准。原来是无条件 while(true)，followBottom
     // 为 false 也只 continue、帧回调照旧注册，等于让主线程全程每帧醒一次（空闲也在耗电）。
+    // 校准本身是「检查列表布局 + 必要时滚回锚点」，不需要逐帧精度：定频 30Hz 与逐帧观感一致，
+    // 却把高刷屏上的唤醒次数从 120/秒降到 30/秒（与打字机同一条功耗纪律）。
     LaunchedEffect(listState, messagesReady) {
         if (!messagesReady) return@LaunchedEffect
         snapshotFlow { followBottom && (busyState.value || listState.isScrollInProgress) }
             .collectLatest { active ->
                 if (active) {
                     while (true) {
-                        withFrameNanos { }
+                        delay(AUTO_SCROLL_TICK_MS)
                         calibrateToAnchor()
                     }
                 } else {

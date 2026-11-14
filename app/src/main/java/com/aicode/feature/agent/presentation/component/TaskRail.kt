@@ -119,7 +119,9 @@ internal fun TaskRail(
         lastActivityAt = SystemClock.elapsedRealtime()
     }
     var nowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    LaunchedEffect(Unit) {
+    // 卡住判定只在轨道有任务时才需要走时：空轨道挂着 5 秒一跳的循环是纯浪费（本组件常驻组合）。
+    LaunchedEffect(totalCount, queuedCount) {
+        if (totalCount == 0 && queuedCount == 0) return@LaunchedEffect
         while (true) {
             delay(STALL_TICK_MS)
             nowMs = SystemClock.elapsedRealtime()
@@ -130,17 +132,26 @@ internal fun TaskRail(
     val stalledSeconds = stall.idleSeconds
 
     // 呼吸点：执行中 = 橙（沿用任务外框语义），卡住时转告警色并加快呼吸。
+    //
+    // 仅在轨道确实「有活在跑」时才挂无限动画：本组件挂在输入栏上方、常驻组合，
+    // 无条件跑无限动画会让主线程在没有任何任务时也持续重绘（功耗纪律，与悬浮球
+    // 「待机零重绘」一致）。有任务时呼吸照旧，空闲时静止。
     val dotColor = if (stalled) MaterialTheme.colorScheme.error else Brand.Orange
-    val breath = rememberInfiniteTransition(label = "task-rail-dot")
-    val dotAlpha by breath.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            tween(if (stalled) 700 else 1400),
-            RepeatMode.Reverse
-        ),
-        label = "task-rail-dot-alpha"
-    )
+    val animateDot = totalCount > 0 || queuedCount > 0
+    val dotAlpha = if (animateDot) {
+        val breath = rememberInfiniteTransition(label = "task-rail-dot")
+        breath.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(if (stalled) 700 else 1400),
+                RepeatMode.Reverse
+            ),
+            label = "task-rail-dot-alpha"
+        ).value
+    } else {
+        1f
+    }
 
     // 描边与卡片底色完全一致：收起后仍能靠形状/渐变蒙版分辨边界，但不露出一圈色差线框，
     // 与展开态输入卡（ChatInputBar 的同色描边）保持一致，任何主题下都融为一体。

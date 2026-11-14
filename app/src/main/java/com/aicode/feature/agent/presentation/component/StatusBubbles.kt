@@ -39,7 +39,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -285,6 +284,15 @@ private const val TYPEWRITER_RATE_WINDOW_MS = 500L
 /** 打字机渲染节流间隔（ms）：~40fps 高频平滑快照，彻底消除低速模型的顿挫感。 */
 private const val TYPEWRITER_RENDER_INTERVAL_MS = 24L
 
+/**
+ * 打字机推进 tick 间隔（ms）：定频 30Hz 驱动显示进度。
+ *
+ * 有意不逐帧（`withFrameNanos`）：帧回调频率随屏幕刷新率走，高刷屏上每帧都唤醒主线程并触发
+ * 文本重组，是长回答期间持续发热的主要来源；打字本身是匀速推进、不需要逐帧精度，
+ * 30Hz 观感一致而唤醒次数减半到四分之一（120Hz → 30Hz）。
+ */
+private const val TYPEWRITER_TICK_MS = 33L
+
 /** 按码点数量截断字符串，避免把 emoji 等代理对截成孤立的半个字符。 */
 private fun truncateToCodePoints(text: String, codePoints: Int): String {
     if (codePoints <= 0) return ""
@@ -449,48 +457,51 @@ internal fun rememberTypewriterStreamingText(
             lastArrivalNanos = now
         }
 
-        // 帧驱动推进显示进度，追平本次文本即退出（text 再变化时本协程被取消重启）
+        // 定频 tick 推进显示进度，追平本次文本即退出（text 再变化时本协程被取消重启）。
+        // 用 delay 定频而非 withFrameNanos 逐帧：逐帧回调会把主线程唤醒次数绑到屏幕刷新率上，
+        // 高刷屏（120Hz）上打字机每秒唤醒 120 次、连带 120 次 md 重排，是持续发热的主因；
+        // 30Hz 已足够平滑（打字本就不是逐帧动画），高刷设备唤醒与重排直接降到 1/4。
         var lastRenderNanos = 0L
-        var lastFrameNanos = 0L
+        var lastTickNanos = 0L
         while (shownCodePoints < codePoints) {
-            withFrameNanos { frameNanos ->
-                if (lastFrameNanos != 0L) {
-                    val dtSec = (frameNanos - lastFrameNanos) / 1_000_000_000f
-                    // 播出阶段才需要估算上游速率：收尾阶段上游已经不动了
-                    var arrivalRate = 0f
-                    if (!draining) {
-                        val oldest = arrivals.firstOrNull()
-                        if (arrivals.size >= 2 && oldest != null) {
-                            val spanSec = (frameNanos - oldest.first) / 1_000_000_000f
-                            if (spanSec > 0f) {
-                                arrivalRate = (arrivals.last().second - oldest.second) / spanSec
-                            }
+            delay(TYPEWRITER_TICK_MS)
+            val tickNanos = System.nanoTime()
+            if (lastTickNanos != 0L) {
+                val dtSec = (tickNanos - lastTickNanos) / 1_000_000_000f
+                // 播出阶段才需要估算上游速率：收尾阶段上游已经不动了
+                var arrivalRate = 0f
+                if (!draining) {
+                    val oldest = arrivals.firstOrNull()
+                    if (arrivals.size >= 2 && oldest != null) {
+                        val spanSec = (tickNanos - oldest.first) / 1_000_000_000f
+                        if (spanSec > 0f) {
+                            arrivalRate = (arrivals.last().second - oldest.second) / spanSec
                         }
                     }
-                    val rate = typewriterRate(
-                        lag = codePoints - shownCodePoints,
-                        arrivalRate = arrivalRate,
-                        drainRate = drainRate
-                    )
-                    shownCodePoints = (shownCodePoints + rate * dtSec)
-                        .coerceAtMost(codePoints.toFloat())
                 }
-                lastFrameNanos = frameNanos
+                val rate = typewriterRate(
+                    lag = codePoints - shownCodePoints,
+                    arrivalRate = arrivalRate,
+                    drainRate = drainRate
+                )
+                shownCodePoints = (shownCodePoints + rate * dtSec)
+                    .coerceAtMost(codePoints.toFloat())
+            }
+            lastTickNanos = tickNanos
 
-                // 收尾硬上限：极端情况（文本被整体替换、渲染跟不上）也必须在这之内追平，
-                // 否则尾巴会一直挂在未追平状态，落库消息永远等不到交棒。
-                if (draining && frameNanos >= drainDeadlineNanos) {
-                    shownCodePoints = codePoints.toFloat()
-                }
+            // 收尾硬上限：极端情况（文本被整体替换、渲染跟不上）也必须在这之内追平，
+            // 否则尾巴会一直挂在未追平状态，落库消息永远等不到交棒。
+            if (draining && tickNanos >= drainDeadlineNanos) {
+                shownCodePoints = codePoints.toFloat()
+            }
 
-                // 渲染节流：到间隔就快照当前显示进度；追平瞬间强制渲染完整文本
-                val intervalNanos = TYPEWRITER_RENDER_INTERVAL_MS * 1_000_000L
-                if (frameNanos - lastRenderNanos >= intervalNanos || shownCodePoints >= codePoints) {
-                    val snapshot = truncateToCodePoints(text, shownCodePoints.toInt())
-                    if (snapshot != renderText) {
-                        lastRenderNanos = frameNanos
-                        commitRender(snapshot)
-                    }
+            // 渲染节流：到间隔就快照当前显示进度；追平瞬间强制渲染完整文本
+            val intervalNanos = TYPEWRITER_RENDER_INTERVAL_MS * 1_000_000L
+            if (tickNanos - lastRenderNanos >= intervalNanos || shownCodePoints >= codePoints) {
+                val snapshot = truncateToCodePoints(text, shownCodePoints.toInt())
+                if (snapshot != renderText) {
+                    lastRenderNanos = tickNanos
+                    commitRender(snapshot)
                 }
             }
         }
