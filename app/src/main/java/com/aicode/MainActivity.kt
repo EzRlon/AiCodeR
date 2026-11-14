@@ -1017,8 +1017,14 @@ fun AppNavigation(
                 }
             }
             composable("memorygraph") {
+                // 改动账本页由 composition root 注入（memorygraph 不认识 changelog，守住 feature 边界基线）。
+                val ledgerViewModel: com.aicode.feature.changelog.presentation.ChangeLedgerViewModel = hiltViewModel()
+                val ledgerWorkspace = currentWorkspace?.path.orEmpty()
+                androidx.compose.runtime.LaunchedEffect(ledgerWorkspace) {
+                    ledgerViewModel.bindWorkspace(ledgerWorkspace)
+                }
                 MemoryGraphScreen(
-                    workspacePath = currentWorkspace?.path.orEmpty(),
+                    workspacePath = ledgerWorkspace,
                     sessions = sessions,
                     subSessionsByParent = subSessionsByParent,
                     agentStates = agentStates,
@@ -1027,7 +1033,12 @@ fun AppNavigation(
                         agentViewModel.selectSession(id)
                         navController.popBackStack()
                     },
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    ledgerContent = {
+                        com.aicode.feature.changelog.presentation.component.ChangeLedgerSection(
+                            viewModel = ledgerViewModel
+                        )
+                    }
                 )
             }
             composable("rea") {

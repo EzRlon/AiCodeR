@@ -55,7 +55,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
-import com.aicode.feature.changelog.presentation.component.ChangeLedgerSection
 import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clock
 import compose.icons.feathericons.MessageSquare
@@ -474,7 +473,11 @@ fun MemoryGraphScreen(
     onOpenSession: (String) -> Unit,
     onBack: () -> Unit,
     viewModel: MemoryGraphViewModel = hiltViewModel(),
-    changeLedgerViewModel: com.aicode.feature.changelog.presentation.ChangeLedgerViewModel = hiltViewModel(),
+    /**
+     * 第 4 个页签「账本」的内容，由调用方注入（composition root 认识两边，本 feature 不认识 changelog）。
+     * 依赖倒置：既守住 feature 边界基线，也避免 memorygraph 绑死某个具体实现。
+     */
+    ledgerContent: (@Composable () -> Unit)? = null,
 ) {
     var expandedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val activity by viewModel.activity.collectAsStateWithLifecycle()
@@ -483,8 +486,6 @@ fun MemoryGraphScreen(
     androidx.compose.runtime.LaunchedEffect(workspacePath) {
         viewModel.refresh()
         viewModel.syncGraph(workspacePath)
-        // 账本按工作区隔离：进页面/切工作区时绑定，Flow 自动跟随刷新
-        changeLedgerViewModel.bindWorkspace(workspacePath)
     }
 
     fun isRunning(id: String): Boolean =
@@ -651,9 +652,7 @@ fun MemoryGraphScreen(
                                 }
                             }
                         }
-                        3 -> ChangeLedgerSection(
-                            viewModel = changeLedgerViewModel
-                        )
+                        3 -> ledgerContent?.invoke()
                         else -> GraphSection(
                             workspacePath = workspacePath,
                             viewModel = viewModel
