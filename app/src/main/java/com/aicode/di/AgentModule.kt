@@ -200,6 +200,12 @@ object AgentModule {
 
     @Provides
     @Singleton
+    fun provideChangeLedgerDao(database: AgentDatabase): com.aicode.feature.changelog.data.local.dao.ChangeLedgerDao {
+        return database.changeLedgerDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideGraphDao(database: AgentDatabase): GraphDao {
         return database.graphDao()
     }
@@ -424,6 +430,7 @@ object AgentModule {
         messageParentTool: MessageParentTool,
         browserTool: BrowserTool,
         fixLedgerTool: com.aicode.feature.fixledger.domain.tool.FixLedgerTool,
+        changeLedgerTool: com.aicode.feature.changelog.domain.tool.ChangeLedgerTool,
         taskLedgerTool: com.aicode.feature.agent.domain.tool.ledger.TaskLedgerTool,
         knowledgeSearchTool: com.aicode.feature.agent.domain.tool.knowledge.KnowledgeSearchTool,
         knowledgeSaveTool: com.aicode.feature.agent.domain.tool.knowledge.KnowledgeSaveTool
@@ -457,6 +464,7 @@ object AgentModule {
             register("messageParent", messageParentTool)
             register("browser", browserTool)
             register("fixledger", fixLedgerTool)
+            register("changelog", changeLedgerTool)
             register("taskLedger", taskLedgerTool)
             register("kb_search", knowledgeSearchTool)
             register("kb_save", knowledgeSaveTool)

@@ -518,6 +518,22 @@
 
     <!-- Memory graph v2 -->
     <string name="memory_graph_tab_graph">Graph</string>
+    <string name="memory_graph_tab_ledger">Ledger</string>
+    <string name="change_ledger_title">Change ledger</string>
+    <string name="change_ledger_empty">No changes recorded yet. AI logs changes automatically as it works — you can also ask it in chat.</string>
+    <string name="change_ledger_summary_total">%1$d total</string>
+    <string name="change_ledger_summary_closed">Verified %1$d</string>
+    <string name="change_ledger_summary_review">To verify %1$d</string>
+    <string name="change_ledger_summary_doing">In progress %1$d</string>
+    <string name="change_ledger_summary_pending">Pending %1$d</string>
+    <string name="change_ledger_no_evidence">Unverified %1$d</string>
+    <string name="change_ledger_filter_all">All</string>
+    <string name="change_ledger_verified">Verified</string>
+    <string name="change_ledger_evidence_label">Evidence</string>
+    <string name="change_ledger_detail_label">Detail</string>
+    <string name="change_ledger_advance_review">Mark to verify</string>
+    <string name="change_ledger_advance_closed">Mark verified</string>
+    <string name="change_ledger_delete">Delete</string>
     <string name="graph_search_hint">Search nodes (name/summary)</string>
     <string name="graph_empty">No graph nodes yet; work threads and memories sync in automatically</string>
     <string name="graph_type_session">Thread</string>

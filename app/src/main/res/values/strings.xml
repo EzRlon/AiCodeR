@@ -519,6 +519,22 @@
 
     <!-- 记忆图谱 v2 -->
     <string name="memory_graph_tab_graph">图谱</string>
+    <string name="memory_graph_tab_ledger">账本</string>
+    <string name="change_ledger_title">改动账本</string>
+    <string name="change_ledger_empty">还没有记录改动。AI 完成改动时会自动记账，也可在对话里让它记录。</string>
+    <string name="change_ledger_summary_total">共 %1$d 条</string>
+    <string name="change_ledger_summary_closed">已验 %1$d</string>
+    <string name="change_ledger_summary_review">待复验 %1$d</string>
+    <string name="change_ledger_summary_doing">进行中 %1$d</string>
+    <string name="change_ledger_summary_pending">待确认 %1$d</string>
+    <string name="change_ledger_no_evidence">未验 %1$d</string>
+    <string name="change_ledger_filter_all">全部</string>
+    <string name="change_ledger_verified">已验</string>
+    <string name="change_ledger_evidence_label">验证</string>
+    <string name="change_ledger_detail_label">细节</string>
+    <string name="change_ledger_advance_review">标记待复验</string>
+    <string name="change_ledger_advance_closed">标记已验</string>
+    <string name="change_ledger_delete">删除</string>
     <string name="graph_search_hint">搜索节点（名称/摘要）</string>
     <string name="graph_empty">暂无图谱节点；工作线索与记忆会自动同步进来</string>
     <string name="graph_type_session">会话</string>

@@ -267,6 +267,28 @@ internal class Migration75To76 : Migration(75, 76) {
     }
 }
 
+/**
+ * 76→77：新建改动账本表（跨会话记录「改了什么、为什么、怎么验的、什么状态」）。
+ *
+ * CREATE TABLE IF NOT EXISTS 本身幂等；列集与 Room 导出的 77.json 一致。
+ * 与 `fix_ledger` 分工：那张只记来自标注的修复，本表覆盖 feat/fix/docs 等全部改动，
+ * 并按 workspacePath 隔离——长期项目里靠它回答「哪些改好了、哪些没做」。
+ */
+internal class Migration76To77 : Migration(76, 77) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `change_ledger` (" +
+                "`id` TEXT NOT NULL, `workspacePath` TEXT NOT NULL, `title` TEXT NOT NULL, " +
+                "`kind` TEXT NOT NULL, `status` TEXT NOT NULL, `humanSummary` TEXT NOT NULL, " +
+                "`agentDetail` TEXT NOT NULL, `evidence` TEXT NOT NULL, `filesJson` TEXT NOT NULL, " +
+                "`sessionId` TEXT, `sourceAnnotationId` TEXT, `createdAt` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, `verifiedAt` INTEGER, PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_change_ledger_workspacePath` ON `change_ledger` (`workspacePath`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_change_ledger_updatedAt` ON `change_ledger` (`updatedAt`)")
+    }
+}
+
 /** 列是否存在；检查失败按「已存在」处理（与 [addColumnIfMissing] 同一保守口径）。 */
 private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
     runCatching {

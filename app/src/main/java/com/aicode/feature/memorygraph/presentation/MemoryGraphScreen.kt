@@ -55,6 +55,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
+import com.aicode.feature.changelog.presentation.component.ChangeLedgerSection
+import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clock
 import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.RefreshCw
@@ -458,8 +460,8 @@ private fun GraphNodeDetailDialog(
  * 点击卡片内联展开详情（目标全文 + 最后消息摘要 + 检查点数 + 打开会话）。
  * 数据由 [MemoryGraphViewModel] 聚合（IO 线程）：消息活动、待办进度、检查点、最后消息摘要。
  */
-/** 记忆图谱底部页签数：结论时间线 / 会话 / 图谱（与 Git 本地仓库同款底部页签）。 */
-private const val MEMORY_GRAPH_TAB_COUNT = 3
+/** 记忆图谱底部页签数：结论时间线 / 会话 / 图谱 / 改动账本（与 Git 本地仓库同款底部页签）。 */
+private const val MEMORY_GRAPH_TAB_COUNT = 4
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -472,6 +474,7 @@ fun MemoryGraphScreen(
     onOpenSession: (String) -> Unit,
     onBack: () -> Unit,
     viewModel: MemoryGraphViewModel = hiltViewModel(),
+    changeLedgerViewModel: com.aicode.feature.changelog.presentation.ChangeLedgerViewModel = hiltViewModel(),
 ) {
     var expandedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val activity by viewModel.activity.collectAsStateWithLifecycle()
@@ -480,6 +483,8 @@ fun MemoryGraphScreen(
     androidx.compose.runtime.LaunchedEffect(workspacePath) {
         viewModel.refresh()
         viewModel.syncGraph(workspacePath)
+        // 账本按工作区隔离：进页面/切工作区时绑定，Flow 自动跟随刷新
+        changeLedgerViewModel.bindWorkspace(workspacePath)
     }
 
     fun isRunning(id: String): Boolean =
@@ -646,6 +651,9 @@ fun MemoryGraphScreen(
                                 }
                             }
                         }
+                        3 -> ChangeLedgerSection(
+                            viewModel = changeLedgerViewModel
+                        )
                         else -> GraphSection(
                             workspacePath = workspacePath,
                             viewModel = viewModel
@@ -660,7 +668,8 @@ fun MemoryGraphScreen(
                 items = listOf(
                     FloatingTabItem(FeatherIcons.Clock, stringResource(R.string.graph_timeline_title)),
                     FloatingTabItem(FeatherIcons.MessageSquare, stringResource(R.string.memory_graph_session)),
-                    FloatingTabItem(FeatherIcons.Share2, stringResource(R.string.memory_graph_tab_graph))
+                    FloatingTabItem(FeatherIcons.Share2, stringResource(R.string.memory_graph_tab_graph)),
+                    FloatingTabItem(FeatherIcons.CheckSquare, stringResource(R.string.memory_graph_tab_ledger))
                 ),
                 maskColor = settingsPageBackground(),
                 isScrolling = tabsScrolling,
