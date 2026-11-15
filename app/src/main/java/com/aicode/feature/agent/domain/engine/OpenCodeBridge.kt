@@ -245,12 +245,23 @@ class OpenCodeBridge @Inject constructor(
         val extraEnv = buildMap {
             put("PERMISSION_BRIDGE_PORT", port.toString())
             put("PERMISSION_BRIDGE_SESSION", sessionId)
-            put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", bridgeToken)
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // MCP 挂载：官方优先级链合并（不整体替换用户配置；mcp 同键会被覆盖）
             // 配置内容要枚举 App 智能体定义（读容器文件），移出主线程
-            put("OPENCODE_CONFIG_CONTENT", withContext(Dispatchers.IO) { configContent(sessionId, customProviderJson) })
+            put(
+                "OPENCODE_CONFIG_CONTENT",
+                withContext(Dispatchers.IO) {
+                    configContent(
+                        sessionId = sessionId,
+                        customProviderJson = customProviderJson,
+                        bridgeToken = bridgeToken,
+                        port = port,
+                        projectPath = projectPath
+                    )
+                }
+            )
             // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）；
             // 会话选定供应商时只透传该供应商的 Key，避免误用其它供应商的凭据
             if (selectedProvider != null) {
@@ -564,14 +575,15 @@ class OpenCodeBridge @Inject constructor(
                 if (knowledge != null) {
                     fileAccess.writeFile(knowledgeContextPath(), knowledge, overwrite = true)
                 } else {
-                    File(knowledgeContextPath()).delete()
+                    // 必须走 FileAccessProvider：这里拿到的是容器路径，宿主 File 看不到
+                    fileAccess.delete(knowledgeContextPath())
                 }
                 // 编排守则（三桥共用）；绑了专家团时包含团长指令。无内容时删旧文件防陈旧注入
-                val orchestration = orchestrationPrompt.build(sessionId)
+                val orchestration = orchestrationPrompt.build(sessionId, AgentEngines.OPENCODE)
                 if (orchestration != null) {
                     fileAccess.writeFile(orchestrationContextPath(), orchestration, overwrite = true)
                 } else {
-                    File(orchestrationContextPath()).delete()
+                    fileAccess.delete(orchestrationContextPath())
                 }
             }.onFailure { e ->
                 FileLogger.e(TAG, "写桥接资产失败", e)
@@ -583,7 +595,13 @@ class OpenCodeBridge @Inject constructor(
      * aicode_bridge + 用户自装 MCP + App 智能体定义的 OPENCODE_CONFIG_CONTENT 内联值
      * （不写用户配置文件；mcp/agent 键按官方优先级覆盖，同名项以本内容为准）。
      */
-    private suspend fun configContent(sessionId: String, customProviderJson: JsonObject? = null): String {
+    private suspend fun configContent(
+        sessionId: String,
+        customProviderJson: JsonObject? = null,
+        bridgeToken: String,
+        port: Int,
+        projectPath: String?
+    ): String {
         // App 智能体定义随回合映射（能力全域打通批二）：App 定义为子代理语义，mode=subagent；
         // 跳过与 opencode 自带 agent（build/plan/explore/general/...）同名的定义，不覆盖引擎原生体系
         // agent 枚举失败不致命（与 Claude 桥同口径）：MCP 枚举异常仍让回合失败，agent 异常只丢本回合映射
@@ -596,18 +614,34 @@ class OpenCodeBridge @Inject constructor(
         mapping.skipped.forEach { FileLogger.w(TAG, "子代理 ${it.agent.name} 不映射到 opencode：${it.reason}") }
         val agentsJson = if (mapping.mapped.isEmpty()) null else CliAgentMapping.openCodeAgentsJson(mapping.mapped)
 
-        val content = renderConfig(sessionId, agentsJson, customProviderJson)
+        val content = renderConfig(sessionId, agentsJson, customProviderJson, bridgeToken, port, projectPath)
         if (content.length <= MAX_CONFIG_CHARS) return content
         FileLogger.w(TAG, "智能体配置过大（>${MAX_CONFIG_CHARS / 1024}KB），本回合不映射 agent")
-        return renderConfig(sessionId, null, customProviderJson)
+        return renderConfig(sessionId, null, customProviderJson, bridgeToken, port, projectPath)
     }
 
     /** OPENCODE_CONFIG_CONTENT 内容（mcp 段 + 可选 agent 段 + 可选 App 供应商 provider 段）。 */
-    private suspend fun renderConfig(sessionId: String, agentsJson: JsonObject?, customProviderJson: JsonObject? = null): String = buildJsonObject {
+    private suspend fun renderConfig(
+        sessionId: String,
+        agentsJson: JsonObject?,
+        customProviderJson: JsonObject? = null,
+        bridgeToken: String,
+        port: Int,
+        projectPath: String?
+    ): String = buildJsonObject {
         put("mcp", buildJsonObject {
             put(MCP_SERVER_NAME, buildJsonObject {
                 put("type", "local")
                 put("command", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("node"), JsonPrimitive(dataBridgeScript()))))
+                // 显式下发 env：opencode 的 MCP 子进程未必继承 run 进程环境；
+                // 且 token 必须与 PermissionBridgeServer 登记的一致（此前误传 sessionId，数据通道全部 token mismatch）。
+                put("environment", buildJsonObject {
+                    put("PERMISSION_BRIDGE_PORT", port.toString())
+                    put("PERMISSION_BRIDGE_SESSION", sessionId)
+                    put("PERMISSION_BRIDGE_TOKEN", bridgeToken)
+                    put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
+                    put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
+                })
                 put("enabled", true)
             })
             // 用户在 App 配置的 MCP 服务器随回合自动映射（能力全域打通批一）；OAuth 型服务器无法委托凭据，跳过。
@@ -648,8 +682,9 @@ class OpenCodeBridge @Inject constructor(
         // 语言指令存在时带上，知识块文件由 writeBridgeAssets 写入（无内容时已删，按存在性判断）
         val instructionFiles = buildList {
             if (EngineLocale.replyLanguageDirective() != null) add(languageRulePath())
-            if (File(knowledgeContextPath()).isFile) add(knowledgeContextPath())
-            if (File(orchestrationContextPath()).isFile) add(orchestrationContextPath())
+            // 容器路径的「文件是否存在」必须走 FileAccessProvider，宿主 File 检查的是字面 /root/...
+            if (fileAccess.isFile(knowledgeContextPath())) add(knowledgeContextPath())
+            if (fileAccess.isFile(orchestrationContextPath())) add(orchestrationContextPath())
         }
         if (instructionFiles.isNotEmpty()) {
             put("instructions", kotlinx.serialization.json.JsonArray(instructionFiles.map { JsonPrimitive(it) }))

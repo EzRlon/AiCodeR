@@ -240,13 +240,8 @@ class PermissionBridgeServer @Inject constructor(
      * 任何结论（表现为「图谱中没有结论」）。优先取会话自己的 workspacePath；会话缺失时
      * 再按路径映射兜底。
      */
-    private suspend fun resolveProjectRoot(sessionId: String, raw: String): String {
-        sessionUseCase.getSessionById(sessionId)?.workspacePath
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
-        if (raw.isBlank()) return ""
-        return runCatching { workspacePathMapper.toHostFile(raw).absolutePath }.getOrDefault(raw)
-    }
+    private suspend fun resolveProjectRoot(sessionId: String): String =
+        sessionUseCase.getSessionById(sessionId)?.workspacePath?.takeIf { it.isNotBlank() }.orEmpty()
 
     // ── 数据通道（aicode_bridge 的 ledger_* 工具）─────────────────────
 
@@ -281,12 +276,18 @@ class PermissionBridgeServer @Inject constructor(
             }
             "orchestration_board" -> {
                 // 多代理共享任务板：按会话自己的工作区落盘（CLI 传的是容器路径，先还原宿主路径）
-                val workspace = resolveProjectRoot(
-                    sessionId,
-                    (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
-                )
-                if (workspace.isBlank()) return errData("当前未选择工作区，无法读写任务板")
-                val result = orchestrationBoard.handle(workspace, input)
+                val hostWorkspace = resolveProjectRoot(sessionId)
+                if (hostWorkspace.isBlank()) return errData("当前未选择工作区，无法读写任务板")
+                // 任务板按容器路径交给 FileAccessProvider 落盘（宿主 workspacePath 直接拼会落进 rootfs）。
+                // 外部引擎只在本地容器运行，且容器工作区固定绑当前工作区；映射不上就明确拒绝，别写错地方。
+                val containerWorkspace = runCatching { workspacePathMapper.toContainerPath(hostWorkspace) }
+                    .getOrDefault("")
+                if (containerWorkspace != com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT &&
+                    !containerWorkspace.startsWith(com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT + "/")
+                ) {
+                    return errData("任务板仅支持当前工作区（${hostWorkspace} 未映射到容器工作区），请切回该工作区再试")
+                }
+                val result = orchestrationBoard.handle(containerWorkspace, input)
                 if (result.ok) okData(result.message) else errData(result.message)
             }
             "recall_search" -> {
@@ -295,10 +296,7 @@ class PermissionBridgeServer @Inject constructor(
                     currentFile = null,
                     selectedCode = null,
                     // as? JsonPrimitive 而非 jsonPrimitive：模型可能传非字符串，抛异常会吞掉响应导致 mjs 侧等满超时（qa P2-2）
-                    projectRoot = resolveProjectRoot(
-                        sessionId,
-                        (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
-                    ),
+                    projectRoot = resolveProjectRoot(sessionId),
                     language = null,
                     sessionId = sessionId.ifBlank { null }
                 )
@@ -320,10 +318,7 @@ class PermissionBridgeServer @Inject constructor(
                 val context = com.aicode.feature.agent.domain.model.AgentContext(
                     currentFile = null,
                     selectedCode = null,
-                    projectRoot = resolveProjectRoot(
-                        sessionId,
-                        (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
-                    ),
+                    projectRoot = resolveProjectRoot(sessionId),
                     language = null,
                     sessionId = sessionId.ifBlank { null }
                 )

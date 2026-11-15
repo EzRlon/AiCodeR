@@ -40,15 +40,26 @@ object OrchestrationPolicy {
         teamPrompt: String,
         members: List<Pair<String, String>>,
         lifecycle: List<String>,
-        gates: List<String>
+        gates: List<String>,
+        /** 当前引擎是否支持按名字派发自定义成员（Codex 不支持，只能按分工作参考）。 */
+        dispatchable: Boolean = true,
+        /** 未映射到引擎的成员名：列出来供分工参考，但标注不可直接派发。 */
+        unmapped: Set<String> = emptySet()
     ): String = buildString {
         append("## 专家团：").append(teamName).append('\n')
         append(teamPrompt.trim())
         if (members.isNotEmpty()) {
-            append("\n\n你的成员（用 Task / agent 按名字派发）：\n")
+            if (dispatchable) {
+                append("\n\n你的成员（用 Task / agent 按名字派发）：\n")
+            } else {
+                append("\n\n成员分工（本引擎不支持自定义成员派发，以下仅作分工参考；由你按角色串行完成或使用引擎自带协作能力）：\n")
+            }
             members.forEach { (name, desc) ->
                 append("- ").append(name)
                 if (desc.isNotBlank()) append(": ").append(desc.lineSequence().first().take(120))
+                if (unmapped.any { it.equals(name, ignoreCase = true) }) {
+                    append("（引擎侧未映射，无法直接派发）")
+                }
                 append('\n')
             }
         }

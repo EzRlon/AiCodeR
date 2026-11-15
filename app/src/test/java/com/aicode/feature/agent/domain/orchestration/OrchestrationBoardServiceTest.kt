@@ -152,6 +152,40 @@ class OrchestrationBoardServiceTest {
     }
 
     @Test
+    fun `历史证据不能替本次完成作证`() = runTest {
+        val (service, root) = newBoard()
+        service.handle(root, args("action" to str("create"), "title" to str("修复空指针")))
+        service.handle(
+            root,
+            args("action" to str("claim"), "task" to str("修复空指针"), "owner" to str("backend"))
+        )
+        assertTrue(
+            service.handle(
+                root,
+                args(
+                    "action" to str("update"),
+                    "task" to str("修复空指针"),
+                    "status" to str("done"),
+                    "evidence" to str("第一次验证通过")
+                )
+            ).ok
+        )
+        // 重开后再完成：本次调用没给 evidence，不能拿上一次的证据充数
+        assertTrue(
+            service.handle(
+                root,
+                args("action" to str("update"), "task" to str("修复空指针"), "status" to str("doing"))
+            ).ok
+        )
+        assertFalse(
+            service.handle(
+                root,
+                args("action" to str("update"), "task" to str("修复空指针"), "status" to str("done"))
+            ).ok
+        )
+    }
+
+    @Test
     fun `空工作区与未知任务明确报错`() = runTest {
         val (service, _) = newBoard()
         assertFalse(service.handle("", args("action" to str("list"))).ok)
