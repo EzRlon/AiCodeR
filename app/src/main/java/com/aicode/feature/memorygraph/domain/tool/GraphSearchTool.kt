@@ -84,7 +84,7 @@ class GraphSearchTool @Inject constructor(
             if (hits.isEmpty()) {
                 return ToolResult.Success(
                     JsonPrimitive(
-                        if (query.isBlank()) "图谱中还没有结论。开一次会（上下文压缩时自动抽取），或让用户在图谱页开启结论抽取。"
+                        if (query.isBlank()) "图谱中还没有结论。结论抽取默认开启：内置引擎在压缩上下文后、外部引擎每几个回合自动沉淀；确保「设置 → 记忆图谱」没有被关闭。"
                         else "未命中「$query」。试试更短的关键词，或留空 query 列出最近结论。"
                     )
                 )

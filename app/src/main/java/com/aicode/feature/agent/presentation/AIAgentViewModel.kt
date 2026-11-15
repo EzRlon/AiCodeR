@@ -2103,6 +2103,8 @@ class AIAgentViewModel @Inject constructor(
      * 不阻塞下一条消息，也不改变会话历史。
      */
     private fun maybeExtractRecentConclusions(sessionId: String) {
+        // 回收站/存储页等旁路删除不会经过 clearSessionRuntimeState：给计数表一个硬上限，避免无界增长
+        if (externalConclusionTurnCounts.size > 512) externalConclusionTurnCounts.clear()
         val completed = (externalConclusionTurnCounts[sessionId] ?: 0) + 1
         externalConclusionTurnCounts[sessionId] = completed
         if (completed % EXTERNAL_CONCLUSION_EVERY_TURNS != 0) return
@@ -3120,7 +3122,10 @@ class AIAgentViewModel @Inject constructor(
                         // 外部引擎异常退出：本轮已派发但没等到结果的子代理一并收尾，子会话与父会话回执都不留半截
                         if (pendingEngineSubagents.isNotEmpty()) {
                             val reason = event.error.take(500)
+                            // 每个 id 收尾前先从 pending 摘除：中途被取消时它已进 closed 不会二次收尾，
+                            // 尚未处理的仍留在 pending 由 catch 分支统一 abandon（不漏收尾也不重复）。
                             pendingEngineSubagents.toList().forEach { id ->
+                                pendingEngineSubagents.remove(id)
                                 if (closedEngineSubagents.add(id)) {
                                     finishEngineSubagentSession(
                                         sessionId,
@@ -3128,7 +3133,6 @@ class AIAgentViewModel @Inject constructor(
                                     )
                                 }
                             }
-                            pendingEngineSubagents.clear()
                         }
                     }
                     AgentEvent.Completed -> {
@@ -3153,6 +3157,7 @@ class AIAgentViewModel @Inject constructor(
                         if (pendingEngineSubagents.isNotEmpty()) {
                             val note = context.getString(R.string.subagent_engine_turn_ended)
                             pendingEngineSubagents.toList().forEach { id ->
+                                pendingEngineSubagents.remove(id)
                                 if (closedEngineSubagents.add(id)) {
                                     finishEngineSubagentSession(
                                         sessionId,
@@ -3160,7 +3165,6 @@ class AIAgentViewModel @Inject constructor(
                                     )
                                 }
                             }
-                            pendingEngineSubagents.clear()
                         }
                         // 外部引擎会话：App 从不压缩它的上下文，结论抽取改在回合结束按节奏补一次，
                         // 否则「结论」页对全程用 CLI 引擎的项目永远为空。
@@ -3213,18 +3217,22 @@ class AIAgentViewModel @Inject constructor(
             // 不留半截子会话。用户主动停止，不给父会话发完成/失败回执（避免又拉起一轮）。
             if (pendingEngineSubagents.isNotEmpty()) {
                 val reason = context.getString(R.string.subagent_engine_turn_cancelled)
-                withContext(NonCancellable) {
-                    abandonEngineSubagentSessions(pendingEngineSubagents.toList(), reason)
-                }
+                val ids = pendingEngineSubagents.filterNot { it in closedEngineSubagents }.toList()
                 pendingEngineSubagents.clear()
+                ids.forEach { closedEngineSubagents.add(it) }
+                withContext(NonCancellable) {
+                    abandonEngineSubagentSessions(ids, reason)
+                }
             }
             throw e
         } catch (e: Exception) {
              FileLogger.e(TAG, "executeAgentRequestStream 失败: request=$request", e)
              // 异常逃出事件流（桥自身未兜住）：同样收尾未回报的子代理，原因用真实错误
              if (pendingEngineSubagents.isNotEmpty()) {
-                 abandonEngineSubagentSessions(pendingEngineSubagents.toList(), e.toUserMessage())
+                 val ids = pendingEngineSubagents.filterNot { it in closedEngineSubagents }.toList()
                  pendingEngineSubagents.clear()
+                 ids.forEach { closedEngineSubagents.add(it) }
+                 abandonEngineSubagentSessions(ids, e.toUserMessage())
              }
              setAgentState(sessionId, AgentUIState.Error(e.toUserMessage()))
              _completedSessions.value = _completedSessions.value - sessionId

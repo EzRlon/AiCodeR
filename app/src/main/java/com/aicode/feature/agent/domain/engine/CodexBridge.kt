@@ -509,6 +509,8 @@ class CodexBridge @Inject constructor(
         var emittedAny = false
         /** item id → 外部子代理会话：collab_tool_call 声明时建，item.completed 时收尾。 */
         val subagents = mutableMapOf<String, EngineSubagentSession>()
+        /** 本回合已建过子会话的 item id（完成后仍保留）：重连重放同一调用时不重复建。 */
+        val seenSubagentIds = mutableSetOf<String>()
     }
 
     private fun parseLine(line: String, acc: TurnAccumulator): List<AgentEvent> {
@@ -564,8 +566,9 @@ class CodexBridge @Inject constructor(
         )
         // collab_tool_call 里只有真正的新派发建子会话；等待/追加消息/关闭复用已有子代理。
         // 同一 item 重放（重连流）不重复建：子会话 id 是随机的，只能在这里挡。
-        if (type == "collab_tool_call" && id !in acc.subagents && EngineSubagent.isSpawnCall(item.toString())) {
+        if (type == "collab_tool_call" && id !in acc.seenSubagentIds && EngineSubagent.isSpawnCall(item.toString())) {
             val sub = newEngineSubagentSession(item.toString())
+            acc.seenSubagentIds += id
             acc.subagents[id] = sub
             events += AgentEvent.SubagentSpawned(
                 subSessionId = sub.subSessionId,

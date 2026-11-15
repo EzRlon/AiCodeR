@@ -71,7 +71,9 @@ class ContextCompactor @Inject constructor(
     suspend fun buildHandoffSummary(
         messages: List<AgentMessage>,
         aiProvider: AIProvider,
-        sessionId: String? = null
+        sessionId: String? = null,
+        /** 调用记录的类型标签：交接/外部引擎抽取与真实压缩分开记账，统计不混淆。 */
+        recordKind: String = "compaction"
     ): String = withContext(Dispatchers.Default) {
         val material = removeCompactionPairs(messages)
         check(material.isNotEmpty()) { "No history to summarize" }
@@ -106,7 +108,7 @@ class ContextCompactor @Inject constructor(
                     )
                 )
                 check(CompactionText.estimateRequest(SUMMARY_SYSTEM, emptyList(), request) <= summaryBudget) { "Summary block exceeds the input budget" }
-                summary = summarize(aiProvider, sessionId, request)
+                summary = summarize(aiProvider, sessionId, request, recordKind)
             }
             val finalSummary = summary
             check(!finalSummary.isNullOrBlank()) { "Summary is empty" }
@@ -132,7 +134,9 @@ class ContextCompactor @Inject constructor(
     ): Boolean {
         if (messages.isEmpty() || workspacePath.isBlank()) return false
         if (!generalSettingsRepository.graphExtractEnabled()) return false
-        val summary = runCatching { buildHandoffSummary(messages, aiProvider, sessionId) }
+        val summary = runCatching {
+            buildHandoffSummary(messages, aiProvider, sessionId, recordKind = "graph_extract")
+        }
             .onFailure { FileLogger.w(TAG, "外部引擎结论摘要失败（跳过抽取）: $sessionId", it) }
             .getOrNull()
             ?: return false
@@ -304,7 +308,7 @@ class ContextCompactor @Inject constructor(
                     "${System.currentTimeMillis() - compactionStartedAt}"
             )
             // 摘要里已有「关键决定」「教训与坑」段落：直接解析成图谱结论，零额外模型调用。
-            // 仅当用户开启结论抽取时才写（默认关，数据不外发）。
+            // 仅当用户开启结论抽取时才写（默认开，可关闭；数据只在本机图谱库）。
             if (sessionId != null) {
                 runCatching {
                     if (generalSettingsRepository.graphExtractEnabled()) {
@@ -338,7 +342,12 @@ class ContextCompactor @Inject constructor(
         }
     }
 
-    private suspend fun summarize(provider: AIProvider, sessionId: String?, messages: List<AgentMessage>): String {
+    private suspend fun summarize(
+        provider: AIProvider,
+        sessionId: String?,
+        messages: List<AgentMessage>,
+        recordKind: String = "compaction"
+    ): String {
         val startElapsed = SystemClock.elapsedRealtime()
         val startWall = System.currentTimeMillis()
         var response: AIResponse? = null
@@ -362,7 +371,7 @@ class ContextCompactor @Inject constructor(
                         sessionId = sessionId,
                         providerId = provider.providerId.ifBlank { null },
                         model = provider.model,
-                        kind = "compaction",
+                        kind = recordKind,
                         inputTokens = response?.inputTokens ?: 0,
                         outputTokens = response?.outputTokens ?: 0,
                         cachedInputTokens = response?.cachedInputTokens ?: 0,

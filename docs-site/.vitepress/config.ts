@@ -171,7 +171,7 @@ export default defineConfig({
             { text: '常见错误提示', link: '/guide/error-codes' },
             { text: '存储空间', link: '/guide/storage' },
             { text: '备份与还原', link: '/guide/backup' },
-            { text: '密钥管理', link: '/guide/keys' },
+            { text: '签名与凭据', link: '/guide/keys' },
             { text: '关于与更新', link: '/guide/about' }
           ]
         }

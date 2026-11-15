@@ -121,6 +121,12 @@ class StatefulAgentWorkflow @Inject constructor(
     private val auditRecorder: PermissionAuditRecorder
 ) : AgentWorkflow {
 
+    /**
+     * 外部引擎结论沉淀的抽取基准（会话 id → 已处理到的历史条数）。
+     * 只存内存：进程重启后最多多摘要一次，不影响正确性；避免每 6 回合重复摘要同一段历史。
+     */
+    private val lastConclusionExtractSize = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     private companion object {
         const val TAG = "StatefulAgentWorkflow"
         const val LIVE_TAIL_CHARS = 4_000
@@ -145,6 +151,9 @@ class StatefulAgentWorkflow @Inject constructor(
         const val EXTRACT_RECENT_MESSAGES = 40
         const val EXTRACT_MIN_HISTORY = 12
         const val EXTRACT_MIN_ASSISTANT = 3
+        /** 距上次抽取至少新增这么多条历史才再摘要一次；另带少量上下文一起交给摘要模型。 */
+        const val EXTRACT_MIN_FRESH_MESSAGES = 12
+        const val EXTRACT_CONTEXT_MESSAGES = 8
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"
         const val MODE_REMINDER_AUTO_FILE = "agent/auto-mode.md"
@@ -455,26 +464,41 @@ class StatefulAgentWorkflow @Inject constructor(
     }.getOrNull()
 
     override suspend fun extractRecentConclusions(sessionId: String): Boolean = runCatching {
+        // 开关先判：关闭时连历史都不读（用户明确关掉就不该有任何后台工作）
+        if (!generalSettingsRepository.graphExtractEnabled()) return@runCatching false
         val session = sessionUseCase.getSessionById(sessionId) ?: return@runCatching false
         // 内置引擎在上下文压缩成功后已零额外调用抽取；这里只补外部引擎（engine 非空）
         if (session.engine.isNullOrBlank()) return@runCatching false
         if (session.workspacePath.isBlank()) return@runCatching false
         val history = messagePersistenceUseCase.buildHistory(sessionId, "__graph_extract__")
         if (history.size < EXTRACT_MIN_HISTORY) return@runCatching false
-        val recent = history.takeLast(EXTRACT_RECENT_MESSAGES)
+        // 距上次抽取新增不足阈值就跳过：避免每 6 回合把几乎同一段历史重复摘要一遍（白花 token）。
+        // 会话被手动压缩后历史会变短，此时把基准归零按「全新会话」处理。
+        val base = lastConclusionExtractSize[sessionId]?.takeIf { it <= history.size } ?: 0
+        val fresh = history.size - base
+        if (fresh < EXTRACT_MIN_FRESH_MESSAGES) return@runCatching false
+        val window = minOf(EXTRACT_RECENT_MESSAGES, fresh + EXTRACT_CONTEXT_MESSAGES)
+        val recent = history.takeLast(window)
         val assistantCount = recent.count { it is AgentMessage.AssistantMessage && it.content.isNotBlank() }
         if (assistantCount < EXTRACT_MIN_ASSISTANT) return@runCatching false
         val provider = resolveCompactionFallbackProvider(sessionId) ?: getEffectiveProvider(sessionId)
-        contextCompactor.extractConclusionsFromHistory(
+        val extracted = contextCompactor.extractConclusionsFromHistory(
             messages = recent,
             aiProvider = provider,
             sessionId = sessionId,
             workspacePath = session.workspacePath,
             teamName = session.teamName?.takeIf { it.isNotBlank() }
         )
+        // 无论本次是否解析出结论都推进基准：摘要失败/格式不符时也不该每 6 回合重复付费
+        lastConclusionExtractSize[sessionId] = history.size
+        extracted
     }.onFailure {
-        // 结论沉淀是附加价值，绝不影响对话；失败留日志便于排查「为什么结论页还是空的」
-        FileLogger.w(TAG, "外部引擎结论沉淀失败（不影响对话）: $sessionId", it)
+        // 结论沉淀是附加价值，绝不影响对话；未配置供应商属常见情况，降为 debug
+        if (it is IllegalStateException && it.message?.contains("尚未配置 AI 供应商") == true) {
+            FileLogger.d(TAG, "外部引擎结论沉淀跳过：未配置可用供应商")
+        } else {
+            FileLogger.w(TAG, "外部引擎结论沉淀失败（不影响对话）: $sessionId", it)
+        }
     }.getOrDefault(false)
 
     override suspend fun buildInstantHandoffDoc(sessionId: String): String? = runCatching {

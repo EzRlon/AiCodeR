@@ -155,7 +155,7 @@ class MemoryGraphViewModel @Inject constructor(
 
     private var graphSearchJob: Job? = null
 
-    /** 结论抽取开关（默认关；页面上可一键开启）。 */
+    /** 结论抽取开关（默认开；页面上可关闭/重新开启）。 */
     val extractEnabled: StateFlow<Boolean> = generalSettingsRepository.graphExtractEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 

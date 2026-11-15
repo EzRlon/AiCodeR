@@ -612,8 +612,10 @@ class ClaudeCodeBridge @Inject constructor(
         var pendingTodos: List<EngineTodoMirror.NativeTodo> = emptyList()
         /** 已后台启动、尚未收到完成通知的子代理 tool_use id（Claude 异步 Task）。 */
         val asyncToolIds = mutableSetOf<String>()
-        /** tool_use id → 本次派生的子代理会话；收到 tool_result / 完成通知 / 回合收尾时移除。 */
+        /** tool_use id → 本次派生的子代理会话；收到 tool_result / 完成通知时移除（回合结束由 ViewModel 兜底）。 */
         val subagents = mutableMapOf<String, EngineSubagentSession>()
+        /** 本回合已建过子会话的 tool_use id（完成后仍保留）：同一调用重放时不重复建。 */
+        val seenSubagentIds = mutableSetOf<String>()
         fun resetBlocks() { text.clear(); reasoning.clear() }
     }
 
@@ -695,8 +697,9 @@ class ClaudeCodeBridge @Inject constructor(
                     acc.toolNames[id] = displayName
                     // 同一 tool_use 重放（引擎重连/消息重投）不重复建子会话；
                     // 工具行本身靠固定 id 落库天然幂等，子会话 id 是随机的，只能在这里挡
-                    if (EngineSubagent.isSubagentTool(name) && id.isNotEmpty() && id !in acc.subagents) {
+                    if (EngineSubagent.isSubagentTool(name) && id.isNotEmpty() && id !in acc.seenSubagentIds) {
                         val sub = newEngineSubagentSession(input.toString())
+                        acc.seenSubagentIds += id
                         acc.subagents[id] = sub
                         spawnEvents += AgentEvent.SubagentSpawned(
                             subSessionId = sub.subSessionId,
