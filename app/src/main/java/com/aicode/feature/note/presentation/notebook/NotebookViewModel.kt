@@ -60,8 +60,14 @@ class NotebookViewModel @Inject constructor(
         val polishing: Boolean = false,
         val canUndoPolish: Boolean = false,
         /** 首次加载失败（远端断开/目录不可写等）：不再无限转圈，页面给可读提示。 */
-        val loadFailed: Boolean = false
+        val loadFailed: Boolean = false,
+        /** 切换/新建失败时递增：浮窗据此弹一次性提示，但**不**用失败页顶掉当前可编辑笔记。 */
+        val actionErrorTick: Int = 0
     )
+
+    private fun signalActionError() {
+        _state.update { it.copy(actionErrorTick = it.actionErrorTick + 1) }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -127,7 +133,10 @@ class NotebookViewModel @Inject constructor(
      */
     fun reloadCurrent() {
         val path = _state.value.currentPath ?: return
-        if (_state.value.polishing) return
+        // 润色中也必须同步：否则润色失败/超时后，编辑器停在旧种子，下一次输入会把
+        // 润色前敲的内容覆盖掉。润色完成时自身还有内容一致性校验兜底。
+        // 没有新编辑时种子就是最新内容，不必重建页面，也不必再写一次盘
+        if (!hasEdits) return
         val text = currentContent()
         hasEdits = false
         if (text != _state.value.editorSeed) {
@@ -175,8 +184,9 @@ class NotebookViewModel @Inject constructor(
                 runCatching { fileAccess.readFile(path) }.getOrNull()
             }
             if (text == null) {
-                // 远端读失败：留在当前笔记并给出可重试提示，不能拿空串把编辑器清掉
-                _state.update { it.copy(loadFailed = true) }
+                // 远端读失败：留在当前笔记并提示一次，不能拿空串把编辑器清掉，
+                // 也不能把整屏换成失败页——当前笔记仍然可编辑。
+                signalActionError()
                 return@launch
             }
             latestMarkdown = text
@@ -209,7 +219,8 @@ class NotebookViewModel @Inject constructor(
                 }
                 createNoteFile()
             } ?: run {
-                _state.update { it.copy(loadFailed = true) }
+                // 新建失败只提示，当前笔记保持原样
+                signalActionError()
                 return@launch
             }
             latestMarkdown = ""
@@ -233,7 +244,10 @@ class NotebookViewModel @Inject constructor(
     /** 关闭浮窗前落盘；只写本地，不阻塞关闭动画。 */
     fun flush() {
         val path = _state.value.currentPath ?: return
+        // 没有新编辑就不重复写盘（远程模式下每次写都是 SFTP 往返）
+        if (!hasEdits) return
         val text = currentContent()
+        hasEdits = false
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { fileAccess.writeFile(path, text, overwrite = true) }
                 .onFailure { FileLogger.w(TAG, "关闭前落盘失败: $path", it) }

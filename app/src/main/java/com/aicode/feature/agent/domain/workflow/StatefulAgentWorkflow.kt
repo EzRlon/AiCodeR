@@ -68,6 +68,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
@@ -139,6 +140,13 @@ class StatefulAgentWorkflow @Inject constructor(
         const val TEXT_POLISHER_FILE = "agent/text-polisher.md"
         /** 润色输入的长度上限：输入框草稿不该有这么长，超了只取前段，避免无谓的大请求。 */
         const val TEXT_POLISH_MAX_INPUT_CHARS = 8_000
+        /**
+         * 润色请求的整体超时。
+         *
+         * 共享 OkHttp 的 readTimeout 为 0（长回答需要），网络半断时润色请求可能永久挂起，
+         * 调用方（输入框/随记浮窗）会一直停在「润色中」。按失败处理比卡死好。
+         */
+        const val POLISH_TIMEOUT_MS = 60_000L
         /** 收尾独立验收的提示词文件（验收模型专用，见 runCompletionVerification）。 */
         const val VERIFIER_FILE = "agent/verifier.md"
         /** 验收报告落库前的字符上限（模型输出异常超长时截断，防撑爆卡片）。 */
@@ -1629,7 +1637,10 @@ class StatefulAgentWorkflow @Inject constructor(
      *
      * 拿不到结果（网络失败、模型拒答、空输出）一律返回 null，由调用方提示失败并保留原文。
      */
-    override suspend fun polishText(sessionId: String, text: String): String? = runCatching {
+    override suspend fun polishText(sessionId: String, text: String): String? =
+        withTimeoutOrNull(POLISH_TIMEOUT_MS) { polishTextInternal(sessionId, text) }
+
+    private suspend fun polishTextInternal(sessionId: String, text: String): String? = runCatching {
         val input = text.trim().take(TEXT_POLISH_MAX_INPUT_CHARS)
         if (input.isEmpty()) return@runCatching null
         val provider = getEffectiveProvider(sessionId)

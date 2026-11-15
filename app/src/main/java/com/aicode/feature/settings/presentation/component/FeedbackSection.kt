@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -59,12 +60,15 @@ import java.util.Locale
 @Composable
 internal fun FeedbackSection() {
     val context = LocalContext.current
-    var kind by remember { mutableStateOf(FeedbackKind.SUGGESTION) }
-    var subject by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    var reproduction by remember { mutableStateOf("") }
-    var includeDiagnostics by remember { mutableStateOf(true) }
-    var includeLogs by remember { mutableStateOf(false) }
+    // 草稿用 rememberSaveable：分区切换/旋转后回来不能把写了一半的反馈丢掉。
+    // 日志片段可能较大，不进 Bundle，重新打开开关时再读。
+    var kindName by rememberSaveable { mutableStateOf(FeedbackKind.SUGGESTION.name) }
+    val kind = FeedbackKind.entries.firstOrNull { it.name == kindName } ?: FeedbackKind.SUGGESTION
+    var subject by rememberSaveable { mutableStateOf("") }
+    var description by rememberSaveable { mutableStateOf("") }
+    var reproduction by rememberSaveable { mutableStateOf("") }
+    var includeDiagnostics by rememberSaveable { mutableStateOf(true) }
+    var includeLogs by rememberSaveable { mutableStateOf(false) }
     var logExcerpt by remember { mutableStateOf("") }
     var loadingLogs by remember { mutableStateOf(false) }
 
@@ -135,7 +139,7 @@ internal fun FeedbackSection() {
             FeedbackKind.entries.forEach { item ->
                 FilterChip(
                     selected = kind == item,
-                    onClick = { kind = item },
+                    onClick = { kindName = item.name },
                     label = { Text(stringResource(item.titleRes())) }
                 )
             }

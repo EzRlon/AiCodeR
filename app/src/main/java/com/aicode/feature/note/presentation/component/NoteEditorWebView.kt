@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -103,7 +104,11 @@ internal fun NoteEditorWebView(
         webView.loadDataWithBaseURL(viewModel.baseUrl(path), html, "text/html", "utf-8", null)
     }
 
-    AndroidView(factory = { webView }, modifier = modifier)
+    // factory 只在组合槽首次创建时执行一次：换笔记时 webView 已按 path 重建，
+    // 若不加 key 会继续挂着旧的（已 destroy）实例，表现为切换后白屏/不可编辑。
+    key(path) {
+        AndroidView(factory = { webView }, modifier = modifier)
+    }
 }
 
 /** Vditor 与原生侧的桥：JS 调 `AiCodeNote.onChange(md)` 回传 Markdown。 */

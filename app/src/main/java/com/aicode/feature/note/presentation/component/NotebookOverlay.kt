@@ -60,8 +60,15 @@ internal fun NotebookOverlay(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val windowState = remember(viewModel) { FloatingWindowState(viewModel.geometry) }
-    // 首次打开才加载笔记（不在 App 启动时做无关磁盘 IO）；再次打开时 ensureLoaded 会回读磁盘
+    // 首次打开才加载笔记（不在 App 启动时做无关磁盘 IO）；再次打开时同步内存最新内容
     LaunchedEffect(Unit) { viewModel.ensureLoaded() }
+    // 切换/新建失败只弹一次性提示，不用失败页顶掉当前仍可编辑的笔记
+    val loadFailedMsg = stringResource(R.string.notebook_load_failed)
+    LaunchedEffect(state.actionErrorTick) {
+        if (state.actionErrorTick > 0) {
+            Toast.makeText(context, loadFailedMsg, Toast.LENGTH_SHORT).show()
+        }
+    }
     // 最小化会销毁浮窗内容（WebView）：从「最小化」恢复时把种子同步为内存最新内容。
     // 只在 true→false 的边沿触发，避免与 ensureLoaded 在每次打开时各回写一遍。
     var wasMinimized by remember { mutableStateOf(windowState.minimized) }

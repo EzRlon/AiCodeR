@@ -28,9 +28,10 @@ object LogExcerptSanitizer {
      * @param maxChars 字符上限，避免把整个日志文件塞进反馈
      */
     fun sanitize(raw: String, maxLines: Int = 200, maxChars: Int = 6000): String {
-        // 先截到「末尾 maxLines 行 / maxChars 字符」再做正则：日志文件可达数 MB，
-        // 对全文跑 5 次正则是纯浪费（用户只会在反馈里看到尾部片段）。
-        var text = raw.lineSequence().toList().takeLast(maxLines).joinToString("\n")
+        // 先按字符粗截尾部（留 4 倍余量），再切行/跑正则：日志文件可达数 MB，
+        // 一次性物化全部行并在全文上跑五次正则纯属浪费（用户只会看到尾部片段）。
+        val tail = if (raw.length > maxChars * 4) raw.takeLast(maxChars * 4) else raw
+        var text = tail.lineSequence().toList().takeLast(maxLines).joinToString("\n")
         if (text.length > maxChars) text = text.takeLast(maxChars)
         text = text
             .replace(SK_KEY, "sk-***")
