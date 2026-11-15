@@ -92,9 +92,12 @@ class NoteEditorViewModel @Inject constructor(
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
             delay(SAVE_DEBOUNCE_MS)
-            val ok = runCatching { fileAccess.writeFile(path, markdown, overwrite = true) }
-                .onFailure { FileLogger.w(TAG, "保存笔记失败: $path", it) }
-                .isSuccess
+            // 本地直读/远程 SFTP 都可能阻塞：写盘不能压在主线程上（随记浮窗会在输入时反复触发）
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { fileAccess.writeFile(path, markdown, overwrite = true) }
+                    .onFailure { FileLogger.w(TAG, "保存笔记失败: $path", it) }
+                    .isSuccess
+            }
             if (ok) onSaved()
         }
     }

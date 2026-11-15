@@ -1345,7 +1345,11 @@ fun AppNavigation(
             viewModel = notebookViewModel,
             onClose = appOverlayViewModel::closeNotebook,
             onPolish = { text -> agentViewModel.polishTextExternal(text) },
-            onSend = { text -> agentViewModel.enqueueAgentRequest(text) }
+            // 没有当前会话时直接判失败：enqueueAgentRequest 在 sid 为空时会走新建流程，
+            // 用户预期是「交给当前会话」，不应静默开一个新会话。
+            onSend = { text ->
+                agentViewModel.currentSessionId.value != null && agentViewModel.enqueueAgentRequest(text)
+            }
         )
     }
 

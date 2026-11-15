@@ -77,7 +77,15 @@ class NotebookViewModel @Inject constructor(
         heightDp = prefs.getFloat(KEY_H, DEFAULT_HEIGHT_DP)
     )
 
-    init {
+    private var loaded = false
+
+    /**
+     * 第一次打开浮窗时才建目录/读笔记：Activity 启动时就做这些会给完全不用随记的用户
+     * 增加一次无谓扫盘（功耗纪律：不做与当前操作无关的后台 IO）。
+     */
+    fun ensureLoaded() {
+        if (loaded) return
+        loaded = true
         openInitialNote()
     }
 
@@ -98,6 +106,8 @@ class NotebookViewModel @Inject constructor(
     fun onSaved() = Unit
 
     fun selectNote(path: String) {
+        // 首次加载还没落地时切换会让两路协程互相覆盖 currentPath，直接忽略这次点击
+        if (_state.value.loading) return
         if (path == _state.value.currentPath) return
         val previousPath = _state.value.currentPath
         val pending = latestMarkdown
@@ -126,6 +136,7 @@ class NotebookViewModel @Inject constructor(
     }
 
     fun newNote() {
+        if (_state.value.loading) return
         val previousPath = _state.value.currentPath
         val pending = latestMarkdown
         viewModelScope.launch {
@@ -165,11 +176,19 @@ class NotebookViewModel @Inject constructor(
      * `AgentWorkflow.polishText`）。结果直接替换正文并立即落盘，可撤销一次。
      */
     fun polish(provider: suspend (String) -> String?, onResult: (Boolean) -> Unit) {
+        val path = _state.value.currentPath ?: return
         val text = latestMarkdown.ifBlank { _state.value.editorSeed }
         if (text.isBlank() || _state.value.polishing) return
         _state.update { it.copy(polishing = true) }
         viewModelScope.launch {
             val polished = runCatching { provider(text) }.getOrNull()
+            // 润色是慢请求：期间用户可能切换/新建了笔记。结果必须回到「发起时那一篇」，
+            // 否则会把旧笔记的润色文本写进新笔记（覆盖用户正在写的内容）。
+            if (_state.value.currentPath != path) {
+                _state.update { it.copy(polishing = false) }
+                onResult(false)
+                return@launch
+            }
             if (polished.isNullOrBlank() || polished == text) {
                 _state.update { it.copy(polishing = false) }
                 onResult(false)
@@ -178,9 +197,7 @@ class NotebookViewModel @Inject constructor(
             prePolishText = text
             latestMarkdown = polished
             withContext(Dispatchers.IO) {
-                _state.value.currentPath?.let { path ->
-                    runCatching { fileAccess.writeFile(path, polished, overwrite = true) }
-                }
+                runCatching { fileAccess.writeFile(path, polished, overwrite = true) }
             }
             _state.update { it.copy(polishing = false, editorSeed = polished, canUndoPolish = true) }
             onResult(true)
@@ -206,6 +223,7 @@ class NotebookViewModel @Inject constructor(
 
     /** 一键发给 agent：返回 false 表示没有内容或被硬阈值拦截。 */
     fun send(dispatch: (String) -> Boolean): Boolean {
+        if (_state.value.currentPath == null) return false
         val text = latestMarkdown.ifBlank { _state.value.editorSeed }
         if (text.isBlank()) return false
         return runCatching { dispatch(text) }.getOrDefault(false)

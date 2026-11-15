@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +57,8 @@ internal fun NotebookOverlay(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // 首次打开才加载笔记（不在 App 启动时做无关磁盘 IO）
+    LaunchedEffect(Unit) { viewModel.ensureLoaded() }
     val windowState = remember(viewModel) { FloatingWindowState(viewModel.geometry) }
     var showNotes by remember { mutableStateOf(false) }
 
