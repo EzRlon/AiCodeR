@@ -316,7 +316,9 @@ class CodexBridge @Inject constructor(
                 // 必须保留（解析不了就本回合跳过注入，宁可少注入也不毁用户配置）
                 val existing = readUserDeveloperInstructions()
                 when {
-                    existing == null -> {
+                    // 文件不存在、或存在但没配该键：都属于「用户没写指令」，直接下发 App 指令即可。
+                    // （present=false 曾被误判成「解析失败」而跳过全部注入，见 CodexUserInstructions 注释）
+                    existing == null || !existing.present -> {
                         add("-c"); add("developer_instructions=${tomlString(appInstructions)}")
                     }
                     existing.text != null -> {
@@ -386,7 +388,7 @@ class CodexBridge @Inject constructor(
         val extraEnv = buildMap {
             put("PERMISSION_BRIDGE_PORT", port.toString())
             put("PERMISSION_BRIDGE_SESSION", sessionId)
-            put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", bridgeToken)
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
             // 会话选定 App 供应商模型时按 providerId 对齐，避免误用首个可用供应商的凭据
@@ -789,32 +791,22 @@ class CodexBridge @Inject constructor(
     /** 转义实现见 [CliToml.string]（抽出去是为了能单测——转义错一个字符整条 -c 参数就废了）。 */
     private fun tomlString(value: String): String = CliToml.string(value)
 
-    /** 用户已配置的 developer_instructions：present 表示配置里出现过该键；text 为可安全解析的值（解析不了为 null）。 */
-    private data class ExistingDevInstructions(val present: Boolean, val text: String?)
-
     /**
      * 读取 `~/.codex/config.toml` 里的 developer_instructions。
      *
      * Codex 的 `-c` 是覆盖语义：直接用 App 的文本会把用户自定义指令整段替换掉。这里只在
      * 能可靠解析单行基本字符串时做「用户指令 + App 指令」拼接；出现该键但格式复杂（多行串/
-     * 字面量串）时返回 present=true、text=null，让调用方跳过注入，避免毁掉用户配置。
+     * 字面量串/非法转义）时返回 present=true、text=null，让调用方跳过注入，避免毁掉用户配置。
+     * 解析规则抽在 [CodexUserInstructions]（纯函数，可单测）。
      */
-    private suspend fun readUserDeveloperInstructions(): ExistingDevInstructions? = withContext(Dispatchers.IO) {
-        val path = "~/.codex/config.toml"
-        val content = runCatching {
-            if (fileAccess.exists(path)) fileAccess.readFile(path) else null
-        }.getOrNull() ?: return@withContext null
-        if (!content.contains("developer_instructions")) return@withContext ExistingDevInstructions(false, null)
-        val match = Regex("""(?m)^\s*developer_instructions\s*=\s*"((?:[^"\\]|\\.)*)"""")
-            .find(content)
-            ?: return@withContext ExistingDevInstructions(true, null)
-        val decoded = match.groupValues[1]
-            .replace("\\n", "\n")
-            .replace("\\t", "\t")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-        ExistingDevInstructions(true, decoded)
-    }
+    private suspend fun readUserDeveloperInstructions(): CodexUserInstructions.Existing? =
+        withContext(Dispatchers.IO) {
+            val path = "~/.codex/config.toml"
+            val content = runCatching {
+                if (fileAccess.exists(path)) fileAccess.readFile(path) else null
+            }.getOrNull() ?: return@withContext null
+            CodexUserInstructions.parse(content)
+        }
 
     /**
      * 图片落盘到容器桥目录（codex -i 只接受文件路径），返回容器内路径列表。

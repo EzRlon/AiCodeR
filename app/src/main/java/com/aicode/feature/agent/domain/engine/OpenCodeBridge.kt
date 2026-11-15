@@ -12,7 +12,6 @@ import com.aicode.feature.agent.domain.workflow.AgentEvent
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.PathHomeResolver
 import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
-import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

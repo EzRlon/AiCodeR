@@ -411,7 +411,7 @@ class ClaudeCodeBridge @Inject constructor(
         val extraEnv = buildMap {
             put("PERMISSION_BRIDGE_PORT", port.toString())
             put("PERMISSION_BRIDGE_SESSION", sessionId)
-            put("PERMISSION_BRIDGE_TOKEN", sessionId)
+            put("PERMISSION_BRIDGE_TOKEN", bridgeToken)
             // 本体能力桥的数据工具需要知道容器内 .aicode 根与当前项目根（容器内路径）
             put("AICODE_HOME", pathHomeResolver.aicodeRoot().trimEnd('/'))
             put("AICODE_PROJECT_ROOT", if (projectPath.isNullOrBlank()) "" else containerWorkspacePath())
