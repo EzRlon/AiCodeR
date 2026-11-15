@@ -323,7 +323,7 @@ internal fun ToolMessageBody(
                 // 折叠态也看得见，不必展开才知道它在跑。
                 Spacer(Modifier.width(Spacing.sm))
                 Text(
-                    text = stringResource(toolRunningLabelRes(message.toolName)),
+                    text = stringResource(toolRunningLabelRes(message.toolName, running = true)),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
@@ -666,7 +666,7 @@ private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase
  * MCP 动态注册工具、自定义工具等未归类的，一律回落 [R.string.chat_status_calling_tool]。
  */
 @StringRes
-internal fun toolRunningLabelRes(toolName: String?): Int = when (toolName?.lowercase()) {
+internal fun toolRunningLabelRes(toolName: String?, running: Boolean = false): Int = when (toolName?.lowercase()) {
     "editfile", "writefile" -> R.string.chat_status_editing_file
     "readfile", "list", "sendfile" -> R.string.chat_status_reading_file
     "viewimage" -> R.string.chat_status_viewing_image
@@ -676,7 +676,9 @@ internal fun toolRunningLabelRes(toolName: String?): Int = when (toolName?.lower
     "askuserquestion" -> R.string.chat_status_asking_user
     "generateimage" -> R.string.chat_status_generating_image
     "todo" -> R.string.chat_status_updating_todo
-    "task" -> R.string.chat_status_starting_subagent
+    // 外部引擎的 task 往往同步等待子代理跑完（Claude 的 Task 要等结果才返回）：
+    // 开始执行后再说「正在启动」会让人以为卡死，运行期改用「子代理运行中」。
+    "task" -> if (running) R.string.chat_status_subagent_running else R.string.chat_status_starting_subagent
     "memory" -> R.string.chat_status_reading_memory
     else -> R.string.chat_status_calling_tool
 }

@@ -1070,7 +1070,7 @@ class FloatBallOverlay(
                 // 2) 正在做什么
                 if (state.busy && state.activeToolName != null) {
                     Text(
-                        text = stringResource(toolRunningLabelRes(state.activeToolName)),
+                        text = stringResource(toolRunningLabelRes(state.activeToolName, running = true)),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         maxLines = 1,

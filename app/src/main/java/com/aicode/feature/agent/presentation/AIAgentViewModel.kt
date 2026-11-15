@@ -1722,11 +1722,13 @@ class AIAgentViewModel @Inject constructor(
                 states.filterValues { it is AgentUIState.Loading || it is AgentUIState.Streaming }
                     .keys
                     .associateWith { sid ->
-                        val toolName = tools[sid]?.values?.lastOrNull()?.toolName?.takeIf { it.isNotBlank() }
-                            ?: preparing[sid]
+                        val runningToolName = tools[sid]?.values?.lastOrNull()?.toolName?.takeIf { it.isNotBlank() }
+                        val toolName = runningToolName ?: preparing[sid]
                         when {
                             sid in approvals -> context.getString(R.string.notification_approval_needed)
-                            toolName != null -> context.getString(toolRunningLabelRes(toolName))
+                            toolName != null -> context.getString(
+                                toolRunningLabelRes(toolName, running = runningToolName != null)
+                            )
                             compacting[sid] == true -> context.getString(R.string.chat_compressing_context)
                             else -> context.getString(R.string.chat_status_thinking)
                         }

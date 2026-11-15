@@ -1164,6 +1164,7 @@
     <string name="chat_status_generating_image">Generating image</string>
     <string name="chat_status_updating_todo">Updating to-dos</string>
     <string name="chat_status_starting_subagent">Starting sub-agent</string>
+    <string name="chat_status_subagent_running">Sub-agent running</string>
     <string name="chat_status_reading_memory">Reading memory</string>
     <string name="chat_tool_running">Tool running</string>
     <string name="chat_tool_succeeded">Tool succeeded</string>

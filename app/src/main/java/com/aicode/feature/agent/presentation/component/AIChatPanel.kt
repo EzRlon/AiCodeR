@@ -799,8 +799,11 @@ fun AIChatPanel(
     // 1. 若当前有正在执行的工具（runningTool）或模型正在准备的工具（preparingTool，工具名先到参数还在流式），
     //    直接说清在做什么（「正在读取文件」、「正在编辑文件」等，见 toolRunningLabelRes）；
     // 2. 否则（如等待模型首字吐出、纯思考间隙）兜底显示「正在思考」。
-    val activeToolName = runningTool.lastOrNull()?.toolName?.takeIf { it.isNotBlank() } ?: preparingTool
-    val thinkingLabel = activeToolName?.let { stringResource(toolRunningLabelRes(it)) }
+    val runningToolName = runningTool.lastOrNull()?.toolName?.takeIf { it.isNotBlank() }
+    // 已开始执行与「参数还在流式、尚未开跑」分开：task 在前者说「子代理运行中」，
+    // 后者才说「正在启动子代理」——外部引擎同步等待子代理时，前者可能持续很久。
+    val thinkingLabel = runningToolName?.let { stringResource(toolRunningLabelRes(it, running = true)) }
+        ?: preparingTool?.let { stringResource(toolRunningLabelRes(it)) }
         ?: stringResource(R.string.chat_status_thinking)
     val pendingPermission by viewModel.pendingToolPermission.collectAsStateWithLifecycle()
     val pendingPermissionSessionTitle by viewModel.pendingToolPermissionSessionTitle.collectAsStateWithLifecycle()
