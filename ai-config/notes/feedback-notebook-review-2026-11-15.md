@@ -21,6 +21,25 @@
 | P2 | 能力感知件未登记随记/反馈 | ✅ `docs-site/docs/guide/capabilities.md` + `prompts/65-capabilities.md` |
 | P2 | 几何高度下限误用 minWidth | ❌ 复核为误报（代码本就是 minHeight） |
 
+## 一·补、optimizer 结论（P0 = 1，已修）
+
+| 级别 | 问题 | 处置 |
+| --- | --- | --- |
+| P0 | 首次加载失败后无重试路径，状态永久卡死（再次打开走 reloadCurrent 直接 return） | ✅ 失败时复位 `loaded`；失败态加重试按钮 `retryLoad()`；成功/切换/新建均清 `loadFailed` |
+| P1 | 清空正文后 `ifBlank` 回退旧种子，恢复/发送会用旧内容并写回文件 | ✅ 新增 `hasEdits` 区分「未输入」与「清空」，统一走 `currentContent()` |
+| P1 | `createNoteFile` 吞写失败仍返回路径 → 后续静默丢内容 | ✅ 返回 `String?`，失败落到失败态 |
+| P1 | 切换期旧 WebView 迟到回调可能串稿 | ✅ 编辑回调带 path，VM 校验当前路径 |
+| P1 | 窗口可拖进状态栏触摸区（按钮点不到、拖不回） | ✅ 顶部边界改用状态栏下沿（拖动与渲染一致） |
+| P2 | 日志先对全文件跑 5 次正则再截断 | ✅ 先取尾部 200 行/6000 字符再脱敏 |
+| P2 | 反馈长表单无 `imePadding()`（API30+ ADJUST_NOTHING） | ✅ 已加 |
+| P2 | 打开浮窗时 ensureLoaded 与最小化 effect 各回写一次 | ✅ 最小化 effect 只在 true→false 边沿触发 |
+| P2 | 剪贴板未标敏感 | ✅ Android 13+ 标 `EXTRA_IS_SENSITIVE` |
+| P2 | 注释/文档漂移（「回读磁盘」、自动保存 1 秒） | ✅ 注释与文档已改 0.8 秒 |
+| 记录 | 每次打开/切笔记重建 WebView（Vditor 约 5MB 资源，数百 ms） | 排期：同窗口切笔记改用 JS `setValue`；最小化保活 |
+| 记录 | 远端模式 list/select 串行多次 RTT | 排期：合并请求/复用列表结果 |
+| 记录 | VNC 小窗与新浮窗组件重复实现 | 维持现状，后续迁移 |
+| 记录 | `pinned` 无 UI 入口、部分 contentDescription 为空、魔数未走主题 | 排期清理 |
+
 ## 二、仍待真机/实测
 
 1. GitHub 预填链接（模板 + body）在手机浏览器是否真的填入正文；不填时剪贴板兜底是否顺畅。
