@@ -1804,7 +1804,7 @@ fun AIChatPanel(
     val isRemote = executionMode == com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH
     // 当前专家团：顶栏按钮高亮 + 输入栏横幅共用（在顶栏之前收集，供 ChatHeader 读取）。
     val teamName by viewModel.teamName.collectAsStateWithLifecycle()
-    val activeTeam by viewModel.activeTeam.collectAsStateWithLifecycle()
+    val activeTeamRuntime by viewModel.activeTeamRuntime.collectAsStateWithLifecycle()
 
     val markdownImageTransformer = remember(viewModel.fileAccess) {
         MarkdownImageTransformer(viewModel.fileAccess)
@@ -2525,7 +2525,7 @@ fun AIChatPanel(
                 intentType = draftIntentType,
                 onIntentTypeChange = viewModel::updateDraftIntentType,
                 currentGoal = currentGoal,
-                activeTeam = activeTeam,
+                activeTeamRuntime = activeTeamRuntime,
                 onOpenTeamPicker = { showTeamPicker = true },
                 onClearTeam = { viewModel.setSessionTeam(null) },
                 onSetGoalPaused = { viewModel.setGoalPaused(it) },

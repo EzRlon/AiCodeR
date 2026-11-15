@@ -295,5 +295,55 @@ data class TeamBannerUi(
     /** 展示名（译文优先，缺省退回标识）。 */
     val displayName: String,
     /** 成员显示名列表（顺序与定义一致）。 */
-    val memberNames: List<String>
+    val memberNames: List<String>,
+    /**
+     * 成员标识列表（`TeamDefinition.members` 原样，顺序一致）——实时状态匹配用。
+     * 与 [memberNames] 一一对应，但保真：显示名可能重名，标识不会。
+     */
+    val memberIds: List<String> = emptyList(),
+    /**
+     * 成员标识 → 子代理定义名（`AgentDefinition.name`）。
+     *
+     * 为什么两个都留：团队定义按**文件名**引用成员（`members: [product-manager]`），
+     * 而派发时落库的 `subagentType` 是**定义名**（`PM`）——两侧名字不同，必须先把标识
+     * 解析成定义名才能与子代理会话对上号。解析在构造横幅时一次算好（那里本就要查定义），
+     * 组合流里零 IO。
+     */
+    val memberDefNames: Map<String, String> = emptyMap()
 )
+
+/** 专家团成员的实时运转状态（横幅人员状态表用）。 */
+enum class TeamMemberStatus {
+    /** 有子代理会话正在运行（Loading/Streaming）。 */
+    WORKING,
+
+    /** 有子代理会话且已结束（本轮已完成）。 */
+    DONE,
+
+    /** 尚未派活。 */
+    IDLE
+}
+
+/** 横幅里单个成员的实时状态行。 */
+data class TeamMemberRuntimeUi(
+    /** 成员显示名（与横幅、侧栏同源）。 */
+    val name: String,
+    val status: TeamMemberStatus,
+    /** 正在干的活（子代理会话标题）；未派活为 null。 */
+    val activity: String?
+)
+
+/**
+ * 专家团横幅的实时运转快照：团 + 各成员状态。
+ * 与会话内容正交——会话是过程流水，这里是人员状态表。
+ */
+data class TeamRuntimeUi(
+    val team: TeamBannerUi,
+    val members: List<TeamMemberRuntimeUi>
+) {
+    /** 正在干活的成员数。 */
+    val workingCount: Int get() = members.count { it.status == TeamMemberStatus.WORKING }
+
+    /** 已完成（本轮有产出且已结束）的成员数。 */
+    val doneCount: Int get() = members.count { it.status == TeamMemberStatus.DONE }
+}

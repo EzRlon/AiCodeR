@@ -3312,6 +3312,49 @@ class AIAgentViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /**
+     * 专家团横幅的**实时运转状态**：把当前团的成员与他们的子代理会话（运行中/已完成/待派）
+     * 对上号，产出「谁在干什么、干到哪一步」的人员状态表。
+     *
+     * 之所以单独一条流：横幅要回答的是「团队此刻的运转」，与会话里的消息流水正交——
+     * 会话按时间排列过程，横幅按成员聚合状态，二者不重复（用户明确要求内容别一样）。
+     * 由 `activeTeam`（定义+成员名）× `subSessionsByParent`（子代理会话）× `agentStates`
+     * （运行状态）三个流组合而成，任一变化即实时刷新。
+     */
+    val activeTeamRuntime: StateFlow<TeamRuntimeUi?> = kotlinx.coroutines.flow.combine(
+        activeTeam,
+        subSessionsByParent,
+        agentStates,
+        _currentSessionId
+    ) { team, subsByParent, states, currentSessionId ->
+        if (team == null) return@combine null
+        // 本会话的子代理：这是「这个团」的活儿；没有子代理 = 全员待派。
+        // 按成员定义名对齐（团队定义按文件名引用成员，而落库的 subagentType 是定义名，
+        // 如 product-manager ↔ PM），映射在构造横幅时已算好，此处零 IO。
+        val memberSessions = subsByParent[currentSessionId].orEmpty()
+        TeamRuntimeUi(
+            team = team,
+            members = team.memberIds.mapIndexed { index, memberId ->
+                val displayName = team.memberNames.getOrElse(index) { memberId }
+                val defName = team.memberDefNames[memberId]
+                // 一个成员可能被派多轮：取最近一条（subSessionsByParent 已按 updatedAt DESC）。
+                val session = memberSessions.firstOrNull { s ->
+                    defName != null && s.subagentType.equals(defName, ignoreCase = true)
+                }
+                val state = session?.let { states[it.id] }
+                TeamMemberRuntimeUi(
+                    name = displayName,
+                    status = when {
+                        state is AgentUIState.Loading || state is AgentUIState.Streaming -> TeamMemberStatus.WORKING
+                        session != null -> TeamMemberStatus.DONE
+                        else -> TeamMemberStatus.IDLE
+                    },
+                    activity = session?.title?.takeIf { it.isNotBlank() }
+                )
+            }
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     private val _teamMemberNames = MutableStateFlow<Map<String, String>>(emptyMap())
 
     /**
@@ -3330,18 +3373,24 @@ class AIAgentViewModel @Inject constructor(
             definition.description
         )
         val displayName = translation?.nameZh?.takeIf { it.isNotBlank() } ?: definition.name
-        val nameById = definition.members.associateWith { memberId ->
-            TeamMemberNaming.displayName(
+        // 一次解析拿到「标识 → (定义, 显示名)」：显示名走统一命名链，定义名供实时状态与子代理会话对齐。
+        val resolved = definition.members.map { memberId ->
+            val def = runCatching { agentDefinitionRepository.find(memberId) }.getOrNull()
+            memberId to (def to TeamMemberNaming.displayName(
                 memberId = memberId,
-                definition = runCatching { agentDefinitionRepository.find(memberId) }.getOrNull(),
+                definition = def,
                 translations = translations
-            )
+            ))
         }
+        val nameById = resolved.associate { (id, pair) -> id to pair.second }
         _teamMemberNames.value = nameById
         return TeamBannerUi(
             name = definition.name,
             displayName = displayName,
-            memberNames = definition.members.mapNotNull { nameById[it] }
+            // 用 map（非 mapNotNull）保持与 memberIds 一一对应，避免任一成员取不到名字时整体错位。
+            memberNames = resolved.map { it.second.second },
+            memberIds = resolved.map { it.first },
+            memberDefNames = resolved.mapNotNull { (id, pair) -> pair.first?.name?.let { id to it } }.toMap()
         )
     }
 

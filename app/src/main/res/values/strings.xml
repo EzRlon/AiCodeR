@@ -2567,6 +2567,9 @@
     <string name="team_banner_label">专家团 · %1$s</string>
     <string name="team_banner_change">更换专家团</string>
     <string name="team_banner_clear">移除专家团</string>
+    <string name="team_runtime_working">%1$d/%2$d 在忙</string>
+    <string name="team_runtime_done">%1$d 已完成</string>
+    <string name="team_runtime_idle">%1$d 待派</string>
     <string name="team_toast_selected">已召唤专家团「%1$s」</string>
     <string name="team_toast_cleared">已移除专家团</string>
     <string name="team_picker_group_builtin">内置</string>

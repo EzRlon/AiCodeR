@@ -2565,6 +2565,9 @@
     <string name="team_banner_label">Team · %1$s</string>
     <string name="team_banner_change">Change team</string>
     <string name="team_banner_clear">Remove team</string>
+    <string name="team_runtime_working">%1$d/%2$d working</string>
+    <string name="team_runtime_done">%1$d done</string>
+    <string name="team_runtime_idle">%1$d idle</string>
     <string name="team_toast_selected">Summoned team \"%1$s\"</string>
     <string name="team_toast_cleared">Team removed</string>
     <string name="team_picker_group_builtin">Built-in</string>

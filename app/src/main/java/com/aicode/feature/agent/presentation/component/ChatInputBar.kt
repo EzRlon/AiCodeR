@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -131,6 +132,9 @@ import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.presentation.SessionGoalUi
 import com.aicode.feature.agent.presentation.TeamBannerUi
+import com.aicode.feature.agent.presentation.TeamMemberStatus
+import com.aicode.feature.agent.presentation.TeamMemberRuntimeUi
+import com.aicode.feature.agent.presentation.TeamRuntimeUi
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.domain.permission.PermissionChoice
@@ -283,7 +287,7 @@ internal fun ChatInputBar(
     onIntentTypeChange: (String?) -> Unit = {},
     currentGoal: SessionGoalUi? = null,
     /** 当前生效的专家团（含成员显示名）；null 时不显示横幅。 */
-    activeTeam: TeamBannerUi? = null,
+    activeTeamRuntime: TeamRuntimeUi? = null,
     /** 点横幅「更换」：打开选择面板。 */
     onOpenTeamPicker: () -> Unit = {},
     /** 点横幅「移除」：清除本会话的专家团绑定。 */
@@ -699,11 +703,10 @@ internal fun ChatInputBar(
                 )
             }
 
-            // 已召唤专家团横幅：选中后此前除弹层里的勾外无任何反馈，用户不知道当前用的是哪个团。
-            activeTeam?.let { team ->
+            // 已召唤专家团横幅：人员状态表（谁在干活/干到哪），点击向上展开、空闲自动翻滚。
+            activeTeamRuntime?.let { runtime ->
                 TeamBannerRow(
-                    teamName = team.displayName,
-                    memberNames = team.memberNames,
+                    runtime = runtime,
                     onChange = onOpenTeamPicker,
                     onClear = onClearTeam
                 )
@@ -1913,6 +1916,12 @@ internal fun SendButton(
 /** 长按语音：手指向上滑动超过该距离视为取消（松手不发送）。 */
 private const val VOICE_CANCEL_SLIDE_DP = 60f
 
+/** 专家团横幅展开面板的最大高度：信息不完整时可滚，但不撑屏（用户明确要求「别展开太大」）。 */
+private const val TEAM_PANEL_MAX_HEIGHT_DP = 180
+
+/** 专家团横幅自动翻滚的步进间隔：空闲时缓慢向上转，有新活动重置、用户触摸即停。 */
+private const val TEAM_AUTO_SCROLL_INTERVAL_MS = 3_000L
+
 /** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
 private const val VOICE_BRANCH_DX_DP = 50f
 
@@ -2498,83 +2507,194 @@ private fun GoalBannerRow(
 }
 
 /**
- * 已召唤专家团横幅：把「当前用的是哪个团、成员有谁」摆在输入栏上方。
+ * 专家团横幅：人员状态表（非会话回放）。
  *
- * 之所以要有这一条：召唤后此前唯一的反馈是选择弹层里的一个勾，合上弹层就再也看不到
- * 用的是哪个团；这条横幅与顶栏按钮高亮一起构成「已选中」的可见反馈。
- * 排版沿用 [GoalBannerRow]（同卡片、同圆角、同图标规格），保持输入区上方一致。
+ * 收起态 2 行——团名 + 实时状态摘要、成员实时胶囊；与会话内容正交：
+ * 会话按时间排列「过程」，这里按成员聚合「此刻谁在干什么、干到哪一步」。
+ *
+ * 交互：点击向上展开（上限 [TEAM_PANEL_MAX_HEIGHT_DP]，不撑屏）；内容超高可手动上下滚；
+ * 展开且无用户操作时自动向上翻滚（跑马灯），有新活动重置、全员空闲即停。
  */
 @Composable
 private fun TeamBannerRow(
-    teamName: String,
-    memberNames: List<String>,
+    runtime: TeamRuntimeUi,
     onChange: () -> Unit,
     onClear: () -> Unit
 ) {
     val accent = MaterialTheme.colorScheme.primary
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = Spacing.sm),
+            .padding(bottom = Spacing.sm)
+            .clip(RoundedCornerShape(Radius.lg))
+            .clickable { expanded = !expanded },
         shape = RoundedCornerShape(Radius.lg),
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(accent.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
+            // ── 收起态头部：团名 + 实时摘要 + 操作 ──
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
-                Icon(
-                    imageVector = FeatherIcons.Users,
-                    contentDescription = null,
-                    tint = accent,
-                    modifier = Modifier.size(15.dp)
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.team_banner_label, teamName),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = accent,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (memberNames.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = FeatherIcons.Users,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = memberNames.joinToString(" · "),
+                        text = stringResource(R.string.team_banner_label, runtime.team.displayName),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        // 实时状态摘要：这是会话里没有的信息（几人在忙/几人完成）
+                        text = teamStatusSummary(runtime),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                IconButton(onClick = onChange, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        imageVector = FeatherIcons.RefreshCw,
+                        contentDescription = stringResource(R.string.team_banner_change),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                IconButton(onClick = onClear, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        imageVector = FeatherIcons.X,
+                        contentDescription = stringResource(R.string.team_banner_clear),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
-            IconButton(onClick = onChange, modifier = Modifier.size(30.dp)) {
-                Icon(
-                    imageVector = FeatherIcons.RefreshCw,
-                    contentDescription = stringResource(R.string.team_banner_change),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(15.dp)
-                )
-            }
-            IconButton(onClick = onClear, modifier = Modifier.size(30.dp)) {
-                Icon(
-                    imageVector = FeatherIcons.X,
-                    contentDescription = stringResource(R.string.team_banner_clear),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
+
+            // ── 展开态：成员实时列表（固定高度、可滚、空闲自动翻滚）──
+            androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+                TeamMemberRuntimePanel(members = runtime.members)
             }
         }
+    }
+}
+
+/** 展开态的成员实时面板：固定高度可滚 + 无操作自动向上翻滚。 */
+@Composable
+private fun TeamMemberRuntimePanel(members: List<TeamMemberRuntimeUi>) {
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val allDone = members.isNotEmpty() && members.all { it.status != TeamMemberStatus.WORKING }
+    // 自动翻滚开关：成员状态更新即重置（有新活动就该重新开始转），用户手动拖动即停（用户优先）。
+    var autoScroll by remember(members) { androidx.compose.runtime.mutableStateOf(true) }
+    // 用户拖动检测走 interactionSource（pointerInput 的 tap 检测抓不到滚动拖拽）。
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is androidx.compose.foundation.interaction.DragInteraction.Start) {
+                autoScroll = false
+            }
+        }
+    }
+    LaunchedEffect(autoScroll, allDone, members.size) {
+        if (!autoScroll || allDone || members.size <= 1) return@LaunchedEffect
+        var cursor = 0
+        while (true) {
+            kotlinx.coroutines.delay(TEAM_AUTO_SCROLL_INTERVAL_MS)
+            // 只在内容超出可视高度时才滚（短列表全可见，滚了没意义）。
+            if (!listState.canScrollForward && !listState.canScrollBackward) continue
+            cursor = (cursor + 1) % members.size
+            runCatching { listState.animateScrollToItem(cursor) }
+        }
+    }
+    androidx.compose.foundation.lazy.LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = TEAM_PANEL_MAX_HEIGHT_DP.dp)
+    ) {
+        items(
+            count = members.size,
+            key = { index -> members[index].name }
+        ) { index ->
+            val member = members[index]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (member.status) {
+                                TeamMemberStatus.WORKING -> MaterialTheme.colorScheme.primary
+                                TeamMemberStatus.DONE -> MaterialTheme.colorScheme.onSurfaceVariant
+                                TeamMemberStatus.IDLE -> MaterialTheme.colorScheme.surface
+                            }
+                        )
+                        .then(
+                            if (member.status == TeamMemberStatus.IDLE) {
+                                Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                            } else Modifier
+                        )
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = member.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    member.activity?.let { activity ->
+                        Text(
+                            text = activity,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 实时状态摘要：「2/5 在忙 · 1 已完成 · 2 待派」（会话里没有这个聚合视角）。 */
+@Composable
+private fun teamStatusSummary(runtime: TeamRuntimeUi): String {
+    val total = runtime.members.size
+    val working = runtime.workingCount
+    val done = runtime.doneCount
+    val idle = total - working - done
+    return buildString {
+        append(stringResource(R.string.team_runtime_working, working, total))
+        if (done > 0) append(" · ").append(stringResource(R.string.team_runtime_done, done))
+        if (idle > 0) append(" · ").append(stringResource(R.string.team_runtime_idle, idle))
     }
 }
