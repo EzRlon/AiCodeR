@@ -119,6 +119,7 @@ export default defineConfig({
             { text: '终端', link: '/guide/terminal' },
             { text: '内置浏览器', link: '/guide/browser' },
             { text: 'VNC 悬浮窗', link: '/guide/vnc' },
+            { text: '随记（速记浮窗）', link: '/guide/notebook' },
             { text: '程序分析（REA）', link: '/guide/program-analysis' },
             { text: 'AI 智能体（终端 CLI）', link: '/guide/agent-cli' },
             { text: '界面标注（标注账本）', link: '/guide/annotations' },
@@ -172,6 +173,7 @@ export default defineConfig({
             { text: '存储空间', link: '/guide/storage' },
             { text: '备份与还原', link: '/guide/backup' },
             { text: '签名与凭据', link: '/guide/keys' },
+            { text: '反馈与建议', link: '/guide/feedback' },
             { text: '关于与更新', link: '/guide/about' }
           ]
         }

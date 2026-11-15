@@ -65,12 +65,14 @@ import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.presentation.overlay.AppOverlayViewModel
 import com.aicode.core.ui.onboarding.OnboardingStep
 import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.vnc.presentation.VncOverlayViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Edit
+import compose.icons.feathericons.FileText
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Monitor
@@ -179,7 +181,7 @@ internal fun ChatHeader(
                     Spacer(modifier = Modifier.width(Spacing.sm))
                 }
                 VncHeaderIconButton()
-                // 顶栏按钮顺序（左→右）：专家团、记忆图谱、Git、终端、新建会话。
+                // 顶栏按钮顺序（左→右）：专家团、记忆图谱、Git、终端、随记、新建会话。
                 // 「智能体」按钮已随引擎切换一期移除（引擎入口收编进模型选择弹窗；管理页本体保留）。
                 onOpenTeams?.let { openTeams ->
                     WorkbenchIconButton(
@@ -212,6 +214,7 @@ internal fun ChatHeader(
                     active = terminalActive,
                     onClick = onNavigateToTerminal
                 )
+                NotebookHeaderIconButton()
                 Box(
                     modifier = Modifier
                         .size(HEADER_ICON_BUTTON_SIZE)
@@ -515,6 +518,44 @@ private fun VncHeaderIconButton() {
             contentDescription = stringResource(R.string.vnc_toggle_window),
             modifier = Modifier.size(HEADER_ICON_SIZE),
             tint = if (overlayOpen) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+    }
+}
+
+/** 顶栏「随记」入口：打开/收起笔记浮窗；浮窗开着时按钮高亮（与 VNC 同款 active 态）。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun NotebookHeaderIconButton() {
+    val context = LocalContext.current
+    val owner = remember(context) { context.findActivityOwner() }
+    val viewModel: AppOverlayViewModel = hiltViewModel(
+        viewModelStoreOwner = owner ?: checkNotNull(LocalViewModelStoreOwner.current)
+    )
+    val open by viewModel.notebookOpen.collectAsStateWithLifecycle()
+    Box(
+        modifier = Modifier
+            .size(HEADER_ICON_BUTTON_SIZE)
+            .then(
+                if (open) {
+                    Modifier
+                        .clip(RoundedCornerShape(Radius.sm))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                } else {
+                    Modifier
+                }
+            )
+            .combinedClickable(onClick = viewModel::toggleNotebook),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            FeatherIcons.FileText,
+            contentDescription = stringResource(R.string.notebook_toggle),
+            modifier = Modifier.size(HEADER_ICON_SIZE),
+            tint = if (open) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant

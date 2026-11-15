@@ -444,6 +444,20 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 润色一段任意文本（随记浮窗等外部入口用），不读写输入框草稿。
+     *
+     * 复用与输入框润色同一条 [AgentWorkflow.polishText] 链路：同一会话供应商、同一提示词、
+     * 同一计费记录。无当前会话或文本为空时返回 null，由调用方提示。
+     */
+    suspend fun polishTextExternal(text: String): String? {
+        val sid = _currentSessionId.value ?: return null
+        if (text.isBlank()) return null
+        return runCatching { agentWorkflow.polishText(sid, text) }
+            .onFailure { FileLogger.w(TAG, "润色随记失败", it) }
+            .getOrNull()
+    }
+
     /** 撤销最近一次润色，恢复原文；没有可撤销内容时什么都不做。 */
     fun restoreDraftBeforePolish() {
         val previous = prePolishDraft ?: return

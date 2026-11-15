@@ -35,6 +35,8 @@ internal fun NoteEditorWebView(
     onContentChanged: () -> Unit,
     onSaved: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 每次编辑回调最新 Markdown：随记浮窗要在「润色/发送」时拿到未被保存防抖拖住的内容。 */
+    onMarkdownChanged: (String) -> Unit = {},
     viewModel: NoteEditorViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -43,6 +45,7 @@ internal fun NoteEditorWebView(
 
     val changedState = rememberUpdatedState(onContentChanged)
     val savedState = rememberUpdatedState(onSaved)
+    val markdownState = rememberUpdatedState(onMarkdownChanged)
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     val webView = remember(path) {
@@ -61,6 +64,7 @@ internal fun NoteEditorWebView(
                     // JS 桥回调在非主线程，切回主线程再驱动 Compose 状态与防抖保存
                     mainHandler.post {
                         changedState.value.invoke()
+                        markdownState.value.invoke(markdown)
                         viewModel.scheduleSave(path, markdown) { savedState.value.invoke() }
                     }
                 },

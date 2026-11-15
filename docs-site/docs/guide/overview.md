@@ -23,6 +23,7 @@
 | VNC 悬浮窗 | 容器图形画面悬浮于聊天上方，AI 图形任务实时可见，自动弹出 → [文档](/guide/vnc) |
 | AI 智能体（终端 CLI） | 一键安装/启动 Claude Code、Codex、OpenCode，登录引导，全程在容器终端内（1.12.0 起）→ [文档](/guide/agent-cli) |
 | 标注中心 | 活标注 / 截屏标注 / 账本三合一（bug/要改/不要/优化），状态机跟踪，一键汇总发给 AI → [文档](/guide/annotations) |
+| 随记（速记浮窗） | 聊天顶栏打开可拖动/缩放的浮窗，随手写 Markdown、润色、一键发给 AI → [文档](/guide/notebook) |
 | 交付物与一键安装 | 跨会话聚合 AI 交付的文件，APK 一键装到手机，其它文件按需导出 → [文档](/guide/deliverables) |
 | 程序分析（REA） | 分析无源码成品软件（APK / Electron / 归档包）的实现原理（插件「分析台」）→ [文档](/guide/program-analysis) |
 | Web 预览 | 容器内开发服务的端口直连预览，支持热更新（1.12.0 起）→ [文档](/guide/preview) |
@@ -84,6 +85,7 @@
 
 | 入口 | 说明 |
 | --- | --- |
+| 反馈与建议 | 在 App 内填写建议或缺陷，自动预填并打开 GitHub Issue；可附带脱敏日志与环境信息 → [文档](/guide/feedback) |
 | 关于 | 版本信息与检查更新 → [文档](/guide/about) |
 
 ## 进阶教程

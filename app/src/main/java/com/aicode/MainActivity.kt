@@ -100,6 +100,9 @@ import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
 import com.aicode.feature.preview.presentation.component.PreviewScreen
 import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
 import com.aicode.feature.agent.presentation.AIAgentViewModel
+import com.aicode.feature.agent.presentation.overlay.AppOverlayViewModel
+import com.aicode.feature.note.presentation.component.NotebookOverlay
+import com.aicode.feature.note.presentation.notebook.NotebookViewModel
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.AIChatPanel
 import com.aicode.feature.agent.presentation.component.ChatDrawerContent
@@ -479,6 +482,9 @@ fun AppNavigation(
     val settingsViewModel: SettingsViewModel = hiltViewModel()
     // Activity 级：聊天页内挂 VncOverlayWindow、模型顾问团工作台「打开 VNC 登录」共用同一实例
     val vncOverlayViewModel: VncOverlayViewModel = hiltViewModel()
+    // 随记浮窗：顶栏按钮与浮窗渲染共用 Activity 级实例（与 VNC 同一纪律）
+    val appOverlayViewModel: AppOverlayViewModel = hiltViewModel()
+    val notebookViewModel: NotebookViewModel = hiltViewModel()
     val workspaceViewModel: WorkspaceViewModel = hiltViewModel()
 
     // ── 首次启动引导 ──
@@ -533,6 +539,7 @@ fun AppNavigation(
         agentViewModel.setWorkspace(path)
     }
 
+    val notebookOpen by appOverlayViewModel.notebookOpen.collectAsStateWithLifecycle()
     val sessions by agentViewModel.sessions.collectAsStateWithLifecycle()
     val currentSessionId by agentViewModel.currentSessionId.collectAsStateWithLifecycle()
     val agentStates by agentViewModel.agentStates.collectAsStateWithLifecycle()
@@ -1330,6 +1337,17 @@ fun AppNavigation(
     // 留在 navBody 里就只能铺满内容区，侧栏依然占着横向空间（横屏下画面被挤成竖条）。
     // 非全屏时它仍是一个跟随拖动的小窗，行为与之前一致。
     VncOverlayWindow(viewModel = vncOverlayViewModel)
+
+    // 随记浮窗：与 VNC 同层挂载，盖住导航内容与侧栏；不会打断会话可见性。
+    // 润色与发送由 Activity 级 agentViewModel 提供，浮窗本身不跨 feature 引用 AI 能力。
+    if (notebookOpen) {
+        NotebookOverlay(
+            viewModel = notebookViewModel,
+            onClose = appOverlayViewModel::closeNotebook,
+            onPolish = { text -> agentViewModel.polishTextExternal(text) },
+            onSend = { text -> agentViewModel.enqueueAgentRequest(text) }
+        )
+    }
 
     // 标注中心统一画布（全局宿主）：一块画布 + 一条工具架，未定格时透明穿透可圈画真实界面，
     // 定格后底图精画，保存入账本；不再有「跳旧界面」的第二套标注编辑器。

@@ -212,6 +212,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     TokenStats(R.string.settings_token_stats_title),
     DevKeys(R.string.settings_dev_keys),
     Backup(R.string.settings_backup),
+    Feedback(R.string.settings_feedback_title),
     About(R.string.settings_about)
 }
 
@@ -1679,6 +1680,7 @@ fun SettingsScreen(
                 SettingsSection.RemoteServers -> {} // 已在上方 early return 处理
                 SettingsSection.Store -> {} // 已在上方 early return 处理
                 SettingsSection.Backup -> {} // 已在上方 early return 处理
+                SettingsSection.Feedback -> FeedbackSection()
                 SettingsSection.About -> AboutSection(
                     updateCheckEnabled = updateCheckEnabled,
                     updateCheckChannel = updateCheckChannel,
@@ -2406,6 +2408,12 @@ internal fun SettingsMenu(
                         )
                     }
                 }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.MessageSquare,
+                title = stringResource(SettingsSection.Feedback.titleRes),
+                onClick = { onOpen(SettingsSection.Feedback) }
             )
             SettingsDivider()
             SettingsRow(
