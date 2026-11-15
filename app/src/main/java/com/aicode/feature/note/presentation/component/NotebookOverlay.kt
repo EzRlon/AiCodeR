@@ -1,7 +1,9 @@
 package com.aicode.feature.note.presentation.component
 
 import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -60,11 +62,14 @@ internal fun NotebookOverlay(
     val windowState = remember(viewModel) { FloatingWindowState(viewModel.geometry) }
     // 首次打开才加载笔记（不在 App 启动时做无关磁盘 IO）；再次打开时 ensureLoaded 会回读磁盘
     LaunchedEffect(Unit) { viewModel.ensureLoaded() }
-    // 最小化会销毁浮窗内容（WebView）：恢复时回读磁盘，避免用旧种子重建、覆盖刚写的内容
+    // 最小化会销毁浮窗内容（WebView）：从「最小化」恢复时把种子同步为内存最新内容。
+    // 只在 true→false 的边沿触发，避免与 ensureLoaded 在每次打开时各回写一遍。
+    var wasMinimized by remember { mutableStateOf(windowState.minimized) }
     LaunchedEffect(windowState.minimized) {
-        if (!windowState.minimized && viewModel.state.value.currentPath != null) {
+        if (wasMinimized && !windowState.minimized && viewModel.state.value.currentPath != null) {
             viewModel.reloadCurrent()
         }
+        wasMinimized = windowState.minimized
     }
     var showNotes by remember { mutableStateOf(false) }
 
@@ -170,12 +175,19 @@ internal fun NotebookOverlay(
         }
     ) {
         when {
-            state.loadFailed -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            state.loadFailed -> Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 Text(
                     text = stringResource(R.string.notebook_load_failed),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                TextButton(onClick = { viewModel.retryLoad() }) {
+                    Text(stringResource(R.string.common_retry))
+                }
             }
             state.loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)

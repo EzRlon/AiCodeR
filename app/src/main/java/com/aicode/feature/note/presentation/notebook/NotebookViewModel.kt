@@ -72,7 +72,17 @@ class NotebookViewModel @Inject constructor(
     @Volatile
     private var latestMarkdown: String = ""
 
+    /**
+     * 是否发生过编辑。用来区分「还没输入」与「用户把内容清空了」：
+     * 只看 `latestMarkdown.ifBlank` 会把清空误判成没输入，从而回退到旧种子并写回文件。
+     */
+    @Volatile
+    private var hasEdits: Boolean = false
+
     private var prePolishText: String? = null
+
+    /** 当前权威内容：编辑过以内存为准，否则以加载时的种子为准。 */
+    private fun currentContent(): String = if (hasEdits) latestMarkdown else _state.value.editorSeed
 
     /**
      * 浮窗几何。必须是可变字段并在拖动/缩放提交时同步：只写 prefs 的话，关掉浮窗再打开
@@ -94,11 +104,18 @@ class NotebookViewModel @Inject constructor(
     fun ensureLoaded() {
         if (!loaded) {
             loaded = true
+            _state.update { it.copy(loading = true, loadFailed = false) }
             openInitialNote()
         } else {
-            // 重新打开浮窗：期间防抖写盘可能已更新文件，回读一次，避免 WebView 用旧种子重建
+            // 重新打开浮窗：把编辑器种子同步成内存最新内容，避免 WebView 用旧种子重建
             reloadCurrent()
         }
+    }
+
+    /** 加载失败后的重试入口：失败时已把 [loaded] 复位，这里重新走首次加载。 */
+    fun retryLoad() {
+        loaded = false
+        ensureLoaded()
     }
 
     /**
@@ -111,12 +128,14 @@ class NotebookViewModel @Inject constructor(
     fun reloadCurrent() {
         val path = _state.value.currentPath ?: return
         if (_state.value.polishing) return
-        val text = latestMarkdown.ifBlank { _state.value.editorSeed }
+        val text = currentContent()
+        hasEdits = false
         if (text != _state.value.editorSeed) {
             _state.update { it.copy(editorSeed = text) }
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { fileAccess.writeFile(path, text, overwrite = true) }
+                .onFailure { FileLogger.w(TAG, "随记回写失败: $path", it) }
         }
     }
 
@@ -130,8 +149,11 @@ class NotebookViewModel @Inject constructor(
             .apply()
     }
 
-    fun onMarkdownChanged(markdown: String) {
+    /** 编辑器内容变化；[path] 用于丢弃切换笔记后旧 WebView 的迟到回调。 */
+    fun onMarkdownChanged(path: String, markdown: String) {
+        if (path != _state.value.currentPath) return
         latestMarkdown = markdown
+        hasEdits = true
     }
 
     /** Vditor 防抖写盘成功（当前笔记仍是同一路径时才需要提示，保留给后续状态展示）。 */
@@ -142,16 +164,23 @@ class NotebookViewModel @Inject constructor(
         if (_state.value.loading) return
         if (path == _state.value.currentPath) return
         val previousPath = _state.value.currentPath
-        val pending = latestMarkdown
+        val pending = currentContent()
         viewModelScope.launch {
             val text = withContext(Dispatchers.IO) {
                 // 切走前先把防抖窗口里的内容落盘，避免「刚写完就切换」丢字
                 if (previousPath != null) {
                     runCatching { fileAccess.writeFile(previousPath, pending, overwrite = true) }
+                        .onFailure { FileLogger.w(TAG, "切换前落盘失败: $previousPath", it) }
                 }
-                runCatching { fileAccess.readFile(path) }.getOrDefault("")
+                runCatching { fileAccess.readFile(path) }.getOrNull()
+            }
+            if (text == null) {
+                // 远端读失败：留在当前笔记并给出可重试提示，不能拿空串把编辑器清掉
+                _state.update { it.copy(loadFailed = true) }
+                return@launch
             }
             latestMarkdown = text
+            hasEdits = false
             prePolishText = null
             val notes = withContext(Dispatchers.IO) { listNotes() }
             _state.update {
@@ -160,6 +189,7 @@ class NotebookViewModel @Inject constructor(
                     editorSeed = text,
                     notes = notes,
                     loading = false,
+                    loadFailed = false,
                     canUndoPolish = false
                 )
             }
@@ -170,18 +200,20 @@ class NotebookViewModel @Inject constructor(
     fun newNote() {
         if (_state.value.loading) return
         val previousPath = _state.value.currentPath
-        val pending = latestMarkdown
+        val pending = currentContent()
         viewModelScope.launch {
             val path = withContext(Dispatchers.IO) {
                 if (previousPath != null) {
                     runCatching { fileAccess.writeFile(previousPath, pending, overwrite = true) }
+                        .onFailure { FileLogger.w(TAG, "新建前落盘失败: $previousPath", it) }
                 }
-                runCatching { createNoteFile() }.getOrNull()
+                createNoteFile()
             } ?: run {
                 _state.update { it.copy(loadFailed = true) }
                 return@launch
             }
             latestMarkdown = ""
+            hasEdits = false
             prePolishText = null
             val notes = withContext(Dispatchers.IO) { listNotes() }
             _state.update {
@@ -190,6 +222,7 @@ class NotebookViewModel @Inject constructor(
                     editorSeed = "",
                     notes = notes,
                     loading = false,
+                    loadFailed = false,
                     canUndoPolish = false
                 )
             }
@@ -200,9 +233,10 @@ class NotebookViewModel @Inject constructor(
     /** 关闭浮窗前落盘；只写本地，不阻塞关闭动画。 */
     fun flush() {
         val path = _state.value.currentPath ?: return
-        val text = latestMarkdown
+        val text = currentContent()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { fileAccess.writeFile(path, text, overwrite = true) }
+                .onFailure { FileLogger.w(TAG, "关闭前落盘失败: $path", it) }
         }
     }
 
@@ -212,7 +246,7 @@ class NotebookViewModel @Inject constructor(
      */
     fun polish(provider: suspend (String) -> String?, onResult: (Boolean) -> Unit) {
         val path = _state.value.currentPath ?: return
-        val text = latestMarkdown.ifBlank { _state.value.editorSeed }
+        val text = currentContent()
         if (text.isBlank()) {
             onResult(false)
             return
@@ -234,13 +268,14 @@ class NotebookViewModel @Inject constructor(
                 return@launch
             }
             // 同一篇笔记里用户可能已经继续输入：此时润色结果基于旧文本，覆盖会吞掉新输入
-            if (latestMarkdown != text) {
+            if (currentContent() != text) {
                 _state.update { it.copy(polishing = false) }
                 onResult(false)
                 return@launch
             }
             prePolishText = text
             latestMarkdown = polished
+            hasEdits = true
             withContext(Dispatchers.IO) {
                 runCatching { fileAccess.writeFile(path, polished, overwrite = true) }
             }
@@ -254,6 +289,7 @@ class NotebookViewModel @Inject constructor(
         val path = _state.value.currentPath ?: return
         prePolishText = null
         latestMarkdown = previous
+        hasEdits = true
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching { fileAccess.writeFile(path, previous, overwrite = true) }
@@ -265,12 +301,12 @@ class NotebookViewModel @Inject constructor(
     }
 
     /** 当前编辑器内容（含尚未落盘的最新输入），供发送前判空。 */
-    fun currentText(): String = latestMarkdown.ifBlank { _state.value.editorSeed }
+    fun currentText(): String = currentContent()
 
     /** 一键发给 agent：返回 false 表示没有内容或被硬阈值拦截。 */
     fun send(dispatch: (String) -> Boolean): Boolean {
         if (_state.value.currentPath == null) return false
-        val text = latestMarkdown.ifBlank { _state.value.editorSeed }
+        val text = currentContent()
         if (text.isBlank()) return false
         return runCatching { dispatch(text) }.getOrDefault(false)
     }
@@ -284,7 +320,7 @@ class NotebookViewModel @Inject constructor(
                 val remembered = prefs.getString(KEY_LAST_PATH, null)
                 val target = notes.firstOrNull { it.path == remembered }?.path
                     ?: notes.firstOrNull()?.path
-                    ?: withContext(Dispatchers.IO) { createNoteFile() }
+                    ?: withContext(Dispatchers.IO) { createNoteFile() ?: error("无法创建随记文件") }
                 val text = withContext(Dispatchers.IO) {
                     runCatching { fileAccess.readFile(target) }.getOrDefault("")
                 }
@@ -297,6 +333,7 @@ class NotebookViewModel @Inject constructor(
             }
             opened.onSuccess { (target, notes, text) ->
                 latestMarkdown = text
+                hasEdits = false
                 _state.update {
                     it.copy(
                         loading = false,
@@ -309,6 +346,8 @@ class NotebookViewModel @Inject constructor(
                 prefs.edit().putString(KEY_LAST_PATH, target).apply()
             }.onFailure { error ->
                 FileLogger.w(TAG, "加载随记失败", error)
+                // 复位 loaded：再次打开浮窗或点「重试」能重新加载，而不是永久卡在失败态
+                loaded = false
                 _state.update { it.copy(loading = false, loadFailed = true) }
             }
         }
@@ -328,18 +367,22 @@ class NotebookViewModel @Inject constructor(
             .sortedByDescending { it.modifiedAt }
     }.getOrDefault(emptyList())
 
-    /** 新建一篇空白笔记；返回容器路径。同名已存在时追加序号。 */
-    private fun createNoteFile(): String {
+    /** 新建一篇空白笔记；返回容器路径。同名已存在时追加序号；写盘失败返回 null。 */
+    private fun createNoteFile(): String? {
         val stamp = SimpleDateFormat("MMdd-HHmm", Locale.US).format(Date())
         var suffix = 0
-        while (true) {
+        while (suffix <= 50) {
             val name = if (suffix == 0) "随手记-$stamp" else "随手记-$stamp-$suffix"
             val path = "$NOTEBOOK_DIR/$name.md"
             if (!fileAccess.exists(path)) {
-                runCatching { fileAccess.writeFile(path, "", overwrite = false) }
-                return path
+                // 写盘失败（目录只读/远端断连）不能假装成功：否则之后每次防抖保存都静默失败
+                val written = runCatching { fileAccess.writeFile(path, "", overwrite = false) }
+                    .onFailure { FileLogger.w(TAG, "创建随记失败: $path", it) }
+                    .isSuccess
+                return if (written) path else null
             }
             suffix++
         }
+        return null
     }
 }

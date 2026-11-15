@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -101,13 +103,19 @@ internal fun FeedbackSection() {
 
     fun copyToClipboard(text: String) {
         val manager = context.getSystemService(ClipboardManager::class.java) ?: return
-        manager.setPrimaryClip(ClipData.newPlainText("AiCodeR feedback", text))
+        val clip = ClipData.newPlainText("AiCodeR feedback", text)
+        // 日志虽已脱敏，仍可能含路径/主机名：标记敏感，Android 13+ 不在剪贴板预览里展示全文
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            clip.description.extras?.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+        manager.setPrimaryClip(clip)
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .imePadding()
             .padding(horizontal = Spacing.lg)
             .padding(bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.md)

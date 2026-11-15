@@ -28,7 +28,11 @@ object LogExcerptSanitizer {
      * @param maxChars 字符上限，避免把整个日志文件塞进反馈
      */
     fun sanitize(raw: String, maxLines: Int = 200, maxChars: Int = 6000): String {
-        var text = raw
+        // 先截到「末尾 maxLines 行 / maxChars 字符」再做正则：日志文件可达数 MB，
+        // 对全文跑 5 次正则是纯浪费（用户只会在反馈里看到尾部片段）。
+        var text = raw.lineSequence().toList().takeLast(maxLines).joinToString("\n")
+        if (text.length > maxChars) text = text.takeLast(maxChars)
+        text = text
             .replace(SK_KEY, "sk-***")
             .replace(BEARER, "Bearer ***")
             .replace(BASIC_AUTH, "Basic ***")
@@ -36,9 +40,6 @@ object LogExcerptSanitizer {
                 // 保留键名与分隔符，只抹掉值；保留开引号便于阅读
                 "${match.groupValues[1]}${match.groupValues[2]}${match.groupValues[3]}***"
             }
-        // Sequence 没有 takeLast，先转成 List（日志最多几千行，成本可接受）
-        text = text.lineSequence().toList().takeLast(maxLines).joinToString("\n")
-        if (text.length > maxChars) text = text.takeLast(maxChars)
         return text.trim()
     }
 }

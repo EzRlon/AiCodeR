@@ -35,8 +35,11 @@ internal fun NoteEditorWebView(
     onContentChanged: () -> Unit,
     onSaved: () -> Unit,
     modifier: Modifier = Modifier,
-    /** 每次编辑回调最新 Markdown：随记浮窗要在「润色/发送」时拿到未被保存防抖拖住的内容。 */
-    onMarkdownChanged: (String) -> Unit = {},
+    /**
+     * 每次编辑回调（所属文件路径 + 最新 Markdown）：随记浮窗要在「润色/发送」时拿到
+     * 未被保存防抖拖住的内容，并用 path 丢弃切换笔记后旧 WebView 的迟到回调。
+     */
+    onMarkdownChanged: (String, String) -> Unit = { _, _ -> },
     /**
      * 重载页面时取哪份文本。默认用 [text]；随记浮窗传「内存最新内容」，
      * 避免深浅色切换触发整页重载时用滞后的种子覆盖刚输入的内容。
@@ -70,7 +73,7 @@ internal fun NoteEditorWebView(
                     // JS 桥回调在非主线程，切回主线程再驱动 Compose 状态与防抖保存
                     mainHandler.post {
                         changedState.value.invoke()
-                        markdownState.value.invoke(markdown)
+                        markdownState.value.invoke(path, markdown)
                         viewModel.scheduleSave(path, markdown) { savedState.value.invoke() }
                     }
                 },

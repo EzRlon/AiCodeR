@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
@@ -108,10 +109,14 @@ fun FloatingWindowScaffold(
         } else {
             heightBase
         }
+        // 顶部边界取状态栏下沿：edge-to-edge 下若允许拖到 0，标题栏会落进状态栏触摸区，
+        // 按钮点不到、窗口也拖不回来（几何还会被持久化）。
+        val statusBarDp = with(density) { WindowInsets.statusBars.getBottom(density).toDp() }
         val maxX = (parentWidth - 56.dp).coerceAtLeast(0.dp)
-        val maxY = (parentHeight - 56.dp).coerceAtLeast(0.dp)
+        val minY = statusBarDp.coerceAtMost((parentHeight - 56.dp).coerceAtLeast(0.dp))
+        val maxY = (parentHeight - 56.dp).coerceAtLeast(minY)
         val x = state.offsetXDp.dp.coerceIn(0.dp, maxX)
-        val baseY = state.offsetYDp.dp.coerceIn(0.dp, maxY)
+        val baseY = state.offsetYDp.dp.coerceIn(minY, maxY)
         val overlap = if (imeDp > 0.dp) {
             (baseY + height - (parentHeight - imeDp)).coerceAtLeast(0.dp)
         } else {
@@ -153,7 +158,7 @@ fun FloatingWindowScaffold(
                                 state.offsetXDp = (state.offsetXDp + dragAmount.x / density.density)
                                     .coerceIn(0f, (parentWidth - 56.dp).value)
                                 state.offsetYDp = (state.offsetYDp + dragAmount.y / density.density)
-                                    .coerceIn(0f, (parentHeight - 56.dp).value)
+                                    .coerceIn(statusBarDp.value, (parentHeight - 56.dp).value)
                             }
                         }
                         .padding(start = 12.dp, end = 4.dp),
