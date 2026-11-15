@@ -43,10 +43,15 @@ class CliOrchestrationPrompt @Inject constructor(
             .onFailure { FileLogger.w(TAG, "解析专家团失败，仅注入通用编排守则: $teamName", it) }
             .getOrNull() ?: return@withContext OrchestrationPolicy.BASE
 
+        // 一次扫盘建索引：成员逐个 findIncludingDisabled 每次都全量读 agents 目录（团队 5 人 = 5 次扫描，
+        // 每回合发生）。名称匹配规则与仓库内部一致（定义名或文件名，忽略大小写）。
+        val allDefinitions = runCatching { agentDefinitionRepository.listAll() }
+            .onFailure { FileLogger.w(TAG, "枚举子代理定义失败，成员描述与可派发标注按空处理", it) }
+            .getOrDefault(emptyList())
         val members = team.members.map { member ->
-            member to runCatching {
-                agentDefinitionRepository.findIncludingDisabled(member)?.description.orEmpty()
-            }.getOrDefault("")
+            member to allDefinitions.firstOrNull {
+                AgentDefinitionRepository.matchesDefinitionName(it.definition, member)
+            }?.definition?.description.orEmpty()
         }
         // Codex 没有自定义成员派发能力：只给出成员分工参考，不诱导它调用不存在的 Task。
         if (engine == AgentEngines.CODEX) {
@@ -61,7 +66,10 @@ class CliOrchestrationPrompt @Inject constructor(
         }
         // Claude / OpenCode：按各自实际映射规则算出哪些成员真的能派发，未映射的明确标注。
         val mapped = runCatching {
-            val defs = agentDefinitionRepository.listEnabled().map { it.definition }
+            val disabled = agentDefinitionRepository.disabledNames()
+            val defs = allDefinitions
+                .filterNot { it.definition.name.lowercase() in disabled }
+                .map { it.definition }
             when (engine) {
                 AgentEngines.OPENCODE -> CliAgentMapping.partitionForOpenCode(defs).mapped
                 else -> CliAgentMapping.partition(defs).mapped

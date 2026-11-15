@@ -15,6 +15,7 @@ import com.aicode.feature.agent.domain.prompt.CliKnowledgeInjection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -388,6 +389,11 @@ class OpenCodeBridge @Inject constructor(
             watchdog.cancel()
             permissionBridgeServer.removeToken(bridgeToken)
             runCatching { process.destroy() }
+            // 编排指令文件只在进程存活期间需要（启动时读取）；回合结束删除本会话的那一份，
+            // 避免按会话命名的文件在桥目录里堆积。取消场景也要删，故用 NonCancellable。
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { fileAccess.delete(orchestrationContextPath(sessionId)) }
+            }
             // 事件行带 sessionID：即便回合失败，映射也已建立，下回合可续接
             acc.remoteSessionId?.let { persistSessionId(sessionId, it) }
         }
@@ -563,30 +569,36 @@ class OpenCodeBridge @Inject constructor(
     /** 每回合确保 aicode_bridge 脚本就位（与 ClaudeCodeBridge/CodexBridge 共用同一 mjs 源）。 */
     private suspend fun writeBridgeAssets(port: Int, sessionId: String, token: String, projectPath: String?, userMessage: String?) =
         assetsMutex.withLock {
-            runCatching {
-                fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
-                // 中文回复规则文件：由 OPENCODE_CONFIG_CONTENT 的 instructions 引用
-                EngineLocale.replyLanguageDirective()?.let { directive ->
-                    fileAccess.writeFile(languageRulePath(), directive, overwrite = true)
+            // 写文件含 fsync，且本函数在 viewModelScope(Main) 的 collect 链路上调用：必须切 IO，
+            // 否则发消息瞬间会掉帧（optimizer P1-1；另两桥也都在 IO 线程内写）
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    fileAccess.writeFile(dataBridgeScript(), AICODE_BRIDGE_SCRIPT_SOURCE, overwrite = true)
+                    // 中文回复规则文件：由 OPENCODE_CONFIG_CONTENT 的 instructions 引用
+                    EngineLocale.replyLanguageDirective()?.let { directive ->
+                        fileAccess.writeFile(languageRulePath(), directive, overwrite = true)
+                    }
+                    // 知识注入块（知识库索引 + 世界书命中，与内置引擎/另两桥同源）；无内容时删旧文件防陈旧注入
+                    val knowledge = CliKnowledgeInjection.build(projectPath ?: "", userMessage.orEmpty())
+                    if (knowledge != null) {
+                        fileAccess.writeFile(knowledgeContextPath(), knowledge, overwrite = true)
+                    } else {
+                        // 必须走 FileAccessProvider：这里拿到的是容器路径，宿主 File 看不到
+                        fileAccess.delete(knowledgeContextPath())
+                    }
+                    // 编排守则（三桥共用）；绑了专家团时包含团长指令。无内容时删旧文件防陈旧注入。
+                    // 文件名带 sessionId：Bridge 是单例，固定文件名会让并发会话互相覆盖专家团指令
+                    val orchestrationPath = orchestrationContextPath(sessionId)
+                    val orchestration = orchestrationPrompt.build(sessionId, AgentEngines.OPENCODE)
+                    if (orchestration != null) {
+                        fileAccess.writeFile(orchestrationPath, orchestration, overwrite = true)
+                    } else {
+                        fileAccess.delete(orchestrationPath)
+                    }
+                }.onFailure { e ->
+                    FileLogger.e(TAG, "写桥接资产失败", e)
+                    throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
                 }
-                // 知识注入块（知识库索引 + 世界书命中，与内置引擎/另两桥同源）；无内容时删旧文件防陈旧注入
-                val knowledge = CliKnowledgeInjection.build(projectPath ?: "", userMessage.orEmpty())
-                if (knowledge != null) {
-                    fileAccess.writeFile(knowledgeContextPath(), knowledge, overwrite = true)
-                } else {
-                    // 必须走 FileAccessProvider：这里拿到的是容器路径，宿主 File 看不到
-                    fileAccess.delete(knowledgeContextPath())
-                }
-                // 编排守则（三桥共用）；绑了专家团时包含团长指令。无内容时删旧文件防陈旧注入
-                val orchestration = orchestrationPrompt.build(sessionId, AgentEngines.OPENCODE)
-                if (orchestration != null) {
-                    fileAccess.writeFile(orchestrationContextPath(), orchestration, overwrite = true)
-                } else {
-                    fileAccess.delete(orchestrationContextPath())
-                }
-            }.onFailure { e ->
-                FileLogger.e(TAG, "写桥接资产失败", e)
-                throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
             }
         }
 
@@ -683,7 +695,7 @@ class OpenCodeBridge @Inject constructor(
             if (EngineLocale.replyLanguageDirective() != null) add(languageRulePath())
             // 容器路径的「文件是否存在」必须走 FileAccessProvider，宿主 File 检查的是字面 /root/...
             if (fileAccess.isFile(knowledgeContextPath())) add(knowledgeContextPath())
-            if (fileAccess.isFile(orchestrationContextPath())) add(orchestrationContextPath())
+            if (fileAccess.isFile(orchestrationContextPath(sessionId))) add(orchestrationContextPath(sessionId))
         }
         if (instructionFiles.isNotEmpty()) {
             put("instructions", kotlinx.serialization.json.JsonArray(instructionFiles.map { JsonPrimitive(it) }))
@@ -696,8 +708,9 @@ class OpenCodeBridge @Inject constructor(
     /** 中文回复规则的容器内路径（内容由 writeBridgeAssets 写入）。 */
     private fun languageRulePath(): String = bridgeDir() + "/language-rule.md"
 
-    /** 主 Agent 编排守则的容器内路径（内容由 writeBridgeAssets 写入/清理）。 */
-    private fun orchestrationContextPath(): String = bridgeDir() + "/orchestration-context.md"
+    /** 主 Agent 编排守则的容器内路径（内容由 writeBridgeAssets 写入，回合结束清理）。按会话隔离。 */
+    private fun orchestrationContextPath(sessionId: String): String =
+        bridgeDir() + "/orchestration-context-$sessionId.md"
 
     /**
      * 会话选定 App 供应商且模型引用指向注入键（自定义端点）时，构造 provider 段：
