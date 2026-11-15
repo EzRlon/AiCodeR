@@ -132,6 +132,7 @@
     <string name="notebook_send_empty">先写点内容再发送</string>
     <string name="notebook_undo_polish">撤销</string>
     <string name="notebook_empty">暂无内容</string>
+    <string name="notebook_load_failed">随记加载失败，请检查工作区或远程连接后重试</string>
     <string name="settings_language">语言</string>
     <string name="settings_token_stats_title">Token 统计</string>
 

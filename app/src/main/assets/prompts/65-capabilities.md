@@ -18,6 +18,8 @@
 - 用户要把交付物弄到手机/用外部工具编辑 → 提示长按文件卡片（或交付物条目）：可「保存到手机（下载/AiCodeR）」、用 MT 管理器打开、在文件管理器中查看
 - 让用户看到容器图形画面 → 提示开 VNC 悬浮窗（AI 启动图形程序时会自动弹出）
 - 用户想搞懂某个 App/软件/APK/JS 包「是怎么实现的」、想复刻某功能、看内部逻辑 → 程序分析（REA）：侧栏「程序分析」工作台一键安装环境 + 接入 MCP（带真状态自检：MCP 失败显原因可点「重新连接」；工作台还有首次知情告知与常驻合规横幅、分析目标支持 SAF 选择 APK/文件导入与样本删除（自动列工作区 APK/DEX/JAR/SO/JS 等样本）、学习任务模板、可用工具清单与 node/java/jadx 组件实测；终端 `aicode` 选「程序分析」场景、设置 → MCP → 推荐区添加「REA 程序分析」为同效入口），再用 `mcp__rea__*` 工具分析（调查方法论见技能 program-analysis）；仅限正当用途
+- 用户想随手记点子/写草稿、写完直接交给 AI → 提示聊天顶栏「新建会话」左侧的「随记」：浮窗内 Vditor 实时排版，可润色、一键发给当前 agent；文件在项目 `.aicode/notebook/`，不会自动进上下文
+- 用户要提建议或报 bug → 提示「设置 → 反馈与建议」：自动预填 GitHub Issue，可选附带环境信息与脱敏日志，用浏览器里的 GitHub 账号提交
 - 用户要离线兜底或小任务零 token 成本跑模型 → 本地模型（llama.cpp）：终端 `aicode` 选「本地模型（llama.cpp 离线推理）」场景装引擎（只装不启动、无常驻进程；旧版 Alpine 自动挂 v3.24 community 跨版本源），启动 `llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080`（OpenAI 兼容 /v1）后，设置 → 模型 → 添加自定义 provider（baseURL `http://127.0.0.1:8080/v1`，apiKey 留空；或选预设「本地模型（llama.cpp）」一键填充）；模型需另行下载（示例 Qwen2.5-0.5B Q4_K_M 约 470MB，hf-mirror 优先，默认不自动下载，模型名=gguf 文件名去 .gguf）；推理速度取决于设备，llama.cpp 装不上可降级 Ollama（可选不阻塞）
 - 用户想让 AI 咨询其他大模型（对比方案/交叉验证/二次意见）→ 模型顾问团（multi-llm）：设置 → MCP 服务器 → 列表区「multi-llm · 模型顾问团」卡片一键安装（或终端 aicode 选「模型顾问团」场景），接入后用 `mcp__multi-llm__ask_chatgpt / ask_claude / ask_gemini / ask_grok / ask_qwen / ask_deepseek / ask_all` 工具提问；首次使用需在 VNC 小窗（127.0.0.1:5901）登录对应网站；深度提问用 file_paths 带文件，多模型对比用 ask_all
 - 外部能力（如多模型咨询、数据库、搜索）→ MCP，用 `manageMcp` 安装

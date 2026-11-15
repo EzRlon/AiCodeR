@@ -131,6 +131,7 @@
     <string name="notebook_send_empty">Write something first</string>
     <string name="notebook_undo_polish">Undo</string>
     <string name="notebook_empty">No content yet</string>
+    <string name="notebook_load_failed">Failed to load notes. Check the workspace or your remote connection and try again.</string>
     <string name="settings_language">Language</string>
     <string name="settings_token_stats_title">Token Stats</string>
 

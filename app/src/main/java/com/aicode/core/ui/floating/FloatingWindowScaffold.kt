@@ -97,7 +97,9 @@ fun FloatingWindowScaffold(
         val maxWidthBound = (parentWidth - 16.dp).coerceAtLeast(minWidth)
         val maxHeightBound = (parentHeight - 48.dp).coerceAtLeast(minHeight)
 
-        // 键盘弹出时整个窗口上移到键盘之上，并压矮可用高度（宿主使用 ADJUST_NOTHING）。
+        // 键盘弹出时把窗口顶到键盘之上（宿主 ADJUST_NOTHING，不会自动缩放）。
+        // 只按「窗口与键盘的重叠量」上移，不做整体减 IME 高度：否则键盘较矮时窗口也会被
+        // 推得很高，观感突兀。
         val imeDp = with(density) { WindowInsets.ime.getBottom(density).toDp() }
         val width = state.widthDp.dp.coerceIn(minWidth, maxWidthBound)
         val heightBase = state.heightDp.dp.coerceIn(minHeight, maxHeightBound)
@@ -109,11 +111,13 @@ fun FloatingWindowScaffold(
         val maxX = (parentWidth - 56.dp).coerceAtLeast(0.dp)
         val maxY = (parentHeight - 56.dp).coerceAtLeast(0.dp)
         val x = state.offsetXDp.dp.coerceIn(0.dp, maxX)
-        val y = if (imeDp > 0.dp) {
-            (state.offsetYDp.dp - imeDp).coerceIn(0.dp, (parentHeight - imeDp - height).coerceAtLeast(0.dp))
+        val baseY = state.offsetYDp.dp.coerceIn(0.dp, maxY)
+        val overlap = if (imeDp > 0.dp) {
+            (baseY + height - (parentHeight - imeDp)).coerceAtLeast(0.dp)
         } else {
-            state.offsetYDp.dp.coerceIn(0.dp, maxY)
+            0.dp
         }
+        val y = (baseY - overlap).coerceAtLeast(0.dp)
 
         if (state.minimized) {
             MinimizedBall(

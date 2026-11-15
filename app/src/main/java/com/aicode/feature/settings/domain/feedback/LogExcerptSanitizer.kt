@@ -16,8 +16,12 @@ object LogExcerptSanitizer {
      * `Bearer` 会被它二次吞掉，反而把脱敏标记破坏掉；Authorization 头由 [BEARER] 负责。
      */
     private val SECRET_ASSIGN = Regex(
-        """(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|secret|password|passwd)\b(\s*[:=]\s*)("?)([^\s"',;]{4,})"""
+        // 键名右侧允许一个引号：日志里的 JSON 形态是 `"token":"abc"`，没有这一步会漏掉
+        """(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|secret|password|passwd)\b"?(\s*[:=]\s*)("?)([^\s"',;]{4,})"""
     )
+
+    /** HTTP Basic 认证头。 */
+    private val BASIC_AUTH = Regex("""(?i)\bBasic\s+[A-Za-z0-9+/=]{8,}""")
 
     /**
      * @param maxLines 只保留末尾若干行（日志越新越有用）
@@ -27,6 +31,7 @@ object LogExcerptSanitizer {
         var text = raw
             .replace(SK_KEY, "sk-***")
             .replace(BEARER, "Bearer ***")
+            .replace(BASIC_AUTH, "Basic ***")
             .replace(SECRET_ASSIGN) { match ->
                 // 保留键名与分隔符，只抹掉值；保留开引号便于阅读
                 "${match.groupValues[1]}${match.groupValues[2]}${match.groupValues[3]}***"

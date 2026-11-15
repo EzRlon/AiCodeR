@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.core.io.FileAccessProvider
 import com.aicode.core.ui.floating.FloatingWindowGeometry
+import com.aicode.core.util.FileLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.text.SimpleDateFormat
@@ -36,6 +37,7 @@ class NotebookViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
+        private const val TAG = "Notebook"
         private const val NOTEBOOK_DIR = "~/workspace/.aicode/notebook"
         private const val PREFS = "notebook_overlay"
         private const val KEY_LAST_PATH = "last_path"
@@ -56,7 +58,9 @@ class NotebookViewModel @Inject constructor(
         /** 只有「加载/切换/润色」时更新；Vditor 只会在这个值变化时整页重载。 */
         val editorSeed: String = "",
         val polishing: Boolean = false,
-        val canUndoPolish: Boolean = false
+        val canUndoPolish: Boolean = false,
+        /** 首次加载失败（远端断开/目录不可写等）：不再无限转圈，页面给可读提示。 */
+        val loadFailed: Boolean = false
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -70,7 +74,11 @@ class NotebookViewModel @Inject constructor(
 
     private var prePolishText: String? = null
 
-    val geometry: FloatingWindowGeometry = FloatingWindowGeometry(
+    /**
+     * 浮窗几何。必须是可变字段并在拖动/缩放提交时同步：只写 prefs 的话，关掉浮窗再打开
+     * （重走 `remember(viewModel)`）会退回进程启动时的位置尺寸。
+     */
+    var geometry: FloatingWindowGeometry = FloatingWindowGeometry(
         xDp = prefs.getFloat(KEY_X, -1f).takeIf { it >= 0f } ?: 16f,
         yDp = prefs.getFloat(KEY_Y, -1f).takeIf { it >= 0f } ?: 96f,
         widthDp = prefs.getFloat(KEY_W, DEFAULT_WIDTH_DP),
@@ -84,12 +92,36 @@ class NotebookViewModel @Inject constructor(
      * 增加一次无谓扫盘（功耗纪律：不做与当前操作无关的后台 IO）。
      */
     fun ensureLoaded() {
-        if (loaded) return
-        loaded = true
-        openInitialNote()
+        if (!loaded) {
+            loaded = true
+            openInitialNote()
+        } else {
+            // 重新打开浮窗：期间防抖写盘可能已更新文件，回读一次，避免 WebView 用旧种子重建
+            reloadCurrent()
+        }
+    }
+
+    /**
+     * 浮窗重开 / 最小化恢复时，把编辑器种子同步成**内存里最新的内容**。
+     *
+     * 刻意不读盘：防抖写盘有 800ms 窗口，关掉或最小化后立刻重开时磁盘可能还是旧内容，
+     * 读盘会把用户刚敲的字回退掉（并且下一次编辑会把旧内容写回去）。内存内容才是权威，
+     * 顺带补一次落盘。App 重启后没有内存态，走 [openInitialNote] 的读盘分支。
+     */
+    fun reloadCurrent() {
+        val path = _state.value.currentPath ?: return
+        if (_state.value.polishing) return
+        val text = latestMarkdown.ifBlank { _state.value.editorSeed }
+        if (text != _state.value.editorSeed) {
+            _state.update { it.copy(editorSeed = text) }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { fileAccess.writeFile(path, text, overwrite = true) }
+        }
     }
 
     fun updateGeometry(geometry: FloatingWindowGeometry) {
+        this.geometry = geometry
         prefs.edit()
             .putFloat(KEY_X, geometry.xDp)
             .putFloat(KEY_Y, geometry.yDp)
@@ -144,7 +176,10 @@ class NotebookViewModel @Inject constructor(
                 if (previousPath != null) {
                     runCatching { fileAccess.writeFile(previousPath, pending, overwrite = true) }
                 }
-                createNoteFile()
+                runCatching { createNoteFile() }.getOrNull()
+            } ?: run {
+                _state.update { it.copy(loadFailed = true) }
+                return@launch
             }
             latestMarkdown = ""
             prePolishText = null
@@ -178,7 +213,11 @@ class NotebookViewModel @Inject constructor(
     fun polish(provider: suspend (String) -> String?, onResult: (Boolean) -> Unit) {
         val path = _state.value.currentPath ?: return
         val text = latestMarkdown.ifBlank { _state.value.editorSeed }
-        if (text.isBlank() || _state.value.polishing) return
+        if (text.isBlank()) {
+            onResult(false)
+            return
+        }
+        if (_state.value.polishing) return
         _state.update { it.copy(polishing = true) }
         viewModelScope.launch {
             val polished = runCatching { provider(text) }.getOrNull()
@@ -190,6 +229,12 @@ class NotebookViewModel @Inject constructor(
                 return@launch
             }
             if (polished.isNullOrBlank() || polished == text) {
+                _state.update { it.copy(polishing = false) }
+                onResult(false)
+                return@launch
+            }
+            // 同一篇笔记里用户可能已经继续输入：此时润色结果基于旧文本，覆盖会吞掉新输入
+            if (latestMarkdown != text) {
                 _state.update { it.copy(polishing = false) }
                 onResult(false)
                 return@launch
@@ -206,14 +251,15 @@ class NotebookViewModel @Inject constructor(
 
     fun undoPolish() {
         val previous = prePolishText ?: return
+        val path = _state.value.currentPath ?: return
         prePolishText = null
         latestMarkdown = previous
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                _state.value.currentPath?.let { path ->
-                    runCatching { fileAccess.writeFile(path, previous, overwrite = true) }
-                }
+                runCatching { fileAccess.writeFile(path, previous, overwrite = true) }
             }
+            // 写盘期间可能已切走：只把种子应用回发起时那一篇，避免串稿
+            if (_state.value.currentPath != path) return@launch
             _state.update { it.copy(editorSeed = previous, canUndoPolish = false) }
         }
     }
@@ -231,25 +277,40 @@ class NotebookViewModel @Inject constructor(
 
     private fun openInitialNote() {
         viewModelScope.launch {
-            val notes = withContext(Dispatchers.IO) { listNotes() }
-            val remembered = prefs.getString(KEY_LAST_PATH, null)
-            val target = notes.firstOrNull { it.path == remembered }?.path
-                ?: notes.firstOrNull()?.path
-                ?: withContext(Dispatchers.IO) { createNoteFile() }
-            val text = withContext(Dispatchers.IO) {
-                runCatching { fileAccess.readFile(target) }.getOrDefault("")
+            // 远端 SFTP 断开、目录不可写都会抛异常：必须兜住并落到失败态，
+            // 否则 loading 永远为 true，浮窗只转圈且没有任何提示。
+            val opened = runCatching {
+                val notes = withContext(Dispatchers.IO) { listNotes() }
+                val remembered = prefs.getString(KEY_LAST_PATH, null)
+                val target = notes.firstOrNull { it.path == remembered }?.path
+                    ?: notes.firstOrNull()?.path
+                    ?: withContext(Dispatchers.IO) { createNoteFile() }
+                val text = withContext(Dispatchers.IO) {
+                    runCatching { fileAccess.readFile(target) }.getOrDefault("")
+                }
+                val refreshed = if (notes.any { it.path == target }) {
+                    notes
+                } else {
+                    withContext(Dispatchers.IO) { listNotes() }
+                }
+                Triple(target, refreshed, text)
             }
-            latestMarkdown = text
-            val refreshed = if (notes.any { it.path == target }) notes else withContext(Dispatchers.IO) { listNotes() }
-            _state.update {
-                it.copy(
-                    loading = false,
-                    notes = refreshed,
-                    currentPath = target,
-                    editorSeed = text
-                )
+            opened.onSuccess { (target, notes, text) ->
+                latestMarkdown = text
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        loadFailed = false,
+                        notes = notes,
+                        currentPath = target,
+                        editorSeed = text
+                    )
+                }
+                prefs.edit().putString(KEY_LAST_PATH, target).apply()
+            }.onFailure { error ->
+                FileLogger.w(TAG, "加载随记失败", error)
+                _state.update { it.copy(loading = false, loadFailed = true) }
             }
-            prefs.edit().putString(KEY_LAST_PATH, target).apply()
         }
     }
 

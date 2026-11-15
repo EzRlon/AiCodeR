@@ -37,6 +37,11 @@ internal fun NoteEditorWebView(
     modifier: Modifier = Modifier,
     /** 每次编辑回调最新 Markdown：随记浮窗要在「润色/发送」时拿到未被保存防抖拖住的内容。 */
     onMarkdownChanged: (String) -> Unit = {},
+    /**
+     * 重载页面时取哪份文本。默认用 [text]；随记浮窗传「内存最新内容」，
+     * 避免深浅色切换触发整页重载时用滞后的种子覆盖刚输入的内容。
+     */
+    latestTextProvider: () -> String = { text },
     viewModel: NoteEditorViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -46,6 +51,7 @@ internal fun NoteEditorWebView(
     val changedState = rememberUpdatedState(onContentChanged)
     val savedState = rememberUpdatedState(onSaved)
     val markdownState = rememberUpdatedState(onMarkdownChanged)
+    val latestTextState = rememberUpdatedState(latestTextProvider)
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     val webView = remember(path) {
@@ -90,7 +96,7 @@ internal fun NoteEditorWebView(
     }
 
     LaunchedEffect(text, path, dark) {
-        val html = viewModel.buildHtml(text, dark)
+        val html = viewModel.buildHtml(latestTextState.value(), dark)
         webView.loadDataWithBaseURL(viewModel.baseUrl(path), html, "text/html", "utf-8", null)
     }
 

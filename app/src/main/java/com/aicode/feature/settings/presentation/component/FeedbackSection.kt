@@ -70,6 +70,8 @@ internal fun FeedbackSection() {
     LaunchedEffect(includeLogs) {
         if (!includeLogs) {
             logExcerpt = ""
+            // 从「开」切回「关」时 effect 会被取消重建，这里必须复位，否则副标题永远停在「正在读取…」
+            loadingLogs = false
             return@LaunchedEffect
         }
         loadingLogs = true

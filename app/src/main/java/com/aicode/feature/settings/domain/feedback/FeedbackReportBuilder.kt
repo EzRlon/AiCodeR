@@ -30,7 +30,8 @@ data class FeedbackReport(
  * 把反馈内容拼成 GitHub Issue 正文与预填链接。
  *
  * 走「浏览器打开预填链接」而不是 App 内调 API：不需要后端、不需要在 App 里存 GitHub 令牌，
- * 用户用浏览器里已有的 GitHub 账号完成提交。代价是链接长度有限（编码后中文约为原文的 3 倍），
+ * 用户用浏览器里已有的 GitHub 账号完成提交。代价是链接长度有限（中文 UTF-8 每字 3 字节、
+ * 每字节编码成 `%XX` 3 字符，编码后约为原文的 9 倍），
  * 所以正文要先裁剪再进 URL，完整版由调用方复制到剪贴板兜底。
  */
 object FeedbackReportBuilder {

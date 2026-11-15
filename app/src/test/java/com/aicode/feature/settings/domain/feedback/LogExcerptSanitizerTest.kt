@@ -39,6 +39,22 @@ class LogExcerptSanitizerTest {
     }
 
     @Test
+    fun `JSON 形态的键值也被脱敏`() {
+        val out = LogExcerptSanitizer.sanitize("""{"apiKey":"abcd1234","token":"efgh5678"}""")
+
+        assertFalse(out.contains("abcd1234"))
+        assertFalse(out.contains("efgh5678"))
+    }
+
+    @Test
+    fun `Basic 认证头被抹掉`() {
+        val out = LogExcerptSanitizer.sanitize("Authorization: Basic dXNlcjpwYXNzd29yZA==")
+
+        assertFalse(out.contains("dXNlcjpwYXNzd29yZA=="))
+        assertTrue(out.contains("Basic ***"))
+    }
+
+    @Test
     fun `普通日志内容保持原样`() {
         val line = "2026-11-15 12:00:00 INFO 启动完成，耗时 320ms"
         val out = LogExcerptSanitizer.sanitize(line)

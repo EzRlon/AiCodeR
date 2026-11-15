@@ -57,9 +57,15 @@ internal fun NotebookOverlay(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    // 首次打开才加载笔记（不在 App 启动时做无关磁盘 IO）
-    LaunchedEffect(Unit) { viewModel.ensureLoaded() }
     val windowState = remember(viewModel) { FloatingWindowState(viewModel.geometry) }
+    // 首次打开才加载笔记（不在 App 启动时做无关磁盘 IO）；再次打开时 ensureLoaded 会回读磁盘
+    LaunchedEffect(Unit) { viewModel.ensureLoaded() }
+    // 最小化会销毁浮窗内容（WebView）：恢复时回读磁盘，避免用旧种子重建、覆盖刚写的内容
+    LaunchedEffect(windowState.minimized) {
+        if (!windowState.minimized && viewModel.state.value.currentPath != null) {
+            viewModel.reloadCurrent()
+        }
+    }
     var showNotes by remember { mutableStateOf(false) }
 
     val polishDone = stringResource(R.string.chat_polish_done)
@@ -164,6 +170,13 @@ internal fun NotebookOverlay(
         }
     ) {
         when {
+            state.loadFailed -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = stringResource(R.string.notebook_load_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             state.loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
             }
@@ -180,6 +193,7 @@ internal fun NotebookOverlay(
                 onContentChanged = {},
                 onSaved = viewModel::onSaved,
                 onMarkdownChanged = viewModel::onMarkdownChanged,
+                latestTextProvider = viewModel::currentText,
                 viewModel = noteEditorViewModel,
                 modifier = Modifier.fillMaxSize()
             )
