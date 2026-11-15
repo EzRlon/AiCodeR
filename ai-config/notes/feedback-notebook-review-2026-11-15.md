@@ -1,55 +1,38 @@
 # 反馈与建议 + 随记浮窗 · 审查处置（2026-11-15）
 
-> 范围：`695b2f9..HEAD`（c4ddea6 功能、2986e18/ aecd771 边界修复）。
-> 流程：自查 → qa 独立复审（会话重启中断两次，第三次完成）→ 修 P1 → 编译 ✅ / 全量单测 1856 ✅ / detekt 0。
-> **optimizer 复审进行中**；正式包（armsolo）等其结论后再构建。
+> 范围：`feat/feedback-notebook` 分支 `c4ddea6`、`2986e18`、`dbe15d3`、`b4c42be`。
+> 流程：自审（qa 子代理三次被会话进程重启杀掉）→ optimizer BATCH 复审 → 修复 → 编译 / 全量单测 1856 / detekt 0。
 
-## 一、qa 结论（P0 = 0）
-
-| 级别 | 问题 | 处置 |
-| --- | --- | --- |
-| P1 | `undoPolish` 未校验路径：切笔记后撤销会把旧笔记内容写进新笔记 | ✅ 进入时捕获 path，写盘与状态更新前校验 |
-| P1 | 首次加载远端异常 → `loading` 永久 true（只转圈无提示） | ✅ `openInitialNote` 整体 runCatching + 失败态文案；新建失败同样兜住 |
-| P1 | 脱敏漏 JSON 键值（`"token":"..."`）、Basic 认证 | ✅ 键后允许闭引号 + 新增 `Basic ***`；补 2 例单测 |
-| P1 | 几何只在 prefs，VM 快照不更新 → 关掉重开退回启动位置 | ✅ `geometry` 改为可变字段，提交时同步 |
-| P1(未验证) | `template=md` + `body=` 的 GitHub 预填行为无文档保证 | ⏳ 保留剪贴板兜底 + 提示；需真机/网页实测一次 |
-| P2 | `includeLogs` 关掉后 `loadingLogs` 卡在 true | ✅ 复位 |
-| P2 | 注释写「编码膨胀 3 倍」，实际约 9 倍 | ✅ 注释修正（中/测试） |
-| P2 | 深浅色切换重载时用滞后种子，可能丢输入 | ✅ `NoteEditorWebView` 增加 `latestTextProvider`，随记传内存最新内容 |
-| P2 | 润色期间切走再切回原笔记，旧结果会盖新输入 | ✅ 追加内容一致性校验（`latestMarkdown == 发起时文本`） |
-| P2 | IME 上移按整个键盘高度、未按重叠量 | ✅ 改为只上移「窗口与键盘重叠量」 |
-| P2 | 能力感知件未登记随记/反馈 | ✅ `docs-site/docs/guide/capabilities.md` + `prompts/65-capabilities.md` |
-| P2 | 几何高度下限误用 minWidth | ❌ 复核为误报（代码本就是 minHeight） |
-
-## 一·补、optimizer 结论（P0 = 1，已修）
+## 一、optimizer 结论与处置
 
 | 级别 | 问题 | 处置 |
 | --- | --- | --- |
-| P0 | 首次加载失败后无重试路径，状态永久卡死（再次打开走 reloadCurrent 直接 return） | ✅ 失败时复位 `loaded`；失败态加重试按钮 `retryLoad()`；成功/切换/新建均清 `loadFailed` |
-| P1 | 清空正文后 `ifBlank` 回退旧种子，恢复/发送会用旧内容并写回文件 | ✅ 新增 `hasEdits` 区分「未输入」与「清空」，统一走 `currentContent()` |
-| P1 | `createNoteFile` 吞写失败仍返回路径 → 后续静默丢内容 | ✅ 返回 `String?`，失败落到失败态 |
-| P1 | 切换期旧 WebView 迟到回调可能串稿 | ✅ 编辑回调带 path，VM 校验当前路径 |
-| P1 | 窗口可拖进状态栏触摸区（按钮点不到、拖不回） | ✅ 顶部边界改用状态栏下沿（拖动与渲染一致） |
-| P2 | 日志先对全文件跑 5 次正则再截断 | ✅ 先取尾部 200 行/6000 字符再脱敏 |
-| P2 | 反馈长表单无 `imePadding()`（API30+ ADJUST_NOTHING） | ✅ 已加 |
-| P2 | 打开浮窗时 ensureLoaded 与最小化 effect 各回写一次 | ✅ 最小化 effect 只在 true→false 边沿触发 |
-| P2 | 剪贴板未标敏感 | ✅ Android 13+ 标 `EXTRA_IS_SENSITIVE` |
-| P2 | 注释/文档漂移（「回读磁盘」、自动保存 1 秒） | ✅ 注释与文档已改 0.8 秒 |
-| 记录 | 每次打开/切笔记重建 WebView（Vditor 约 5MB 资源，数百 ms） | 排期：同窗口切笔记改用 JS `setValue`；最小化保活 |
-| 记录 | 远端模式 list/select 串行多次 RTT | 排期：合并请求/复用列表结果 |
-| 记录 | VNC 小窗与新浮窗组件重复实现 | 维持现状，后续迁移 |
-| 记录 | `pinned` 无 UI 入口、部分 contentDescription 为空、魔数未走主题 | 排期清理 |
+| P0 | 切换/新建笔记后 `AndroidView` factory 不重跑，界面挂着已 `destroy()` 的旧 WebView（白屏/不可编辑） | ✅ `b4c42be`：`key(path)` 包裹 AndroidView（与 `CodeEditorScreen` 的既有规避一致） |
+| P1 | 切换笔记读失败时用整屏失败页顶掉当前仍可编辑的笔记 | ✅ `b4c42be`：改为一次性 Toast（`actionErrorTick`），当前笔记保持不动 |
+| P1 | 浮窗每次打开重建 WebView + 6.5MB Vditor 资源，约百毫秒级启动成本 | ⏳ 需真机确认；若明显再做 WebView 缓存 |
+| P2 | `reloadCurrent` 每次重开都无条件写盘 | ✅ `b4c42be`：无编辑（`hasEdits=false`）时直接返回 |
+| P2 | 日志整体 `readText` + 全文物化 + 多次正则 | ✅ 先按字符截尾（4× 上限）再切行脱敏 |
+| P2 | Issue 正文模板与类型文案硬编码中文（英文用户仍是中文正文） | ⏳ 排期：模板文案按 Locale 选择 |
+| P2 | `core/ui/floating` 与 VNC 小窗逻辑重复，VNC 未迁移 | ⏳ 已知取舍：本轮不动 VNC；后续抽公共组件迁移 |
+| P2 | 随记 VM 中「落盘上一篇 → 读/建下一篇 → 刷新列表」三段近重复 | ⏳ 排期：抽 `switchTo` |
+| P2 | `canUndoPolish` 在继续输入后不清除，撤销可能连带回退新输入 | ⏳ 排期：编辑后清除撤销点或二次确认 |
+| P2 | 笔记下拉菜单全量渲染（非 LazyColumn） | ⏳ 量级小，暂不处理 |
+| P2 | 编辑器页（笔记模式）仍未传 `latestTextProvider`，深浅色切换可能用滞后种子 | ⏳ 存量隐患，后续统一 |
+| P2 | `onSaved()` 空实现属无意义间接层；进程被杀最多丢 800ms 防抖窗口 | ⏳ 记录为已知取舍 |
 
-## 二、仍待真机/实测
+## 二、本轮额外修掉的正确性问题
 
-1. GitHub 预填链接（模板 + body）在手机浏览器是否真的填入正文；不填时剪贴板兜底是否顺畅。
-2. Vditor 在浮窗内的键盘弹出/焦点；IME 上移与缩放手柄手势冲突。
-3. 远端 SSH 模式：`.aicode/notebook` 目录创建、读写、断开时的失败态。
-4. 反馈页在 API 30+ `ADJUST_NOTHING` 下，键盘是否遮挡底部提交按钮（需 `imePadding` 则补）。
-5. 浮窗每次打开重建 WebView（本地资源加载约百毫秒）的观感；若明显卡顿再考虑缓存实例。
+- 润色慢请求返回时若用户已切笔记/继续输入，放弃覆盖（防串稿、防吞字）。
+- 首次加载未落地时忽略切换/新建，避免两路协程互相覆盖 `currentPath`。
+- 笔记防抖写盘移到 IO 线程（原实现跑在主线程）。
+- 无当前会话时「发给 AI」明确失败，不静默新建会话。
+- 随记首次加载延迟到打开浮窗，App 启动不做无关扫盘。
+- 反馈日志开关关闭时复位 loading 文案；脱敏补 JSON 键值与 Basic 认证。
 
-## 三、已知取舍
+## 三、仍未验证（需真机）
 
-- VNC 小窗**未**迁移到 `core/ui/floating`：避免动已验证模块，行为已对齐（拖动/缩放/最小化/56dp 可见/最小 220×180）。迁移列为后续重构。
-- 反馈提交不存 GitHub 令牌、无后端；代价是正文长度受 URL 限制（中文编码约 9 倍），超长时链接内裁剪、剪贴板保完整。
-- 随记文件不自动进入 AI 上下文（故意与 `.aicode/notes/` 知识库目录隔离）。
+- Vditor 在浮窗内的键盘弹出、焦点与 IME 上移观感。
+- 缩放手柄与 WebView 内容手势是否冲突。
+- GitHub Issue 预填链接在手机浏览器中是否真的填入正文（不填则依赖剪贴板兜底）。
+- 远程 SSH 模式下 notebook 目录创建与读写。
+- 反馈页在窄屏/英文下的排版（三个 FilterChip 是否换行）。
