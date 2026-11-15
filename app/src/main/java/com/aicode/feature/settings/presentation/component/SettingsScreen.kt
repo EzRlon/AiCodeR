@@ -2364,8 +2364,9 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.Key,
+                icon = FeatherIcons.Shield,
                 title = stringResource(SettingsSection.DevKeys.titleRes),
+                subtitle = stringResource(R.string.settings_dev_keys_desc),
                 onClick = { onOpen(SettingsSection.DevKeys) }
             )
             SettingsDivider()

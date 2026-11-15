@@ -97,9 +97,10 @@ class KeyFilesScanner @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 if (!fileAccess.exists(containerPath) || fileAccess.isDirectory(containerPath)) return@runCatching null
+                // 带上目录分隔符，避免 ~/.aicode/keys-backup 之类前缀相同但并非密钥库的路径
                 val source = when {
-                    containerPath.startsWith(libraryDir()) -> KeySource.LIBRARY
-                    containerPath.startsWith(sshDir()) -> KeySource.SSH
+                    containerPath.startsWith(libraryDir().trimEnd('/') + "/") -> KeySource.LIBRARY
+                    containerPath.startsWith(sshDir().trimEnd('/') + "/") -> KeySource.SSH
                     else -> KeySource.WORKSPACE
                 }
                 val file = toKeyFile(containerPath, containerPath.substringAfterLast('/'), source)

@@ -110,7 +110,8 @@ class ReleaseReadinessChecker @Inject constructor(
             detail = if (aliasOk) {
                 "别名「${config["keyAlias"]}」已在证书中验证"
             } else {
-                "别名「${config["keyAlias"]}」未能自动验证（容器内无 keytool 或证书不可读）；建议发布前手动跑一次 assembleRelease"
+                "别名「${config["keyAlias"]}」未能自动验证（容器内没有 keytool 或证书读不到）。这不代表口令配错，" +
+                    "建议发布前手动跑一次 assembleRelease 确认签名生效"
             }
         )
 

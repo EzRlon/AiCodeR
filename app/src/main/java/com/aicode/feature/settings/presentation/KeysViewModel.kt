@@ -134,7 +134,12 @@ class KeysViewModel @Inject constructor(
         }
     }
 
-    /** 导出全部密钥为 zip（含清单，不含密码）到所选输出流。 */
+    /**
+     * 导出全部密钥为 zip（含清单）到所选输出流。
+     *
+     * 注意：清单本身不含密码，但 zip 内可能带 `keystore.properties` 等**明文口令配置**，
+     * 调用方必须向用户讲清这一点（与「打包发布资产」同口径）。
+     */
     fun exportAllTo(output: OutputStream) {
         if (_state.value.exporting) return
         _state.update { it.copy(exporting = true) }
@@ -346,7 +351,8 @@ class KeysViewModel @Inject constructor(
                 }
                 appendLine()
             }
-            append("注：本清单不含任何密码。 / No passwords included.")
+            append("注：本清单不含任何密码；但 zip 内的签名配置（keystore.properties 等）可能含明文口令，请加密保管。")
+            append(" / Note: this manifest contains no passwords, but signing configs inside the zip may contain plaintext credentials — keep the archive encrypted.")
         }
     }
 
