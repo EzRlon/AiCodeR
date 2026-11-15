@@ -3,6 +3,38 @@ package com.aicode.feature.settings.domain.model
 /** 密钥文件的来源位置。 */
 enum class KeySource { LIBRARY, SSH, WORKSPACE }
 
+/** 一次发布就绪检查的完整结论（逐项 + 总判定 + 关键路径，供打包发布资产复用）。 */
+data class ReleaseReadiness(
+    val ready: Boolean,
+    val items: List<ReadinessItem>,
+    /** 检查中命中的证书路径；未找到证书为 null。 */
+    val keystorePath: String? = null,
+    /** 配套的口令配置路径；未找到为 null。 */
+    val configPath: String? = null,
+    /** 解析出的配置（含口令，**仅供打包发布资产时原样带走**，UI 不展示明文）。 */
+    val config: Map<String, String> = emptyMap()
+) {
+    companion object {
+        const val KEY_CERT = "cert"
+        const val KEY_CONFIG = "config"
+        const val KEY_ENTRIES = "entries"
+        const val KEY_ALIAS = "alias"
+    }
+}
+
+/** 就绪检查的单项结果。 */
+data class ReadinessItem(
+    /** 检查项标识（[ReleaseReadiness.KEY_*]）。 */
+    val key: String,
+    val passed: Boolean,
+    /** 一句话结论（大白话，直接展示）。 */
+    val detail: String
+)
+
+/** 解析后的签名配置（供打包资产与交叉验证使用；不含展示逻辑）。 */
+typealias KeystoreConfig = Map<String, String>
+
+
 /** 密钥文件的类别标签（展示用）：发布签名 / SSH / 其他。 */
 enum class KeyCategory { RELEASE, SSH, OTHER }
 

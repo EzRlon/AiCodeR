@@ -6,9 +6,12 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.R
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.settings.domain.model.KeyFile
 import com.aicode.feature.settings.domain.model.KeySource
+import com.aicode.feature.settings.domain.model.ReleaseReadiness
 import com.aicode.feature.settings.domain.service.KeyFilesScanner
+import com.aicode.feature.settings.domain.service.ReleaseReadinessChecker
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +27,7 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,6 +41,8 @@ data class DevKeysUiState(
     val entries: List<KeyFile> = emptyList(),
     val importing: Boolean = false,
     val exporting: Boolean = false,
+    /** 发布就绪检查结果；null = 尚未检查或当前无证书。 */
+    val readiness: ReleaseReadiness? = null,
     /** 一次性提示（导入 / 导出结果）；界面 Toast 后调 [KeysViewModel.consumeMessage] 清掉。 */
     val message: String? = null,
 )
@@ -49,6 +55,7 @@ data class DevKeysUiState(
 class KeysViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val scanner: KeyFilesScanner,
+    private val readinessChecker: ReleaseReadinessChecker,
     private val fileAccess: FileAccessProvider,
 ) : ViewModel() {
 
@@ -65,13 +72,22 @@ class KeysViewModel @Inject constructor(
         refresh()
     }
 
-    /** 重新扫描三处来源（进入页面 / 导入完成时调用）。 */
+    /** 重新扫描三处来源（进入页面 / 导入完成时调用），顺带刷新发布就绪检查。 */
     fun refresh() {
         scanJob?.cancel()
         _state.update { it.copy(scanning = true) }
         scanJob = viewModelScope.launch {
             val entries = scanner.scan()
-            _state.update { it.copy(scanning = false, entries = entries) }
+            // 发布就绪检查跟着扫描走：证书/配置任一变化，就绪结论立刻更新。
+            val releaseJks = entries
+                .filter { it.category == com.aicode.feature.settings.domain.model.KeyCategory.RELEASE }
+                // 统一密钥库优先（导入的发布证书应归位），其次工作区；SSH 来源不含签名证书。
+                .sortedBy { if (it.source == KeySource.LIBRARY) 0 else 1 }
+                .firstOrNull()
+            val readiness = runCatching { readinessChecker.check(releaseJks?.containerPath) }
+                .onFailure { FileLogger.w("KeysVM", "发布就绪检查失败: ${it.message}") }
+                .getOrNull()
+            _state.update { it.copy(scanning = false, entries = entries, readiness = readiness) }
         }
     }
 
@@ -140,6 +156,91 @@ class KeysViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * 打包「发布资产包」：证书 + 配套口令配置 + 恢复说明 + 逐文件 SHA-256 清单。
+     *
+     * 与 [exportAllTo] 的区别：那个是全部密钥的盘点清单；这个只取**打正式包必需的最小集**，
+     * 且带逐文件校验和与恢复命令——发布当天靠它原地恢复，不再重演「证书在、口令配置没跟上」。
+     * 就绪检查未全绿时拒绝打包（缺什么打包什么只会把坑打包进 zip）。
+     */
+    fun exportReleaseBundleTo(output: OutputStream) {
+        if (_state.value.exporting) return
+        val readiness = _state.value.readiness
+        if (readiness == null || !readiness.ready) {
+            _state.update {
+                it.copy(message = context.getString(R.string.dev_keys_bundle_not_ready))
+            }
+            return
+        }
+        _state.update { it.copy(exporting = true) }
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { writeReleaseBundle(output, readiness) }
+            }.onSuccess {
+                _state.update { it.copy(exporting = false, message = context.getString(R.string.dev_keys_export_success)) }
+            }.onFailure {
+                FileLogger.w("KeysVM", "发布资产包导出失败", it)
+                _state.update { it.copy(exporting = false, message = context.getString(R.string.dev_keys_export_failed)) }
+            }
+        }
+    }
+
+    private fun writeReleaseBundle(output: OutputStream, readiness: ReleaseReadiness) {
+        val jksPath = readiness.keystorePath ?: error("无证书路径")
+        val configPath = readiness.configPath ?: error("无配置路径")
+        val jksBytes = fileAccess.readBytes(jksPath)
+        val configBytes = fileAccess.readBytes(configPath)
+        val jksName = jksPath.substringAfterLast('/')
+        val configName = configPath.substringAfterLast('/')
+        ZipOutputStream(BufferedOutputStream(output)).use { zip ->
+            // 证书 + 口令配置：发布签名的最小完备集
+            zip.putNextEntry(ZipEntry(jksName))
+            zip.write(jksBytes)
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry(configName))
+            zip.write(configBytes)
+            zip.closeEntry()
+            // 逐文件校验和清单：恢复时逐个验证，坏一个立刻知道
+            zip.putNextEntry(ZipEntry("CHECKSUMS.txt"))
+            zip.write(
+                buildString {
+                    appendLine("# AiCodeR 发布资产校验和（SHA-256）")
+                    appendLine("# 恢复后执行: sha256sum -c CHECKSUMS.txt")
+                    appendLine("${sha256Hex(jksBytes)}  $jksName")
+                    append("${sha256Hex(configBytes)}  $configName")
+                }.toByteArray(Charsets.UTF_8)
+            )
+            zip.closeEntry()
+            // 恢复说明：目标位置与自验命令，照抄即可
+            zip.putNextEntry(ZipEntry("RESTORE.md"))
+            zip.write(
+                buildString {
+                    appendLine("# 发布签名资产恢复说明")
+                    appendLine()
+                    appendLine("## 内容")
+                    appendLine("- $jksName（签名证书）")
+                    appendLine("- $configName（签名配置：storeFile / storePassword / keyAlias / keyPassword）")
+                    appendLine("- CHECKSUMS.txt（逐文件 SHA-256，先校验再用）")
+                    appendLine()
+                    appendLine("## 恢复步骤")
+                    appendLine("1. 校验: `sha256sum -c CHECKSUMS.txt`（必须全部 OK）")
+                    appendLine("2. 证书放统一密钥库: `cp $jksName ~/.aicode/keys/$jksName`")
+                    appendLine("3. 配置放工程: `cp $configName app/keystore.properties`")
+                    appendLine("4. 自验: `app/build.gradle.kts` 的 signingConfig 读取该 properties 后，")
+                    appendLine("   跑 `./gradlew assembleRelease` 确认签名生效")
+                    appendLine()
+                    appendLine("## 纪律")
+                    appendLine("- 本包含明文口令：勿入库、勿转发；传输走加密信道。")
+                    append("- 生成时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())}")
+                }.toByteArray(Charsets.UTF_8)
+            )
+            zip.closeEntry()
+        }
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     /** 把所选 uri 复制到统一密钥库；重名自动改名（`name-2.ext`、`name-3.ext`…）。 */
     private fun importOne(uri: Uri, displayName: String, usedNames: MutableSet<String>) {

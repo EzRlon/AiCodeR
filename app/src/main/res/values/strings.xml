@@ -158,8 +158,8 @@
     <string name="settings_token_stats_provider_keys">%1$d 个密钥</string>
     <string name="settings_token_stats_requests_unit">次请求</string>
 
-    <!-- 密钥管理页 -->
-    <string name="settings_dev_keys">密钥管理</string>
+    <!-- 签名与凭据页（原「密钥管理」：功能已升级为发布就绪检查 + 配套资产打包，名称随之更新） -->
+    <string name="settings_dev_keys">签名与凭据</string>
     <string name="settings_dev_env">开发环境</string>
     <string name="dev_env_intro">选择你想开发什么，确认后会新建会话并自动把搭建任务发给 AI：它会先检测当前容器的发行版与包管理器（apk / apt / dnf / pacman），再按实际情况安装工具链、跑验证命令并汇报版本。安装过程在会话里可中断、可追问。</string>
     <string name="dev_env_installed">已安装</string>
@@ -202,6 +202,13 @@
     <string name="dev_keys_intro">集中查看发布签名（*.jks / *.keystore）、SSH 与其他密钥文件；本页只读展示与导出，不含任何密码。</string>
     <string name="dev_keys_import">导入密钥</string>
     <string name="dev_keys_import_desc">从手机中选择文件，复制到统一密钥库</string>
+    <string name="dev_keys_readiness_title">发布就绪</string>
+    <string name="dev_keys_readiness_ready">已就绪，可打正式包</string>
+    <string name="dev_keys_readiness_not_ready">未就绪，缺以下条件</string>
+    <string name="dev_keys_readiness_no_cert">未找到签名证书，打包正式版前需要先导入 .jks 与配套 keystore.properties</string>
+    <string name="dev_keys_export_bundle">打包发布资产</string>
+    <string name="dev_keys_export_bundle_desc">证书 + 口令配置 + 校验和 + 恢复说明，一个 zip 带走发布所需的全部</string>
+    <string name="dev_keys_bundle_not_ready">发布未就绪：缺证书或配套配置，打包了也签不出——先补齐上面缺的条件</string>
     <string name="dev_keys_import_running">正在导入…</string>
     <string name="dev_keys_import_success">已导入 %1$d 个文件</string>
     <string name="dev_keys_import_partial">已导入 %1$d 个，%2$d 个失败</string>

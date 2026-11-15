@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -51,8 +53,10 @@ import com.aicode.feature.settings.domain.model.KeySource
 import com.aicode.feature.settings.presentation.DevKeysUiState
 import com.aicode.feature.settings.presentation.KeysViewModel
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.CheckCircle
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Key
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.Upload
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,6 +77,7 @@ internal fun DevKeysSection(
     state: DevKeysUiState,
     onImportClick: () -> Unit,
     onExportAll: () -> Unit,
+    onExportBundle: () -> Unit,
     onExportOne: (KeyFile) -> Unit,
     onConsumeMessage: () -> Unit,
 ) {
@@ -102,6 +107,21 @@ internal fun DevKeysSection(
             color = MaterialTheme.semanticColors.subtleText,
             modifier = Modifier.padding(vertical = Spacing.md)
         )
+
+        // ── 发布就绪卡：回答「现在打正式包，够不够」，而不是只列文件 ──
+        // 当年发布踩坑：备份只带走 .jks，同目录 keystore.properties（口令）没跟上，正式包当天签不出。
+        state.readiness?.let { readiness ->
+            ReleaseReadinessCard(readiness = readiness)
+            SettingsGroup {
+                SettingsRow(
+                    icon = FeatherIcons.Package,
+                    title = stringResource(R.string.dev_keys_export_bundle),
+                    subtitle = stringResource(R.string.dev_keys_export_bundle_desc),
+                    enabled = !state.exporting && readiness.ready,
+                    onClick = onExportBundle
+                )
+            }
+        }
 
         SettingsGroup {
             SettingsRow(
@@ -365,6 +385,62 @@ private fun categoryLabelRes(category: KeyCategory): Int = when (category) {
  * 密钥管理页宿主：注册 SAF launcher（多选导入 / 导出全部 zip / 单条导出），
  * 与 [KeysViewModel] 同作用域（随分区进入 / 离开注册与注销）。
  */
+/**
+ * 发布就绪卡：逐项列出「打正式包需要什么、现在缺什么」，全绿才亮「打包发布资产」。
+ * 这是对「备份只带了证书、发布当天才发现缺口令配置」那次踩坑的结构性回应。
+ */
+@Composable
+private fun ReleaseReadinessCard(readiness: com.aicode.feature.settings.domain.model.ReleaseReadiness) {
+    val accent = if (readiness.ready) MaterialTheme.semanticColors.success else MaterialTheme.semanticColors.warning
+    SettingsGroup {
+        Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (readiness.ready) FeatherIcons.CheckCircle else FeatherIcons.Key,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.dev_keys_readiness_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = stringResource(
+                        if (readiness.ready) R.string.dev_keys_readiness_ready
+                        else R.string.dev_keys_readiness_not_ready
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent
+                )
+            }
+            Spacer(Modifier.height(Spacing.xs))
+            readiness.items.forEach { item ->
+                Row(
+                    modifier = Modifier.padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = if (item.passed) "✓" else "✗",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (item.passed) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.width(Spacing.xs))
+                    Text(
+                        text = item.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (item.passed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 internal fun DevKeysSectionHost(viewModel: KeysViewModel) {
     val context = LocalContext.current
@@ -405,11 +481,26 @@ internal fun DevKeysSectionHost(viewModel: KeysViewModel) {
             }
         }
     }
+    val exportBundleLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val output = withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri) }
+                if (output != null) {
+                    viewModel.exportReleaseBundleTo(output)
+                } else {
+                    Toast.makeText(context, context.getString(R.string.dev_keys_export_failed), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     DevKeysSection(
         state = state,
         onImportClick = { importLauncher.launch(arrayOf("*/*")) },
         onExportAll = { exportAllLauncher.launch("aicode-keys-${System.currentTimeMillis()}.zip") },
+        onExportBundle = { exportBundleLauncher.launch("aicode-release-bundle-${System.currentTimeMillis()}.zip") },
         onExportOne = { key ->
             pendingExportKey = key
             exportOneLauncher.launch(key.name)

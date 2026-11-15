@@ -158,7 +158,7 @@
     <string name="settings_token_stats_requests_unit">requests</string>
 
     <!-- Key Management page -->
-    <string name="settings_dev_keys">Key Management</string>
+    <string name="settings_dev_keys">Signing &amp; Credentials</string>
     <string name="settings_dev_env">Dev Environments</string>
     <string name="dev_env_intro">Pick what you want to build. After confirmation a new session is created and the setup task is sent to the AI automatically: it first detects the container distro and package manager (apk / apt / dnf / pacman), then installs the toolchain accordingly, runs verification commands and reports versions. You can interrupt or follow up in the session at any time.</string>
     <string name="dev_env_installed">Installed</string>
@@ -201,6 +201,13 @@
     <string name="dev_keys_intro">Browse signing (*.jks / *.keystore), SSH, and other key files. This page is read-only and never shows or includes passwords.</string>
     <string name="dev_keys_import">Import keys</string>
     <string name="dev_keys_import_desc">Pick files from your device and copy them into the key library</string>
+    <string name="dev_keys_readiness_title">Release readiness</string>
+    <string name="dev_keys_readiness_ready">Ready to build a release</string>
+    <string name="dev_keys_readiness_not_ready">Not ready — missing:</string>
+    <string name="dev_keys_readiness_no_cert">No signing certificate found. Import the .jks and its keystore.properties before building a release</string>
+    <string name="dev_keys_export_bundle">Export release bundle</string>
+    <string name="dev_keys_export_bundle_desc">Certificate + signing config + checksums + restore guide — everything a release needs in one zip</string>
+    <string name="dev_keys_bundle_not_ready">Release not ready: missing certificate or signing config — packing now would not sign. Fill the gaps above first</string>
     <string name="dev_keys_import_running">Importing…</string>
     <string name="dev_keys_import_success">Imported %1$d file(s)</string>
     <string name="dev_keys_import_partial">Imported %1$d, %2$d failed</string>
