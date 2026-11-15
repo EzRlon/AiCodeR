@@ -96,9 +96,6 @@ class ClaudeCodeBridge @Inject constructor(
         /** 后台子代理完成时 CLI 注入的纯文本通知标签（headless stream-json 的 user 消息）。 */
         const val TASK_NOTIFICATION_TAG = "<task-notification>"
 
-        /** 回合结束时仍未回报的子代理：如实说明，不伪造成功/失败。 */
-        const val PENDING_SUBAGENT_NOTE = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。"
-
         const val MCP_SERVER_NAME = "permission_bridge"
         const val MCP_TOOL_NAME = "request_permission"
 
@@ -696,7 +693,9 @@ class ClaudeCodeBridge @Inject constructor(
                     // Claude 的 Task/Agent 归一成内置的 task：图标、场景文案、成员名复用同一条链路
                     val displayName = EngineSubagent.normalizeToolName(name)
                     acc.toolNames[id] = displayName
-                    if (EngineSubagent.isSubagentTool(name) && id.isNotEmpty()) {
+                    // 同一 tool_use 重放（引擎重连/消息重投）不重复建子会话；
+                    // 工具行本身靠固定 id 落库天然幂等，子会话 id 是随机的，只能在这里挡
+                    if (EngineSubagent.isSubagentTool(name) && id.isNotEmpty() && id !in acc.subagents) {
                         val sub = newEngineSubagentSession(input.toString())
                         acc.subagents[id] = sub
                         spawnEvents += AgentEvent.SubagentSpawned(
@@ -847,13 +846,11 @@ class ClaudeCodeBridge @Inject constructor(
             events += AgentEvent.ToolCallFinished(
                 id = id,
                 toolName = acc.toolNames[id] ?: EngineSubagent.TOOL_NAME,
-                result = PENDING_SUBAGENT_NOTE,
+                result = EngineSubagent.PENDING_NOTE,
                 isError = false
             )
         }
         acc.asyncToolIds.clear()
-        // 回合失败时未回报的子代理一并按失败收尾（引擎已退出，它们不可能再回报）
-        events += drainPendingSubagents(acc, PENDING_SUBAGENT_NOTE, isError = isError)
         if (isError) {
             val detail = obj["result"]?.jsonPrimitive?.contentOrNull
                 ?: obj["error"]?.jsonPrimitive?.contentOrNull
@@ -870,19 +867,6 @@ class ClaudeCodeBridge @Inject constructor(
     }
 
     private fun JsonObject.intOf(key: String): Int = (this[key] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
-
-    /**
-     * 回合结束/异常中止时收尾仍未回报的子代理：给子会话落一条如实说明并通知父会话，
-     * 避免子会话停在「有任务、无结果」的半截状态。已收尾的不会在 [TurnAccumulator.subagents] 里。
-     */
-    private fun drainPendingSubagents(acc: TurnAccumulator, message: String, isError: Boolean): List<AgentEvent> {
-        if (acc.subagents.isEmpty()) return emptyList()
-        val events = acc.subagents.values.map { sub ->
-            AgentEvent.SubagentFinished(subSessionId = sub.subSessionId, result = message, isError = isError)
-        }
-        acc.subagents.clear()
-        return events
-    }
 
     // ── 桥接资产（脚本 + MCP 配置）──────────────────────────────────
 

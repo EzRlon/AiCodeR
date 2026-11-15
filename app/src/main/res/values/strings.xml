@@ -160,6 +160,7 @@
 
     <!-- 签名与凭据页（原「密钥管理」：功能已升级为发布就绪检查 + 配套资产打包，名称随之更新） -->
     <string name="settings_dev_keys">签名与凭据</string>
+    <string name="settings_dev_keys_desc">发布签名、口令配置与就绪检查</string>
     <string name="settings_dev_env">开发环境</string>
     <string name="dev_env_intro">选择你想开发什么，确认后会新建会话并自动把搭建任务发给 AI：它会先检测当前容器的发行版与包管理器（apk / apt / dnf / pacman），再按实际情况安装工具链、跑验证命令并汇报版本。安装过程在会话里可中断、可追问。</string>
     <string name="dev_env_installed">已安装</string>
@@ -199,7 +200,7 @@
     <string name="dev_env_datasci">数据科学（Python）</string>
     <string name="dev_env_datasci_desc">numpy / pandas / matplotlib · 一键安装三件套</string>
     <string name="dev_env_datasci_prompt">请在当前执行环境里搭建 Python 数据处理环境（numpy/pandas/matplotlib）。步骤：1) 先探测执行环境，不要凭假设：执行 `cat /etc/os-release` 看发行版，再依次 `command -v apk apt-get dnf yum pacman` 确定包管理器，把检测结果原样汇报（容器与远程 SSH 都按这个流程走，不预设发行版）；2) 按探测到的包管理器安装 python3 与 pip（apk: `apk add python3 py3-pip`；apt: `apt-get install -y python3 python3-pip python3-venv`；dnf/yum: `dnf install -y python3 python3-pip`；pacman: `pacman -Sy python python-pip`）；3) 用 pip 安装 numpy、pandas、matplotlib（musl 环境优先用预编译轮子，装不上要说明）；4) 验证：python3 -c "import numpy, pandas" 并输出版本；5) 汇报组件版本与在 ~/workspace 下开始数据分析的建议。若某个组件装不上，说明原因与替代方案，不要静默跳过。</string>
-    <string name="dev_keys_intro">集中查看发布签名（*.jks / *.keystore）、SSH 与其他密钥文件。「导出全部」只含文件本身；「打包发布资产」会一并带上口令配置（keystore.properties），请注意保管。</string>
+    <string name="dev_keys_intro">集中查看发布签名（*.jks / *.keystore）、SSH 与其他密钥文件。文件按原样导出，签名配置（keystore.properties）里的明文口令会随「导出全部」一起带走，请加密保管。</string>
     <string name="dev_keys_import">导入密钥</string>
     <string name="dev_keys_import_desc">从手机中选择文件，复制到统一密钥库</string>
     <string name="dev_keys_readiness_title">发布就绪</string>
@@ -214,12 +215,12 @@
     <string name="dev_keys_import_partial">已导入 %1$d 个，%2$d 个失败</string>
     <string name="dev_keys_import_failed">导入失败（%1$d 个未成功）</string>
     <string name="dev_keys_export_all">导出全部（zip）</string>
-    <string name="dev_keys_export_all_desc">打包所有密钥文件，附指纹清单</string>
+    <string name="dev_keys_export_all_desc">打包所有密钥文件（可能含明文口令配置），附指纹清单</string>
     <string name="dev_keys_export_running">正在打包…</string>
     <string name="dev_keys_export_success">已导出</string>
     <string name="dev_keys_export_failed">导出失败</string>
     <string name="dev_keys_export_confirm_title">导出全部密钥？</string>
-    <string name="dev_keys_export_confirm_body">将打包 %1$d 个密钥文件（可能含私钥与签名密钥），请保存到安全位置；导出内容不含密码。</string>
+    <string name="dev_keys_export_confirm_body">将打包 %1$d 个密钥文件（可能含私钥、签名密钥与明文口令配置）。请保存到安全位置，勿入库或转发。</string>
     <string name="dev_keys_export_confirm_action">导出</string>
     <string name="dev_keys_source_library">统一密钥库（~/.aicode/keys）</string>
     <string name="dev_keys_source_ssh">SSH 密钥（~/.ssh）</string>
@@ -240,7 +241,7 @@
     <string name="dev_keys_scanning">正在扫描…</string>
     <string name="dev_keys_empty">未发现密钥文件</string>
     <string name="dev_keys_empty_hint">可用上方「导入密钥」把发布签名或 SSH 密钥复制进统一密钥库</string>
-    <string name="dev_keys_footer">本页只读展示，不会修改或删除任何密钥文件；导出内容不含密码。</string>
+    <string name="dev_keys_footer">本页只读展示，不会修改或删除任何密钥文件；导出内容可能含明文口令配置，请加密保管。</string>
 
     <!-- 存储空间页 -->
     <string name="settings_storage">存储空间</string>
@@ -553,7 +554,7 @@
     <string name="graph_conclusion_empty">AI 还没有记住任何结论。去干一件活，结束时它会自动记下；或点右下角手动记一条。</string>
     <string name="graph_conclusion_mark_outdated">这条不对/已过时</string>
     <string name="graph_conclusion_jump_source">去来源会话</string>
-    <string name="graph_extract_off_hint">结论抽取已关闭：AI 不会自动记下结论。开启后 AI 每次压缩上下文时自动记住定案与坑（约几十 token）。</string>
+    <string name="graph_extract_off_hint">结论抽取已关闭：AI 不会自动记下结论。开启后，内置引擎在压缩上下文时、外部引擎每隔几个回合，会自动把定案与坑整理成结论（一次有界摘要）。</string>
     <string name="graph_extract_enable">开启</string>
     <string name="graph_timeline_title">结论</string>
     <string name="graph_no_relations">暂无关系</string>
@@ -1975,6 +1976,7 @@
     <string name="subagent_engine_finished_no_result">子代理已完成，但引擎未返回结果正文。</string>
     <string name="subagent_engine_failed_no_detail">子代理失败，引擎未返回错误详情。</string>
     <string name="subagent_engine_turn_ended">引擎本轮结束前未收到该子代理的结果；它可能仍在后台运行，完成情况以引擎日志为准。</string>
+    <string name="subagent_engine_turn_cancelled">主会话已停止，该子代理没有返回结果。</string>
     <string name="subagent_editor_new">新建子代理</string>
     <string name="subagent_editor_edit">编辑子代理</string>
     <string name="subagent_editor_basic">基本信息</string>

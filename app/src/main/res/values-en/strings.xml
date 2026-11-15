@@ -159,6 +159,7 @@
 
     <!-- Key Management page -->
     <string name="settings_dev_keys">Signing &amp; Credentials</string>
+    <string name="settings_dev_keys_desc">Release signing, credentials and readiness check</string>
     <string name="settings_dev_env">Dev Environments</string>
     <string name="dev_env_intro">Pick what you want to build. After confirmation a new session is created and the setup task is sent to the AI automatically: it first detects the container distro and package manager (apk / apt / dnf / pacman), then installs the toolchain accordingly, runs verification commands and reports versions. You can interrupt or follow up in the session at any time.</string>
     <string name="dev_env_installed">Installed</string>
@@ -198,7 +199,7 @@
     <string name="dev_env_datasci">Data science (Python)</string>
     <string name="dev_env_datasci_desc">numpy / pandas / matplotlib · one-tap install</string>
     <string name="dev_env_datasci_prompt">Set up a Python data-processing environment (numpy/pandas/matplotlib) in the current execution environment. Steps: 1) Detect the environment first - do not assume: run `cat /etc/os-release` for the distro, then `command -v apk apt-get dnf yum pacman` to find the package manager, and report the result verbatim (this applies to both the local container and remote SSH; never assume a distro); 2) Install python3 and pip with the detected package manager (apk: `apk add python3 py3-pip`; apt: `apt-get install -y python3 python3-pip python3-venv`; dnf/yum: `dnf install -y python3 python3-pip`; pacman: `pacman -Sy python python-pip`); 3) Install numpy, pandas and matplotlib via pip (prefer prebuilt wheels on musl; explain if unavailable); 4) Verify: run python3 -c "import numpy, pandas" and report versions; 5) Report component versions and how to start data analysis under ~/workspace. If a component fails to install, explain why and give alternatives instead of skipping silently.</string>
-    <string name="dev_keys_intro">Browse signing (*.jks / *.keystore), SSH, and other key files. \"Export all\" contains only the files themselves; \"Export release bundle\" also includes your passwords (keystore.properties) — keep it safe.</string>
+    <string name="dev_keys_intro">Browse signing (*.jks / *.keystore), SSH, and other key files. Files are exported as-is: the signing config (keystore.properties) contains plaintext passwords and is included in \"Export all\" — keep the archive encrypted.</string>
     <string name="dev_keys_import">Import keys</string>
     <string name="dev_keys_import_desc">Pick files from your device and copy them into the key library</string>
     <string name="dev_keys_readiness_title">Release readiness</string>
@@ -213,12 +214,12 @@
     <string name="dev_keys_import_partial">Imported %1$d, %2$d failed</string>
     <string name="dev_keys_import_failed">Import failed (%1$d not imported)</string>
     <string name="dev_keys_export_all">Export all (zip)</string>
-    <string name="dev_keys_export_all_desc">Bundle all key files with a fingerprint manifest</string>
+    <string name="dev_keys_export_all_desc">Bundle all key files (may include the plaintext signing config) with a fingerprint manifest</string>
     <string name="dev_keys_export_running">Packaging…</string>
     <string name="dev_keys_export_success">Exported</string>
     <string name="dev_keys_export_failed">Export failed</string>
     <string name="dev_keys_export_confirm_title">Export all keys?</string>
-    <string name="dev_keys_export_confirm_body">This will bundle %1$d key files (may include private and signing keys). Save to a safe location; no passwords are included.</string>
+    <string name="dev_keys_export_confirm_body">This will bundle %1$d key files (may include private keys, signing keys and a plaintext signing config). Save to a safe location; never commit or share it unencrypted.</string>
     <string name="dev_keys_export_confirm_action">Export</string>
     <string name="dev_keys_source_library">Key library (~/.aicode/keys)</string>
     <string name="dev_keys_source_ssh">SSH keys (~/.ssh)</string>
@@ -239,7 +240,7 @@
     <string name="dev_keys_scanning">Scanning…</string>
     <string name="dev_keys_empty">No key files found</string>
     <string name="dev_keys_empty_hint">Use "Import keys" above to copy signing or SSH keys into the library</string>
-    <string name="dev_keys_footer">Read-only: key files are never modified or deleted here; exported archives contain no passwords.</string>
+    <string name="dev_keys_footer">Read-only: key files are never modified or deleted here. Exports may include a plaintext signing config — keep them encrypted.</string>
 
     <!-- Storage page -->
     <string name="settings_storage">Storage</string>
@@ -552,7 +553,7 @@
     <string name="graph_conclusion_empty">No conclusions yet. Do some work and they get recorded automatically at the end, or add one with the button below.</string>
     <string name="graph_conclusion_mark_outdated">Wrong / outdated</string>
     <string name="graph_conclusion_jump_source">Go to source session</string>
-    <string name="graph_extract_off_hint">Conclusion extraction is off, so AI won\'t record conclusions. When on, AI remembers decisions and pitfalls each time it compacts the context (a few dozen tokens).</string>
+    <string name="graph_extract_off_hint">Conclusion extraction is off, so AI won\'t record conclusions. When on, the built-in engine records them when it compacts the context, and external engines do so every few turns with one bounded summary.</string>
     <string name="graph_extract_enable">Turn on</string>
     <string name="graph_timeline_title">Conclusions AI learned</string>
     <string name="graph_no_relations">No relations yet</string>
@@ -1981,6 +1982,7 @@
     <string name="subagent_engine_finished_no_result">The subagent finished, but the engine returned no result text.</string>
     <string name="subagent_engine_failed_no_detail">The subagent failed, but the engine returned no error details.</string>
     <string name="subagent_engine_turn_ended">The engine turn ended before this subagent reported back; it may still be running in the background — check the engine log for the outcome.</string>
+    <string name="subagent_engine_turn_cancelled">The main session was stopped before this subagent returned a result.</string>
     <string name="subagent_editor_new">New subagent</string>
     <string name="subagent_editor_edit">Edit subagent</string>
     <string name="subagent_editor_basic">Basics</string>

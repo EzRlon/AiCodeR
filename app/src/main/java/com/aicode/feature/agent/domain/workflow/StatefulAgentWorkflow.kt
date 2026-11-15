@@ -141,6 +141,10 @@ class StatefulAgentWorkflow @Inject constructor(
         // VerificationContextBuilder —— 它们是纯函数，放那儿能单测。
         /** 快照交接的原文尾窗上限（字符）：控制在 ~1 万 token 内，接手会话首屏可承受。 */
         const val INSTANT_HANDOFF_TAIL_LIMIT = 24_000
+        /** 外部引擎结论沉淀：只摘要最近一段镜像历史（成本有界），要求至少这么多条消息且有实质助手回复。 */
+        const val EXTRACT_RECENT_MESSAGES = 40
+        const val EXTRACT_MIN_HISTORY = 12
+        const val EXTRACT_MIN_ASSISTANT = 3
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"
         const val MODE_REMINDER_AUTO_FILE = "agent/auto-mode.md"
@@ -449,6 +453,29 @@ class StatefulAgentWorkflow @Inject constructor(
         val provider = resolveCompactionFallbackProvider(sessionId) ?: getEffectiveProvider(sessionId)
         contextCompactor.buildHandoffSummary(history, provider, sessionId = null)
     }.getOrNull()
+
+    override suspend fun extractRecentConclusions(sessionId: String): Boolean = runCatching {
+        val session = sessionUseCase.getSessionById(sessionId) ?: return@runCatching false
+        // 内置引擎在上下文压缩成功后已零额外调用抽取；这里只补外部引擎（engine 非空）
+        if (session.engine.isNullOrBlank()) return@runCatching false
+        if (session.workspacePath.isBlank()) return@runCatching false
+        val history = messagePersistenceUseCase.buildHistory(sessionId, "__graph_extract__")
+        if (history.size < EXTRACT_MIN_HISTORY) return@runCatching false
+        val recent = history.takeLast(EXTRACT_RECENT_MESSAGES)
+        val assistantCount = recent.count { it is AgentMessage.AssistantMessage && it.content.isNotBlank() }
+        if (assistantCount < EXTRACT_MIN_ASSISTANT) return@runCatching false
+        val provider = resolveCompactionFallbackProvider(sessionId) ?: getEffectiveProvider(sessionId)
+        contextCompactor.extractConclusionsFromHistory(
+            messages = recent,
+            aiProvider = provider,
+            sessionId = sessionId,
+            workspacePath = session.workspacePath,
+            teamName = session.teamName?.takeIf { it.isNotBlank() }
+        )
+    }.onFailure {
+        // 结论沉淀是附加价值，绝不影响对话；失败留日志便于排查「为什么结论页还是空的」
+        FileLogger.w(TAG, "外部引擎结论沉淀失败（不影响对话）: $sessionId", it)
+    }.getOrDefault(false)
 
     override suspend fun buildInstantHandoffDoc(sessionId: String): String? = runCatching {
         val history = messagePersistenceUseCase.buildHistory(sessionId, "__handoff__")

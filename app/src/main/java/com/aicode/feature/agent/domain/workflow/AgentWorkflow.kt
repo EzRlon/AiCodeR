@@ -157,6 +157,15 @@ interface AgentWorkflow {
     suspend fun buildHandoffSummary(sessionId: String): String?
 
     /**
+     * 外部引擎会话的结论沉淀：从最近一段 App 侧镜像历史生成九段式摘要并抽取结论（不落库、不改历史）。
+     *
+     * 内置引擎在上下文压缩后零额外调用完成抽取；外部引擎的上下文在 CLI 进程内部，App 从不压缩它，
+     * 因此由回合结束按节奏调用本方法补齐，避免「结论页长期空白」。开关关闭、历史过短、
+     * 无可用供应商或摘要失败时返回 false，绝不影响对话本身。
+     */
+    suspend fun extractRecentConclusions(sessionId: String): Boolean
+
+    /**
      * 快照交接：即时拼装「接手材料」——最近一次压缩的结构化摘要（若有）+ 其后的最新原文
      * （从未压缩过则取最近原文窗口）。零模型调用、毫秒级返回，文本原样不做改写；
      * 历史为空或拼不出有效内容返回 null。

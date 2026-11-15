@@ -95,8 +95,9 @@ class CodexBridge @Inject constructor(
         /** 与 ClaudeCodeBridge 一致的空闲上限。 */
         const val IDLE_TIMEOUT_MS = 30 * 60_000L
 
-        /** 回合结束时仍未回报的子代理：如实说明，不伪造成功/失败。 */
-        const val PENDING_SUBAGENT_NOTE = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。"
+        /** collab_tool_call 完成事件里可能承载子代理结论的字段（按序取第一个非空文本）。
+         *  协议未公开，字段名以实测为准；都取不到时明确落「未返回正文」而不是伪造内容。 */
+        val COLLAB_RESULT_KEYS = listOf("result", "output", "last_message", "message")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -542,14 +543,9 @@ class CodexBridge @Inject constructor(
                         output = u.intOf("output_tokens") ?: 0
                     )
                 }
-                // 正常结束前把未回报的子代理收尾（Codex 子代理可能仍在其进程内跑，如实说明）
-                drainPendingSubagents(acc, PENDING_SUBAGENT_NOTE, isError = false) +
-                    listOf(AgentEvent.Completed)
+                listOf(AgentEvent.Completed)
             }
-            "turn.failed" -> {
-                val failure = parseTurnFailed(obj)
-                listOf(failure) + drainPendingSubagents(acc, PENDING_SUBAGENT_NOTE, isError = true)
-            }
+            "turn.failed" -> listOf(parseTurnFailed(obj))
             else -> emptyList()
         }
     }
@@ -566,8 +562,9 @@ class CodexBridge @Inject constructor(
         val events = mutableListOf<AgentEvent>(
             AgentEvent.ToolCallStarted(id = id, toolName = display, argsPreview = argsPreview(item))
         )
-        // collab_tool_call 里只有真正的新派发建子会话；等待/追加消息/关闭复用已有子代理
-        if (type == "collab_tool_call" && EngineSubagent.isSpawnCall(item.toString())) {
+        // collab_tool_call 里只有真正的新派发建子会话；等待/追加消息/关闭复用已有子代理。
+        // 同一 item 重放（重连流）不重复建：子会话 id 是随机的，只能在这里挡。
+        if (type == "collab_tool_call" && id !in acc.subagents && EngineSubagent.isSpawnCall(item.toString())) {
             val sub = newEngineSubagentSession(item.toString())
             acc.subagents[id] = sub
             events += AgentEvent.SubagentSpawned(
@@ -643,16 +640,6 @@ class CodexBridge @Inject constructor(
         return AgentEvent.Failed(error = message)
     }
 
-    /** 回合结束/失败时收尾仍未回报的子代理，避免子会话停在「有任务、无结果」的半截状态。 */
-    private fun drainPendingSubagents(acc: TurnAccumulator, message: String, isError: Boolean): List<AgentEvent> {
-        if (acc.subagents.isEmpty()) return emptyList()
-        val events = acc.subagents.values.map { sub ->
-            AgentEvent.SubagentFinished(subSessionId = sub.subSessionId, result = message, isError = isError)
-        }
-        acc.subagents.clear()
-        return events
-    }
-
     /** 命令执行→bash、文件改动→file_edit、MCP 工具→server.tool、子代理协作→task，其余用协议类型名。 */
     private fun displayToolName(type: String?, item: JsonObject): String = when (type) {
         "command_execution" -> "bash"
@@ -706,6 +693,13 @@ class CodexBridge @Inject constructor(
                 "${o?.get("kind")?.jsonPrimitive?.contentOrNull ?: "update"}: ${o?.get("path")?.jsonPrimitive?.contentOrNull ?: ""}"
             }
             ?.ifBlank { null } ?: "（无变更）"
+        // 子代理协作：优先取引擎给的文本结果；取不到时明确说明「未返回正文」，
+        // 不再把整条调用参数 JSON 当报告落进子会话。
+        "collab_tool_call" -> COLLAB_RESULT_KEYS
+            .firstNotNullOfOrNull { key ->
+                (item[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            }
+            ?: "（引擎未返回子代理正文；原始调用：${item.toString().take(300)}）"
         else -> item["text"]?.jsonPrimitive?.contentOrNull
             ?: item.toString().take(400)
     }

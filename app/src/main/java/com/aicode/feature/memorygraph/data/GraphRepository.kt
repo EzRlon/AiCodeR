@@ -285,10 +285,15 @@ class GraphRepository @Inject constructor(
         sessionId: String,
         summary: String,
         teamName: String?
-    ) {
-        if (workspacePath.isBlank() || summary.isBlank()) return
+    ): Int {
+        if (workspacePath.isBlank() || summary.isBlank()) return 0
         val conclusions = ConclusionParser.parse(summary)
-        if (conclusions.isEmpty()) return
+        if (conclusions.isEmpty()) {
+            // 摘要里没有「关键决定与理由 / 教训与坑 / 未完成」三段（或标题写法变了）：
+            // 显式记一条，便于排查「开了抽取却一直没有结论」而不必靠猜。
+            FileLogger.i(TAG, "压缩摘要未解析出结论（摘要长度=${summary.length}），可能缺少结构化段落")
+            return 0
+        }
         conclusions.forEach { conclusion ->
             runCatching {
                 // 团队会话的结论名加前缀：sourceRefId 即 name（幂等键），团队结论与同名普通结论互不覆盖；
@@ -306,6 +311,7 @@ class GraphRepository @Inject constructor(
             }.onFailure { FileLogger.w(TAG, "写结论节点失败「${conclusion.name}」: ${it.message}") }
         }
         FileLogger.i(TAG, "压缩摘要抽取结论：${conclusions.size} 条")
+        return conclusions.size
     }
 
     /** 手动节点（类型 CUSTOM，无来源引用）。 */

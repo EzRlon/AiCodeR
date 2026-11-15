@@ -24,6 +24,9 @@ internal object EngineSubagent {
     /** 子会话标题上限：与内置 TaskTool 的任务描述同一口径。 */
     const val TITLE_MAX = 30
 
+    /** 回合结束时仍未回报的子代理：如实说明，不伪造成功/失败（三家引擎共用同一句）。 */
+    const val PENDING_NOTE = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。"
+
     private val ALIASES = setOf("task", "agent", "subagent", "collab_tool_call")
 
     /** 真正的代理名；`description`/`prompt` 是任务描述，不能拿来冒充成员名。 */

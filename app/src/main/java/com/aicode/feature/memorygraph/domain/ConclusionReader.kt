@@ -18,8 +18,16 @@ interface ConclusionReader {
     /** 当前有效的、属于指定团队（label 带 [团队:名字] 前缀）的结论节点（按时间倒序）。 */
     suspend fun validTeamConclusions(workspacePath: String, teamName: String, limit: Int = DEFAULT_TEAM_INJECT_LIMIT): List<GraphNode>
 
-    /** 从压缩摘要里抽取结论并落库（幂等，按名称去重）；[teamName] 非空时结论带团队标签。 */
-    suspend fun extractConclusionsFromSummary(workspacePath: String, sessionId: String, summary: String, teamName: String? = null)
+    /**
+     * 从九段式摘要里抽取结论并落库（幂等，按名称去重）；[teamName] 非空时结论带团队标签。
+     * @return 实际解析出的结论条数（0 表示摘要里没有可沉淀段落，调用方可据此决定是否记日志）。
+     */
+    suspend fun extractConclusionsFromSummary(
+        workspacePath: String,
+        sessionId: String,
+        summary: String,
+        teamName: String? = null
+    ): Int
 
     companion object {
         /** 会话开始注入的结论条数上限：太多会挤占上下文，且旧结论参考价值递减。 */

@@ -267,6 +267,11 @@ class AIAgentViewModel @Inject constructor(
 
     private val sessionJobs = mutableMapOf<String, Job>()
 
+    /** 外部引擎会话已完成的回合数：结论抽取按回合节奏节流（内置引擎走压缩路径，不计数）。 */
+    private val externalConclusionTurnCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    /** 正在做结论抽取的会话：避免上一个摘要请求还没回来又叠加一次。 */
+    private val externalConclusionRunning = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** 斜杠命令/技能回合的执行 job（按会话）：悬浮球「停止任务」需要能停到它们。 */
     private val commandJobs = mutableMapOf<String, Job>()
 
@@ -1478,6 +1483,9 @@ class AIAgentViewModel @Inject constructor(
         const val TRASH_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
         const val TAG = "AIAgentViewModel"
 
+        /** 外部引擎会话每完成 N 个回合做一次结论沉淀（一次有界摘要；可被结论抽取开关关闭）。 */
+        const val EXTERNAL_CONCLUSION_EVERY_TURNS = 6
+
         /** 意图纠正判定阈值（bigram Jaccard）：0.8 只抓「几乎原样重发」，宁漏不误。 */
         const val CORRECTION_SIMILARITY = 0.8
 
@@ -1916,6 +1924,7 @@ class AIAgentViewModel @Inject constructor(
      */
     private fun clearSessionRuntimeState(sessionId: String) {
         subAgentEventBus.release(sessionId)
+        externalConclusionTurnCounts.remove(sessionId)
         // 门禁状态按父会话键控：父会话被删时清掉；传子会话 id 时 Map.remove 不命中，无副作用。
         workflowGateStore.clear(sessionId)
         // 先清队列再取消 job：cancel 可能在调用栈内同步跑 finally → flushPendingNotifications，
@@ -2009,6 +2018,7 @@ class AIAgentViewModel @Inject constructor(
     ) {
         if (sessionUseCase.getSessionById(event.subSessionId) != null) return
         val parent = sessionUseCase.getSessionById(parentSessionId) ?: return
+        if (parent.deletedAt != null) return
         sessionUseCase.upsertSession(
             sessionUseCase.newSubSessionEntity(
                 title = event.title.ifBlank { event.memberName },
@@ -2038,6 +2048,8 @@ class AIAgentViewModel @Inject constructor(
         event: AgentEvent.SubagentFinished
     ) {
         val child = sessionUseCase.getSessionById(event.subSessionId) ?: return
+        // 子会话已进回收站/彻底删除：不再往里写迟到报告，也不给父会话补回执
+        if (child.deletedAt != null) return
         val report = event.result.ifBlank {
             context.getString(
                 if (event.isError) R.string.subagent_engine_failed_no_detail
@@ -2059,6 +2071,53 @@ class AIAgentViewModel @Inject constructor(
             TAG,
             "外部引擎子代理已收尾: session=${event.subSessionId} error=${event.isError}"
         )
+    }
+
+    /**
+     * 主会话被取消/异常退出时，给本轮未回报的外部引擎子代理落一条终止说明并归档，
+     * 不留「有任务、无结果」的半截子会话。
+     *
+     * 刻意不发 [SubAgentEvent]：取消/异常路径不应再把父会话拉起来跑一轮（与用户点停止的意图相反）。
+     * 每个子会话独立兜底，一个失败不影响其余收尾。
+     */
+    private suspend fun abandonEngineSubagentSessions(ids: Collection<String>, reason: String) {
+        ids.forEach { id ->
+            runCatching {
+                val child = sessionUseCase.getSessionById(id) ?: return@forEach
+                if (child.deletedAt != null) return@forEach
+                messagePersistenceUseCase.persist(id, MessageRole.ASSISTANT, reason)
+                sessionUseCase.touch(id, messagePersistenceUseCase.nextTimestamp())
+                archiveSubAgentReport(id, outcome = "failed")
+                FileLogger.i(TAG, "外部引擎子代理已中止收尾: session=$id")
+            }.onFailure { e ->
+                FileLogger.w(TAG, "外部引擎子代理中止收尾失败: $id", e)
+            }
+        }
+    }
+
+    /**
+     * 外部引擎会话的结论沉淀节流：每完成 [EXTERNAL_CONCLUSION_EVERY_TURNS] 个回合触发一次。
+     *
+     * 内置引擎在上下文压缩后已零额外调用抽取；外部引擎的上下文在 CLI 里面，App 不压缩它，
+     * 所以只能按回合节奏补一次「最近一段历史」的有界摘要。放在后台执行，失败只记日志，
+     * 不阻塞下一条消息，也不改变会话历史。
+     */
+    private fun maybeExtractRecentConclusions(sessionId: String) {
+        val completed = (externalConclusionTurnCounts[sessionId] ?: 0) + 1
+        externalConclusionTurnCounts[sessionId] = completed
+        if (completed % EXTERNAL_CONCLUSION_EVERY_TURNS != 0) return
+        if (!externalConclusionRunning.add(sessionId)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                agentWorkflow.extractRecentConclusions(sessionId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "外部引擎结论沉淀失败: $sessionId", e)
+            } finally {
+                externalConclusionRunning.remove(sessionId)
+            }
+        }
     }
 
     /**
@@ -2644,6 +2703,12 @@ class AIAgentViewModel @Inject constructor(
         var goalActiveAtTurn = false
         var turnHadActivity = false
         val isGoalTurn = !persistUserMessage
+        // 本轮由外部引擎派生、尚未回报的子代理会话：引擎异常退出/取消时据此一并收尾，
+        // 避免侧栏留下「有任务、无结果」的半截子会话。声明在 try 外，catch 收尾要用。
+        val pendingEngineSubagents = LinkedHashSet<String>()
+        // 本轮已收尾的外部子代理：同一会话只落一次报告、只发一次回执（桥接的 Failed
+        // 兜底与随后的 Finished 事件可能成对到达，重复收尾会覆盖归档、重复打扰父会话）。
+        val closedEngineSubagents = HashSet<String>()
         try {
             var failed = false
             // 必须在插入本次用户消息之前读取历史：workflow 会自己 add(userRequest)，避免重复。
@@ -2780,10 +2845,6 @@ class AIAgentViewModel @Inject constructor(
                 else list.filter { tool -> limit.any { it == tool.name || (it.endsWith("*") && tool.name.startsWith(it.dropLast(1), ignoreCase = true)) } }
             }
 
-            // 本轮由外部引擎派生、尚未回报的子代理会话：引擎异常退出时据此一并收尾，
-            // 避免侧栏留下「有任务、无结果」的半截子会话。
-            val pendingEngineSubagents = LinkedHashSet<String>()
-
             var currentReasoningStart: Long? = null
             var currentReasoningEnd: Long? = null
             fun finishReasoning() {
@@ -2918,7 +2979,9 @@ class AIAgentViewModel @Inject constructor(
                     }
                     is AgentEvent.SubagentFinished -> {
                         pendingEngineSubagents -= event.subSessionId
-                        finishEngineSubagentSession(sessionId, event)
+                        if (closedEngineSubagents.add(event.subSessionId)) {
+                            finishEngineSubagentSession(sessionId, event)
+                        }
                     }
                     is AgentEvent.AssistantText -> {
                         finishReasoning()
@@ -3058,10 +3121,12 @@ class AIAgentViewModel @Inject constructor(
                         if (pendingEngineSubagents.isNotEmpty()) {
                             val reason = event.error.take(500)
                             pendingEngineSubagents.toList().forEach { id ->
-                                finishEngineSubagentSession(
-                                    sessionId,
-                                    AgentEvent.SubagentFinished(subSessionId = id, result = reason, isError = true)
-                                )
+                                if (closedEngineSubagents.add(id)) {
+                                    finishEngineSubagentSession(
+                                        sessionId,
+                                        AgentEvent.SubagentFinished(subSessionId = id, result = reason, isError = true)
+                                    )
+                                }
                             }
                             pendingEngineSubagents.clear()
                         }
@@ -3088,12 +3153,19 @@ class AIAgentViewModel @Inject constructor(
                         if (pendingEngineSubagents.isNotEmpty()) {
                             val note = context.getString(R.string.subagent_engine_turn_ended)
                             pendingEngineSubagents.toList().forEach { id ->
-                                finishEngineSubagentSession(
-                                    sessionId,
-                                    AgentEvent.SubagentFinished(subSessionId = id, result = note, isError = false)
-                                )
+                                if (closedEngineSubagents.add(id)) {
+                                    finishEngineSubagentSession(
+                                        sessionId,
+                                        AgentEvent.SubagentFinished(subSessionId = id, result = note, isError = false)
+                                    )
+                                }
                             }
                             pendingEngineSubagents.clear()
+                        }
+                        // 外部引擎会话：App 从不压缩它的上下文，结论抽取改在回合结束按节奏补一次，
+                        // 否则「结论」页对全程用 CLI 引擎的项目永远为空。
+                        if (currentSession?.engine?.let { it in AgentEngines.ALL } == true) {
+                            maybeExtractRecentConclusions(sessionId)
                         }
                         // 仅当 App 不在前台时发 agent 完成通知（避免打扰正在看对话的用户）。
                         // 定时任务离屏实例由任务完成通知统一告知，不在此重复。
@@ -3137,9 +3209,23 @@ class AIAgentViewModel @Inject constructor(
                     runCatching { sessionUseCase.updateGoalStatus(sessionId, GoalStatus.PAUSED) }
                 }
             }
+            // 取消时引擎进程被直接杀掉，不会再有子代理结果：给子会话落一条「已随主会话停止」，
+            // 不留半截子会话。用户主动停止，不给父会话发完成/失败回执（避免又拉起一轮）。
+            if (pendingEngineSubagents.isNotEmpty()) {
+                val reason = context.getString(R.string.subagent_engine_turn_cancelled)
+                withContext(NonCancellable) {
+                    abandonEngineSubagentSessions(pendingEngineSubagents.toList(), reason)
+                }
+                pendingEngineSubagents.clear()
+            }
             throw e
         } catch (e: Exception) {
              FileLogger.e(TAG, "executeAgentRequestStream 失败: request=$request", e)
+             // 异常逃出事件流（桥自身未兜住）：同样收尾未回报的子代理，原因用真实错误
+             if (pendingEngineSubagents.isNotEmpty()) {
+                 abandonEngineSubagentSessions(pendingEngineSubagents.toList(), e.toUserMessage())
+                 pendingEngineSubagents.clear()
+             }
              setAgentState(sessionId, AgentUIState.Error(e.toUserMessage()))
              _completedSessions.value = _completedSessions.value - sessionId
         } finally {

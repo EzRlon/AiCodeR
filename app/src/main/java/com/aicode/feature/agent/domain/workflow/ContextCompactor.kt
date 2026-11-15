@@ -116,6 +116,32 @@ class ContextCompactor @Inject constructor(
         }
     }
 
+    /**
+     * 外部引擎会话的结论沉淀：对给定历史生成九段式摘要（不落库、不改历史），解析出结论写入图谱。
+     *
+     * 内置引擎在压缩成功后已复用同一次摘要零额外调用抽取；外部引擎的上下文在 CLI 进程内部，
+     * App 从不压缩它，因此由工作流在回合结束按节奏调用本方法补齐。
+     * 开关关闭、历史为空或摘要失败均返回 false，绝不影响对话本身。
+     */
+    suspend fun extractConclusionsFromHistory(
+        messages: List<AgentMessage>,
+        aiProvider: AIProvider,
+        sessionId: String,
+        workspacePath: String,
+        teamName: String?
+    ): Boolean {
+        if (messages.isEmpty() || workspacePath.isBlank()) return false
+        if (!generalSettingsRepository.graphExtractEnabled()) return false
+        val summary = runCatching { buildHandoffSummary(messages, aiProvider, sessionId) }
+            .onFailure { FileLogger.w(TAG, "外部引擎结论摘要失败（跳过抽取）: $sessionId", it) }
+            .getOrNull()
+            ?: return false
+        return runCatching {
+            graphRepository.extractConclusionsFromSummary(workspacePath, sessionId, summary, teamName)
+        }.onFailure { FileLogger.w(TAG, "外部引擎结论写入失败: $sessionId", it) }
+            .getOrDefault(0) > 0
+    }
+
     suspend fun compactIfNeeded(
         messages: List<AgentMessage>,
         aiProvider: AIProvider,

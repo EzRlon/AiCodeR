@@ -50,7 +50,9 @@ class PermissionBridgeServer @Inject constructor(
     private val recallTool: com.aicode.feature.agent.domain.tool.recall.RecallTool,
     private val graphSearchTool: com.aicode.feature.memorygraph.domain.tool.GraphSearchTool,
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
-    private val deliveryRegistry: CliDeliveryRegistry
+    private val deliveryRegistry: CliDeliveryRegistry,
+    private val sessionUseCase: com.aicode.feature.agent.domain.session.SessionUseCase,
+    private val workspacePathMapper: com.aicode.feature.workspace.domain.WorkspacePathMapper
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -229,6 +231,22 @@ class PermissionBridgeServer @Inject constructor(
         return if (text.length <= 300) text else text.take(300) + "…"
     }
 
+    /**
+     * 把 CLI 传来的 projectRoot 还原成 **App 里存库的工作区路径**。
+     *
+     * CLI 侧看到的是容器路径（`/root/workspace` 或 `~/workspace`），而记忆图谱、跨会话检索
+     * 都按 `chat_sessions.workspacePath`（宿主路径）存库与查询——直接用容器路径会永远查不到
+     * 任何结论（表现为「图谱中没有结论」）。优先取会话自己的 workspacePath；会话缺失时
+     * 再按路径映射兜底。
+     */
+    private suspend fun resolveProjectRoot(sessionId: String, raw: String): String {
+        sessionUseCase.getSessionById(sessionId)?.workspacePath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        if (raw.isBlank()) return ""
+        return runCatching { workspacePathMapper.toHostFile(raw).absolutePath }.getOrDefault(raw)
+    }
+
     // ── 数据通道（aicode_bridge 的 ledger_* 工具）─────────────────────
 
     /** 账本类数据请求：只读合流列表与状态推进（与本体 fixledger 工具同语义，只能前进，关闭由用户手动）。 */
@@ -266,7 +284,10 @@ class PermissionBridgeServer @Inject constructor(
                     currentFile = null,
                     selectedCode = null,
                     // as? JsonPrimitive 而非 jsonPrimitive：模型可能传非字符串，抛异常会吞掉响应导致 mjs 侧等满超时（qa P2-2）
-                    projectRoot = (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty(),
+                    projectRoot = resolveProjectRoot(
+                        sessionId,
+                        (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+                    ),
                     language = null,
                     sessionId = sessionId.ifBlank { null }
                 )
@@ -288,7 +309,10 @@ class PermissionBridgeServer @Inject constructor(
                 val context = com.aicode.feature.agent.domain.model.AgentContext(
                     currentFile = null,
                     selectedCode = null,
-                    projectRoot = (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty(),
+                    projectRoot = resolveProjectRoot(
+                        sessionId,
+                        (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+                    ),
                     language = null,
                     sessionId = sessionId.ifBlank { null }
                 )
