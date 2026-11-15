@@ -79,7 +79,8 @@ class ClaudeCodeBridge @Inject constructor(
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val llmCallRecordDao: LlmCallRecordDao,
-    private val todoMirror: EngineTodoMirror
+    private val todoMirror: EngineTodoMirror,
+    private val orchestrationPrompt: CliOrchestrationPrompt
 ) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
 
     override val cliCommand: String = "claude"
@@ -392,7 +393,9 @@ class ClaudeCodeBridge @Inject constructor(
             // 同时注入知识块：项目知识库索引 + 世界书命中（与内置引擎同源），并附使用引导
             val systemExtras = listOfNotNull(
                 EngineLocale.replyLanguageDirective(),
-                CliKnowledgeInjection.build(projectPath ?: "", userRequest ?: "")
+                CliKnowledgeInjection.build(projectPath ?: "", userRequest ?: ""),
+                // 三引擎共用同一套编排守则；绑了专家团时附带团长指令（内置引擎不走这里）
+                orchestrationPrompt.build(sessionId)
             )
             if (systemExtras.isNotEmpty()) {
                 add("--append-system-prompt"); add(systemExtras.joinToString("\n\n"))
@@ -1076,6 +1079,7 @@ const TOOLS = [
   { name: 'ledger_advance', description: 'Advance an annotation and its linked fix-ledger entry to FIXING/REVIEW via the AiCode app (closing is user-only)', inputSchema: { type: 'object', properties: { annotationId: { type: 'string' }, target: { type: 'string', enum: ['FIXING', 'REVIEW'] } }, required: ['annotationId', 'target'] } },
   { name: 'recall_search', description: 'Full-text search archived history sessions via the AiCode app, including messages compacted out of context (FTS for ASCII, fuzzy for CJK)', inputSchema: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string', enum: ['session', 'workspace', 'all'] }, limit: { type: 'integer' } }, required: ['query'] } },
   { name: 'graph_search', description: 'Search the project conclusion graph via the AiCode app: decisions, verified pitfalls and pending items already settled in this project, with their source sessions. Use recall_search for raw message details instead.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, includeInvalid: { type: 'boolean' }, limit: { type: 'integer' } } } },
+  { name: 'orchestration_board', description: 'Shared task board for multi-agent work, persisted in the project. Use list before starting, create tasks for multi-step work, claim a task before doing it, then update its status with evidence. Statuses: queued, doing, waiting (needs a user decision), blocked (missing permission/tool/condition), done (evidence required), failed (reason required). Do not delete tasks.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'create', 'claim', 'update', 'read'] }, task: { type: 'string', description: 'Task id (t-xxxx) or a unique title substring' }, title: { type: 'string' }, owner: { type: 'string', description: 'Agent/member name that owns the task' }, status: { type: 'string', enum: ['queued', 'doing', 'waiting', 'blocked', 'done', 'failed'] }, note: { type: 'string' }, evidence: { type: 'string', description: 'Commands/tests/files proving completion (required for done)' }, needs: { type: 'string', description: 'What is missing or what the user must decide (required for blocked/waiting)' }, deps: { type: 'array', items: { type: 'string' } }, statusFilter: { type: 'string' } } } },
   { name: 'send_file', description: 'Deliver existing workspace files to the user: they appear as file cards in the chat (tap to open, APKs can be installed directly) and are listed on the Deliverables page. Use it when you finish a build or produce an artifact the user should receive. All paths must exist; the whole call fails if any path is invalid.', inputSchema: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' }, description: 'Container paths, e.g. ~/workspace/app/build/outputs/apk/release/app-release.apk' } }, required: ['paths'] } }
 ];
 
@@ -1130,8 +1134,8 @@ function handleLine(line) {
       send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: local }] } });
       return;
     }
-    if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search' || name === 'graph_search' || name === 'send_file') {
-      askApp(name, (name === 'recall_search' || name === 'graph_search') ? Object.assign({ projectRoot: PROJECT }, args) : args).then((res) => {
+    if (name === 'ledger_list' || name === 'ledger_advance' || name === 'recall_search' || name === 'graph_search' || name === 'orchestration_board' || name === 'send_file') {
+      askApp(name, (name === 'recall_search' || name === 'graph_search' || name === 'orchestration_board') ? Object.assign({ projectRoot: PROJECT }, args) : args).then((res) => {
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: res.ok ? (res.result || '成功') : ('错误：' + (res.message || '未知错误')) }] } });
       }).catch((e) => {
         send({ jsonrpc: '2.0', id, error: { code: -32603, message: '数据通道失败: ' + (e && e.message ? e.message : String(e)) } });

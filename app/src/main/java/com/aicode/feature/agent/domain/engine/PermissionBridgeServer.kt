@@ -52,7 +52,8 @@ class PermissionBridgeServer @Inject constructor(
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val sessionUseCase: com.aicode.feature.agent.domain.session.SessionUseCase,
-    private val workspacePathMapper: com.aicode.feature.workspace.domain.WorkspacePathMapper
+    private val workspacePathMapper: com.aicode.feature.workspace.domain.WorkspacePathMapper,
+    private val orchestrationBoard: com.aicode.feature.agent.domain.orchestration.OrchestrationBoardService
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -277,6 +278,16 @@ class PermissionBridgeServer @Inject constructor(
                     return errData("无法推进：标注不存在，或状态不能后退/重复推进（当前可能已在目标状态之后）")
                 }
                 okData(message)
+            }
+            "orchestration_board" -> {
+                // 多代理共享任务板：按会话自己的工作区落盘（CLI 传的是容器路径，先还原宿主路径）
+                val workspace = resolveProjectRoot(
+                    sessionId,
+                    (input["projectRoot"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+                )
+                if (workspace.isBlank()) return errData("当前未选择工作区，无法读写任务板")
+                val result = orchestrationBoard.handle(workspace, input)
+                if (result.ok) okData(result.message) else errData(result.message)
             }
             "recall_search" -> {
                 // 跨会话档案检索：复用本体 RecallTool（FTS4 + CJK LIKE 降级），scope=session 用当前桥接会话 id

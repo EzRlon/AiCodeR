@@ -75,7 +75,8 @@ class OpenCodeBridge @Inject constructor(
     private val mcpConfigRepository: McpConfigRepository,
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
-    private val todoMirror: EngineTodoMirror
+    private val todoMirror: EngineTodoMirror,
+    private val orchestrationPrompt: CliOrchestrationPrompt
 ) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
 
     override val cliCommand: String = "opencode"
@@ -565,6 +566,13 @@ class OpenCodeBridge @Inject constructor(
                 } else {
                     File(knowledgeContextPath()).delete()
                 }
+                // 编排守则（三桥共用）；绑了专家团时包含团长指令。无内容时删旧文件防陈旧注入
+                val orchestration = orchestrationPrompt.build(sessionId)
+                if (orchestration != null) {
+                    fileAccess.writeFile(orchestrationContextPath(), orchestration, overwrite = true)
+                } else {
+                    File(orchestrationContextPath()).delete()
+                }
             }.onFailure { e ->
                 FileLogger.e(TAG, "写桥接资产失败", e)
                 throw RuntimeException("初始化数据桥资产失败: ${e.message}", e)
@@ -641,6 +649,7 @@ class OpenCodeBridge @Inject constructor(
         val instructionFiles = buildList {
             if (EngineLocale.replyLanguageDirective() != null) add(languageRulePath())
             if (File(knowledgeContextPath()).isFile) add(knowledgeContextPath())
+            if (File(orchestrationContextPath()).isFile) add(orchestrationContextPath())
         }
         if (instructionFiles.isNotEmpty()) {
             put("instructions", kotlinx.serialization.json.JsonArray(instructionFiles.map { JsonPrimitive(it) }))
@@ -652,6 +661,9 @@ class OpenCodeBridge @Inject constructor(
 
     /** 中文回复规则的容器内路径（内容由 writeBridgeAssets 写入）。 */
     private fun languageRulePath(): String = bridgeDir() + "/language-rule.md"
+
+    /** 主 Agent 编排守则的容器内路径（内容由 writeBridgeAssets 写入/清理）。 */
+    private fun orchestrationContextPath(): String = bridgeDir() + "/orchestration-context.md"
 
     /**
      * 会话选定 App 供应商且模型引用指向注入键（自定义端点）时，构造 provider 段：

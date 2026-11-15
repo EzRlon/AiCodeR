@@ -70,7 +70,8 @@ class CodexBridge @Inject constructor(
     private val aiProviderRepository: AIProviderRepository,
     private val mcpConfigRepository: McpConfigRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
-    private val todoMirror: EngineTodoMirror
+    private val todoMirror: EngineTodoMirror,
+    private val orchestrationPrompt: CliOrchestrationPrompt
 ) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
 
     override val cliCommand: String = "codex"
@@ -305,7 +306,9 @@ class CodexBridge @Inject constructor(
                 EngineLocale.replyLanguageDirective(),
                 // 注意传宿主路径：CliKnowledgeInjection 按宿主文件系统读 notes/lorebook，
                     // 传容器路径（/root/workspace）会读不到，注入内容恒为空。
-                    CliKnowledgeInjection.build(projectPath ?: "", userRequest ?: "")
+                    CliKnowledgeInjection.build(projectPath ?: "", userRequest ?: ""),
+                // 三引擎共用同一套编排守则；绑了专家团时附带团长指令（内置引擎不走这里）
+                orchestrationPrompt.build(sessionId)
             )
             if (developerExtras.isNotEmpty()) {
                 add("-c"); add("developer_instructions=${tomlString(developerExtras.joinToString("\n\n"))}")
