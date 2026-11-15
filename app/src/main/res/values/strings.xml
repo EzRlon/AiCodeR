@@ -199,7 +199,7 @@
     <string name="dev_env_datasci">数据科学（Python）</string>
     <string name="dev_env_datasci_desc">numpy / pandas / matplotlib · 一键安装三件套</string>
     <string name="dev_env_datasci_prompt">请在当前执行环境里搭建 Python 数据处理环境（numpy/pandas/matplotlib）。步骤：1) 先探测执行环境，不要凭假设：执行 `cat /etc/os-release` 看发行版，再依次 `command -v apk apt-get dnf yum pacman` 确定包管理器，把检测结果原样汇报（容器与远程 SSH 都按这个流程走，不预设发行版）；2) 按探测到的包管理器安装 python3 与 pip（apk: `apk add python3 py3-pip`；apt: `apt-get install -y python3 python3-pip python3-venv`；dnf/yum: `dnf install -y python3 python3-pip`；pacman: `pacman -Sy python python-pip`）；3) 用 pip 安装 numpy、pandas、matplotlib（musl 环境优先用预编译轮子，装不上要说明）；4) 验证：python3 -c "import numpy, pandas" 并输出版本；5) 汇报组件版本与在 ~/workspace 下开始数据分析的建议。若某个组件装不上，说明原因与替代方案，不要静默跳过。</string>
-    <string name="dev_keys_intro">集中查看发布签名（*.jks / *.keystore）、SSH 与其他密钥文件；本页只读展示与导出，不含任何密码。</string>
+    <string name="dev_keys_intro">集中查看发布签名（*.jks / *.keystore）、SSH 与其他密钥文件。「导出全部」只含文件本身；「打包发布资产」会一并带上口令配置（keystore.properties），请注意保管。</string>
     <string name="dev_keys_import">导入密钥</string>
     <string name="dev_keys_import_desc">从手机中选择文件，复制到统一密钥库</string>
     <string name="dev_keys_readiness_title">发布就绪</string>
