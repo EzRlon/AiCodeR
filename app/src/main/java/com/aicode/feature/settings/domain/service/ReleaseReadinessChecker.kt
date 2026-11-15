@@ -3,6 +3,7 @@ package com.aicode.feature.settings.domain.service
 import com.aicode.feature.settings.domain.model.KeystoreConfig
 import com.aicode.feature.settings.domain.model.ReleaseReadiness
 import com.aicode.feature.settings.domain.model.ReadinessItem
+import com.aicode.feature.settings.domain.model.SIGNING_CONFIG_NAMES
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,8 +26,8 @@ class ReleaseReadinessChecker @Inject constructor(
     private val fileAccess: FileAccessProvider
 ) {
     companion object {
-        /** 配套配置的候选文件名（按序找第一个存在的）。 */
-        private val CONFIG_CANDIDATES = listOf("keystore.properties", "signing.properties")
+        /** 配套配置的候选文件名（按序找第一个存在的）；与密钥扫描 / 导出清单共用同一份定义。 */
+        private val CONFIG_CANDIDATES = SIGNING_CONFIG_NAMES
 
         /** 配置必须包含的四要素。 */
         private val REQUIRED_ENTRIES = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")

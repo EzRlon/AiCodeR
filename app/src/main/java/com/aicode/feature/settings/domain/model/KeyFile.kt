@@ -42,6 +42,17 @@ enum class KeyCategory { RELEASE, SSH, OTHER }
 val KEY_FILE_SUFFIXES = listOf(".jks", ".keystore", ".p12", ".p8")
 
 /**
+ * 发布签名配套的口令配置文件名（与 [com.aicode.feature.settings.domain.service.ReleaseReadinessChecker]
+ * 同口径）：证书本身签不出包，`storeFile / storePassword / keyAlias / keyPassword` 跟着一起备份才算完备。
+ * 只按精确文件名判定，避免把 `gradle.properties` 等普通 properties 混进密钥清单。
+ */
+val SIGNING_CONFIG_NAMES = listOf("keystore.properties", "signing.properties")
+
+/** 是否为签名配套的口令配置（精确文件名，不区分大小写）。 */
+fun isSigningConfigName(name: String): Boolean =
+    name.trim().lowercase() in SIGNING_CONFIG_NAMES
+
+/**
  * 扫描到的一个密钥文件条目。
  *
  * [containerPath] 为容器视角路径（展示、复制、后续操作共用）；
@@ -55,6 +66,8 @@ data class KeyFile(
     val size: Long,
     val lastModified: Long,
     val fingerprint: String?,
+    /** 该条目是签名配套的口令配置（而非证书本体）：发布就绪检查挑证书时必须排除。 */
+    val isSigningConfig: Boolean = false,
 )
 
 /**
@@ -65,6 +78,8 @@ fun classifyKeyFile(source: KeySource, name: String): KeyCategory {
     if (source == KeySource.SSH) return KeyCategory.SSH
     val lower = name.lowercase()
     if (KEY_FILE_SUFFIXES.any { lower.endsWith(it) }) return KeyCategory.RELEASE
+    // 口令配置与证书同属发布签名材料：「导出全部」漏了它，发布当天同样签不出包
+    if (isSigningConfigName(lower)) return KeyCategory.RELEASE
     if (lower.endsWith(".pub") ||
         lower.startsWith("id_rsa") ||
         lower.startsWith("id_ed25519") ||

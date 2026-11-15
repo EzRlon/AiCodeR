@@ -80,14 +80,23 @@ class KeysViewModel @Inject constructor(
             val entries = scanner.scan()
             // 发布就绪检查跟着扫描走：证书/配置任一变化，就绪结论立刻更新。
             val releaseJks = entries
-                .filter { it.category == com.aicode.feature.settings.domain.model.KeyCategory.RELEASE }
+                // 口令配置也归 RELEASE，但它不是证书本体：挑证书时排除，否则可能拿 properties 去查证书
+                .filter { it.category == com.aicode.feature.settings.domain.model.KeyCategory.RELEASE && !it.isSigningConfig }
                 // 统一密钥库优先（导入的发布证书应归位），其次工作区；SSH 来源不含签名证书。
                 .sortedBy { if (it.source == KeySource.LIBRARY) 0 else 1 }
                 .firstOrNull()
             val readiness = runCatching { readinessChecker.check(releaseJks?.containerPath) }
                 .onFailure { FileLogger.w("KeysVM", "发布就绪检查失败: ${it.message}") }
                 .getOrNull()
-            _state.update { it.copy(scanning = false, entries = entries, readiness = readiness) }
+            // 「导出全部」与发布资产包同口径：就绪检查认定的配置必须进清单，
+            // 包括 `<证书同名>.properties` 这类不在候选名里的配置。
+            val configPath = readiness?.configPath
+            val allEntries = if (configPath != null && entries.none { it.containerPath == configPath }) {
+                entries + listOfNotNull(scanner.describeFile(configPath, asSigningConfig = true))
+            } else {
+                entries
+            }
+            _state.update { it.copy(scanning = false, entries = allEntries, readiness = readiness) }
         }
     }
 

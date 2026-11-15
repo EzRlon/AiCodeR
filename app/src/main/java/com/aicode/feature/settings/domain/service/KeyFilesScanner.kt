@@ -6,6 +6,7 @@ import com.aicode.feature.settings.domain.model.KEY_FILE_SUFFIXES
 import com.aicode.feature.settings.domain.model.KeyFile
 import com.aicode.feature.settings.domain.model.KeySource
 import com.aicode.feature.settings.domain.model.classifyKeyFile
+import com.aicode.feature.settings.domain.model.isSigningConfigName
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import kotlinx.coroutines.Dispatchers
@@ -76,11 +77,39 @@ class KeyFilesScanner @Inject constructor(
         val found = runCatching { fileAccess.listFilesRecursive(root, WORKSPACE_SCAN_DEPTH) }
             .getOrDefault(emptyList())
         return found
-            .filter { rel -> KEY_FILE_SUFFIXES.any { rel.lowercase().endsWith(it) } }
+            .filter { rel ->
+                // 证书本体按扩展名识别；keystore.properties 这类口令配置按精确文件名识别，
+                // 与发布资产包同口径（否则「导出全部」里仍缺了口令）。
+                KEY_FILE_SUFFIXES.any { rel.lowercase().endsWith(it) } ||
+                    isSigningConfigName(rel.substringAfterLast('/'))
+            }
             .filter { rel -> rel.split('/').none { it in EXCLUDED_SEGMENTS } }
             .sortedBy { it.lowercase() }
             .map { rel -> toKeyFile("$root/$rel", rel.substringAfterLast('/'), KeySource.WORKSPACE) }
     }
+
+    /**
+     * 把单个文件包装成扫描条目。供「发布就绪检查命中的配置」补齐进导出清单：
+     * 配置可能是 `<证书同名>.properties`（不在 [SIGNING_CONFIG_NAMES] 里），
+     * 单靠文件名扫描兜不住，只能由就绪检查的结果反向补齐。
+     */
+    suspend fun describeFile(containerPath: String, asSigningConfig: Boolean = false): KeyFile? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (!fileAccess.exists(containerPath) || fileAccess.isDirectory(containerPath)) return@runCatching null
+                val source = when {
+                    containerPath.startsWith(libraryDir()) -> KeySource.LIBRARY
+                    containerPath.startsWith(sshDir()) -> KeySource.SSH
+                    else -> KeySource.WORKSPACE
+                }
+                val file = toKeyFile(containerPath, containerPath.substringAfterLast('/'), source)
+                if (asSigningConfig) {
+                    file.copy(category = com.aicode.feature.settings.domain.model.KeyCategory.RELEASE, isSigningConfig = true)
+                } else {
+                    file
+                }
+            }.getOrNull()
+        }
 
     private fun toKeyFile(containerPath: String, name: String, source: KeySource): KeyFile {
         // 读取失败以 -1 表示「未知」（区别于真实的 0 字节/ 时间）；指纹只对已知且不超限的大小计算。
@@ -99,6 +128,7 @@ class KeyFilesScanner @Inject constructor(
             size = size,
             lastModified = lastModified,
             fingerprint = fingerprint,
+            isSigningConfig = source != KeySource.SSH && isSigningConfigName(name),
         )
     }
 }
