@@ -1971,6 +1971,9 @@
     <string name="subagent_edit">编辑子代理</string>
     <string name="subagent_enable">启用该子代理</string>
     <string name="subagent_enable_hint">关闭后 AI 不再能派发它，已在运行的子会话不受影响</string>
+    <string name="subagent_engine_finished_no_result">子代理已完成，但引擎未返回结果正文。</string>
+    <string name="subagent_engine_failed_no_detail">子代理失败，引擎未返回错误详情。</string>
+    <string name="subagent_engine_turn_ended">引擎本轮结束前未收到该子代理的结果；它可能仍在后台运行，完成情况以引擎日志为准。</string>
     <string name="subagent_editor_new">新建子代理</string>
     <string name="subagent_editor_edit">编辑子代理</string>
     <string name="subagent_editor_basic">基本信息</string>

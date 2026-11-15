@@ -94,6 +94,9 @@ class CodexBridge @Inject constructor(
 
         /** 与 ClaudeCodeBridge 一致的空闲上限。 */
         const val IDLE_TIMEOUT_MS = 30 * 60_000L
+
+        /** 回合结束时仍未回报的子代理：如实说明，不伪造成功/失败。 */
+        const val PENDING_SUBAGENT_NOTE = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。"
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -503,6 +506,8 @@ class CodexBridge @Inject constructor(
         /** 最近一条顶层 error 文本：EOF 分类时兕底（发版 qa P2-2）。 */
         var lastError: String? = null
         var emittedAny = false
+        /** item id → 外部子代理会话：collab_tool_call 声明时建，item.completed 时收尾。 */
+        val subagents = mutableMapOf<String, EngineSubagentSession>()
     }
 
     private fun parseLine(line: String, acc: TurnAccumulator): List<AgentEvent> {
@@ -537,9 +542,14 @@ class CodexBridge @Inject constructor(
                         output = u.intOf("output_tokens") ?: 0
                     )
                 }
-                listOf(AgentEvent.Completed)
+                // 正常结束前把未回报的子代理收尾（Codex 子代理可能仍在其进程内跑，如实说明）
+                drainPendingSubagents(acc, PENDING_SUBAGENT_NOTE, isError = false) +
+                    listOf(AgentEvent.Completed)
             }
-            "turn.failed" -> listOfNotNull(parseTurnFailed(obj))
+            "turn.failed" -> {
+                val failure = parseTurnFailed(obj)
+                listOf(failure) + drainPendingSubagents(acc, PENDING_SUBAGENT_NOTE, isError = true)
+            }
             else -> emptyList()
         }
     }
@@ -553,7 +563,21 @@ class CodexBridge @Inject constructor(
         val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
         val display = displayToolName(type, item)
         acc.toolNames[id] = display
-        return listOf(AgentEvent.ToolCallStarted(id = id, toolName = display, argsPreview = argsPreview(item)))
+        val events = mutableListOf<AgentEvent>(
+            AgentEvent.ToolCallStarted(id = id, toolName = display, argsPreview = argsPreview(item))
+        )
+        // collab_tool_call 里只有真正的新派发建子会话；等待/追加消息/关闭复用已有子代理
+        if (type == "collab_tool_call" && EngineSubagent.isSpawnCall(item.toString())) {
+            val sub = newEngineSubagentSession(item.toString())
+            acc.subagents[id] = sub
+            events += AgentEvent.SubagentSpawned(
+                subSessionId = sub.subSessionId,
+                memberName = sub.memberName,
+                title = sub.title,
+                prompt = sub.prompt
+            )
+        }
+        return events
     }
 
     private fun parseItemCompleted(obj: JsonObject, acc: TurnAccumulator): List<AgentEvent> {
@@ -590,15 +614,24 @@ class CodexBridge @Inject constructor(
                 } else {
                     emptyList()
                 }
-                return listOf(
+                val result = itemResult(item, status)
+                val events = mutableListOf<AgentEvent>(
                     AgentEvent.ToolCallFinished(
                         id = id,
                         toolName = name,
-                        result = itemResult(item, status),
+                        result = result,
                         isError = failed,
                         attachments = attachments
                     )
                 )
+                acc.subagents.remove(id)?.let { sub ->
+                    events += AgentEvent.SubagentFinished(
+                        subSessionId = sub.subSessionId,
+                        result = result.take(4000),
+                        isError = failed
+                    )
+                }
+                return events
             }
         }
     }
@@ -608,6 +641,16 @@ class CodexBridge @Inject constructor(
         val message = error?.get("message")?.jsonPrimitive?.contentOrNull
             ?: "Codex 运行失败"
         return AgentEvent.Failed(error = message)
+    }
+
+    /** 回合结束/失败时收尾仍未回报的子代理，避免子会话停在「有任务、无结果」的半截状态。 */
+    private fun drainPendingSubagents(acc: TurnAccumulator, message: String, isError: Boolean): List<AgentEvent> {
+        if (acc.subagents.isEmpty()) return emptyList()
+        val events = acc.subagents.values.map { sub ->
+            AgentEvent.SubagentFinished(subSessionId = sub.subSessionId, result = message, isError = isError)
+        }
+        acc.subagents.clear()
+        return events
     }
 
     /** 命令执行→bash、文件改动→file_edit、MCP 工具→server.tool、子代理协作→task，其余用协议类型名。 */

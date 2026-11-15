@@ -1977,6 +1977,9 @@
     <string name="subagent_edit">Edit subagent</string>
     <string name="subagent_enable">Enable this subagent</string>
     <string name="subagent_enable_hint">When off, the AI can no longer dispatch it; running subagents are unaffected</string>
+    <string name="subagent_engine_finished_no_result">The subagent finished, but the engine returned no result text.</string>
+    <string name="subagent_engine_failed_no_detail">The subagent failed, but the engine returned no error details.</string>
+    <string name="subagent_engine_turn_ended">The engine turn ended before this subagent reported back; it may still be running in the background — check the engine log for the outcome.</string>
     <string name="subagent_editor_new">New subagent</string>
     <string name="subagent_editor_edit">Edit subagent</string>
     <string name="subagent_editor_basic">Basics</string>

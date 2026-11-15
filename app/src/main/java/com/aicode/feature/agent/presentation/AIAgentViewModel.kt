@@ -1996,6 +1996,70 @@ class AIAgentViewModel @Inject constructor(
     }
 
     /**
+     * 外部 CLI 引擎派生的子代理：建子会话并落任务描述。
+     *
+     * 引擎在自己的进程里跑子代理，App 拿不到过程流；这里建「任务描述 + 最终报告」的骨架，
+     * 让侧栏出现分级会话，成员名与内置子代理同一套展示（`subagentType` → 成员名）。
+     */
+    private suspend fun createEngineSubagentSession(
+        parentSessionId: String,
+        event: AgentEvent.SubagentSpawned
+    ) {
+        if (sessionUseCase.getSessionById(event.subSessionId) != null) return
+        val parent = sessionUseCase.getSessionById(parentSessionId) ?: return
+        sessionUseCase.upsertSession(
+            sessionUseCase.newSubSessionEntity(
+                title = event.title.ifBlank { event.memberName },
+                parentId = parentSessionId,
+                parent = parent,
+                subagentType = event.memberName,
+                id = event.subSessionId
+            )
+        )
+        if (event.prompt.isNotBlank()) {
+            messagePersistenceUseCase.persist(event.subSessionId, MessageRole.USER, event.prompt)
+        }
+        FileLogger.i(
+            TAG,
+            "外部引擎子代理已建子会话: session=${event.subSessionId} parent=$parentSessionId member=${event.memberName}"
+        )
+    }
+
+    /**
+     * 外部引擎子代理结束：把最终报告落到子会话并给父会话发完成/失败回执。
+     *
+     * 回执走与内置子代理相同的 [SubAgentEventBus] 通道（父会话忙碌时搭车、空闲时注入一轮），
+     * 因此主会话能像内置引擎一样看到「子代理结束」类回执，而不是只剩一条工具行。
+     */
+    private suspend fun finishEngineSubagentSession(
+        parentSessionId: String,
+        event: AgentEvent.SubagentFinished
+    ) {
+        val child = sessionUseCase.getSessionById(event.subSessionId) ?: return
+        val report = event.result.ifBlank {
+            context.getString(
+                if (event.isError) R.string.subagent_engine_failed_no_detail
+                else R.string.subagent_engine_finished_no_result
+            )
+        }
+        messagePersistenceUseCase.persist(event.subSessionId, MessageRole.ASSISTANT, report)
+        sessionUseCase.touch(event.subSessionId, messagePersistenceUseCase.nextTimestamp())
+        archiveSubAgentReport(event.subSessionId, outcome = if (event.isError) "failed" else "completed")
+        subAgentEventBus.emit(
+            SubAgentEvent(
+                subSessionId = event.subSessionId,
+                parentSessionId = child.parentId ?: parentSessionId,
+                type = if (event.isError) SubAgentEventType.FAILED else SubAgentEventType.COMPLETED,
+                detail = if (event.isError) report else ""
+            )
+        )
+        FileLogger.i(
+            TAG,
+            "外部引擎子代理已收尾: session=${event.subSessionId} error=${event.isError}"
+        )
+    }
+
+    /**
      * 归档子代理最终输出到报告 catalog（`~/.aicode/subagent-reports/`）。
      * 子会话被 task(del) 删除后仍可回溯结论；qa/optimizer 报告也能跨会话检索复用。
      */
@@ -2714,6 +2778,10 @@ class AIAgentViewModel @Inject constructor(
                 else list.filter { tool -> limit.any { it == tool.name || (it.endsWith("*") && tool.name.startsWith(it.dropLast(1), ignoreCase = true)) } }
             }
 
+            // 本轮由外部引擎派生、尚未回报的子代理会话：引擎异常退出时据此一并收尾，
+            // 避免侧栏留下「有任务、无结果」的半截子会话。
+            val pendingEngineSubagents = LinkedHashSet<String>()
+
             var currentReasoningStart: Long? = null
             var currentReasoningEnd: Long? = null
             fun finishReasoning() {
@@ -2841,6 +2909,14 @@ class AIAgentViewModel @Inject constructor(
                             MessageRole.ASSISTANT,
                             context.getString(R.string.agent_budget_stopped, event.usedTokens, event.budgetTokens)
                         )
+                    }
+                    is AgentEvent.SubagentSpawned -> {
+                        pendingEngineSubagents += event.subSessionId
+                        createEngineSubagentSession(sessionId, event)
+                    }
+                    is AgentEvent.SubagentFinished -> {
+                        pendingEngineSubagents -= event.subSessionId
+                        finishEngineSubagentSession(sessionId, event)
                     }
                     is AgentEvent.AssistantText -> {
                         finishReasoning()
@@ -2976,6 +3052,17 @@ class AIAgentViewModel @Inject constructor(
                                 )
                             }
                         }
+                        // 外部引擎异常退出：本轮已派发但没等到结果的子代理一并收尾，子会话与父会话回执都不留半截
+                        if (pendingEngineSubagents.isNotEmpty()) {
+                            val reason = event.error.take(500)
+                            pendingEngineSubagents.toList().forEach { id ->
+                                finishEngineSubagentSession(
+                                    sessionId,
+                                    AgentEvent.SubagentFinished(subSessionId = id, result = reason, isError = true)
+                                )
+                            }
+                            pendingEngineSubagents.clear()
+                        }
                     }
                     AgentEvent.Completed -> {
                         setRetryState(sessionId, null)
@@ -2994,6 +3081,17 @@ class AIAgentViewModel @Inject constructor(
                                     )
                                 )
                             }
+                        }
+                        // 外部引擎本轮正常结束但仍有子代理没回报：如实收尾（引擎异步子代理可能仍在跑）
+                        if (pendingEngineSubagents.isNotEmpty()) {
+                            val note = context.getString(R.string.subagent_engine_turn_ended)
+                            pendingEngineSubagents.toList().forEach { id ->
+                                finishEngineSubagentSession(
+                                    sessionId,
+                                    AgentEvent.SubagentFinished(subSessionId = id, result = note, isError = false)
+                                )
+                            }
+                            pendingEngineSubagents.clear()
                         }
                         // 仅当 App 不在前台时发 agent 完成通知（避免打扰正在看对话的用户）。
                         // 定时任务离屏实例由任务完成通知统一告知，不在此重复。

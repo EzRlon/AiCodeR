@@ -96,6 +96,9 @@ class ClaudeCodeBridge @Inject constructor(
         /** 后台子代理完成时 CLI 注入的纯文本通知标签（headless stream-json 的 user 消息）。 */
         const val TASK_NOTIFICATION_TAG = "<task-notification>"
 
+        /** 回合结束时仍未回报的子代理：如实说明，不伪造成功/失败。 */
+        const val PENDING_SUBAGENT_NOTE = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。"
+
         const val MCP_SERVER_NAME = "permission_bridge"
         const val MCP_TOOL_NAME = "request_permission"
 
@@ -612,6 +615,8 @@ class ClaudeCodeBridge @Inject constructor(
         var pendingTodos: List<EngineTodoMirror.NativeTodo> = emptyList()
         /** 已后台启动、尚未收到完成通知的子代理 tool_use id（Claude 异步 Task）。 */
         val asyncToolIds = mutableSetOf<String>()
+        /** tool_use id → 本次派生的子代理会话；收到 tool_result / 完成通知 / 回合收尾时移除。 */
+        val subagents = mutableMapOf<String, EngineSubagentSession>()
         fun resetBlocks() { text.clear(); reasoning.clear() }
     }
 
@@ -676,6 +681,9 @@ class ClaudeCodeBridge @Inject constructor(
         val text = StringBuilder()
         val reasoning = StringBuilder()
         val toolCalls = mutableListOf<ToolCall>()
+        // 引擎侧子代理：Task/Agent 声明时就建子会话（侧栏出现分级会话、成员名可辨），
+        // 结果在 tool_result（同步）或 <task-notification>（异步）回来时收尾。
+        val spawnEvents = mutableListOf<AgentEvent>()
         for (block in blocks) {
             val b = block as? JsonObject ?: continue
             when (b["type"]?.jsonPrimitive?.contentOrNull) {
@@ -688,6 +696,16 @@ class ClaudeCodeBridge @Inject constructor(
                     // Claude 的 Task/Agent 归一成内置的 task：图标、场景文案、成员名复用同一条链路
                     val displayName = EngineSubagent.normalizeToolName(name)
                     acc.toolNames[id] = displayName
+                    if (EngineSubagent.isSubagentTool(name) && id.isNotEmpty()) {
+                        val sub = newEngineSubagentSession(input.toString())
+                        acc.subagents[id] = sub
+                        spawnEvents += AgentEvent.SubagentSpawned(
+                            subSessionId = sub.subSessionId,
+                            memberName = sub.memberName,
+                            title = sub.title,
+                            prompt = sub.prompt
+                        )
+                    }
                     // Claude 的 TodoWrite（todos 数组）镜像进 App 待办表：待办卡片由此拉起/刷新/自动收起
                     if (name.equals(CLAUDE_TODO_TOOL, ignoreCase = true)) {
                         acc.pendingTodos = todoMirror.parseTodos(input["todos"] as? kotlinx.serialization.json.JsonArray)
@@ -717,6 +735,7 @@ class ClaudeCodeBridge @Inject constructor(
                 cachedInputTokens = usage.cachedInputTokens
             )
         )
+        events += spawnEvents
         // 本体链路靠 ToolCallStarted 落「执行中」工具行与参数预览：CLI 工具在 CLI 侧执行，
         // 这里在声明时补发 Started，Finished 由 tool_result 回来时配对。
         toolCalls.forEach { tc ->
@@ -740,12 +759,21 @@ class ClaudeCodeBridge @Inject constructor(
         if (notification != null && acc.asyncToolIds.isNotEmpty()) {
             val id = acc.asyncToolIds.first()
             acc.asyncToolIds.remove(id)
+            val notificationFailed = notification.contains("status>failed", ignoreCase = true)
             events += AgentEvent.ToolCallFinished(
                 id = id,
                 toolName = acc.toolNames[id] ?: EngineSubagent.TOOL_NAME,
                 result = notification.take(4000),
-                isError = notification.contains("status>failed", ignoreCase = true)
+                isError = notificationFailed
             )
+            // 子会话收尾：通知正文就是子代理的最终报告
+            acc.subagents.remove(id)?.let { sub ->
+                events += AgentEvent.SubagentFinished(
+                    subSessionId = sub.subSessionId,
+                    result = notification.take(4000),
+                    isError = notificationFailed
+                )
+            }
         }
         content.forEach { block ->
             val b = block as? JsonObject ?: return@forEach
@@ -775,6 +803,14 @@ class ClaudeCodeBridge @Inject constructor(
                 isError = failed,
                 attachments = attachments
             )
+            // 同步 Task：tool_result 就是子代理的最终报告；异步启动的已在上面 return，等通知收尾
+            acc.subagents.remove(toolUseId)?.let { sub ->
+                events += AgentEvent.SubagentFinished(
+                    subSessionId = sub.subSessionId,
+                    result = resultText.take(4000),
+                    isError = failed
+                )
+            }
         }
         return events
     }
@@ -811,11 +847,13 @@ class ClaudeCodeBridge @Inject constructor(
             events += AgentEvent.ToolCallFinished(
                 id = id,
                 toolName = acc.toolNames[id] ?: EngineSubagent.TOOL_NAME,
-                result = "子代理已转入后台运行，本轮在它回报前结束；完成情况以引擎日志为准。",
+                result = PENDING_SUBAGENT_NOTE,
                 isError = false
             )
         }
         acc.asyncToolIds.clear()
+        // 回合失败时未回报的子代理一并按失败收尾（引擎已退出，它们不可能再回报）
+        events += drainPendingSubagents(acc, PENDING_SUBAGENT_NOTE, isError = isError)
         if (isError) {
             val detail = obj["result"]?.jsonPrimitive?.contentOrNull
                 ?: obj["error"]?.jsonPrimitive?.contentOrNull
@@ -832,6 +870,19 @@ class ClaudeCodeBridge @Inject constructor(
     }
 
     private fun JsonObject.intOf(key: String): Int = (this[key] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+
+    /**
+     * 回合结束/异常中止时收尾仍未回报的子代理：给子会话落一条如实说明并通知父会话，
+     * 避免子会话停在「有任务、无结果」的半截状态。已收尾的不会在 [TurnAccumulator.subagents] 里。
+     */
+    private fun drainPendingSubagents(acc: TurnAccumulator, message: String, isError: Boolean): List<AgentEvent> {
+        if (acc.subagents.isEmpty()) return emptyList()
+        val events = acc.subagents.values.map { sub ->
+            AgentEvent.SubagentFinished(subSessionId = sub.subSessionId, result = message, isError = isError)
+        }
+        acc.subagents.clear()
+        return events
+    }
 
     // ── 桥接资产（脚本 + MCP 配置）──────────────────────────────────
 

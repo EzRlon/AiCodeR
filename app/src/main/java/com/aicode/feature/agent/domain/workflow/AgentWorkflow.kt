@@ -100,6 +100,29 @@ sealed class AgentEvent {
 
     /** 单次任务 token 预算用尽且用户选择停止：本轮就此结束，UI 落一条说明消息。 */
     data class BudgetStopped(val usedTokens: Int, val budgetTokens: Int) : AgentEvent()
+
+    /**
+     * 外部 CLI 引擎在**引擎进程内部**派生了子代理（Claude `Task` / Codex `collab_tool_call` /
+     * OpenCode `task`）。这类子代理不经过本体 TaskTool，桥接层只能拿到「调用参数 + 最终结果」，
+     * 因此由桥接在声明时发本事件、在结果返回时发 [SubagentFinished]，ViewModel 据此建子会话，
+     * 让侧栏出现分级会话、结束后给主会话回执。
+     */
+    data class SubagentSpawned(
+        val subSessionId: String,
+        val memberName: String,
+        val title: String,
+        val prompt: String
+    ) : AgentEvent()
+
+    /**
+     * 外部引擎子代理结束：[result] 为最终报告（或失败原因），落子会话末条回复并给父会话回执。
+     * 引擎侧拿不到完整过程，子会话内容是「任务描述 + 最终报告」，与内置子代理的完整时间线不同。
+     */
+    data class SubagentFinished(
+        val subSessionId: String,
+        val result: String,
+        val isError: Boolean
+    ) : AgentEvent()
 }
 
 interface AgentWorkflow {

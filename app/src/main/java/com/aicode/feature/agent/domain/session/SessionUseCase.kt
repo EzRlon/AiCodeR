@@ -189,6 +189,7 @@ class SessionUseCase @Inject constructor(
      * 创建子代理会话，继承父会话的 provider/model/reasoningEffort/workspacePath。
      * @param title 子会话标题（由 task 描述派生）
      * @param parentId 父会话 id
+     * @param id 子会话 id；外部引擎桥接在派发时先生成，保证「派发/结束」两个事件能对上，默认随机生成
      * @param subagentType 子代理类型 id（自定义 agent 名，或默认通用子代理标识）
      * @param providerId 覆盖 provider；null 表示继承父会话
      * @param model 覆盖模型；null 表示继承父会话
@@ -203,11 +204,12 @@ class SessionUseCase @Inject constructor(
         providerId: String? = null,
         model: String? = null,
         reasoningEffort: String? = null,
-        mode: AgentMode? = null
+        mode: AgentMode? = null,
+        id: String = UUID.randomUUID().toString()
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         return ChatSessionEntity(
-            id = UUID.randomUUID().toString(),
+            id = id,
             title = title,
             workspacePath = parent.workspacePath,
             createdAt = now,

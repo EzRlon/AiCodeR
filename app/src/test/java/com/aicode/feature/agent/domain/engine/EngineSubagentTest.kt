@@ -58,4 +58,42 @@ class EngineSubagentTest {
         assertFalse(EngineSubagent.isAsyncLaunch("""{"status":"completed","content":"ok"}"""))
         assertFalse(EngineSubagent.isAsyncLaunch(null))
     }
+
+    @Test
+    fun `成员标识只认代理名，不拿任务描述冒充`() {
+        assertEquals("Explore", EngineSubagent.agentName("""{"subagent_type":"Explore","description":"查代码"}"""))
+        assertEquals("qa", EngineSubagent.agentName("""{"agent":"qa","prompt":"审一下"}"""))
+        assertNull(EngineSubagent.agentName("""{"description":"写测试","prompt":"完整指令"}"""))
+    }
+
+    @Test
+    fun `子会话标题取描述首行并截断，指令取完整正文`() {
+        val args = """{"description":"  修复登录 bug  \n第二行","prompt":"完整指令正文"}"""
+        assertEquals("修复登录 bug", EngineSubagent.taskTitle(args))
+        assertEquals("完整指令正文", EngineSubagent.taskPrompt(args))
+        assertNull(EngineSubagent.taskTitle("""{"prompt":"   "}"""))
+        assertEquals(EngineSubagent.TITLE_MAX, EngineSubagent.taskTitle("""{"description":"${"长".repeat(80)}"}""")!!.length)
+    }
+
+    @Test
+    fun `Codex 控制类协作调用不建子会话，新派发才建`() {
+        // 带任务指令、无动作字段 → 视为派发
+        assertTrue(EngineSubagent.isSpawnCall("""{"prompt":"实现登录"}"""))
+        assertTrue(EngineSubagent.isSpawnCall("""{"tool":"spawn_agent","prompt":"实现登录"}"""))
+        // 等待/追加消息/关闭等控制调用不建
+        assertFalse(EngineSubagent.isSpawnCall("""{"tool":"wait","prompt":"继续"}"""))
+        assertFalse(EngineSubagent.isSpawnCall("""{"tool":"send_input","prompt":"补充"}"""))
+        // 没有任务指令也不是派发
+        assertFalse(EngineSubagent.isSpawnCall("""{"tool":"spawn_agent"}"""))
+    }
+
+    @Test
+    fun `会话快照带稳定 id 与兜底成员名`() {
+        val sub = newEngineSubagentSession("""{"description":"调研","prompt":"看一下"}""")
+        assertEquals(EngineSubagent.DEFAULT_MEMBER, sub.memberName)
+        assertEquals("调研", sub.title)
+        assertEquals("看一下", sub.prompt)
+        assertTrue(sub.subSessionId.isNotBlank())
+        assertTrue(sub.subSessionId != newEngineSubagentSession("""{"prompt":"再派一次"}""").subSessionId)
+    }
 }

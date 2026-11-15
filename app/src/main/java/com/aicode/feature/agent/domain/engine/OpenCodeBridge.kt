@@ -493,16 +493,33 @@ class OpenCodeBridge @Inject constructor(
         } else {
             emptyList()
         }
-        return listOf(
-            AgentEvent.ToolCallStarted(id = id, toolName = toolName, argsPreview = input.toString().take(400)),
-            AgentEvent.ToolCallFinished(
-                id = id,
-                toolName = toolName,
-                result = result.take(4000),
-                isError = isError,
-                attachments = attachments
-            )
+        val events = mutableListOf<AgentEvent>(
+            AgentEvent.ToolCallStarted(id = id, toolName = toolName, argsPreview = input.toString().take(400))
         )
+        // OpenCode 的工具调用只在成败后一次性到达：子代理在这里同时「建会话 + 收尾」。
+        // 子会话内容是「任务描述 + 最终报告」骨架（引擎进程内部执行，App 看不到过程）。
+        if (EngineSubagent.isSubagentTool(toolName)) {
+            val sub = newEngineSubagentSession(input.toString())
+            events += AgentEvent.SubagentSpawned(
+                subSessionId = sub.subSessionId,
+                memberName = sub.memberName,
+                title = sub.title,
+                prompt = sub.prompt
+            )
+            events += AgentEvent.SubagentFinished(
+                subSessionId = sub.subSessionId,
+                result = result.take(4000),
+                isError = isError
+            )
+        }
+        events += AgentEvent.ToolCallFinished(
+            id = id,
+            toolName = toolName,
+            result = result.take(4000),
+            isError = isError,
+            attachments = attachments
+        )
+        return events
     }
 
     // ── session 映射持久化 ────────────────────────────────────────
