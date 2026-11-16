@@ -166,18 +166,61 @@ class VncServiceController @Inject constructor(
          * 改为无条件拉起——若端口已被旧实例占用，新进程绑定失败自然退出，旧实例继续服务，
          * 幂等；转发层孤儿由 [CLEANUP_SCRIPT] 在每次尝试前清理（Xvfb 除外，见该脚本注释）。
          */
+        /**
+         * 极简桌面配置：只有任务栏、时钟、右键菜单和纯色背景。
+         * 写进 ~/.jwmrc（容器内 HOME=/root）而不是另起配置系统——jwm 是现成组件，配置只是数据。
+         * 每次启动覆盖写入，保证升级后配置不会与代码版本漂移。
+         */
+        private val JWM_CONFIG = """
+            <JWM>
+              <RootMenu onroot="3">
+                <Program label="Terminal">xterm -geometry 100x30 -title "AiCode Shell"</Program>
+                <Separator/>
+                <Program label="Restart jwm">jwm -restart</Program>
+                <Exit label="Close menu"/>
+              </RootMenu>
+              <Desktops width="2" height="1">
+                <Background type="solid">#1e1e1e</Background>
+              </Desktops>
+              <TaskList/>
+              <Clock format="%H:%M"/>
+            </JWM>
+        """.trimIndent()
+
+        /**
+         * 把 [JWM_CONFIG] 逐行加单引号，供 `printf '%s\n' '行1' '行2' …` 原样写入。
+         *
+         * 为什么不用 heredoc：整段启动脚本是 Kotlin 原始字符串 + `trimIndent()`，
+         * 去缩进量取决于全脚本最小缩进，写死缩进的 `JWM_EOF` 终止符很可能不被 shell 识别，
+         * 于是把随后的 Xvfb/x11vnc/websockify 全部当成配置内容，表现为「VNC 无画面」（已实测）。
+         * 单引号包裹后 shell 不做任何展开，XML 里的 `<` `>` `#` `%` 都安全。
+         */
+        private val JWM_CONFIG_LINES: String = JWM_CONFIG.lines()
+            .joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
+
         private val HOLD_SCRIPT = """
-            if ! command -v websockify >/dev/null 2>&1; then
+            # 极简桌面（2026-11-16 用户定）：复用现有 Xvfb/x11vnc/websockify 管线，
+            # 只补 jwm（窗口管理器/任务栏/右键菜单）+ xterm（可用终端）+ 基础字体。
+            # 不引入 LXDE/XFCE 等完整桌面（磁盘与内存代价高一个数量级）。
+            if ! command -v websockify >/dev/null 2>&1 || ! command -v jwm >/dev/null 2>&1; then
                 if command -v apk >/dev/null 2>&1; then
-                    apk add --no-cache xvfb x11vnc websockify
+                    apk add --no-cache xvfb x11vnc websockify jwm xterm font-misc-misc
                 elif command -v apt-get >/dev/null 2>&1; then
                     apt-get update -y >/dev/null 2>&1
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify jwm xterm xfonts-base
                 fi
             fi
+            # 桌面配置：jwm 的菜单/任务栏/背景，数据文件而非新实现。
+            # 刻意不用 heredoc：整段脚本经 trimIndent 后缩进不可控，带缩进的 JWM_EOF 不会被识别为
+            # 终止符，会把后面的 Xvfb/x11vnc/websockify 全吞进配置里（实测过一次黑屏）。
+            printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc
             # :1 可能已由 multi-llm 的 MCP 会话持有（不受本会话 30 分钟上限影响），
             # 此时绑定失败退出属预期，x11vnc/websockify 继续接管同一个 X 服务器。
             Xvfb :1 -screen 0 1280x800x24 -nolock -nolisten tcp >/dev/null 2>&1 &
+            sleep 1
+            # 用精确进程名（-x）判重，避免命令行子串匹配命中父 shell 自杀（见上方注释）。
+            pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
+            pgrep -x xterm >/dev/null 2>&1 || (DISPLAY=:1 xterm -geometry 100x30 -fn fixed -bg black -fg white -title "AiCode Shell" >/dev/null 2>&1 &)
             sleep 1
             x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
             sleep 1

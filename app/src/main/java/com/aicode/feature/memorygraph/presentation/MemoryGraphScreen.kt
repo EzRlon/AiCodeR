@@ -38,7 +38,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +61,6 @@ import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clock
 import compose.icons.feathericons.MessageSquare
-import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Share2
 import com.aicode.R
 import com.aicode.core.ui.AppTextField
@@ -525,15 +527,7 @@ fun MemoryGraphScreen(
                         )
                     }
                 },
-                actions = {
-                    IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(
-                            FeatherIcons.RefreshCw,
-                            contentDescription = stringResource(R.string.memory_graph_refresh),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                actions = {}
             )
         }
     ) { padding ->
@@ -555,12 +549,35 @@ fun MemoryGraphScreen(
         )
 
         // ── 三页（与 Git 本地仓库同款）：结论时间线 / 会话 / 图谱，底部悬浮页签切换 ──
+        // 刷新统一改为「大幅下拉」：顶栏不再放刷新按钮（2026-11-16 用户反馈 8）。
+        // PullToRefreshBox 只在内容滚到顶时可下拉，触发阈值由系统按屏高推导；
+        // 共用一份刷新中标记，1.2s 后自动收起（refresh/sync 都是幂等快照刷新）。
+        val pullState = rememberPullToRefreshState()
+        var refreshing by remember { mutableStateOf(false) }
+        LaunchedEffect(refreshing) {
+            if (refreshing) {
+                kotlinx.coroutines.delay(1200)
+                refreshing = false
+            }
+        }
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                 ) { page ->
+                    PullToRefreshBox(
+                        isRefreshing = refreshing,
+                        onRefresh = {
+                            if (!refreshing) {
+                                refreshing = true
+                                viewModel.refresh()
+                                viewModel.syncGraph(workspacePath)
+                            }
+                        },
+                        state = pullState,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
                     when (page) {
                         0 -> ConclusionsSection(
                             workspacePath = workspacePath,
@@ -657,6 +674,7 @@ fun MemoryGraphScreen(
                             workspacePath = workspacePath,
                             viewModel = viewModel
                         )
+                    }
                     }
                 }
             }
