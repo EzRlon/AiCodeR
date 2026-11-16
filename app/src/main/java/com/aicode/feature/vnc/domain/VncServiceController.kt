@@ -237,13 +237,21 @@ class VncServiceController @Inject constructor(
                     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                         xvfb x11vnc python3-websockify openbox lxpanel pcmanfm lxterminal \
                         lxrandr lxappearance synaptic fonts-wqy-zenhei fonts-noto-cjk fonts-dejavu-core \
-                        locales dbus-x11 x11-xserver-utils >/dev/null 2>&1 || true
+                        locales dbus-x11 libglib2.0-bin x11-xserver-utils >/dev/null 2>&1 || true
                     command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
                     # 生成中文 locale：没有它 GTK/Qt 程序仍按英文渲染。
-                    if command -v locale-gen >/dev/null 2>&1 && [ -f /etc/locale.gen ]; then
+                    if [ -f /etc/locale.gen ]; then
                         grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen
-                        locale-gen >/dev/null 2>&1 || true
+                        command -v locale-gen >/dev/null 2>&1 && locale-gen >/dev/null 2>&1 || true
+                        command -v localedef >/dev/null 2>&1 && localedef -i zh_CN -f UTF-8 zh_CN.UTF-8 >/dev/null 2>&1 || true
                     fi
+                    # 明确指定 GTK 字体：字体装了但 fontconfig 没选到中文字体时仍会显示方块。
+                    mkdir -p /root/.config/gtk-3.0 /root/.config/gtk-2.0
+                    printf '%s\n' '[Settings]' 'gtk-font-name=Noto Sans CJK SC 10' \
+                        'gtk-theme-name=Adwaita' 'gtk-icon-theme-name=Adwaita' \
+                        > /root/.config/gtk-3.0/settings.ini
+                    printf '%s\n' 'gtk-font-name = "Noto Sans CJK SC 10"' \
+                        > /root/.config/gtk-2.0/gtkrc
                 elif command -v apk >/dev/null 2>&1; then
                     apk add --no-cache xvfb x11vnc websockify openbox lxpanel pcmanfm lxterminal \
                         font-wqy-zenhei font-noto-cjk xrandr xsetroot >/dev/null 2>&1 || true
@@ -276,6 +284,14 @@ class VncServiceController @Inject constructor(
             rm -f /root/Desktop/终端.desktop /root/Desktop/文件.desktop \
                   /root/Desktop/软件包管理.desktop /root/Desktop/系统设置.desktop 2>/dev/null || true
             chmod +x /root/Desktop/*.desktop 2>/dev/null || true
+            # 标记为「可信启动器」：不标记时 pcmanfm 双击 .desktop 会弹 Execute File 询问框。
+            command -v gio >/dev/null 2>&1 && for f in /root/Desktop/*.desktop; do
+                gio set "${'$'}f" metadata::trusted true >/dev/null 2>&1 || true
+            done
+            # libfm：桌面双击直接执行，不再弹执行确认；桌面使用本地文件图标。
+            mkdir -p /root/.config/libfm
+            printf '%s\n' '[config]' 'quick_exec=1' 'single_click=0' \
+                > /root/.config/libfm/libfm.conf
             # 已安装的常见图形程序（Chrome/Chromium/Firefox/VS Code 等）自动补桌面图标。
             # 之前只创建了四个内置快捷方式，用户装的浏览器不会自动出现在桌面。
             for app in google-chrome google-chrome-stable chromium chromium-browser firefox code; do
@@ -291,17 +307,34 @@ class VncServiceController @Inject constructor(
             i=0
             while [ ${'$'}i -lt 10 ] && [ ! -S /tmp/.X11-unix/X1 ]; do sleep 0.5; i=${'$'}((i+1)); done
             command -v xsetroot >/dev/null 2>&1 && DISPLAY=:1 xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
-            # 窗口管理器：openbox 优先；缺失退回 jwm/twm。
-            if command -v openbox >/dev/null 2>&1; then
+            # 桌面会话总线：lxpanel/pcmanfm 缺 dbus 会静默退出（表现就是没有任务栏）。
+            if command -v dbus-launch >/dev/null 2>&1 && [ -z "${'$'}DBUS_SESSION_BUS_ADDRESS" ]; then
+                eval "${'$'}(dbus-launch --sh-syntax)" >/dev/null 2>&1 || true
+            fi
+            export XDG_CURRENT_DESKTOP=LXDE
+            # 任务栏 + 开始菜单：优先 lxpanel；起不来就换 jwm（自带任务栏/菜单），
+            # 不能只起 openbox——那样桌面没有开始菜单也没有任务栏（用户截图实测）。
+            panel_ok=0
+            if command -v lxpanel >/dev/null 2>&1; then
+                pgrep -x lxpanel >/dev/null 2>&1 || (DISPLAY=:1 lxpanel >/dev/null 2>&1 &)
+                sleep 1
+                pgrep -x lxpanel >/dev/null 2>&1 && panel_ok=1
+            fi
+            if [ "${'$'}panel_ok" = "1" ] && command -v openbox >/dev/null 2>&1; then
                 pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:1 openbox >/dev/null 2>&1 &)
             elif command -v jwm >/dev/null 2>&1; then
+                # 切到 jwm：它自带任务栏（TaskList/Clock）与右键菜单，保证一定有开始菜单入口。
                 pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
+            elif command -v openbox >/dev/null 2>&1; then
+                pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:1 openbox >/dev/null 2>&1 &)
             elif command -v twm >/dev/null 2>&1; then
                 pgrep -x twm >/dev/null 2>&1 || (DISPLAY=:1 twm >/dev/null 2>&1 &)
             fi
-            # 任务栏 + 开始菜单（lxpanel）与桌面图标/文件管理（pcmanfm --desktop）。
-            command -v lxpanel >/dev/null 2>&1 && { pgrep -x lxpanel >/dev/null 2>&1 || (DISPLAY=:1 lxpanel >/dev/null 2>&1 &); }
             command -v pcmanfm >/dev/null 2>&1 && { pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &); }
+            # 诊断：把关键组件是否就绪写进日志文件，真机可据此判断缺什么。
+            { echo "panel_ok=${'$'}panel_ok"; for c in lxpanel openbox jwm pcmanfm synaptic; do
+                command -v "${'$'}c" >/dev/null 2>&1 && echo "${'$'}c=yes" || echo "${'$'}c=no"; done
+              echo "fonts=$(fc-list 2>/dev/null | grep -ci 'CJK\\|WenQuanYi')"; } > /root/.aicode-desktop-diag.txt 2>&1
             sleep 1
             x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
             sleep 1

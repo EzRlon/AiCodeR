@@ -92,7 +92,9 @@ setInterval(fitScreen, 1000);
 // 单指拖动=拖动；双指拖动=滚轮；双指捏合=缩放。这些都是 noVNC gesturehandler
 // 自带的，**不再自写触控层覆盖它**（上一版覆盖后三键/滚动全部失效）。
 // 这里只做两件事：点画面时唤起键盘；可选「触控板」模式做相对移动。
-let pointerMode = 'direct'; // direct = 交给 noVNC 原生手势；trackpad = 单指相对移动
+// 默认触控板：手机小窗里直触很难点准（用户实测），相对移动+加速能精确定位。
+// 仍可一键切回直触，使用 noVNC 原生三键手势。
+let pointerMode = 'trackpad'; // direct = noVNC 原生手势；trackpad = 单指相对移动
 let tapMask = 1;            // 轻点使用哪个键（默认左键；原生侧可切右键）
 let cursor = { x: 0, y: 0 };
 let dragging = false;
@@ -319,6 +321,7 @@ window.vncSetMouseButton = function (b) {
   tapMask = (b === 2) ? 4 : 1;
 };
 
+setMode('trackpad');
 setStatus(TEXT.connecting);
 window.vncTryConnect();
 </script>
