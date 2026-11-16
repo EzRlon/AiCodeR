@@ -170,11 +170,23 @@ class OrchestrationBoardServiceTest {
                 )
             ).ok
         )
+        // 终态重开必须写原因：无 note 拒绝，写了原因才允许
+        assertFalse(
+            service.handle(
+                root,
+                args("action" to str("update"), "task" to str("修复空指针"), "status" to str("doing"))
+            ).ok
+        )
         // 重开后再完成：本次调用没给 evidence，不能拿上一次的证据充数
         assertTrue(
             service.handle(
                 root,
-                args("action" to str("update"), "task" to str("修复空指针"), "status" to str("doing"))
+                args(
+                    "action" to str("update"),
+                    "task" to str("修复空指针"),
+                    "status" to str("doing"),
+                    "note" to str("复验发现回归，重新打开")
+                )
             ).ok
         )
         assertFalse(
