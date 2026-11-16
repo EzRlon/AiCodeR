@@ -86,6 +86,11 @@ class PermissionBridgeServer @Inject constructor(
 
     /** 惰性启动监听（幂等），返回回环端口。[token] 为本实例的请求鉴权令牌（随机串，与会话 id 无关）。 */
     suspend fun ensureStarted(token: String, sessionId: String): Int = startMutex.withLock {
+        // 令牌改为跟随进程生命周期后，同会话新回合要清掉上一枚，避免集合无界增长。
+        tokenSessions.entries.firstOrNull { it.value == sessionId && it.key != token }?.let { stale ->
+            expectedTokens.remove(stale.key)
+            tokenSessions.remove(stale.key)
+        }
         expectedTokens.add(token)
         tokenSessions[token] = sessionId
         serverSocket?.let { return it.localPort }

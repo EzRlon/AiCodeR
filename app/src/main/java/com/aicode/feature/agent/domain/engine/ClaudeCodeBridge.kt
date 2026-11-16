@@ -461,6 +461,9 @@ class ClaudeCodeBridge @Inject constructor(
         // 取消即杀进程：本体停止按钮取消 collect 时，进程必须立刻死，否则僵尸 claude 继续烧 token。
         // 走 registry 而不是只 process.destroy()：后者挂在 Job 完成回调上，阻塞读时可能迟迟不触发。
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
+            // 令牌跟随进程生命周期：进程被停止时才失效，回合结束不删（否则下一回合的
+            // send_file 等数据通道调用会因旧令牌被移除而 token mismatch）。
+            permissionBridgeServer.removeToken(bridgeToken)
             processRegistry.kill(sessionId, process)
         }
 
@@ -604,7 +607,6 @@ class ClaudeCodeBridge @Inject constructor(
             killOnCancel?.dispose()
             stderrDrain.cancel()
             watchdog.cancel()
-            permissionBridgeServer.removeToken(bridgeToken)
             processRegistry.unregister(sessionId, process)
             runCatching { process.destroyForcibly() }
         }

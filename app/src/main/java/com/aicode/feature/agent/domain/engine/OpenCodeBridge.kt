@@ -308,6 +308,7 @@ class OpenCodeBridge @Inject constructor(
             }
         }
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
+            permissionBridgeServer.removeToken(bridgeToken)
             processRegistry.kill(sessionId, process)
         }
 
@@ -410,7 +411,6 @@ class OpenCodeBridge @Inject constructor(
             killOnCancel?.dispose()
             stderrDrain.cancel()
             watchdog.cancel()
-            permissionBridgeServer.removeToken(bridgeToken)
             processRegistry.unregister(sessionId, process)
             runCatching { process.destroyForcibly() }
             // 编排指令文件只在进程存活期间需要（启动时读取）；回合结束删除本会话的那一份，

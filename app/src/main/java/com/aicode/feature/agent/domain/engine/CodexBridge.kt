@@ -432,6 +432,7 @@ class CodexBridge @Inject constructor(
             }
         }
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
+            permissionBridgeServer.removeToken(bridgeToken)
             processRegistry.kill(sessionId, process)
         }
 
@@ -519,7 +520,6 @@ class CodexBridge @Inject constructor(
             killOnCancel?.dispose()
             stderrDrain.cancel()
             watchdog.cancel()
-            permissionBridgeServer.removeToken(bridgeToken)
             processRegistry.unregister(sessionId, process)
             runCatching { process.destroyForcibly() }
             // thread.started 在认证前就发出：即便回合失败，映射也已建立，下回合可续接
