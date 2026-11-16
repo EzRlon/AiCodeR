@@ -372,6 +372,26 @@ class VncOverlayViewModel @Inject constructor(
         )
     }
 
+    /**
+     * 重置浮窗几何到默认位置/尺寸（用户反馈：窗口跑到状态栏上、点不到）。
+     * 置为 MIN_VALUE/0 后由 UI 的 ensureGeometry 按当前父容器重新落默认值，同时取消钉住。
+     */
+    fun resetGeometry() {
+        _window.update {
+            it.copy(
+                offsetX = Float.MIN_VALUE,
+                offsetY = Float.MIN_VALUE,
+                widthDp = 0f,
+                heightDp = 0f,
+                pinned = false,
+            )
+        }
+        viewModelScope.launch {
+            prefsRepository.saveGeometry(Float.MIN_VALUE, Float.MIN_VALUE, 0f, 0f)
+            prefsRepository.savePinned(false)
+        }
+    }
+
     fun persistGeometry() {
         val w = _window.value
         viewModelScope.launch {

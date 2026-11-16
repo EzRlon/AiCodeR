@@ -3138,6 +3138,7 @@
     <string name="vnc_pin">钉住小窗（固定位置）</string>
     <string name="vnc_unpin">取消钉住</string>
     <string name="vnc_paste">粘贴剪贴板到 VNC</string>
+    <string name="vnc_reset_position">重置窗口位置</string>
     <string name="vnc_minimize">最小化为悬浮球</string>
     <string name="vnc_fullscreen">全屏</string>
     <string name="vnc_exit_fullscreen">退出全屏</string>

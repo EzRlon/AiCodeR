@@ -84,6 +84,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.feature.vnc.domain.VncServiceState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
+import compose.icons.feathericons.Crosshair
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Lock
 import compose.icons.feathericons.Maximize2
@@ -444,6 +445,12 @@ private fun VncTitleBar(
             contentDescription = if (window.pinned) R.string.vnc_unpin else R.string.vnc_pin,
             active = window.pinned,
             onClick = { viewModel.setPinned(!window.pinned) },
+        )
+        // 位置重置：窗口被拖到状态栏后方/屏幕外时，一键回到默认位置。
+        VncTitleAction(
+            icon = FeatherIcons.Crosshair,
+            contentDescription = R.string.vnc_reset_position,
+            onClick = viewModel::resetGeometry,
         )
         VncTitleAction(
             icon = FeatherIcons.ChevronDown,

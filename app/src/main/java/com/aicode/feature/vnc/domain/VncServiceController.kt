@@ -218,10 +218,12 @@ class VncServiceController @Inject constructor(
             .joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
 
         private val HOLD_SCRIPT = """
-            # 极简 GUI 桌面：jwm（任务栏/菜单/窗口管理）+ pcmanfm（桌面图标/壁纸/文件管理）。
-            # 不再自动开终端；终端保留在右键菜单与桌面快捷方式里。
-            # 实测黑屏根因：Alpine minirootfs 默认只有 main 仓库，jwm/pcmanfm 在 community，
-            # apk add 一直失败 → 只剩 X 与鼠标指针。这里先补 community 再装。
+            # 正常操作系统形态的轻量桌面（2026-11-17 用户定）：
+            #   openbox（窗口管理）+ lxpanel（任务栏 + 开始菜单）+ pcmanfm（桌面/文件）
+            #   + 中文环境（WenQuanYi 字体 + zh_CN.UTF-8）+ 软件包管理入口（Synaptic）。
+            # 不做成 Windows 全量，但开始菜单/任务栏/右键菜单/中文/包管理都有。
+            export LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8 LANGUAGE=zh_CN:zh
+            # Alpine 的 jwm/pcmanfm 在 community 仓库，先补上（Debian 无此步）。
             if command -v apk >/dev/null 2>&1 && [ -f /etc/apk/repositories ]; then
                 main_line=${'$'}(grep -m1 -E '^[^#].*/main' /etc/apk/repositories)
                 if [ -n "${'$'}main_line" ]; then
@@ -229,56 +231,63 @@ class VncServiceController @Inject constructor(
                     grep -qxF "${'$'}community_line" /etc/apk/repositories || echo "${'$'}community_line" >> /etc/apk/repositories
                 fi
             fi
-            # 分两段装：最小桌面（jwm/xterm）同步装、立即出画面；pcmanfm（GTK，上百 MB）
-            # 放到后台装，绝不阻塞首次启动——这正是之前「启动很慢，最后只剩黑屏」的原因。
             if [ ! -f /root/.aicode-desktop.ok ]; then
                 if command -v apt-get >/dev/null 2>&1; then
                     apt-get update -y >/dev/null 2>&1 || true
                     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                        xvfb x11vnc python3-websockify jwm twm xterm xfonts-base x11-xserver-utils >/dev/null 2>&1 || true
+                        xvfb x11vnc python3-websockify openbox lxpanel pcmanfm lxterminal \
+                        lxrandr lxappearance synaptic fonts-wqy-zenhei fonts-dejavu-core locales dbus-x11 \
+                        x11-xserver-utils >/dev/null 2>&1 || true
+                    # 生成中文 locale：没有它 GTK/Qt 程序仍按英文渲染。
+                    if command -v locale-gen >/dev/null 2>&1 && [ -f /etc/locale.gen ]; then
+                        grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen
+                        locale-gen >/dev/null 2>&1 || true
+                    fi
                 elif command -v apk >/dev/null 2>&1; then
-                    apk add --no-cache xvfb x11vnc websockify jwm twm xterm font-misc-misc xrandr xsetroot >/dev/null 2>&1 || true
+                    apk add --no-cache xvfb x11vnc websockify openbox lxpanel pcmanfm lxterminal \
+                        font-wqy-zenhei font-noto-cjk xrandr xsetroot >/dev/null 2>&1 || true
                 fi
-                # 只有关键组件齐了才记成功；否则下次启动继续补装。
-                if command -v jwm >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1; then
+                if command -v lxpanel >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1; then
                     touch /root/.aicode-desktop.ok
                 fi
             fi
-            # 桌面图标/文件管理器：后台补装并启动，装好前 jwm 任务栏/菜单已可用。
-            if ! command -v pcmanfm >/dev/null 2>&1; then
-                (
-                    if command -v apt-get >/dev/null 2>&1; then
-                        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pcmanfm >/dev/null 2>&1
-                    elif command -v apk >/dev/null 2>&1; then
-                        apk add --no-cache pcmanfm >/dev/null 2>&1
-                    fi
-                    command -v pcmanfm >/dev/null 2>&1 && DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &
-                ) >/dev/null 2>&1 &
-            fi
-            # 桌面配置：jwm 菜单/任务栏/背景。不要用 heredoc（Kotlin trimIndent 会让终止符失效）。
-            printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc
-            # 桌面快捷方式（pcmanfm 会把 ~/Desktop 下的 .desktop 显示成图标）。
-            mkdir -p /root/Desktop
-            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Terminal' 'Comment=Open a shell' \
-                'Exec=xterm -fn fixed' 'Terminal=false' > /root/Desktop/Terminal.desktop
-            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Files' 'Comment=File manager' \
-                'Exec=pcmanfm /root' 'Terminal=false' > /root/Desktop/Files.desktop
+            # 开始菜单/桌面里的软件包管理：Synaptic 首次点击时安装，避免拖慢首启。
+            mkdir -p /usr/share/applications /root/Desktop
+            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Package Manager' \
+                'Name[zh_CN]=软件包管理' 'Comment=Install or remove software' 'Comment[zh_CN]=安装、卸载软件' \
+                'Exec=synaptic' \
+                'Icon=synaptic' 'Terminal=false' 'Categories=System;PackageManager;' \
+                > /usr/share/applications/aicode-package-manager.desktop
+            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Settings' \
+                'Name[zh_CN]=系统设置' 'Exec=sh -c "lxrandr & lxappearance"' \
+                'Icon=preferences-system' 'Terminal=false' 'Categories=Settings;' \
+                > /usr/share/applications/aicode-settings.desktop
+            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Terminal' 'Name[zh_CN]=终端' \
+                'Exec=lxterminal' 'Icon=utilities-terminal' 'Terminal=false' \
+                > /root/Desktop/终端.desktop
+            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Files' 'Name[zh_CN]=文件' \
+                'Exec=pcmanfm /root' 'Icon=system-file-manager' 'Terminal=false' \
+                > /root/Desktop/文件.desktop
+            cp /usr/share/applications/aicode-package-manager.desktop /root/Desktop/软件包管理.desktop 2>/dev/null || true
+            cp /usr/share/applications/aicode-settings.desktop /root/Desktop/系统设置.desktop 2>/dev/null || true
             chmod +x /root/Desktop/*.desktop 2>/dev/null || true
+            # jwm 作为兜底配置（lxpanel 缺失时仍能有菜单）。
+            printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc
             # :1 可能已由 multi-llm 的 MCP 会话持有；绑定失败属预期，后续继续接管同一 X。
             Xvfb :1 -screen 0 720x1280x24 -nolock -nolisten tcp >/dev/null 2>&1 &
-            # 等 X socket 真正就绪再起 WM：固定 sleep 1 在慢设备上不够，jwm 会连不上直接退出，
-            # 表现就是「只有黑屏和鼠标」。最多等 5 秒。
             i=0
             while [ ${'$'}i -lt 10 ] && [ ! -S /tmp/.X11-unix/X1 ]; do sleep 0.5; i=${'$'}((i+1)); done
-            # 铺底色：即使 pcmanfm 起不来，也不是纯黑。
             command -v xsetroot >/dev/null 2>&1 && DISPLAY=:1 xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
-            # 窗口管理器：优先 jwm（任务栏/菜单），缺包时退回 twm，至少窗口可拖动。
-            if command -v jwm >/dev/null 2>&1; then
+            # 窗口管理器：openbox 优先；缺失退回 jwm/twm。
+            if command -v openbox >/dev/null 2>&1; then
+                pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:1 openbox >/dev/null 2>&1 &)
+            elif command -v jwm >/dev/null 2>&1; then
                 pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
             elif command -v twm >/dev/null 2>&1; then
                 pgrep -x twm >/dev/null 2>&1 || (DISPLAY=:1 twm >/dev/null 2>&1 &)
             fi
-            # pcmanfm 若已就绪则立刻起桌面图标（后台安装完成时会自行拉起）。
+            # 任务栏 + 开始菜单（lxpanel）与桌面图标/文件管理（pcmanfm --desktop）。
+            command -v lxpanel >/dev/null 2>&1 && { pgrep -x lxpanel >/dev/null 2>&1 || (DISPLAY=:1 lxpanel >/dev/null 2>&1 &); }
             command -v pcmanfm >/dev/null 2>&1 && { pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &); }
             sleep 1
             x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
