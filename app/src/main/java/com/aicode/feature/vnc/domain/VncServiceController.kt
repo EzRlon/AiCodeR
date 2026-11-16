@@ -218,43 +218,68 @@ class VncServiceController @Inject constructor(
             .joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
 
         private val HOLD_SCRIPT = """
-            # 极简 GUI 桌面（2026-11-16 用户定）：jwm 提供任务栏/右键菜单/窗口管理，
-            # pcmanfm --desktop 提供桌面图标与壁纸。**不再自动打开终端窗口**——进 VNC 应看到
-            # 桌面本身，终端只在右键菜单/文件管理器里按需打开（用户明确要求）。
-            # 基础组件单独装：可选桌面组件（pcmanfm）装失败时不能连累 jwm/xterm。
-            if ! command -v websockify >/dev/null 2>&1 || ! command -v jwm >/dev/null 2>&1; then
-                if command -v apk >/dev/null 2>&1; then
-                    apk add --no-cache xvfb x11vnc websockify jwm xterm font-misc-misc xrandr xsetroot
-                elif command -v apt-get >/dev/null 2>&1; then
-                    apt-get update -y >/dev/null 2>&1
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify jwm xterm xfonts-base x11-xserver-utils
+            # 极简 GUI 桌面：jwm（任务栏/菜单/窗口管理）+ pcmanfm（桌面图标/壁纸/文件管理）。
+            # 不再自动开终端；终端保留在右键菜单与桌面快捷方式里。
+            # 实测黑屏根因：Alpine minirootfs 默认只有 main 仓库，jwm/pcmanfm 在 community，
+            # apk add 一直失败 → 只剩 X 与鼠标指针。这里先补 community 再装。
+            if command -v apk >/dev/null 2>&1 && [ -f /etc/apk/repositories ]; then
+                main_line=${'$'}(grep -m1 -E '^[^#].*/main' /etc/apk/repositories)
+                if [ -n "${'$'}main_line" ]; then
+                    community_line=${'$'}{main_line%/main}/community
+                    grep -qxF "${'$'}community_line" /etc/apk/repositories || echo "${'$'}community_line" >> /etc/apk/repositories
                 fi
             fi
-            # 桌面组件：文件管理器 + 桌面图标/壁纸。与基础组件分开装，装不上也不影响 jwm 起来。
-            command -v pcmanfm >/dev/null 2>&1 || {
-                if command -v apk >/dev/null 2>&1; then
-                    apk add --no-cache pcmanfm >/dev/null 2>&1 || true
-                elif command -v apt-get >/dev/null 2>&1; then
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y pcmanfm >/dev/null 2>&1 || true
+            # 分两段装：最小桌面（jwm/xterm）同步装、立即出画面；pcmanfm（GTK，上百 MB）
+            # 放到后台装，绝不阻塞首次启动——这正是之前「启动很慢，最后只剩黑屏」的原因。
+            if [ ! -f /root/.aicode-desktop.ok ]; then
+                if command -v apt-get >/dev/null 2>&1; then
+                    apt-get update -y >/dev/null 2>&1 || true
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                        xvfb x11vnc python3-websockify jwm twm xterm xfonts-base x11-xserver-utils >/dev/null 2>&1 || true
+                elif command -v apk >/dev/null 2>&1; then
+                    apk add --no-cache xvfb x11vnc websockify jwm twm xterm font-misc-misc xrandr xsetroot >/dev/null 2>&1 || true
                 fi
-            }
-            # 桌面配置：jwm 的菜单/任务栏/背景，数据文件而非新实现。
-            # 刻意不用 heredoc：整段脚本经 trimIndent 后缩进不可控，带缩进的 JWM_EOF 不会被识别为
-            # 终止符，会把后面的 Xvfb/x11vnc/websockify 全吞进配置里（实测过一次黑屏）。
+                # 只有关键组件齐了才记成功；否则下次启动继续补装。
+                if command -v jwm >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1; then
+                    touch /root/.aicode-desktop.ok
+                fi
+            fi
+            # 桌面图标/文件管理器：后台补装并启动，装好前 jwm 任务栏/菜单已可用。
+            if ! command -v pcmanfm >/dev/null 2>&1; then
+                (
+                    if command -v apt-get >/dev/null 2>&1; then
+                        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pcmanfm >/dev/null 2>&1
+                    elif command -v apk >/dev/null 2>&1; then
+                        apk add --no-cache pcmanfm >/dev/null 2>&1
+                    fi
+                    command -v pcmanfm >/dev/null 2>&1 && DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &
+                ) >/dev/null 2>&1 &
+            fi
+            # 桌面配置：jwm 菜单/任务栏/背景。不要用 heredoc（Kotlin trimIndent 会让终止符失效）。
             printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc
-            # :1 可能已由 multi-llm 的 MCP 会话持有（不受本会话 30 分钟上限影响），
-            # 此时绑定失败退出属预期，x11vnc/websockify 继续接管同一个 X 服务器。
-            # 手机场景默认竖屏分辨率；服务就绪后由 App 按浮窗宽高比 xrandr 调整。
+            # 桌面快捷方式（pcmanfm 会把 ~/Desktop 下的 .desktop 显示成图标）。
+            mkdir -p /root/Desktop
+            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Terminal' 'Comment=Open a shell' \
+                'Exec=xterm -fn fixed' 'Terminal=false' > /root/Desktop/Terminal.desktop
+            printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Files' 'Comment=File manager' \
+                'Exec=pcmanfm /root' 'Terminal=false' > /root/Desktop/Files.desktop
+            chmod +x /root/Desktop/*.desktop 2>/dev/null || true
+            # :1 可能已由 multi-llm 的 MCP 会话持有；绑定失败属预期，后续继续接管同一 X。
             Xvfb :1 -screen 0 720x1280x24 -nolock -nolisten tcp >/dev/null 2>&1 &
-            sleep 1
-            # 用精确进程名（-x）判重，避免命令行子串匹配命中父 shell 自杀（见上方注释）。
-            pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
-            # 轻量 GUI 桌面：只起桌面环境（任务栏 + 桌面图标/壁纸 + 右键菜单），
-            # **不再自动弹终端窗口**（用户明确要求：要桌面，不要终端界面）。
-            # 终端仍保留在右键菜单里，需要时手动打开。
-            pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &)
-            # 没有 pcmanfm 时至少铺一层纯色桌面，避免黑屏。
+            # 等 X socket 真正就绪再起 WM：固定 sleep 1 在慢设备上不够，jwm 会连不上直接退出，
+            # 表现就是「只有黑屏和鼠标」。最多等 5 秒。
+            i=0
+            while [ ${'$'}i -lt 10 ] && [ ! -S /tmp/.X11-unix/X1 ]; do sleep 0.5; i=${'$'}((i+1)); done
+            # 铺底色：即使 pcmanfm 起不来，也不是纯黑。
             command -v xsetroot >/dev/null 2>&1 && DISPLAY=:1 xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
+            # 窗口管理器：优先 jwm（任务栏/菜单），缺包时退回 twm，至少窗口可拖动。
+            if command -v jwm >/dev/null 2>&1; then
+                pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
+            elif command -v twm >/dev/null 2>&1; then
+                pgrep -x twm >/dev/null 2>&1 || (DISPLAY=:1 twm >/dev/null 2>&1 &)
+            fi
+            # pcmanfm 若已就绪则立刻起桌面图标（后台安装完成时会自行拉起）。
+            command -v pcmanfm >/dev/null 2>&1 && { pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &); }
             sleep 1
             x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
             sleep 1
