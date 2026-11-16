@@ -249,14 +249,9 @@ private fun FloatingVncWindow(
     val maxYDp = (parentHeight - 56.dp).coerceAtLeast(minYDp)
     val offY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight * 0.18f).value else window.offsetY)
         .dp.coerceIn(minYDp, maxYDp)
-    // 已保存的坏位置（在状态栏内）或处于钉住状态时，显示即自动归位并解钉，
-    // 不依赖用户点到标题栏里的重置按钮。
-    LaunchedEffect(window.visible, window.offsetY, minYDp, window.pinned) {
-        val invalidY = window.offsetY != Float.MIN_VALUE && window.offsetY < minYDp.value
-        if (window.visible && invalidY) {
-            viewModel.resetGeometry()
-        }
-    }
+    // 注意：不要在这里「发现 offsetY < minY 就 resetGeometry」——拖动过程中 raw 值
+    // 会短暂低于最小值，自动重置会和用户拖动打架（真机反馈“位置挪不动”）。
+    // 显示层已经用 coerceIn 把窗口夹在状态栏下方；手动兜底是标题栏的重置按钮。
 
     Box(
         modifier = Modifier

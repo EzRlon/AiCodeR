@@ -201,8 +201,12 @@ class VncServiceController @Inject constructor(
               <Desktops width="2" height="1">
                 <Background type="solid">#1e1e1e</Background>
               </Desktops>
-              <TaskList/>
-              <Clock format="%H:%M"/>
+              <!-- TaskList/Clock 必须在 Tray 里才会显示；此前外层漏了 Tray，任务栏根本没画出来。 -->
+              <Tray x="0" y="-1" height="32">
+                <TrayButton label="Menu">root:3</TrayButton>
+                <TaskList/>
+                <Clock format="%H:%M"/>
+              </Tray>
             </JWM>
         """.trimIndent()
 
@@ -231,7 +235,16 @@ class VncServiceController @Inject constructor(
                     grep -qxF "${'$'}community_line" /etc/apk/repositories || echo "${'$'}community_line" >> /etc/apk/repositories
                 fi
             fi
-            if [ ! -f /root/.aicode-desktop.ok ]; then
+            # 不再用「一次成功就永久跳过」的标记：旧版本曾在只有 jwm 时写下 marker，
+            # 之后永远跳过安装，导致 lxpanel/字体/Synaptic 一直缺失（真机实测的根因）。
+            # 改为每次启动校验关键组件，缺哪个补哪个；apt 已装时这条是秒级空操作。
+            need_install=0
+            for c in lxpanel openbox pcmanfm synaptic lxterminal locale-gen; do
+                command -v "${'$'}c" >/dev/null 2>&1 || need_install=1
+            done
+            fc-list 2>/dev/null | grep -qiE 'CJK|WenQuanYi|Noto Sans SC' || need_install=1
+            locale -a 2>/dev/null | grep -qi '^zh_CN' || need_install=1
+            if [ "${'$'}need_install" = "1" ]; then
                 if command -v apt-get >/dev/null 2>&1; then
                     apt-get update -y >/dev/null 2>&1 || true
                     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -239,27 +252,22 @@ class VncServiceController @Inject constructor(
                         lxrandr lxappearance synaptic fonts-wqy-zenhei fonts-noto-cjk fonts-dejavu-core \
                         locales dbus-x11 libglib2.0-bin x11-xserver-utils >/dev/null 2>&1 || true
                     command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
-                    # 生成中文 locale：没有它 GTK/Qt 程序仍按英文渲染。
                     if [ -f /etc/locale.gen ]; then
                         grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen
                         command -v locale-gen >/dev/null 2>&1 && locale-gen >/dev/null 2>&1 || true
-                        command -v localedef >/dev/null 2>&1 && localedef -i zh_CN -f UTF-8 zh_CN.UTF-8 >/dev/null 2>&1 || true
                     fi
-                    # 明确指定 GTK 字体：字体装了但 fontconfig 没选到中文字体时仍会显示方块。
-                    mkdir -p /root/.config/gtk-3.0 /root/.config/gtk-2.0
-                    printf '%s\n' '[Settings]' 'gtk-font-name=Noto Sans CJK SC 10' \
-                        'gtk-theme-name=Adwaita' 'gtk-icon-theme-name=Adwaita' \
-                        > /root/.config/gtk-3.0/settings.ini
-                    printf '%s\n' 'gtk-font-name = "Noto Sans CJK SC 10"' \
-                        > /root/.config/gtk-2.0/gtkrc
                 elif command -v apk >/dev/null 2>&1; then
                     apk add --no-cache xvfb x11vnc websockify openbox lxpanel pcmanfm lxterminal \
                         font-wqy-zenhei font-noto-cjk xrandr xsetroot >/dev/null 2>&1 || true
                 fi
-                if command -v lxpanel >/dev/null 2>&1 && command -v websockify >/dev/null 2>&1; then
-                    touch /root/.aicode-desktop.ok
-                fi
             fi
+            # GTK 字体显式指定（字体装了但 fontconfig 没选中时仍会方块）。
+            mkdir -p /root/.config/gtk-3.0 /root/.config/gtk-2.0
+            printf '%s\n' '[Settings]' 'gtk-font-name=Noto Sans CJK SC 10' \
+                'gtk-theme-name=Adwaita' 'gtk-icon-theme-name=Adwaita' \
+                > /root/.config/gtk-3.0/settings.ini
+            printf '%s\n' 'gtk-font-name = "Noto Sans CJK SC 10"' \
+                > /root/.config/gtk-2.0/gtkrc
             # 开始菜单/桌面里的软件包管理：Synaptic 首次点击时安装，避免拖慢首启。
             mkdir -p /usr/share/applications /root/Desktop
             printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Package Manager' \
