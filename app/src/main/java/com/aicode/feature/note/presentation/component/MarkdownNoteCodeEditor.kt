@@ -47,13 +47,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.aicode.R
 import com.aicode.feature.editor.domain.TextMateSetup
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.AlignLeft
 import compose.icons.feathericons.CheckSquare
-import compose.icons.feathericons.Code
-import compose.icons.feathericons.Link2
-import compose.icons.feathericons.MessageCircle
+import compose.icons.feathericons.FileText
 import compose.icons.feathericons.RotateCcw
 import compose.icons.feathericons.RotateCw
-import compose.icons.feathericons.Terminal
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.langs.textmate.TextMateColorScheme
@@ -152,13 +150,35 @@ class MarkdownNoteController {
     }
 }
 
+/** 随记右侧栏的自然语言动作：用户不写代码，按钮应该是「让 AI 做事」而不是插 Markdown 记号。 */
+internal enum class NoteAiAction(val labelRes: Int, val instruction: String) {
+    ORGANIZE(
+        R.string.notebook_ai_organize,
+        "把下面这段随手记整理成清晰、有条理的笔记：保留全部事实与数字，不添加原文没有的内容，" +
+            "用短标题和项目符号；只输出整理后的内容本身，不要解释。"
+    ),
+    SUMMARIZE(
+        R.string.notebook_ai_summarize,
+        "用 3-5 条要点总结下面这段笔记；只输出要点列表，不要解释或补充。"
+    ),
+    TODOS(
+        R.string.notebook_ai_todos,
+        "从下面这段笔记里提取需要做的具体事项，输出 Markdown 待办清单（每行 - [ ] 开头）；" +
+            "只输出清单，不要解释；没有待办就输出「（没有发现待办）」。"
+    )
+}
+
 @Composable
 internal fun MarkdownNoteCodeEditor(
     text: String,
     path: String,
     onTextChanged: (String) -> Unit,
     modifier: Modifier = Modifier,
-    controller: MarkdownNoteController = remember { MarkdownNoteController() }
+    controller: MarkdownNoteController = remember { MarkdownNoteController() },
+    onAiAction: (NoteAiAction) -> Unit = {},
+    canUndoAi: Boolean = false,
+    onUndoAi: () -> Unit = {},
+    transforming: Boolean = false
 ) {
     val context = LocalContext.current
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
@@ -215,7 +235,13 @@ internal fun MarkdownNoteCodeEditor(
                     it.release()
                 }
             )
-            NoteFormatRail(controller = controller)
+            NoteActionRail(
+                controller = controller,
+                onAiAction = onAiAction,
+                canUndoAi = canUndoAi,
+                onUndoAi = onUndoAi,
+                transforming = transforming
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
         Row(
@@ -271,24 +297,28 @@ internal fun MarkdownNoteCodeEditor(
     }
 }
 
-/** 右侧纵向格式条：带文字标签，窄窗可纵向滚动。
+/** 右侧纵向动作条：不再插入 Markdown 记号，而是让 AI 直接处理这段话。
  *
- * 动作按随记的真实用法取舍（2026-11-16 用户反馈 2）：
- * - 待办/代码块/行内代码/链接/引用：AI 会话摘要、命令行与结论收集高频使用；
- * - 撤销/重做：浮窗手滑误删常见，保留兜底。
- * 旧「列表/加粗/斜体」从真实开发随记里几乎没有用途，已移除。
+ * 2026-11-16 用户反馈：随记的用户不写代码，列表/加粗/代码块这类按钮没有用；
+ * 保留的应是「整理 / 总结 / 提取待办」这类自然语言动作，外加一次编辑撤销兜底。
  */
 @Composable
-private fun NoteFormatRail(controller: MarkdownNoteController) {
-    val actions = listOf(
-        RailAction(R.string.notebook_format_check, FeatherIcons.CheckSquare) { controller.prefixLine("- [ ] ") },
-        RailAction(R.string.notebook_format_code_block, FeatherIcons.Code) { controller.insertCodeBlock() },
-        RailAction(R.string.notebook_format_inline_code, FeatherIcons.Terminal) { controller.wrapSelection("`", "`") },
-        RailAction(R.string.notebook_format_link, FeatherIcons.Link2) { controller.insertLink() },
-        RailAction(R.string.notebook_format_quote, FeatherIcons.MessageCircle) { controller.prefixLine("> ") },
-        RailAction(R.string.notebook_format_undo, FeatherIcons.RotateCcw) { controller.undo() },
-        RailAction(R.string.notebook_format_redo, FeatherIcons.RotateCw) { controller.redo() }
-    )
+private fun NoteActionRail(
+    controller: MarkdownNoteController,
+    onAiAction: (NoteAiAction) -> Unit,
+    canUndoAi: Boolean,
+    onUndoAi: () -> Unit,
+    transforming: Boolean
+) {
+    val actions = buildList {
+        NoteAiAction.entries.forEach { action ->
+            add(RailAction(action.labelRes, action.iconOf(), enabled = !transforming) { onAiAction(action) })
+        }
+        add(RailAction(R.string.notebook_format_undo, FeatherIcons.RotateCcw) { controller.undo() })
+        if (canUndoAi) {
+            add(RailAction(R.string.notebook_ai_undo, FeatherIcons.RotateCcw) { onUndoAi() })
+        }
+    }
     Column(
         modifier = Modifier
             .width(52.dp)
@@ -300,11 +330,16 @@ private fun NoteFormatRail(controller: MarkdownNoteController) {
     ) {
         actions.forEach { action ->
             val label = stringResource(action.label)
+            val tint = if (action.enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(44.dp)
-                    .clickable(onClick = action.onClick)
+                    .clickable(enabled = action.enabled, onClick = action.onClick)
                     .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -313,13 +348,13 @@ private fun NoteFormatRail(controller: MarkdownNoteController) {
                     imageVector = action.icon,
                     contentDescription = label,
                     modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = tint
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = tint,
                     maxLines = 1
                 )
             }
@@ -327,9 +362,17 @@ private fun NoteFormatRail(controller: MarkdownNoteController) {
     }
 }
 
+/** 动作图标：用 Feather 现有图标表达「整理 / 总结 / 待办」。 */
+private fun NoteAiAction.iconOf(): androidx.compose.ui.graphics.vector.ImageVector = when (this) {
+    NoteAiAction.ORGANIZE -> FeatherIcons.AlignLeft
+    NoteAiAction.SUMMARIZE -> FeatherIcons.FileText
+    NoteAiAction.TODOS -> FeatherIcons.CheckSquare
+}
+
 private data class RailAction(
     val label: Int,
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val enabled: Boolean = true,
     val onClick: () -> Unit
 )
 

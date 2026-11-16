@@ -1640,6 +1640,43 @@ class StatefulAgentWorkflow @Inject constructor(
     override suspend fun polishText(sessionId: String, text: String): String? =
         withTimeoutOrNull(POLISH_TIMEOUT_MS) { polishTextInternal(sessionId, text) }
 
+    override suspend fun transformText(sessionId: String, text: String, instruction: String): String? =
+        withTimeoutOrNull(POLISH_TIMEOUT_MS) { transformTextInternal(sessionId, text, instruction) }
+
+    /** 通用文本改写：与润色同一套「单次模型调用 + 用量记账 + 输出清洗」。 */
+    private suspend fun transformTextInternal(sessionId: String, text: String, instruction: String): String? =
+        runCatching {
+            val input = text.trim().take(TEXT_POLISH_MAX_INPUT_CHARS)
+            if (input.isEmpty() || instruction.isBlank()) return@runCatching null
+            val provider = getEffectiveProvider(sessionId)
+            val response = provider.complete(
+                systemPrompt = instruction,
+                messages = listOf(AgentMessage.UserMessage(content = input)),
+                tools = emptyList()
+            )
+            runCatching {
+                llmCallRecordDao.insert(
+                    LlmCallRecordEntity(
+                        sessionId = sessionId,
+                        providerId = provider.providerId.ifBlank { null },
+                        model = provider.model,
+                        kind = "note_transform",
+                        inputTokens = response.inputTokens,
+                        outputTokens = response.outputTokens,
+                        cachedInputTokens = response.cachedInputTokens,
+                        cacheCreationTokens = response.cacheCreationTokens,
+                        ttfbMillis = null,
+                        durationMillis = 0,
+                        status = "success",
+                        errorMessage = null,
+                        stopReason = response.stopReason,
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            sanitizePolishedText(response.content)
+        }.onFailure { FileLogger.w(TAG, "随记文本改写失败", it) }.getOrNull()
+
     private suspend fun polishTextInternal(sessionId: String, text: String): String? = runCatching {
         val input = text.trim().take(TEXT_POLISH_MAX_INPUT_CHARS)
         if (input.isEmpty()) return@runCatching null

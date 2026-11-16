@@ -69,6 +69,23 @@ class VncServiceController @Inject constructor(
     }
 
     /**
+     * 跟随浮窗宽高比调整虚拟屏分辨率（竖屏/横屏/缩放都能铺满）。
+     *
+     * 只在「缩放/旋转结束」时调用（调用方已节流），命令毫秒级；失败忽略——旧分辨率仍可用，
+     * 只是画面可能留黑边，不影响连接。
+     */
+    suspend fun resizeDisplay(width: Int, height: Int) {
+        if (!isSupported()) return
+        if (width < 320 || height < 320) return
+        runCatching {
+            commandEngine.runCommandSync(
+                command = "DISPLAY=:1 xrandr --fb ${width}x$height",
+                timeoutMs = RESIZE_TIMEOUT_MS
+            )
+        }.onFailure { FileLogger.w(TAG, "调整 VNC 分辨率失败: ${width}x$height", it) }
+    }
+
+    /**
      * 启动服务并保持宿主进程存活。
      *
      * PRoot 以 `--kill-on-exit` 启动：proot 进程退出的瞬间，容器内所有子进程被级联杀掉。
@@ -115,6 +132,7 @@ class VncServiceController @Inject constructor(
 
     companion object {
         private const val TAG = "VncService"
+        private const val RESIZE_TIMEOUT_MS = 5_000L
         private const val READY_MARKER = "VNC_READY"
 
         /**
@@ -174,7 +192,8 @@ class VncServiceController @Inject constructor(
         private val JWM_CONFIG = """
             <JWM>
               <RootMenu onroot="3">
-                <Program label="Terminal">xterm -geometry 100x30 -title "AiCode Shell"</Program>
+                <Program label="Terminal">xterm -geometry 120x36 -title "AiCode Shell"</Program>
+                <Program label="Files">pcmanfm</Program>
                 <Separator/>
                 <Program label="Restart jwm">jwm -restart</Program>
                 <Exit label="Close menu"/>
@@ -204,10 +223,10 @@ class VncServiceController @Inject constructor(
             # 不引入 LXDE/XFCE 等完整桌面（磁盘与内存代价高一个数量级）。
             if ! command -v websockify >/dev/null 2>&1 || ! command -v jwm >/dev/null 2>&1; then
                 if command -v apk >/dev/null 2>&1; then
-                    apk add --no-cache xvfb x11vnc websockify jwm xterm font-misc-misc
+                    apk add --no-cache xvfb x11vnc websockify jwm xterm font-misc-misc pcmanfm
                 elif command -v apt-get >/dev/null 2>&1; then
                     apt-get update -y >/dev/null 2>&1
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify jwm xterm xfonts-base
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify jwm xterm xfonts-base pcmanfm
                 fi
             fi
             # 桌面配置：jwm 的菜单/任务栏/背景，数据文件而非新实现。
@@ -220,7 +239,9 @@ class VncServiceController @Inject constructor(
             sleep 1
             # 用精确进程名（-x）判重，避免命令行子串匹配命中父 shell 自杀（见上方注释）。
             pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
-            pgrep -x xterm >/dev/null 2>&1 || (DISPLAY=:1 xterm -geometry 100x30 -fn fixed -bg black -fg white -title "AiCode Shell" >/dev/null 2>&1 &)
+            # 极轻量桌面：pcmanfm 提供桌面图标/壁纸与文件管理（约 30MB），不是完整桌面套件。
+            pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &)
+            pgrep -x xterm >/dev/null 2>&1 || (DISPLAY=:1 xterm -geometry 120x36 -fn fixed -bg black -fg white -title "AiCode Shell" >/dev/null 2>&1 &)
             sleep 1
             x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
             sleep 1

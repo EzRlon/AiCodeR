@@ -316,6 +316,9 @@ class AIAgentViewModel @Inject constructor(
     /** 斜杠命令/技能回合的执行 job（按会话）：悬浮球「停止任务」需要能停到它们。 */
     private val commandJobs = mutableMapOf<String, Job>()
 
+    /** 队列等待残留 CLI 退出时的轻量重试 job（按会话）：队列清空/进程退出即不再续。 */
+    private val queueRetryJobs = mutableMapOf<String, Job>()
+
     // ── 语音输入（委托 VoiceStateHolder；属性/方法签名保持稳定）──
     val voiceEngine: StateFlow<VoiceEngine> get() = voiceState.voiceEngine
     val voiceModelState: StateFlow<VoskModelManager.ModelState> get() = voiceState.voiceModelState
@@ -491,6 +494,15 @@ class AIAgentViewModel @Inject constructor(
      * 复用与输入框润色同一条 [AgentWorkflow.polishText] 链路：同一会话供应商、同一提示词、
      * 同一计费记录。无当前会话或文本为空时返回 null，由调用方提示。
      */
+    /** 随记 AI 动作（整理/总结/提取待办）：按指令改写文本，失败返回 null。 */
+    suspend fun transformNoteText(text: String, instruction: String): String? {
+        val sid = _currentSessionId.value ?: return null
+        if (text.isBlank() || instruction.isBlank()) return null
+        return runCatching { agentWorkflow.transformText(sid, text, instruction) }
+            .onFailure { FileLogger.w(TAG, "随记 AI 改写失败", it) }
+            .getOrNull()
+    }
+
     suspend fun polishTextExternal(text: String): String? {
         val sid = _currentSessionId.value ?: return null
         if (text.isBlank()) return null
@@ -2556,11 +2568,17 @@ class AIAgentViewModel @Inject constructor(
             _handoffPrompt.value = HandoffPrompt(sid, pausedHandoffSessions.getValue(sid), paused = true)
             return false
         }
-        val isCurrentRunning = sid != null && (sid in stoppingSessions || SessionRunState.isRunning(
-            hasActiveSessionJob = sessionJobs[sid]?.isActive == true,
-            hasActiveCommandJob = commandJobs[sid]?.isActive == true,
-            sessionInRunningCommands = sid in _runningCommandSessions.value
-        ))
+        // 「后台还有 CLI 进程在跑」也算忙碌：回合已收尾但后台子代理未结束时，CLI 进程仍存活。
+        // 此时直接起新回合会被引擎判定为「另一进程正在处理同一内容」而强制截断。
+        val isCurrentRunning = sid != null && (
+            sid in stoppingSessions ||
+                engineProcessRegistry.isActive(sid) ||
+                SessionRunState.isRunning(
+                    hasActiveSessionJob = sessionJobs[sid]?.isActive == true,
+                    hasActiveCommandJob = commandJobs[sid]?.isActive == true,
+                    sessionInRunningCommands = sid in _runningCommandSessions.value
+                )
+            )
         // 跨会话并发上限：本会话没在跑、但别的会话已占满并发数 → 同样入队等待。
         // 与「同会话排队」共用一套队列与续跑机制（processNextInQueue），只是多一个触发条件。
         val overConcurrencyLimit = sid != null && !isCurrentRunning &&
@@ -2879,6 +2897,19 @@ class AIAgentViewModel @Inject constructor(
         // 旧 CLI 进程尚未真正退出时绝不启动下一轮，否则同会话两份 --resume 并行。
         if (sessionId in stoppingSessions) return
         val queue = _queuedRequests.value[sessionId] ?: return
+        // 后台子代理仍在跑的残留 CLI：排队等待它自然退出，不截断、不抢跑。
+        // 用轻量重试（3s）而不是常驻轮询：队列清空即停。
+        if (engineProcessRegistry.isActive(sessionId)) {
+            FileLogger.i(TAG, "后台 CLI 仍在运行，队列等待: sid=$sessionId")
+            if (queueRetryJobs[sessionId]?.isActive != true) {
+                queueRetryJobs[sessionId] = viewModelScope.launch(Dispatchers.IO) {
+                    delay(3_000)
+                    queueRetryJobs.remove(sessionId)
+                    processNextInQueue(sessionId)
+                }
+            }
+            return
+        }
         // 消费闸门（规则见 SessionRunState.shouldConsumeQueue），四类情况都不消费：
         // - 已有活跃 job（可能是本次收尾前由通知合并/flush 等入口启动的）：避免队列被
         //   多个收尾入口重复消费、同一会话并发跑两个 job。传给 isOwnJob 的是「是否已被

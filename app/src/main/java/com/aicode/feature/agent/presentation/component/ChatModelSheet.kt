@@ -427,12 +427,7 @@ private fun CliModelPage(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        Text(
-            text = stringResource(R.string.engine_resume_hint),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = Spacing.sm)
-        )
+        // 与内置模型页保持同一观感：不额外放说明行，直接「搜索 + 分组列表」（2026-11-16 反馈 8）。
         // 与内置模型页同一观感：无边框胶囊搜索框（2026-11-16 用户反馈 6）
         var searchQuery by remember { mutableStateOf("") }
         ModelSearchField(
@@ -499,7 +494,14 @@ private fun CliModelPage(
                 }
             }
             if (!collapsed) {
-                group.models.forEach { (model, ref) ->
+                group.models.forEachIndexed { index, (model, ref) ->
+                    if (index > 0) {
+                        // 与内置模型页一致：行间分隔线，同组靠线聚拢、不同组靠标题分层。
+                        androidx.compose.material3.HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                            modifier = Modifier.padding(horizontal = Spacing.lg)
+                        )
+                    }
                     CliModelRow(
                         display = model,
                         selected = currentProviderId == group.providerId && currentModel == ref,

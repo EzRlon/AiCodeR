@@ -120,6 +120,15 @@ class EngineProcessRegistry @Inject constructor(
         persistence.execute { recordFile.remove(sessionId, pid) }
     }
 
+    /**
+     * 该会话是否仍有 CLI 进程存活（含回合已结束但后台子代理仍在跑的残留进程）。
+     *
+     * 队列消费用它做闸门：旧进程没退就绝不起新回合，否则同会话两份 `--resume` 并行，
+     * 引擎会报「另一个进程正在处理同一内容」。
+     */
+    fun isActive(sessionId: String): Boolean =
+        processes[sessionId]?.isAlive == true
+
     /** 终止所有登记进程（App 退出/停止全部会话）。 */
     fun killAll() {
         processes.keys.toList().forEach { kill(it) }

@@ -276,6 +276,51 @@ class NotebookViewModel @Inject constructor(
      * 润色当前随记：复用输入框同一条润色链路（[provider] 由宿主注入，内部是
      * `AgentWorkflow.polishText`）。结果直接替换正文并立即落盘，可撤销一次。
      */
+    /**
+     * 随记 AI 动作（整理/总结/提取待办）：与润色同一条链路，只是 system 指令不同。
+     * 结果直接替换正文并落盘，可撤销一次。
+     */
+    fun transform(
+        instruction: String,
+        provider: suspend (instruction: String, text: String) -> String?,
+        onResult: (Boolean) -> Unit
+    ) {
+        val path = _state.value.currentPath ?: return
+        val text = currentContent()
+        if (text.isBlank()) { onResult(false); return }
+        if (_state.value.polishing) return
+        _state.update { it.copy(polishing = true) }
+        viewModelScope.launch {
+            val rewritten = runCatching { provider(instruction, text) }.getOrNull()
+            // 慢请求期间可能切换笔记或继续输入：结果必须只落在发起时那一篇、且内容未变。
+            if (_state.value.currentPath != path || currentContent() != text) {
+                _state.update { it.copy(polishing = false) }
+                onResult(false)
+                return@launch
+            }
+            if (rewritten.isNullOrBlank() || rewritten == text) {
+                _state.update { it.copy(polishing = false) }
+                onResult(false)
+                return@launch
+            }
+            prePolishText = text
+            latestMarkdown = rewritten
+            hasEdits = true
+            val written = withContext(Dispatchers.IO) {
+                runCatching { fileAccess.writeFile(path, rewritten, overwrite = true) }.isSuccess
+            }
+            _state.update {
+                it.copy(
+                    polishing = false,
+                    editorSeed = rewritten,
+                    canUndoPolish = true,
+                    saveState = if (written) SaveState.Saved else SaveState.Failed
+                )
+            }
+            onResult(written)
+        }
+    }
+
     fun polish(provider: suspend (String) -> String?, onResult: (Boolean) -> Unit) {
         val path = _state.value.currentPath ?: return
         val text = currentContent()

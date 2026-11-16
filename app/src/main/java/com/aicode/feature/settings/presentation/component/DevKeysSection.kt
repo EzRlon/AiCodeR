@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.feature.settings.domain.model.KeyCategory
 import com.aicode.feature.settings.domain.model.KeyFile
 import com.aicode.feature.settings.domain.model.KeySource
+import com.aicode.feature.settings.domain.model.ReleaseReadiness
 import com.aicode.feature.settings.presentation.DevKeysUiState
 import com.aicode.feature.settings.presentation.KeysViewModel
 import compose.icons.FeatherIcons
@@ -62,6 +64,7 @@ import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Package
+import compose.icons.feathericons.Tool
 import compose.icons.feathericons.Upload
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -109,14 +112,13 @@ internal fun DevKeysSection(
             .padding(bottom = Spacing.xl)
     ) {
         Text(
-            text = stringResource(R.string.dev_keys_value_title),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
+            text = stringResource(R.string.settings_dev_keys_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.semanticColors.subtleText,
             modifier = Modifier.padding(top = Spacing.md)
         )
         Text(
-            text = stringResource(R.string.dev_keys_value_desc),
+            text = stringResource(R.string.dev_keys_intro),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.semanticColors.subtleText,
             modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.md)
@@ -131,6 +133,9 @@ internal fun DevKeysSection(
                 showChevron = false
             )
         }
+
+        // ── 以项目为单位：先看有哪些构建版本、各需要什么材料（2026-11-16 用户反馈 1）──
+        BuildVariantsSection(readiness = state.readiness)
         Spacer(Modifier.height(Spacing.md))
 
         // ── 发布就绪卡：回答「现在打正式包，够不够」，并给出每一项的下一步 ──
@@ -162,6 +167,7 @@ internal fun DevKeysSection(
             }
         }
 
+        // 以项目为单位导入/导出：导出的 zip 可带到另一台设备恢复（跨设备）。
         SettingsGroupHeader(text = stringResource(R.string.dev_keys_actions_prepare))
         SettingsGroup {
             SettingsRow(
@@ -427,6 +433,79 @@ private fun categoryLabelRes(category: KeyCategory): Int = when (category) {
  * 密钥管理页宿主：注册 SAF launcher（多选导入 / 导出全部 zip / 单条导出），
  * 与 [KeysViewModel] 同作用域（随分区进入 / 离开注册与注销）。
  */
+/** 一个构建版本：debug 包不需要发布材料；正式包需要证书 + 口令配置 + 四个字段。 */
+private data class BuildVariant(val titleRes: Int, val isDebug: Boolean)
+
+private val BUILD_VARIANTS = listOf(
+    BuildVariant(R.string.dev_keys_variant_release_armsolo, false),
+    BuildVariant(R.string.dev_keys_variant_release_universal, false),
+    BuildVariant(R.string.dev_keys_variant_release_x86, false),
+    BuildVariant(R.string.dev_keys_variant_debug, true)
+)
+
+/**
+ * 构建版本矩阵（2026-11-16 反馈 1 的层级重做）：
+ * 项目 → 构建版本 → 该版本需要哪些材料；而不是一上来就丢一张「未就绪」清单。
+ */
+@Composable
+private fun BuildVariantsSection(readiness: ReleaseReadiness?) {
+    var expanded by rememberSaveable { mutableStateOf(setOf<Int>()) }
+    val certOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_CERT }?.passed == true
+    val configOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_CONFIG }?.passed == true
+    val entriesOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_ENTRIES }?.passed == true
+    val aliasOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_ALIAS }?.passed == true
+
+    SettingsGroupHeader(text = stringResource(R.string.dev_keys_variants_title))
+    SettingsGroup {
+        BUILD_VARIANTS.forEachIndexed { index, variant ->
+            if (index > 0) SettingsDivider()
+            val isOpen = index in expanded
+            SettingsRow(
+                icon = if (variant.isDebug) FeatherIcons.Tool else FeatherIcons.Package,
+                title = stringResource(variant.titleRes),
+                subtitle = if (variant.isDebug) {
+                    stringResource(R.string.dev_keys_variant_debug_desc)
+                } else {
+                    stringResource(R.string.dev_keys_variant_needs)
+                },
+                showChevron = !variant.isDebug,
+                onClick = if (variant.isDebug) null else ({
+                    expanded = if (isOpen) expanded - index else expanded + index
+                })
+            )
+            if (!variant.isDebug && isOpen) {
+                VariantRequirementRow(R.string.dev_keys_required_cert, certOk, last = false)
+                VariantRequirementRow(R.string.dev_keys_required_config, configOk, last = false)
+                VariantRequirementRow(R.string.dev_keys_required_entries, entriesOk, last = false)
+                VariantRequirementRow(R.string.dev_keys_required_alias, aliasOk, last = true)
+            }
+        }
+    }
+}
+
+/** 单个版本的材料要求：✓ / ✗ + 一句说明，缩进在版本行下方。 */
+@Composable
+private fun VariantRequirementRow(labelRes: Int, ok: Boolean, last: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.xl, end = Spacing.lg, top = 6.dp, bottom = if (last) 10.dp else 0.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (ok) "✓" else "✗",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (ok) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error
+        )
+        Spacer(Modifier.width(Spacing.sm))
+        Text(
+            text = stringResource(labelRes),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 /**
  * 发布就绪卡：逐项列出「打正式包需要什么、现在缺什么」，全绿才亮「打包发布资产」。
  * 这是对「备份只带了证书、发布当天才发现缺口令配置」那次踩坑的结构性回应。

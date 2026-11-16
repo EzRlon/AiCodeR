@@ -369,6 +369,16 @@ class VncOverlayViewModel @Inject constructor(
         val w = _window.value
         viewModelScope.launch {
             prefsRepository.saveGeometry(w.offsetX, w.offsetY, w.widthDp, w.heightDp)
+            // 缩放/旋转结束后让虚拟屏跟随浮窗宽高比：横屏 → 宽图，竖屏 → 高图，窄浮窗不留大片黑边。
+            if (w.widthDp > 0f && w.heightDp > 0f) {
+                val ratio = (w.widthDp / w.heightDp).coerceIn(0.4f, 2.5f)
+                val (sw, sh) = if (ratio >= 1f) {
+                    DESKTOP_LONG_EDGE to (DESKTOP_LONG_EDGE / ratio).toInt()
+                } else {
+                    (DESKTOP_LONG_EDGE * ratio).toInt() to DESKTOP_LONG_EDGE
+                }
+                serviceController.resizeDisplay(sw, sh)
+            }
         }
     }
 
@@ -381,6 +391,9 @@ class VncOverlayViewModel @Inject constructor(
         private const val PROBE_MAX_INTERVAL_MS = 30_000L
         private const val AUTO_POPUP_COOLDOWN_MS = 10 * 60_000L
         const val MIN_WIDTH_DP = 200f
+
+        /** 虚拟屏长边像素：按浮窗宽高比推导另一条边，兼顾横竖屏且不超 1280。 */
+        private const val DESKTOP_LONG_EDGE = 1280
         const val MIN_HEIGHT_DP = 150f
     }
 }

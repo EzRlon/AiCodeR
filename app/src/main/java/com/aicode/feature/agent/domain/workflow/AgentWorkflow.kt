@@ -186,6 +186,12 @@ interface AgentWorkflow {
     suspend fun polishText(sessionId: String, text: String): String?
 
     /**
+     * 按一段自然语言指令改写文本（随记的「整理 / 总结 / 提取待办」共用）。
+     * 与 [polishText] 同一条零工具调用链路，只替换 system 指令；失败返回 null。
+     */
+    suspend fun transformText(sessionId: String, text: String, instruction: String): String?
+
+    /**
      * 根据 Git 差异文本生成符合 Conventional Commits 规范的提交信息。
      * 默认使用全局生效的 AI 供应商及默认模型。
      * @param diff 变更内容差异文本（`git diff --cached` 或工作区差异）

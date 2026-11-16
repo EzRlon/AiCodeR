@@ -198,14 +198,6 @@ internal fun AboutSection(
                 onClick = { openUrl(context, GITHUB_REPO_URL) }
             )
             SettingsDivider()
-            // 上游底座：本项目基于的官方 AiCode
-            SettingsRow(
-                icon = FeatherIcons.Globe,
-                title = stringResource(R.string.about_upstream),
-                subtitle = stringResource(R.string.about_upstream_desc),
-                onClick = { openUrl(context, UPSTREAM_REPO_URL) }
-            )
-            SettingsDivider()
             // 许可证
             SettingsRow(
                 icon = FeatherIcons.Book,

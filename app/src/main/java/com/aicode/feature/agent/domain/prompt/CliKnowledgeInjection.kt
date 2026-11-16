@@ -76,6 +76,13 @@ object CliKnowledgeInjection {
         }
         if (sb.isEmpty()) return null
         sb.append("\n\n（开工前若上述索引与任务相关，先读对应原文件；遇到约定/坑先对照知识库；任务结束时用 kb_save 工具把新结论沉淀回 notes。）")
-        return sb.toString().trim()
+        // 每回合都会注入：给一个硬上限，避免知识库膨胀后每轮多烧几千 token。
+        return sb.toString().trim().let { text ->
+            if (text.length <= MAX_INJECT_CHARS) text
+            else text.take(MAX_INJECT_CHARS) + "\n…（知识块过长，已截断；需要的条目按名称读取原文件）"
+        }
     }
+
+    /** 单回合知识块上限（约 1.5k token），超出截断并提示按需读取。 */
+    private const val MAX_INJECT_CHARS = 6_000
 }

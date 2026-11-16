@@ -59,6 +59,8 @@ internal fun NotebookOverlay(
     viewModel: NotebookViewModel,
     onClose: () -> Unit,
     onPolish: suspend (String) -> String?,
+    /** 随记右侧动作（整理/总结/提取待办）：(指令, 文本) → 改写结果。 */
+    onTransform: suspend (String, String) -> String? = { _, _ -> null },
     onSend: (String) -> Boolean,
     noteEditorViewModel: NoteEditorViewModel = hiltViewModel()
 ) {
@@ -252,6 +254,18 @@ internal fun NotebookOverlay(
                                 onFailed = { viewModel.onSaveResult(path, false) }
                             )
                         },
+                        onAiAction = { action ->
+                            viewModel.transform(action.instruction, onTransform) { ok ->
+                                if (!ok) Toast.makeText(
+                                    context,
+                                    context.getString(R.string.notebook_ai_failed),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        },
+                        canUndoAi = state.canUndoPolish,
+                        onUndoAi = { viewModel.undoPolish() },
+                        transforming = state.polishing,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
