@@ -493,6 +493,12 @@ private fun VncHeaderIconButton() {
     )
     val supported by viewModel.supported.collectAsStateWithLifecycle(initialValue = true)
     if (!supported) return
+    // 插件接管：任一启用插件声明 chat.toolbar + anchor=vnc 时，内置入口自动让位。
+    val entryViewModel: com.aicode.feature.plugin.presentation.ToolEntryViewModel = hiltViewModel(
+        viewModelStoreOwner = owner ?: checkNotNull(LocalViewModelStoreOwner.current)
+    )
+    val desktopClaimed by entryViewModel.desktopEntryClaimed.collectAsStateWithLifecycle()
+    if (desktopClaimed) return
     val window by viewModel.window.collectAsStateWithLifecycle()
     val overlayOpen = window.visible && !window.minimized
     Box(

@@ -51,6 +51,9 @@ import javax.inject.Singleton
 /** stream-json 模式下 CLI 提前退出且 stderr 命中续接会话缺失的特征时抛出，触发一次无续接重试。 */
 internal class ResumeSessionMissingException(message: String) : RuntimeException(message)
 
+/** 续接回合返回 subtype=success 但零输出：通常意味着同会话仍有残留 CLI 占着会话。 */
+internal class EmptyTurnException : RuntimeException("Claude Code 返回空结果")
+
 /**
  * Claude Code CLI 桥接（引擎切换一期）。
  *
@@ -88,6 +91,9 @@ class ClaudeCodeBridge @Inject constructor(
 
     private companion object {
         const val TAG = "ClaudeCodeBridge"
+
+        /** 空结果重试前的等待：给残留 CLI 退出与会话锁释放留出余量。 */
+        const val EMPTY_RETRY_DELAY_MS = 800L
 
         /** aicode_bridge 的交付工具名；CLI 侧实际工具名形如 mcp__aicode_bridge__send_file，用包含匹配。 */
         const val SEND_FILE_TOOL = "send_file"
@@ -228,6 +234,20 @@ class ClaudeCodeBridge @Inject constructor(
                 if (emittedAny) throw RuntimeException("续接回合中途失败且已产出事件，不重试: ${e.message}", e)
                 FileLogger.w(TAG, "续接会话缺失，转全新回合重试: ${e.message}")
                 runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
+            } catch (e: EmptyTurnException) {
+                if (emittedAny) throw e
+                // 机制性恢复：先回收占着同一会话的残留 CLI（跨 App 进程的孤儿），
+                // 等它真正退出后再重试一次 --resume；仍为空才报错。
+                FileLogger.w(TAG, "续接回合返回空结果，回收残留 CLI 后重试一次")
+                runCatching { processRegistry.killForeignSessionProcesses(sessionId) }
+                delay(EMPTY_RETRY_DELAY_MS)
+                try {
+                    runTurnOnce(sessionId, userRequest, projectPath, model, resume = true, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
+                } catch (e2: EmptyTurnException) {
+                    emit(AgentEvent.Failed(
+                        error = "Claude Code 连续两次未返回内容。已尝试回收残留进程；若仍反复出现，请新建会话。"
+                    ))
+                }
             }
         } else {
             runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
@@ -430,6 +450,9 @@ class ClaudeCodeBridge @Inject constructor(
         FileLogger.i(TAG, "启动 claude 桥接进程: resume=$resume model=$model project=$projectPath auth=helper:${ccSettingsPath != null} envFallback:${extraEnv.containsKey("ANTHROPIC_API_KEY")}")
         // 进程孵化阻塞，移出主线程（发版 optimizer P1-1）
         val process = withContext(Dispatchers.IO) {
+            // 先清掉「上一个 App 进程遗留、当前进程未登记」的同会话 CLI：否则新进程会与它
+            // 并行跑同一会话，引擎直接报「另一个进程正在处理同一内容」（用户多次反馈）。
+            processRegistry.killForeignSessionProcesses(sessionId)
             // 在 IO 块内登记：若孵化完成与协程恢复之间被取消，也不会留下未登记的孤儿进程
             containerEngine.startStdioProcess("claude", args, projectPath, extraEnv, resolveRuntimeProfile())
                 .also { processRegistry.register(sessionId, it, engine = "claude") }
@@ -877,13 +900,12 @@ class ClaudeCodeBridge @Inject constructor(
             if (subtype == "error_during_execution") throw classifyEarlyExit(detail)
             events += AgentEvent.Failed(error = detail)
         } else if (!acc.sawContent) {
-            // 实测：会话被强杀后 --resume 偶尔会立即返回 subtype=success 的 result，但既没有
-            // assistant 文本也没有工具调用（无模型请求）。旧逻辑当成功收尾，UI 一片空白、用户
-            // 以为「继续没反应」。这里改为明确失败，并记录原始 result 便于定位。
+            // 实测：会话被强杀/仍有残留 CLI 占着会话时，--resume 会立即返回 subtype=success
+            // 的 result，但既没有 assistant 文本也没有工具调用（无模型请求）。
+            // 不直接判失败：抛给 runTurn 做「清理残留 + 重试一次」，从机制上恢复，
+            // 而不是把问题丢给用户点重试/新建会话。
             FileLogger.w(TAG, "空结果回合（无任何输出）: ${obj.toString().take(1000)}")
-            events += AgentEvent.Failed(
-                error = "Claude Code 没有返回任何内容（会话状态可能异常）。请重试；若反复出现，请新建会话。"
-            )
+            throw EmptyTurnException()
         } else {
             events += AgentEvent.Completed
         }

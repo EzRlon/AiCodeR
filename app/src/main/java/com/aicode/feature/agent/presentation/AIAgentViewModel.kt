@@ -272,6 +272,8 @@ class AIAgentViewModel @Inject constructor(
     private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
     /** 改动账本：回合结束自动补录（模型没自己调 changelog 时）。 */
     private val changeLedgerRepository: com.aicode.feature.changelog.data.ChangeLedgerRepository,
+    /** 跨进程会话锁：同会话同时只允许一个引擎回合；占用时只排队，绝不杀进程。 */
+    private val engineSessionLock: com.aicode.feature.agent.domain.engine.EngineSessionLock,
     @param:ApplicationContext private val context: Context
 ) : ViewModel(), SlashCommandContext {
 
@@ -2572,7 +2574,7 @@ class AIAgentViewModel @Inject constructor(
         // 此时直接起新回合会被引擎判定为「另一进程正在处理同一内容」而强制截断。
         val isCurrentRunning = sid != null && (
             sid in stoppingSessions ||
-                engineProcessRegistry.isActive(sid) ||
+                hasLiveEngineProcess(sid) ||
                 SessionRunState.isRunning(
                     hasActiveSessionJob = sessionJobs[sid]?.isActive == true,
                     hasActiveCommandJob = commandJobs[sid]?.isActive == true,
@@ -2637,6 +2639,19 @@ class AIAgentViewModel @Inject constructor(
             )
         }
         return true
+    }
+
+    /**
+     * 本会话或其子代理会话是否仍有 CLI 进程存活。
+     *
+     * 后台子代理是独立会话、独立 CLI 进程：父会话回合结束后它仍可能在跑。此时若直接起新回合，
+     * 引擎会因「另一进程正在处理同一会话/项目」而报错截断（用户 2026-11-16 再次反馈）。
+     * 所以父会话忙碌判定必须把子会话进程也算进来。
+     */
+    private fun hasLiveEngineProcess(sessionId: String): Boolean {
+        if (engineProcessRegistry.isActive(sessionId)) return true
+        val children = subSessionsByParent.value[sessionId].orEmpty()
+        return children.any { engineProcessRegistry.isActive(it.id) }
     }
 
     /**
@@ -2893,21 +2908,33 @@ class AIAgentViewModel @Inject constructor(
         processNextInQueue(candidate.key)
     }
 
+    /** 队列等待重试：3 秒后再看一次，队列清空或停止即自然结束；不常驻轮询。 */
+    private fun scheduleQueueRetry(sessionId: String) {
+        if (queueRetryJobs[sessionId]?.isActive == true) return
+        queueRetryJobs[sessionId] = viewModelScope.launch(Dispatchers.IO) {
+            delay(3_000)
+            queueRetryJobs.remove(sessionId)
+            processNextInQueue(sessionId)
+        }
+    }
+
     private fun processNextInQueue(sessionId: String) {
         // 旧 CLI 进程尚未真正退出时绝不启动下一轮，否则同会话两份 --resume 并行。
         if (sessionId in stoppingSessions) return
         val queue = _queuedRequests.value[sessionId] ?: return
         // 后台子代理仍在跑的残留 CLI：排队等待它自然退出，不截断、不抢跑。
-        // 用轻量重试（3s）而不是常驻轮询：队列清空即停。
-        if (engineProcessRegistry.isActive(sessionId)) {
-            FileLogger.i(TAG, "后台 CLI 仍在运行，队列等待: sid=$sessionId")
-            if (queueRetryJobs[sessionId]?.isActive != true) {
-                queueRetryJobs[sessionId] = viewModelScope.launch(Dispatchers.IO) {
-                    delay(3_000)
-                    queueRetryJobs.remove(sessionId)
-                    processNextInQueue(sessionId)
-                }
-            }
+        if (hasLiveEngineProcess(sessionId)) {
+            FileLogger.i(TAG, "后台 CLI（含子代理）仍在运行，队列等待: sid=$sessionId")
+            scheduleQueueRetry(sessionId)
+            return
+        }
+        // 跨进程会话锁：其它 App 进程/上个进程的 CLI 仍占着会话时同样只等待。
+        // 外部引擎在真正 spawn 前还会再确认一次（见 executeAgentRequestStream）。
+        // 非挂起上下文：从已加载的会话列表取 engine，避免 suspend 调用。
+        val sessionIsExternal = sessions.value.firstOrNull { it.id == sessionId }?.engine != null
+        if (sessionIsExternal && engineSessionLock.isHeldByOther(sessionId)) {
+            FileLogger.i(TAG, "会话锁被其它进程占用，队列等待: sid=$sessionId")
+            scheduleQueueRetry(sessionId)
             return
         }
         // 消费闸门（规则见 SessionRunState.shouldConsumeQueue），四类情况都不消费：
@@ -2992,6 +3019,33 @@ class AIAgentViewModel @Inject constructor(
         if (sessionId.isBlank()) {
             FileLogger.w(TAG, "工作区未就绪，跳过请求")
             return@launch
+        }
+        // 外部引擎：跨进程会话锁。同会话已有回合在跑（含上个 App 进程遗留的 CLI）时
+        // **只排队等待**，绝不杀进程——用户明确要求发消息不得打断后台任务。
+        val isExternalEngine = sessionUseCase.getSessionById(sessionId)?.engine != null
+        if (isExternalEngine && !engineSessionLock.tryAcquire(sessionId)) {
+            FileLogger.i(TAG, "同会话已有引擎回合在跑，消息排队: sid=$sessionId")
+            val queued = QueuedRequest(
+                id = UUID.randomUUID().toString(),
+                request = request,
+                modelRequest = modelRequest,
+                currentFile = currentFile,
+                selectedCode = selectedCode,
+                projectRoot = projectRoot,
+                inputImages = inputImages,
+                inputAttachments = inputAttachments,
+                isAutoTrigger = isAutoTrigger,
+                intentType = intentType,
+                persistUserMessage = persistUserMessage
+            )
+            _queuedRequests.value = _queuedRequests.value +
+                (sessionId to (listOf(queued) + (_queuedRequests.value[sessionId] ?: emptyList())))
+            scheduleQueueRetry(sessionId)
+            return@launch
+        }
+        if (isExternalEngine) {
+            // 回合结束（含取消/失败）自动释放锁；进程被杀时由下一进程按 pid 判陈旧锁。
+            coroutineContext[Job]?.invokeOnCompletion { engineSessionLock.release(sessionId) }
         }
         // 意图纠正埋点：用户在上一轮 AI 回复后又发一条消息，且与上一轮用户消息高度相似
         // （重述/改口/重发）→ 记一次纠正信号。只看相邻两条，不做语义判断，低成本且不误伤普通追问。
@@ -4204,6 +4258,8 @@ class AIAgentViewModel @Inject constructor(
      * 取消 job 并把未完成的流式内容落库为「已停止」；队列下一条照常执行。
      */
     fun stopAgentSession(sessionId: String) {
+        // 用户主动停止：释放跨进程会话锁，下一次发送可立即开始（进程由取消链路负责回收）。
+        engineSessionLock.forceRelease(sessionId)
         val job = sessionJobs[sessionId] ?: return
         if (!job.isActive) return
         // 用户在界面上手动停止运行中的子代理：交回并发槽位并告知父代理，否则槽位泄漏到进程重启，

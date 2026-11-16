@@ -96,7 +96,7 @@
     <string name="settings_shizuku_hint_ready">Authorized — AI can run commands via adb shell</string>
     <string name="settings_backup">Backup &amp; Restore</string>
     <string name="settings_about">About</string>
-    <string name="settings_about_ack">About AiCode</string>
+    <string name="settings_about_ack">About</string>
     <string name="settings_feedback_title">Feedback</string>
     <string name="settings_feedback_intro">Feedback goes directly to the project feedback page — no sign-in required. If submission fails, it is saved locally and retried automatically. The content is used publicly for triage; remove any keys or passwords first.</string>
     <string name="settings_feedback_kind">Type</string>

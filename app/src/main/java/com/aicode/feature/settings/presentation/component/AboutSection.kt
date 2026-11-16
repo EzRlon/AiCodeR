@@ -143,7 +143,6 @@ internal fun AboutSection(
             SettingsRow(
                 icon = FeatherIcons.RefreshCw,
                 title = stringResource(R.string.about_auto_check_update),
-                subtitle = stringResource(R.string.about_auto_check_update_desc),
                 trailing = {
                     AppSwitch(
                         checked = updateCheckEnabled,
@@ -209,7 +208,6 @@ internal fun AboutSection(
             SettingsRow(
                 icon = FeatherIcons.Heart,
                 title = stringResource(R.string.about_acknowledgements),
-                subtitle = stringResource(R.string.about_acknowledgements_desc),
                 onClick = { showAcknowledgements = true }
             )
             SettingsDivider()

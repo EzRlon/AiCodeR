@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
@@ -72,7 +73,8 @@ class CodexBridge @Inject constructor(
     private val deliveryRegistry: CliDeliveryRegistry,
     private val todoMirror: EngineTodoMirror,
     private val orchestrationPrompt: CliOrchestrationPrompt,
-    private val processRegistry: EngineProcessRegistry
+    private val processRegistry: EngineProcessRegistry,
+    private val sessionLock: EngineSessionLock
 ) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
 
     override val cliCommand: String = "codex"
@@ -219,6 +221,16 @@ class CodexBridge @Inject constructor(
         images: List<com.aicode.feature.agent.domain.model.AgentImage> = emptyList(),
         attachments: List<com.aicode.feature.agent.presentation.AgentAttachment> = emptyList()
     ): Flow<AgentEvent> = flow {
+        // 跨进程同会话串行：锁被其它存活进程持有时等待（最多 60s），绝不并行 spawn。
+        val acquired = withTimeoutOrNull(60_000L) {
+            while (!sessionLock.tryAcquire(sessionId)) delay(500)
+            true
+        } ?: false
+        if (!acquired) {
+            emit(AgentEvent.Failed(error = "同一会话仍有引擎回合在运行，请稍后重试"))
+            return@flow
+        }
+        try {
         if (resume) {
             var emittedAny = false
             try {
@@ -234,6 +246,9 @@ class CodexBridge @Inject constructor(
             }
         } else {
             runTurnOnce(sessionId, userRequest, projectPath, model, resume = false, providerId = providerId, engineMode = engineMode, images = images, attachments = attachments).collect { emit(it) }
+        }
+        } finally {
+            sessionLock.release(sessionId)
         }
     }.catch { e ->
         emit(AgentEvent.Failed(error = e.message ?: e.javaClass.simpleName))
@@ -407,6 +422,8 @@ class CodexBridge @Inject constructor(
         // spawn 失败（codex 未装/容器未就绪）时若不清理，token 会残留到下一次同会话回合（qa P2-1）；孵化阻塞，移出主线程（optimizer P1-1）
         val process = withContext(Dispatchers.IO) {
             try {
+                // 清掉上一个 App 进程遗留的同会话 CLI，避免「另一个进程正在处理同一内容」。
+                processRegistry.killForeignSessionProcesses(sessionId)
                 containerEngine.startStdioProcess("codex", args, projectPath, extraEnv, resolveRuntimeProfile())
                     .also { processRegistry.register(sessionId, it, engine = "codex") }
             } catch (e: Exception) {

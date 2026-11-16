@@ -33,6 +33,9 @@ class EngineProcessRegistry @Inject constructor(
     private companion object {
         const val TAG = "EngineProcessRegistry"
         const val FORCE_KILL_DELAY_MS = 1500L
+
+        /** 起新回合前等待外部孤儿 CLI 退出的上限；超时才强杀。 */
+        const val FOREIGN_EXIT_WAIT_MS = 3_000L
         const val PERSIST_FILE = "engine-processes.json"
     }
 
@@ -128,6 +131,56 @@ class EngineProcessRegistry @Inject constructor(
      */
     fun isActive(sessionId: String): Boolean =
         processes[sessionId]?.isAlive == true
+
+    /**
+     * 起新回合前清理「同会话的外部孤儿 CLI」。
+     *
+     * 场景：App 被中断/重启后，上一个 App 进程拉起的 CLI 仍活着，但当前进程的登记表是空的。
+     * 此时再 spawn 会变成同会话两份 `--resume`，引擎直接报「另一个进程正在处理同一内容」。
+     * 这里按 `PERMISSION_BRIDGE_SESSION` 环境变量在 `/proc` 里精确认领并回收（只杀不属于
+     * 当前进程登记表的 proot），避免用户一发消息就失败。
+     *
+     * 只在本进程没有该会话活跃回合时调用（队列闸门已保证），因此不会截断正在进行的工作。
+     */
+    fun killForeignSessionProcesses(sessionId: String) {
+        val marker = "PERMISSION_BRIDGE_SESSION=$sessionId"
+        val myPid = android.os.Process.myPid()
+        val ownPids = sessionPids.values.toSet()
+        val snapshot = probe.allPids().mapNotNull { probe.stat(it) }
+        val byPid = snapshot.associateBy { it.pid }
+        val roots = snapshot.map { it.pid }.filter { pid ->
+            if (pid == myPid || pid in ownPids) return@filter false
+            val argv = probe.cmdline(pid)
+            isProotExecutableArg(argv.firstOrNull().orEmpty()) &&
+                probe.environ(pid).any { it == marker }
+        }
+        if (roots.isEmpty()) return
+        // 连整个进程树一起收：proot 的子进程（CLI/子代理）也必须消失，否则会话文件锁仍在。
+        val byParent = snapshot.filter { it.state != 'Z' }.groupBy { it.ppid }
+        val all = LinkedHashSet<Int>()
+        fun walk(pid: Int) {
+            if (!all.add(pid)) return
+            byParent[pid].orEmpty().forEach { walk(it.pid) }
+        }
+        roots.forEach { walk(it) }
+        all.toList().asReversed().forEach { probe.signal(it, EngineOrphanReclaimer.SIGTERM) }
+        // 关键：**同步等它们真正退出**再返回。不等的话调用方立刻 spawn，新 CLI 仍会看到
+        // 旧进程占着会话而返回空结果（用户反馈的「没有返回任何内容」）。
+        val deadline = System.currentTimeMillis() + FOREIGN_EXIT_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val alive = roots.count { pid ->
+                val s = probe.stat(pid)
+                s != null && s.state != 'Z'
+            }
+            if (alive == 0) return
+            runCatching { Thread.sleep(100) }
+        }
+        all.forEach { pid ->
+            val s = probe.stat(pid)
+            if (s != null && s.state != 'Z') probe.signal(pid, EngineOrphanReclaimer.SIGKILL)
+        }
+        FileLogger.w(TAG, "外部孤儿 CLI 未在 ${FOREIGN_EXIT_WAIT_MS}ms 内退出，已强杀: sid=$sessionId")
+    }
 
     /** 终止所有登记进程（App 退出/停止全部会话）。 */
     fun killAll() {

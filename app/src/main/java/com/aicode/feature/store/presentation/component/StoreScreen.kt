@@ -333,7 +333,7 @@ internal fun StoreScreen(
             ) {
                 val nameZh = translation?.nameZh.orEmpty()
                 Text(
-                    text = if (nameZh.isBlank()) item.name else "${item.name}（${nameZh}）",
+                    text = nameZh.ifBlank { item.name },
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -351,16 +351,11 @@ internal fun StoreScreen(
                     )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                if (translation?.descriptionZh?.isNotBlank() == true) {
+                // 有译文时只显示译文；没有译文才回退英文原文，避免同一段话中英各一遍。
+                val description = translation?.descriptionZh?.takeIf { it.isNotBlank() } ?: item.description
+                if (description.isNotBlank()) {
                     Text(
-                        text = translation.descriptionZh,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                if (item.description.isNotBlank()) {
-                    Text(
-                        text = item.description,
+                        text = description,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -628,7 +623,8 @@ private fun StoreItemCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val nameZh = translation?.nameZh.orEmpty()
                 Text(
-                    text = if (nameZh.isBlank()) item.name else "${item.name}（${nameZh}）",
+                    // 中文界面优先显示译文，不再「英文（中文）」并列（2026-11-16 反馈）。
+                    text = nameZh.ifBlank { item.name },
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,

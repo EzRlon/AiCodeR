@@ -104,6 +104,13 @@ class VncOverlayViewModel @Inject constructor(
                 autoPopupBlockedUntilMs = saved.dismissedAtMs + AUTO_POPUP_COOLDOWN_MS
             }
         }
+        // 服务就绪后立刻按当前浮窗宽高比同步一次分辨率：否则首开沿用 Xvfb 默认尺寸，
+        // 竖屏浮窗里整张桌面被缩小，文字看起来又小又挤。
+        viewModelScope.launch {
+            serviceController.state.collect { st ->
+                if (st is VncServiceState.Ready) syncDisplayToWindow()
+            }
+        }
         // 自动弹出：聊天页存续期间探测容器图形服务，从无到有即弹窗（AI 跑图形测试/用户手动起服务都会触发）。
         // 指数退避到 PROBE_MAX_INTERVAL_MS：没起服务时是最常见的长稳态，固定 5s 一轮等于白白唤醒
         // 容器探测。代价是服务新起后最长要等 30s 才弹窗（原来的上限是 5s）——这是刻意的取舍：
@@ -369,17 +376,24 @@ class VncOverlayViewModel @Inject constructor(
         val w = _window.value
         viewModelScope.launch {
             prefsRepository.saveGeometry(w.offsetX, w.offsetY, w.widthDp, w.heightDp)
-            // 缩放/旋转结束后让虚拟屏跟随浮窗宽高比：横屏 → 宽图，竖屏 → 高图，窄浮窗不留大片黑边。
-            if (w.widthDp > 0f && w.heightDp > 0f) {
-                val ratio = (w.widthDp / w.heightDp).coerceIn(0.4f, 2.5f)
-                val (sw, sh) = if (ratio >= 1f) {
-                    DESKTOP_LONG_EDGE to (DESKTOP_LONG_EDGE / ratio).toInt()
-                } else {
-                    (DESKTOP_LONG_EDGE * ratio).toInt() to DESKTOP_LONG_EDGE
-                }
-                serviceController.resizeDisplay(sw, sh)
-            }
+            syncDisplayToWindow()
         }
+    }
+
+    /**
+     * 让虚拟屏跟随浮窗宽高比：横屏 → 宽图，竖屏 → 高图。
+     * 长边固定 [DESKTOP_LONG_EDGE]，短边按比例推导；比例过窄时钳到 480 保底。
+     */
+    private suspend fun syncDisplayToWindow() {
+        val w = _window.value
+        if (w.widthDp <= 0f || w.heightDp <= 0f) return
+        val ratio = (w.widthDp / w.heightDp).coerceIn(0.4f, 2.5f)
+        val (sw, sh) = if (ratio >= 1f) {
+            DESKTOP_LONG_EDGE to (DESKTOP_LONG_EDGE / ratio).toInt()
+        } else {
+            (DESKTOP_LONG_EDGE * ratio).toInt() to DESKTOP_LONG_EDGE
+        }
+        serviceController.resizeDisplay(sw.coerceAtLeast(480), sh.coerceAtLeast(480))
     }
 
     companion object {

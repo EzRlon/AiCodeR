@@ -53,7 +53,6 @@ import com.aicode.feature.settings.domain.model.ModelMetadata
 import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
-import com.aicode.feature.settings.presentation.component.ModelSelectionContent
 import com.aicode.core.ui.settings.ModelSearchField
 import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
@@ -374,17 +373,99 @@ internal fun ModelSheet(
                     onSelect = onSelectCliModel
                 )
             } else {
-                ModelSelectionContent(
-                    title = stringResource(R.string.common_model),
-                    noModelsText = stringResource(R.string.chat_no_models_hint),
+                // 内置引擎与三引擎统一为同一套呈现：无边框搜索框 + 可折叠供应商分组 + 扁平行
+                // （2026-11-16 用户反馈：此前内置页是另一套卡片样式）。
+                BuiltinModelPage(
                     providers = providers,
                     currentProviderId = currentProviderId,
                     currentModel = currentModel,
-                    modelMetadata = modelMetadata,
-                    onSelect = onSelectModel,
-                    onClear = null
+                    onSelect = onSelectModel
                 )
             }
+        }
+    }
+}
+
+/**
+ * 内置引擎的模型页：与 [CliModelPage] 完全同构——搜索框 + 可折叠供应商分组 + 扁平行 + 分隔线。
+ * 不再使用设置页那套「大标题 + 卡片」，避免同一按钮弹出两种视觉。
+ */
+@Composable
+private fun BuiltinModelPage(
+    providers: List<AIProviderConfig>,
+    currentProviderId: String,
+    currentModel: String,
+    onSelect: (providerId: String, model: String) -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var collapsedGroups by remember { mutableStateOf(emptySet<String>()) }
+    val active = providers.filter { it.isEnabled && it.models.isNotEmpty() }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 360.dp, max = 420.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    ) {
+        ModelSearchField(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholder = stringResource(R.string.provider_filter_models_hint)
+        )
+        active.forEach { provider ->
+            val models = provider.models
+                .filter { searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true) }
+            if (models.isEmpty()) return@forEach
+            val expanded = searchQuery.isNotBlank() || provider.id !in collapsedGroups
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        collapsedGroups = if (provider.id in collapsedGroups) {
+                            collapsedGroups - provider.id
+                        } else {
+                            collapsedGroups + provider.id
+                        }
+                    }
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${provider.name} (${models.size})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            if (expanded) {
+                models.forEachIndexed { index, model ->
+                    if (index > 0) {
+                        androidx.compose.material3.HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                            modifier = Modifier.padding(horizontal = Spacing.lg)
+                        )
+                    }
+                    CliModelRow(
+                        display = model,
+                        selected = provider.id == currentProviderId && model == currentModel,
+                        onClick = { onSelect(provider.id, model) }
+                    )
+                }
+            }
+        }
+        if (active.isEmpty()) {
+            Text(
+                text = stringResource(R.string.chat_no_models_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            )
         }
     }
 }

@@ -97,7 +97,7 @@
     <string name="settings_shizuku_hint_ready">已获授权，AI 可通过 adb shell 执行命令</string>
     <string name="settings_backup">备份与还原</string>
     <string name="settings_about">关于</string>
-    <string name="settings_about_ack">关于 AiCode</string>
+    <string name="settings_about_ack">关于</string>
     <string name="settings_feedback_title">反馈与建议</string>
     <string name="settings_feedback_intro">反馈会直接提交到项目反馈收集页，不需要登录；失败时先保存在本地并自动重试。内容会公开用于排障，请先移除密钥、口令等敏感信息。</string>
     <string name="settings_feedback_kind">反馈类型</string>

@@ -218,30 +218,43 @@ class VncServiceController @Inject constructor(
             .joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
 
         private val HOLD_SCRIPT = """
-            # 极简桌面（2026-11-16 用户定）：复用现有 Xvfb/x11vnc/websockify 管线，
-            # 只补 jwm（窗口管理器/任务栏/右键菜单）+ xterm（可用终端）+ 基础字体。
-            # 不引入 LXDE/XFCE 等完整桌面（磁盘与内存代价高一个数量级）。
+            # 极简 GUI 桌面（2026-11-16 用户定）：jwm 提供任务栏/右键菜单/窗口管理，
+            # pcmanfm --desktop 提供桌面图标与壁纸。**不再自动打开终端窗口**——进 VNC 应看到
+            # 桌面本身，终端只在右键菜单/文件管理器里按需打开（用户明确要求）。
+            # 基础组件单独装：可选桌面组件（pcmanfm）装失败时不能连累 jwm/xterm。
             if ! command -v websockify >/dev/null 2>&1 || ! command -v jwm >/dev/null 2>&1; then
                 if command -v apk >/dev/null 2>&1; then
-                    apk add --no-cache xvfb x11vnc websockify jwm xterm font-misc-misc pcmanfm
+                    apk add --no-cache xvfb x11vnc websockify jwm xterm font-misc-misc xrandr xsetroot
                 elif command -v apt-get >/dev/null 2>&1; then
                     apt-get update -y >/dev/null 2>&1
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify jwm xterm xfonts-base pcmanfm
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11vnc python3-websockify jwm xterm xfonts-base x11-xserver-utils
                 fi
             fi
+            # 桌面组件：文件管理器 + 桌面图标/壁纸。与基础组件分开装，装不上也不影响 jwm 起来。
+            command -v pcmanfm >/dev/null 2>&1 || {
+                if command -v apk >/dev/null 2>&1; then
+                    apk add --no-cache pcmanfm >/dev/null 2>&1 || true
+                elif command -v apt-get >/dev/null 2>&1; then
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y pcmanfm >/dev/null 2>&1 || true
+                fi
+            }
             # 桌面配置：jwm 的菜单/任务栏/背景，数据文件而非新实现。
             # 刻意不用 heredoc：整段脚本经 trimIndent 后缩进不可控，带缩进的 JWM_EOF 不会被识别为
             # 终止符，会把后面的 Xvfb/x11vnc/websockify 全吞进配置里（实测过一次黑屏）。
             printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc
             # :1 可能已由 multi-llm 的 MCP 会话持有（不受本会话 30 分钟上限影响），
             # 此时绑定失败退出属预期，x11vnc/websockify 继续接管同一个 X 服务器。
-            Xvfb :1 -screen 0 1280x800x24 -nolock -nolisten tcp >/dev/null 2>&1 &
+            # 手机场景默认竖屏分辨率；服务就绪后由 App 按浮窗宽高比 xrandr 调整。
+            Xvfb :1 -screen 0 720x1280x24 -nolock -nolisten tcp >/dev/null 2>&1 &
             sleep 1
             # 用精确进程名（-x）判重，避免命令行子串匹配命中父 shell 自杀（见上方注释）。
             pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
-            # 极轻量桌面：pcmanfm 提供桌面图标/壁纸与文件管理（约 30MB），不是完整桌面套件。
+            # 轻量 GUI 桌面：只起桌面环境（任务栏 + 桌面图标/壁纸 + 右键菜单），
+            # **不再自动弹终端窗口**（用户明确要求：要桌面，不要终端界面）。
+            # 终端仍保留在右键菜单里，需要时手动打开。
             pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &)
-            pgrep -x xterm >/dev/null 2>&1 || (DISPLAY=:1 xterm -geometry 120x36 -fn fixed -bg black -fg white -title "AiCode Shell" >/dev/null 2>&1 &)
+            # 没有 pcmanfm 时至少铺一层纯色桌面，避免黑屏。
+            command -v xsetroot >/dev/null 2>&1 && DISPLAY=:1 xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
             sleep 1
             x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
             sleep 1

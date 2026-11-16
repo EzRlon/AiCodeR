@@ -119,6 +119,8 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
     /** 改动账本：与主 VM 同源，定时任务回合也能自动补录改动。 */
     private val changeLedgerRepository: com.aicode.feature.changelog.data.ChangeLedgerRepository,
+    /** 与主 VM 共用跨进程会话锁。 */
+    private val engineSessionLock: com.aicode.feature.agent.domain.engine.EngineSessionLock,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -183,6 +185,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         false, // 定时任务 VM 不接管用户排队消息
         handoffStateRepository,
         changeLedgerRepository,
+        engineSessionLock,
         context
     )
 }
