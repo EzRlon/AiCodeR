@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -19,6 +20,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,18 +38,21 @@ import com.aicode.core.ui.floating.FloatingWindowState
 import com.aicode.feature.note.presentation.NoteEditorViewModel
 import com.aicode.feature.note.presentation.notebook.NotebookViewModel
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Check
 import compose.icons.feathericons.Feather
 import compose.icons.feathericons.List
+import compose.icons.feathericons.Plus
+import compose.icons.feathericons.RotateCcw
 import compose.icons.feathericons.Send
 
 /**
  * 会话页「随记」浮窗：不打断会话可见性，随手记录 → 润色 → 一键交给 agent。
  *
- * 编辑器直接复用编辑器页同款 Vditor（[NoteEditorWebView]），写盘走同一套 800ms 防抖；
- * 本组件只负责浮窗外壳、笔记切换与两条动作（润色 / 发送）。
+ * 本轮按用户反馈改成代码编辑器形态：复用 sora-editor + TextMate Markdown，
+ * 行号、自动换行、撤销栈都沿用编辑器页；右侧是纵向格式条（待办/列表/加粗/斜体/撤销/重做），
+ * 底部不再放大卡片，润色与发送都收进标题栏，只保留图标。
  *
- * [onPolish] 与 [onSend] 由宿主注入：跨 feature 的 AI 能力不在这里直接引用，
- * 避免新增 `feature/presentation → feature/presentation` 依赖。
+ * [onPolish] 与 [onSend] 由宿主注入：跨 feature 的 AI 能力不在这里直接引用。
  */
 @Composable
 internal fun NotebookOverlay(
@@ -69,8 +74,7 @@ internal fun NotebookOverlay(
             Toast.makeText(context, loadFailedMsg, Toast.LENGTH_SHORT).show()
         }
     }
-    // 最小化会销毁浮窗内容（WebView）：从「最小化」恢复时把种子同步为内存最新内容。
-    // 只在 true→false 的边沿触发，避免与 ensureLoaded 在每次打开时各回写一遍。
+    // 最小化会销毁浮窗内容：从「最小化」恢复时把种子同步为内存最新内容。
     var wasMinimized by remember { mutableStateOf(windowState.minimized) }
     LaunchedEffect(windowState.minimized) {
         if (wasMinimized && !windowState.minimized && viewModel.state.value.currentPath != null) {
@@ -98,8 +102,9 @@ internal fun NotebookOverlay(
         },
         onGeometryCommitted = viewModel::updateGeometry,
         headerActions = {
+            SaveStateLabel(state.saveState)
             Box {
-                IconButton(onClick = { showNotes = true }, modifier = Modifier.size(32.dp)) {
+                IconButton(onClick = { showNotes = true }, modifier = Modifier.size(30.dp)) {
                     Icon(
                         FeatherIcons.List,
                         contentDescription = stringResource(R.string.notebook_list),
@@ -110,8 +115,18 @@ internal fun NotebookOverlay(
                 DropdownMenu(expanded = showNotes, onDismissRequest = { showNotes = false }) {
                     state.notes.forEach { note ->
                         DropdownMenuItem(
-                            text = {
-                                Text(note.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            text = { Text(note.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            trailingIcon = if (note.path == state.currentPath) {
+                                {
+                                    Icon(
+                                        FeatherIcons.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            } else {
+                                null
                             },
                             onClick = {
                                 showNotes = false
@@ -122,6 +137,13 @@ internal fun NotebookOverlay(
                     if (state.notes.isNotEmpty()) HorizontalDivider()
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.notebook_new)) },
+                        leadingIcon = {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        },
                         onClick = {
                             showNotes = false
                             viewModel.newNote()
@@ -130,30 +152,35 @@ internal fun NotebookOverlay(
                 }
             }
             if (state.canUndoPolish) {
-                TextButton(
+                IconButton(
                     onClick = { viewModel.undoPolish() },
-                    contentPadding = PaddingValues(horizontal = 6.dp)
+                    modifier = Modifier.size(30.dp)
                 ) {
-                    Text(
-                        text = stringResource(R.string.notebook_undo_polish),
-                        style = MaterialTheme.typography.labelSmall
+                    Icon(
+                        FeatherIcons.RotateCcw,
+                        contentDescription = stringResource(R.string.notebook_undo_polish),
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
             IconButton(
                 onClick = {
                     viewModel.polish(onPolish) { ok ->
-                        Toast.makeText(context, if (ok) polishDone else polishFailed, Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            if (ok) polishDone else polishFailed,
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 },
                 enabled = !state.polishing,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(30.dp)
             ) {
                 if (state.polishing) {
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                 } else {
                     Icon(
-                        // 与输入框润色按钮同一个「羽毛」图标，用户能认出是同一条能力
                         FeatherIcons.Feather,
                         contentDescription = stringResource(R.string.notebook_polish),
                         modifier = Modifier.size(15.dp),
@@ -167,10 +194,14 @@ internal fun NotebookOverlay(
                         Toast.makeText(context, sendEmpty, Toast.LENGTH_SHORT).show()
                     } else {
                         val ok = viewModel.send(onSend)
-                        Toast.makeText(context, if (ok) sendDone else sendFailed, Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            if (ok) sendDone else sendFailed,
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 },
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(30.dp)
             ) {
                 Icon(
                     FeatherIcons.Send,
@@ -206,16 +237,48 @@ internal fun NotebookOverlay(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            else -> NoteEditorWebView(
-                text = state.editorSeed,
-                path = state.currentPath!!,
-                onContentChanged = {},
-                onSaved = viewModel::onSaved,
-                onMarkdownChanged = viewModel::onMarkdownChanged,
-                latestTextProvider = viewModel::currentText,
-                viewModel = noteEditorViewModel,
-                modifier = Modifier.fillMaxSize()
-            )
+            else -> {
+                val path = state.currentPath!!
+                key(path) {
+                    MarkdownNoteCodeEditor(
+                        text = state.editorSeed,
+                        path = path,
+                        onTextChanged = { value ->
+                            viewModel.onMarkdownChanged(path, value)
+                            noteEditorViewModel.scheduleSave(
+                                path = path,
+                                markdown = value,
+                                onSaved = { viewModel.onSaveResult(path, true) },
+                                onFailed = { viewModel.onSaveResult(path, false) }
+                            )
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
     }
+}
+
+/** 标题栏右侧的自动保存状态；Idle 时完全不占位。 */
+@Composable
+private fun SaveStateLabel(saveState: NotebookViewModel.SaveState) {
+    if (saveState == NotebookViewModel.SaveState.Idle) return
+    val failed = saveState == NotebookViewModel.SaveState.Failed
+    val textRes = when (saveState) {
+        NotebookViewModel.SaveState.Saving -> R.string.notebook_saving
+        NotebookViewModel.SaveState.Failed -> R.string.notebook_save_failed
+        else -> R.string.notebook_saved
+    }
+    Text(
+        text = stringResource(textRes),
+        style = MaterialTheme.typography.labelSmall,
+        color = if (failed) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        maxLines = 1,
+        modifier = Modifier.padding(end = 2.dp)
+    )
 }

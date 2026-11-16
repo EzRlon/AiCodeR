@@ -51,6 +51,9 @@ class NotebookViewModel @Inject constructor(
 
     data class NoteEntry(val path: String, val name: String, val modifiedAt: Long)
 
+    /** 浮窗标题栏的保存状态；Idle 不展示，避免刚打开就闪一下「已保存」。 */
+    enum class SaveState { Idle, Saving, Saved, Failed }
+
     data class UiState(
         val loading: Boolean = true,
         val notes: List<NoteEntry> = emptyList(),
@@ -62,7 +65,8 @@ class NotebookViewModel @Inject constructor(
         /** 首次加载失败（远端断开/目录不可写等）：不再无限转圈，页面给可读提示。 */
         val loadFailed: Boolean = false,
         /** 切换/新建失败时递增：浮窗据此弹一次性提示，但**不**用失败页顶掉当前可编辑笔记。 */
-        val actionErrorTick: Int = 0
+        val actionErrorTick: Int = 0,
+        val saveState: SaveState = SaveState.Idle
     )
 
     private fun signalActionError() {
@@ -163,10 +167,22 @@ class NotebookViewModel @Inject constructor(
         if (path != _state.value.currentPath) return
         latestMarkdown = markdown
         hasEdits = true
+        // 用户已经继续编辑：润色撤销点随之失效。否则点「撤销润色」会把润色后新输入的内容
+        // 一起回退掉（review P2：撤销可能连带回退新输入）。
+        // 注意：润色完成会用 editorSeed 回填编辑器，回填回调的 markdown == editorSeed，不算编辑。
+        val undoStale = prePolishText != null && markdown != _state.value.editorSeed
+        if (undoStale) prePolishText = null
+        // 同一段输入只切一次状态，避免逐键触发整窗重组
+        if (_state.value.saveState != SaveState.Saving || undoStale) {
+            _state.update { it.copy(saveState = SaveState.Saving, canUndoPolish = if (undoStale) false else it.canUndoPolish) }
+        }
     }
 
-    /** Vditor 防抖写盘成功（当前笔记仍是同一路径时才需要提示，保留给后续状态展示）。 */
-    fun onSaved() = Unit
+    /** Vditor 防抖写盘结果；迟到的旧笔记结果不能覆盖当前笔记的标题栏状态。 */
+    fun onSaveResult(path: String, ok: Boolean) {
+        if (path != _state.value.currentPath) return
+        _state.update { it.copy(saveState = if (ok) SaveState.Saved else SaveState.Failed) }
+    }
 
     fun selectNote(path: String) {
         // 首次加载还没落地时切换会让两路协程互相覆盖 currentPath，直接忽略这次点击
@@ -200,7 +216,8 @@ class NotebookViewModel @Inject constructor(
                     notes = notes,
                     loading = false,
                     loadFailed = false,
-                    canUndoPolish = false
+                    canUndoPolish = false,
+                    saveState = SaveState.Idle
                 )
             }
             prefs.edit().putString(KEY_LAST_PATH, path).apply()
@@ -234,7 +251,8 @@ class NotebookViewModel @Inject constructor(
                     notes = notes,
                     loading = false,
                     loadFailed = false,
-                    canUndoPolish = false
+                    canUndoPolish = false,
+                    saveState = SaveState.Idle
                 )
             }
             prefs.edit().putString(KEY_LAST_PATH, path).apply()
@@ -290,11 +308,19 @@ class NotebookViewModel @Inject constructor(
             prePolishText = text
             latestMarkdown = polished
             hasEdits = true
-            withContext(Dispatchers.IO) {
-                runCatching { fileAccess.writeFile(path, polished, overwrite = true) }
+            val written = withContext(Dispatchers.IO) {
+                runCatching { fileAccess.writeFile(path, polished, overwrite = true) }.isSuccess
             }
-            _state.update { it.copy(polishing = false, editorSeed = polished, canUndoPolish = true) }
-            onResult(true)
+            _state.update {
+                it.copy(
+                    polishing = false,
+                    editorSeed = polished,
+                    canUndoPolish = true,
+                    saveState = if (written) SaveState.Saved else SaveState.Failed
+                )
+            }
+            // 写盘失败时标题栏已显示「保存失败」，这里不能再回报成功（否则 Toast 与状态矛盾）
+            onResult(written)
         }
     }
 
@@ -305,12 +331,18 @@ class NotebookViewModel @Inject constructor(
         latestMarkdown = previous
         hasEdits = true
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                runCatching { fileAccess.writeFile(path, previous, overwrite = true) }
+            val written = withContext(Dispatchers.IO) {
+                runCatching { fileAccess.writeFile(path, previous, overwrite = true) }.isSuccess
             }
             // 写盘期间可能已切走：只把种子应用回发起时那一篇，避免串稿
             if (_state.value.currentPath != path) return@launch
-            _state.update { it.copy(editorSeed = previous, canUndoPolish = false) }
+            _state.update {
+                it.copy(
+                    editorSeed = previous,
+                    canUndoPolish = false,
+                    saveState = if (written) SaveState.Saved else SaveState.Failed
+                )
+            }
         }
     }
 
@@ -354,7 +386,8 @@ class NotebookViewModel @Inject constructor(
                         loadFailed = false,
                         notes = notes,
                         currentPath = target,
-                        editorSeed = text
+                        editorSeed = text,
+                        saveState = SaveState.Idle
                     )
                 }
                 prefs.edit().putString(KEY_LAST_PATH, target).apply()

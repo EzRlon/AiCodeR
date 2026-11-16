@@ -9,11 +9,27 @@
   #vditor { height: 100%; }
   /* 移动端：让编辑区填满、去掉圆角边框，和原生页面观感一致 */
   .vditor { background: __BG__; border-radius: 0; }
+  /*
+   * 浮窗模式（compact）：正文区只留内容。格式操作由原生「待办/列表/加粗…」条驱动，
+   * 不用 Vditor 自带工具栏——它在这个宽度会折成多行，图标资源异常时只剩分隔竖线，
+   * 用户会点到「看不见的按钮」并误插入空表格 / 分割线。
+   */
+  body.compact .vditor-toolbar { display: none; }
+  /* 预览模式下的 Desktop/Tablet/Mobile 动作条与笔记编辑无关，统一隐藏 */
+  .vditor-preview__action { display: none !important; }
+  body.compact .vditor-wysiwyg { padding-top: 8px; }
+  /* 占位提示不要贴着窗口边缘 */
+  body.compact .vditor-reset { padding-left: 4px; padding-right: 4px; }
 </style>
 </head>
-<body>
+<body class="__BODY_CLASS__">
 <div id="vditor"></div>
 <script id="note-source" type="text/plain">__MD_B64__</script>
+<!--
+  图标 sprite 必须在 Vditor 初始化前注入：Vditor 的异步加载在部分 WebView 上失败后
+  工具栏只剩分隔线、图标全空。这里用解析期脚本同步注入，Vditor 检测到同 id 会直接复用。
+-->
+<script id="vditorIconScript" src="__ASSET_BASE__notes/vditor/dist/js/icons/ant.js"></script>
 <script src="__ASSET_BASE__notes/vditor/dist/index.min.js"></script>
 <script>
 (function () {
@@ -27,6 +43,17 @@
       md = new TextDecoder('utf-8').decode(bytes);
     }
     var dark = __DARK__;
+    var compact = __COMPACT__;
+    // 浮窗只用不需要二级弹层的格式项，原生工具栏可以直接调用；
+    // 完整编辑器保留原来的能力（标题、表格、代码块等）。
+    // 与原生格式条（MarkdownNoteCodeEditor）同套动作：待办/代码块/行内代码/链接/引用。
+    var compactToolbar = ['check', 'code', 'inline-code', 'link', 'quote', '|', 'undo', 'redo'];
+    var fullToolbar = [
+      'headings', 'bold', 'italic', 'strike', '|',
+      'list', 'ordered-list', 'check', '|',
+      'quote', 'line', 'code', 'inline-code', 'table', '|',
+      'undo', 'redo', '|', 'fullscreen'
+    ];
     var vditor = new Vditor('vditor', {
       cdn: '__ASSET_BASE__notes/vditor',
       mode: 'wysiwyg',
@@ -34,12 +61,8 @@
       theme: dark ? 'dark' : 'classic',
       cache: { enable: false },
       height: '100%',
-      toolbar: [
-        'headings', 'bold', 'italic', 'strike', '|',
-        'list', 'ordered-list', 'check', '|',
-        'quote', 'line', 'code', 'inline-code', 'table', '|',
-        'undo', 'redo', '|', 'fullscreen'
-      ],
+      placeholder: __PLACEHOLDER__,
+      toolbar: compact ? compactToolbar : fullToolbar,
       preview: {
         hljs: { style: dark ? 'github-dark' : 'github' },
         markdown: { toc: true }
@@ -51,6 +74,27 @@
         if (window.AiCodeNote && window.AiCodeNote.onReady) window.AiCodeNote.onReady();
       }
     });
+    /**
+     * 原生格式条入口：直接触发 Vditor 自己的工具栏按钮，避免另写一套 Markdown 操作
+     * 与 Vditor 的撤销栈 / 选区处理脱节。仅用于无二级弹层的按钮。
+     */
+    window.__noteFormat = function (name) {
+      // 新动作名映射到 Vditor 工具栏原按钮（headings 侧的键名与 Vditor 内部一致）；
+      // 旧 list/bold/italic 按钮已从原生格式条移除（2026-11-16 随记格式条改版）。
+      var alias = { codeblock: 'code', inlinecode: 'inline-code', link: 'link' };
+      var key = alias[name] || name;
+      try {
+        var item = vditor.toolbar && vditor.toolbar.elements && vditor.toolbar.elements[key];
+        if (!item) return false;
+        var btn = item.querySelector('button') || item.firstElementChild;
+        if (!btn) return false;
+        btn.click();
+        if (vditor.focus) vditor.focus();
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
     window.__noteGetValue = function () {
       try { return vditor.getValue(); } catch (e) { return ''; }
     };

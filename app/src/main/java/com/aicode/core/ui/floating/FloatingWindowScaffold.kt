@@ -87,6 +87,8 @@ fun FloatingWindowScaffold(
     onGeometryCommitted: (FloatingWindowGeometry) -> Unit,
     modifier: Modifier = Modifier,
     headerActions: @Composable RowScope.() -> Unit = {},
+    /** 底部动作栏；为 null 时不占位、不画分隔线。 */
+    footer: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -206,6 +208,10 @@ fun FloatingWindowScaffold(
                         },
                         onCommit = { onGeometryCommitted(state.snapshot()) }
                     )
+                }
+                if (footer != null) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    footer?.invoke()
                 }
             }
         }

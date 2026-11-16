@@ -65,15 +65,47 @@ class NoteEditorViewModel @Inject constructor(
         .addPathHandler(LOCAL_PREFIX, LocalAssetPathHandler())
         .build()
 
-    /** 把 Markdown 原文注入模板生成笔记页 HTML；[dark] 决定 Vditor 明/暗主题。 */
-    suspend fun buildHtml(text: String, dark: Boolean): String = withContext(Dispatchers.IO) {
+    /**
+     * 把 Markdown 原文注入模板生成笔记页 HTML。
+     *
+     * [dark] 决定 Vditor 明/暗主题；[compact] 为 true 时隐藏 Vditor 自带工具栏
+     * （浮窗改用原生带文字的格式条），[placeholder] 是空文档时的提示文案。
+     */
+    suspend fun buildHtml(
+        text: String,
+        dark: Boolean,
+        compact: Boolean = false,
+        placeholder: String = ""
+    ): String = withContext(Dispatchers.IO) {
         currentDark = dark
         val b64 = Base64.encodeToString(text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         template
             .replace("__ASSET_BASE__", ASSET_BASE)
             .replace("__BG__", if (dark) BG_DARK else BG_LIGHT)
             .replace("__DARK__", if (dark) "true" else "false")
+            .replace("__BODY_CLASS__", if (compact) "compact" else "")
+            .replace("__COMPACT__", compact.toString())
+            .replace("__PLACEHOLDER__", jsString(placeholder))
             .replace("__MD_B64__", b64)
+    }
+
+    /** 把任意文案安全地嵌入 JS 字符串字面量（模板里以 `placeholder: __PLACEHOLDER__` 使用）。 */
+    private fun jsString(value: String): String = buildString {
+        append('"')
+        value.forEach { ch ->
+            when (ch) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '<' -> append("\\u003c")
+                '>' -> append("\\u003e")
+                '&' -> append("\\u0026")
+                else -> append(ch)
+            }
+        }
+        append('"')
     }
 
     /** 笔记页 baseUrl：以被编辑文件所在目录为基准，笔记里的相对图片路径解析到 `/local/<相对工作区根的目录>/`。 */
@@ -87,8 +119,13 @@ class NoteEditorViewModel @Inject constructor(
         }
     }
 
-    /** 防抖保存：合并连续编辑，停顿后写盘；成功回调 [onSaved]（在主线程）。 */
-    fun scheduleSave(path: String, markdown: String, onSaved: () -> Unit) {
+    /** 防抖保存：合并连续编辑，停顿后写盘；结果回调（在主线程），浮窗据此显示保存状态。 */
+    fun scheduleSave(
+        path: String,
+        markdown: String,
+        onSaved: () -> Unit,
+        onFailed: () -> Unit = {}
+    ) {
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
             delay(SAVE_DEBOUNCE_MS)
@@ -98,7 +135,7 @@ class NoteEditorViewModel @Inject constructor(
                     .onFailure { FileLogger.w(TAG, "保存笔记失败: $path", it) }
                     .isSuccess
             }
-            if (ok) onSaved()
+            if (ok) onSaved() else onFailed()
         }
     }
 
