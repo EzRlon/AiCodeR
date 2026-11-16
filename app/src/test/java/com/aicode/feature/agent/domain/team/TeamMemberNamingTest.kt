@@ -38,6 +38,8 @@ class TeamMemberNamingTest {
     fun `内置角色用官方中文名而非描述首段`() {
         // PM / qa 这类缩写标识若走描述首段会得到偏长的句子，内置名表给出更统一的短名。
         assertEquals("产品经理", TeamMemberNaming.displayName(memberId = "PM"))
+        // 内置 dev-squad 的 members 写的是 product-manager，不是 pm；两者都要命中名表
+        assertEquals("产品经理", TeamMemberNaming.displayName(memberId = "product-manager"))
         assertEquals("质检", TeamMemberNaming.displayName(memberId = "qa"))
         assertEquals("前端", TeamMemberNaming.displayName(memberId = "frontend"))
         assertEquals("后端", TeamMemberNaming.displayName(memberId = "backend"))

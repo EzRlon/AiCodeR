@@ -71,7 +71,8 @@ class CodexBridge @Inject constructor(
     private val mcpConfigRepository: McpConfigRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val todoMirror: EngineTodoMirror,
-    private val orchestrationPrompt: CliOrchestrationPrompt
+    private val orchestrationPrompt: CliOrchestrationPrompt,
+    private val processRegistry: EngineProcessRegistry
 ) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
 
     override val cliCommand: String = "codex"
@@ -110,6 +111,8 @@ class CodexBridge @Inject constructor(
 
     /** 内存映射缓存；进程被杀/应用重启后回退读 threads 文件。并发回合（悬浮球/定时任务）下也有读写。 */
     private val threadIds = ConcurrentHashMap<String, String>()
+    /** thread 映射读改写串行化：多会话并发时不能整体覆盖对方的条目。 */
+    private val mappingMutex = Mutex()
 
     // 可用性/认证缓存字段与 isAvailable() 由 AbstractCliBridge 提供。
 
@@ -405,14 +408,14 @@ class CodexBridge @Inject constructor(
         val process = withContext(Dispatchers.IO) {
             try {
                 containerEngine.startStdioProcess("codex", args, projectPath, extraEnv, resolveRuntimeProfile())
+                    .also { processRegistry.register(sessionId, it, engine = "codex") }
             } catch (e: Exception) {
                 permissionBridgeServer.removeToken(bridgeToken)
                 throw e
             }
         }
-
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
-            runCatching { process.destroy() }
+            processRegistry.kill(sessionId, process)
         }
 
         val stderrTail = StringBuilder()
@@ -452,6 +455,7 @@ class CodexBridge @Inject constructor(
 
             var gotResult = false
             val reader = process.inputStream.bufferedReader()
+            var persistedThreadId: String? = null
             while (!gotResult) {
                 val line = withContext(Dispatchers.IO) {
                     lastActivity.set(System.currentTimeMillis())
@@ -462,6 +466,11 @@ class CodexBridge @Inject constructor(
                     acc.emittedAny = true
                     emit(event)
                     if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
+                }
+                // thread.started 一出现就落盘：回合中途 App 被杀也能续接，不只依赖 finally
+                acc.threadId?.takeIf { it != persistedThreadId }?.let { id ->
+                    persistedThreadId = id
+                    persistThreadId(sessionId, id)
                 }
                 // todo_list 全量待办镜像落库（快照式替换）：待办卡片的拉起/刷新/自动收起走既有 Flow
                 acc.pendingTodos.takeIf { it.isNotEmpty() }?.let { todos ->
@@ -494,7 +503,8 @@ class CodexBridge @Inject constructor(
             stderrDrain.cancel()
             watchdog.cancel()
             permissionBridgeServer.removeToken(bridgeToken)
-            runCatching { process.destroy() }
+            processRegistry.unregister(sessionId, process)
+            runCatching { process.destroyForcibly() }
             // thread.started 在认证前就发出：即便回合失败，映射也已建立，下回合可续接
             acc.threadId?.let { persistThreadId(sessionId, it) }
         }
@@ -733,27 +743,42 @@ class CodexBridge @Inject constructor(
 
     // ── thread 映射持久化 ──────────────────────────────────────────
 
-    private fun readThreadId(appSessionId: String): String? {
+    private suspend fun readThreadId(appSessionId: String): String? {
         threadIds[appSessionId]?.let { return it }
-        return runCatching {
-            if (!fileAccess.exists(threadsPath())) return null
-            val map = json.parseToJsonElement(fileAccess.readFile(threadsPath()))
-                .let { it as? JsonObject } ?: return null
-            map[appSessionId]?.jsonPrimitive?.contentOrNull
-        }.getOrNull()
+        // 读盘后回填内存缓存：否则后续 persist 用空 map 覆盖文件，会丢其他会话的映射
+        val id = withContext(Dispatchers.IO) {
+            runCatching {
+                if (!fileAccess.exists(threadsPath())) return@runCatching null
+                val map = json.parseToJsonElement(fileAccess.readFile(threadsPath()))
+                    .let { it as? JsonObject } ?: return@runCatching null
+                map[appSessionId]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+        }
+        if (id != null) threadIds[appSessionId] = id
+        return id
     }
 
-    private fun persistThreadId(appSessionId: String, threadId: String) {
+    private suspend fun persistThreadId(appSessionId: String, threadId: String) = mappingMutex.withLock {
         threadIds[appSessionId] = threadId
-        runCatching {
-            fileAccess.writeFile(
-                threadsPath(),
-                buildJsonObject {
-                    for ((k, v) in threadIds) put(k, JsonPrimitive(v))
-                }.toString(),
-                overwrite = true
-            )
-        }.onFailure { e -> FileLogger.w(TAG, "持久化 thread 映射失败: ${e.message}") }
+        withContext(Dispatchers.IO) {
+            runCatching {
+                // 读盘合并，而不是用内存 map 整体覆盖：多会话 / 进程重启后才不会互相丢映射
+                val existing = runCatching {
+                    if (!fileAccess.exists(threadsPath())) return@runCatching emptyMap()
+                    val obj = json.parseToJsonElement(fileAccess.readFile(threadsPath()))
+                        .let { it as? JsonObject } ?: return@runCatching emptyMap()
+                    obj.mapNotNull { (k, v) -> v.jsonPrimitive.contentOrNull?.let { k to it } }.toMap()
+                }.getOrDefault(emptyMap())
+                val merged = existing + threadIds
+                fileAccess.writeFile(
+                    threadsPath(),
+                    buildJsonObject {
+                        for ((k, v) in merged) put(k, JsonPrimitive(v))
+                    }.toString(),
+                    overwrite = true
+                )
+            }.onFailure { e -> FileLogger.w(TAG, "持久化 thread 映射失败: ${e.message}") }
+        }
     }
 
     // ── 桥接资产 ──────────────────────────────────────────────────

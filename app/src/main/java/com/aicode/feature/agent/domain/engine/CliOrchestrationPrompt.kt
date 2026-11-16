@@ -28,6 +28,17 @@ class CliOrchestrationPrompt @Inject constructor(
 ) {
     private companion object {
         const val TAG = "CliOrchestrationPrompt"
+
+        /**
+         * 外部引擎不会自动走 App 的压缩抽取/工具注册；把「记改动、记结论、维护任务账本」
+         * 写成提示纪律，并配合 aicode_bridge 暴露的 changelog / graph_write / taskLedger，
+         * 让长期项目在 CLI 会话里也能自动积累账本与图谱。
+         */
+        const val BRIDGE_RECORDING = "【能力桥记录纪律】完成一项改动后调用 changelog 记入项目改动账本" +
+            "（title/kind/humanSummary/agentDetail/evidence/files；evidence 必须是真跑过的命令或测试，没验证就留空）；" +
+            "确认了可复用的决定、教训或待办后调用 graph_write 写入记忆图谱（name 用稳定短标题、summary 写可复用结论）；" +
+            "长期项目的任务拆解与交接用 taskLedger 维护（先 list 看 doing/queued，再 add/advance，状态只前进）。" +
+            "这些是跨会话资产，完成即记，不要等用户提醒。"
     }
 
     /**
@@ -38,10 +49,12 @@ class CliOrchestrationPrompt @Inject constructor(
         val session = runCatching { sessionUseCase.getSessionById(sessionId) }
             .getOrNull() ?: return@withContext null
         val teamName = session.teamName?.takeIf { it.isNotBlank() }
-        if (teamName == null) return@withContext OrchestrationPolicy.BASE
+        if (teamName == null) {
+            return@withContext OrchestrationPolicy.BASE + "\n\n" + BRIDGE_RECORDING
+        }
         val team = runCatching { teamRepository.resolve(teamName) }
             .onFailure { FileLogger.w(TAG, "解析专家团失败，仅注入通用编排守则: $teamName", it) }
-            .getOrNull() ?: return@withContext OrchestrationPolicy.BASE
+            .getOrNull() ?: return@withContext OrchestrationPolicy.BASE + "\n\n" + BRIDGE_RECORDING
 
         // 一次扫盘建索引：成员逐个 findIncludingDisabled 每次都全量读 agents 目录（团队 5 人 = 5 次扫描，
         // 每回合发生）。名称匹配规则与仓库内部一致（定义名或文件名，忽略大小写）。
@@ -62,7 +75,7 @@ class CliOrchestrationPrompt @Inject constructor(
                 lifecycle = team.lifecycle,
                 gates = team.gates,
                 dispatchable = false
-            )
+            ) + "\n\n" + BRIDGE_RECORDING
         }
         // Claude / OpenCode：按各自实际映射规则算出哪些成员真的能派发，未映射的明确标注。
         val mapped = runCatching {
@@ -84,6 +97,6 @@ class CliOrchestrationPrompt @Inject constructor(
             gates = team.gates,
             dispatchable = true,
             unmapped = unmapped
-        )
+        ) + "\n\n" + BRIDGE_RECORDING
     }
 }

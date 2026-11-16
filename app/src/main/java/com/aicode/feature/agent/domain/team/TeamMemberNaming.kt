@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.team
 
+import com.aicode.core.util.containsCjk
 import com.aicode.feature.agent.domain.subagent.AgentDefinition
 import com.aicode.feature.store.data.StoreTranslation
 
@@ -34,6 +35,7 @@ object TeamMemberNaming {
      */
     private val BUILTIN_NAMES: Map<String, String> = mapOf(
         "pm" to "产品经理",
+        "product-manager" to "产品经理",
         "architect" to "架构师",
         "frontend" to "前端",
         "backend" to "后端",
@@ -60,7 +62,7 @@ object TeamMemberNaming {
 
         // 1. 商店译文：成员若来自商店装的专家团，译文表里可直接查到中文名。
         translations.values.firstOrNull { it.sourceName.equals(id, ignoreCase = true) }
-            ?.nameZh?.takeIf { it.isNotBlank() }
+            ?.nameZh?.takeIf { it.isNotBlank() && it.containsCjk() }
             ?.let { return it }
 
         // 2. 内置角色名表：缩写标识（PM/qa）看这里，比描述首段更短更统一。

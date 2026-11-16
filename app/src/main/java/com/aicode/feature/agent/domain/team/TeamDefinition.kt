@@ -24,7 +24,9 @@ data class TeamDefinition(
     val prompt: String,
     val lifecycle: List<String> = emptyList(),
     val gates: List<String> = emptyList(),
-    val filePath: String? = null
+    val filePath: String? = null,
+    /** 可选的本地化展示名（内置团队显式提供）；为空时由商店译文兜底。 */
+    val displayName: String? = null
 )
 
 /** 一个生效的专家团条目：定义本体 + 来源作用域，供 UI 标注「全局/项目」。 */

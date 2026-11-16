@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import com.aicode.core.util.containsCjk
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -198,8 +199,16 @@ private fun TeamCard(
         team.name,
         team.description
     )
-    val displayName = translation?.nameZh?.takeIf { it.isNotBlank() }
-    val displayDescription = translation?.descriptionZh?.takeIf { it.isNotBlank() } ?: team.description
+    // 本地化纪律：展示名优先用定义里的中文名，其次只接受中文译文；描述同理。
+    // 中文界面下绝不把英文论文摘要之类的未本地化文本直接铺给用户。
+    val displayName = team.displayName?.takeIf { it.containsCjk() }
+        ?: translation?.nameZh?.takeIf { it.isNotBlank() && it.containsCjk() }
+        ?: team.name
+    val displayDescription = when {
+        team.description.containsCjk() -> team.description
+        translation?.descriptionZh?.containsCjk() == true -> translation.descriptionZh
+        else -> stringResource(R.string.team_description_unavailable)
+    }
     val accent = MaterialTheme.colorScheme.primary
 
     Surface(
@@ -237,7 +246,7 @@ private fun TeamCard(
                 }
                 Spacer(Modifier.width(Spacing.sm))
                 Text(
-                    text = displayName ?: team.name,
+                    text = displayName,
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (selected) accent else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,

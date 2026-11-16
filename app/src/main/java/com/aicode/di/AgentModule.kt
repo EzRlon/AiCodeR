@@ -82,7 +82,6 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
-import javax.inject.Named
 import javax.inject.Singleton
 
 import com.aicode.core.db.MigrationLoader
@@ -116,6 +115,7 @@ import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
 import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import javax.inject.Named
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -534,4 +534,12 @@ object AgentModule {
             auditRecorder
         )
     }
+
+    /**
+     * 排队消息持久化归属：主 Activity 的 VM 负责恢复/回写用户队列；
+     * 定时任务 worker 的 VM 传 false，避免把用户排队消息当成自己的任务跑掉或覆盖文件。
+     */
+    @Provides
+    @Named("queue_persistence")
+    fun provideQueuePersistence(): Boolean = true
 }

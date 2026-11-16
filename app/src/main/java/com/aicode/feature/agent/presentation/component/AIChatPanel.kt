@@ -32,6 +32,8 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -49,6 +51,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -781,6 +785,15 @@ fun AIChatPanel(
     val messageEntryDelays = remember(messages, entryScheduler) { entryScheduler.schedule(messages) }
     val currentSessionState by viewModel.currentSessionState.collectAsStateWithLifecycle()
     val currentSession = currentSessionState
+    val rootSessions by viewModel.sessions.collectAsStateWithLifecycle()
+    // 外部引擎派生的子会话只展示「任务 + 最终报告」；点进去发消息会落到内置工作流，
+    // 用 CLI 的模型名去请求 App 供应商，既跑不通也会误导用户。这里明确只读。
+    val isEngineSubagentSession = remember(currentSession?.parentId, currentSession?.engine, rootSessions) {
+        currentSession?.parentId?.let { parentId ->
+            currentSession?.engine == null &&
+                rootSessions.firstOrNull { it.id == parentId }?.engine != null
+        } == true
+    }
     val sessionInputTokens = currentSession?.totalInputTokens ?: 0
     val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0
     val sessionLastInputTokens = currentSession?.lastInputTokens ?: 0
@@ -810,6 +823,7 @@ fun AIChatPanel(
     val pendingQuestion by viewModel.pendingUserQuestion.collectAsStateWithLifecycle()
     val currentTodoItems by viewModel.currentSessionTodoItems.collectAsStateWithLifecycle()
     val queuedRequests by viewModel.queuedRequests.collectAsStateWithLifecycle()
+    val interruptedSessions by viewModel.interruptedSessions.collectAsStateWithLifecycle()
     val targetRewindMessageId by viewModel.targetRewindMessageId.collectAsStateWithLifecycle()
     val rewindConflicts by viewModel.rewindConflicts.collectAsStateWithLifecycle()
     val providers = (settingsViewModel?.providers?.collectAsStateWithLifecycle()?.value ?: emptyList()).filter { it.isEnabled }
@@ -1696,6 +1710,14 @@ fun AIChatPanel(
     }
 
     val sendMessage: () -> Unit = sendMessage@{
+        if (isEngineSubagentSession) {
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.chat_engine_subagent_readonly),
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            return@sendMessage
+        }
         val text = inputText.trim()
         if (text.isNotEmpty() || pendingAttachments.isNotEmpty()) {
             val attachments = pendingAttachments
@@ -2465,6 +2487,43 @@ fun AIChatPanel(
                     currentTodoItems.map { it.status },
                     isCompacting
                 )
+            }
+
+            val interruptedPreview = interruptedSessions[currentSessionId]
+            if (interruptedPreview != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.chat_interrupted_title),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text(
+                                text = interruptedPreview,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.enqueueAgentRequest(
+                                    request = "继续",
+                                    targetSessionId = currentSessionId
+                                )
+                            }
+                        ) {
+                            Text(stringResource(R.string.chat_interrupted_continue))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(Spacing.xs))
             }
 
             ChatInputBar(

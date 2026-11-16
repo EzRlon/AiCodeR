@@ -1,4 +1,5 @@
 ---
+nameZh: 研究队
 name: research-squad
 description: 调研三人组：探索摸清代码库现状、架构师做技术选型与风险评估、质检复核结论。适合「这个功能怎么实现的」「选哪个方案」类任务。
 members: [explore, architect, qa]

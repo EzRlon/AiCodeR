@@ -17,6 +17,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -53,7 +55,10 @@ class PermissionBridgeServer @Inject constructor(
     private val deliveryRegistry: CliDeliveryRegistry,
     private val sessionUseCase: com.aicode.feature.agent.domain.session.SessionUseCase,
     private val workspacePathMapper: com.aicode.feature.workspace.domain.WorkspacePathMapper,
-    private val orchestrationBoard: com.aicode.feature.agent.domain.orchestration.OrchestrationBoardService
+    private val orchestrationBoard: com.aicode.feature.agent.domain.orchestration.OrchestrationBoardService,
+    private val changeLedgerRepository: com.aicode.feature.changelog.data.ChangeLedgerRepository,
+    private val graphRepository: com.aicode.feature.memorygraph.data.GraphRepository,
+    private val taskLedgerTool: com.aicode.feature.agent.domain.tool.ledger.TaskLedgerTool
 ) {
     private companion object {
         const val TAG = "EnginePermissionBridge"
@@ -323,6 +328,79 @@ class PermissionBridgeServer @Inject constructor(
                     sessionId = sessionId.ifBlank { null }
                 )
                 when (val result = graphSearchTool.executeWithContext(input, context)) {
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Success -> {
+                        val text = (result.data as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.takeIf { it.isString }
+                            ?.content
+                            ?: result.data.toString()
+                        okData(text)
+                    }
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Error -> errData(result.message)
+                    is com.aicode.feature.agent.domain.tool.ToolResult.Partial -> okData(result.message)
+                }
+            }
+            "changelog" -> {
+                // 外部引擎的改动账本写入：与本体 changelog 工具同语义，按会话工作区落库
+                val title = input["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                if (title.isBlank()) return errData("title 不能为空")
+                val workspace = sessionUseCase.getSessionById(sessionId)?.workspacePath
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return errData("当前会话没有工作区，无法记录改动账本")
+                val kind = com.aicode.feature.changelog.domain.model.ChangeKind.fromToken(
+                    input["kind"]?.jsonPrimitive?.contentOrNull
+                )
+                val status = when (input["status"]?.jsonPrimitive?.contentOrNull?.uppercase()) {
+                    "REVIEW" -> com.aicode.feature.annotation.domain.model.AnnotationStatus.REVIEW
+                    else -> com.aicode.feature.annotation.domain.model.AnnotationStatus.FIXING
+                }
+                val files = input["files"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                val filesJson = buildJsonArray { files.forEach { add(it) } }.toString()
+                val id = changeLedgerRepository.add(
+                    title = title,
+                    kind = kind,
+                    status = status,
+                    humanSummary = input["humanSummary"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    agentDetail = input["agentDetail"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    evidence = input["evidence"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    filesJson = filesJson,
+                    sessionId = sessionId.ifBlank { null },
+                    workspacePath = workspace
+                )
+                okData("已记入改动账本 id=$id")
+            }
+            "graph_write" -> {
+                // 外部引擎没有 App 侧压缩，结论文本由 CLI 自己总结后经此落图谱（不依赖 App 供应商）
+                val name = input["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                val summary = input["summary"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                if (name.isBlank() || summary.isBlank()) return errData("name / summary 不能为空")
+                val workspace = resolveProjectRoot(sessionId)
+                if (workspace.isBlank()) return errData("当前会话没有工作区，无法写入图谱")
+                val label = input["label"]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() } ?: "decision"
+                val id = graphRepository.recordConclusion(
+                    workspacePath = workspace,
+                    name = name,
+                    summary = summary,
+                    label = label,
+                    sourceSessionId = sessionId
+                )
+                okData("已记录结论 id=$id")
+            }
+            "taskLedger" -> {
+                val hostWorkspace = resolveProjectRoot(sessionId)
+                if (hostWorkspace.isBlank()) return errData("当前会话没有工作区，无法读写任务账本")
+                val containerWorkspace = runCatching { workspacePathMapper.toContainerPath(hostWorkspace) }
+                    .getOrDefault("")
+                if (containerWorkspace.isBlank()) return errData("任务账本仅支持当前工作区")
+                val context = com.aicode.feature.agent.domain.model.AgentContext(
+                    currentFile = null,
+                    selectedCode = null,
+                    projectRoot = containerWorkspace,
+                    language = null,
+                    sessionId = sessionId.ifBlank { null }
+                )
+                when (val result = taskLedgerTool.executeWithContext(input, context)) {
                     is com.aicode.feature.agent.domain.tool.ToolResult.Success -> {
                         val text = (result.data as? kotlinx.serialization.json.JsonPrimitive)
                             ?.takeIf { it.isString }

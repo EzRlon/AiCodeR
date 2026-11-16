@@ -1,4 +1,5 @@
 ---
+nameZh: 设计小组
 name: design-squad
 description: 美工设计团队：界面设计师定视觉方向（配色/布局/图标/规范），前端负责把设计落成界面代码，质检复核效果与一致性。适合界面美化、视觉改版、图标与主题调整类任务。
 members: [ui-designer, frontend, qa]

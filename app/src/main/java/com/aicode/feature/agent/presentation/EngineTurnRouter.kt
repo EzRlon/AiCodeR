@@ -42,6 +42,8 @@ class EngineTurnRouter @Inject constructor(
         engineMode: String?,
         images: List<AgentImage>,
         attachments: List<AgentAttachment>,
+        /** 是否续接 CLI 侧历史。首回合传 false，避免「先 --resume 失败再起第二份进程」的固定双起。 */
+        resume: Boolean = true,
         nativeFlow: () -> Flow<AgentEvent>
     ): Flow<AgentEvent> = when (engine) {
         AgentEngines.CLAUDE_CODE -> {
@@ -59,7 +61,7 @@ class EngineTurnRouter @Inject constructor(
                         userRequest = userRequest,
                         projectPath = projectPath,
                         model = model,
-                        resume = true,
+                        resume = resume,
                         providerId = providerId,
                         engineMode = engineMode,
                         images = images,
@@ -83,7 +85,7 @@ class EngineTurnRouter @Inject constructor(
                         userRequest = userRequest,
                         projectPath = projectPath,
                         model = model,
-                        resume = true,
+                        resume = resume,
                         providerId = providerId,
                         engineMode = engineMode,
                         images = images,
@@ -107,7 +109,7 @@ class EngineTurnRouter @Inject constructor(
                         userRequest = userRequest,
                         projectPath = projectPath,
                         model = model,
-                        resume = true,
+                        resume = resume,
                         providerId = providerId,
                         engineMode = engineMode,
                         images = images,

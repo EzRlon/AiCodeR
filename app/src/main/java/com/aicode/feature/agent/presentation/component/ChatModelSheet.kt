@@ -54,9 +54,12 @@ import com.aicode.feature.settings.domain.model.modelMetadataKey
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import com.aicode.feature.settings.presentation.component.ModelSelectionContent
+import com.aicode.core.ui.settings.ModelSearchField
 import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
+import compose.icons.feathericons.ChevronDown
+import compose.icons.feathericons.ChevronUp
 
 /**
  * 思考强度入口的灯泡图标：参照 RikkaHub「调整模型思考深度」面板的灯泡意象（验收反馈 F1，
@@ -414,6 +417,8 @@ private fun CliModelPage(
         AgentEngines.CODEX -> providers.filter { it.type == ProviderType.OPENAI && !it.useFullUrl }
         else -> providers.filter { (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC) && !it.useFullUrl }
     }
+    // 折叠的供应商组（引擎自带组不参与折叠，组数少且最常用）；弹窗生命周期内记忆
+    var collapsedGroups by remember { mutableStateOf(emptySet<String>()) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -428,70 +433,88 @@ private fun CliModelPage(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = Spacing.sm)
         )
-        Surface(
-            shape = RoundedCornerShape(Radius.mdLarge),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            // 行模型：Label=分组标题（引擎模型/供应商名），Model=可选模型行；
-            // 记忆化避免弹窗内任何状态变化都重建整表（optimizer P2）
-            val builtinLabel = stringResource(R.string.cli_model_builtin_group)
-            val rows = remember(engine, providers, builtinLabel) {
-                data class Row(val label: String?, val model: String? = null, val providerId: String? = null, val ref: String? = null)
-                buildList {
-                    add(Row(label = builtinLabel))
-                // 引擎自带模型：providerId=null
-                builtinModels.forEach { model ->
-                    add(Row(label = null, model = model, providerId = null, ref = model))
+        // 与内置模型页同一观感：无边框胶囊搜索框（2026-11-16 用户反馈 6）
+        var searchQuery by remember { mutableStateOf("") }
+        ModelSearchField(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholder = stringResource(R.string.provider_filter_models_hint)
+        )
+        // 分组可折叠（记忆化避免弹窗内任何状态变化都重建整表，optimizer P2）：
+        // label=供应商名（含「引擎自带模型」组），models=该组可选模型；搜索时强制展开命中组
+        val builtinLabel = stringResource(R.string.cli_model_builtin_group)
+        val groups = remember(engine, providers, builtinLabel, searchQuery) {
+            data class Group(val label: String, val providerId: String?, val models: List<Pair<String, String>>)
+            buildList {
+                val builtinHits = builtinModels.filter { searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true) }
+                if (builtinHits.isNotEmpty()) {
+                    add(Group(builtinLabel, null, builtinHits.map { it to it }))
                 }
-                // App 供应商模型：与内置引擎一样可选供应商的模型（Key/baseURL 由桥透传）
                 matchingProviders.forEach { provider ->
                     val models = (provider.models + listOf(provider.selectedModel, provider.defaultModel))
                         .filter { it.isNotBlank() }
                         .distinct()
+                        .filter { searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true) }
                     if (models.isEmpty()) return@forEach
                     // CC 引擎下 OpenAI 型全部走自动适配（端点表直连或本地转换网关），标注区分
                     val adapted = engine == AgentEngines.CLAUDE_CODE && provider.type == ProviderType.OPENAI
-                    add(Row(label = if (adapted) provider.name + "（自动适配）" else provider.name))
-                    models.forEach { model ->
-                        // OpenCode 的模型串带 provider 前缀（与桥内 provider 注入同源）；Claude/Codex 用裸模型名
+                    val label = if (adapted) provider.name + "（自动适配）" else provider.name
+                    add(Group(label, provider.id, models.map { model ->
                         val ref = if (engine == AgentEngines.OPENCODE) {
                             CliModelRef.opencodeModelRef(provider.name, provider.id, provider.type, provider.baseUrl, model)
                         } else {
                             model
                         }
-                        add(Row(label = null, model = model, providerId = provider.id, ref = ref))
-                    }
-                }
-                }
-            }
-            Column {
-                rows.forEachIndexed { index, row ->
-                    if (index > 0) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = Spacing.lg)
-                                .height(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        )
-                    }
-                    if (row.label != null) {
-                        Text(
-                            text = row.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
-                        )
-                    } else {
-                        CliModelRow(
-                            display = row.model.orEmpty(),
-                            selected = currentProviderId == row.providerId && currentModel == row.ref,
-                            onClick = { onSelect(row.providerId, row.ref.orEmpty()) }
-                        )
-                    }
+                        model to ref
+                    }))
                 }
             }
+        }
+        groups.forEach { group ->
+            // 分组头：点击折叠/展开（与内置页 CollapsibleGroupHeader 同交互，简化为行内实现）
+            val collapsed = group.providerId != null && group.providerId in collapsedGroups
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        val id = group.providerId ?: return@clickable
+                        collapsedGroups = if (id in collapsedGroups) collapsedGroups - id else collapsedGroups + id
+                    }
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = group.label + " (${group.models.size})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                if (group.providerId != null) {
+                    Icon(
+                        imageVector = if (collapsed) FeatherIcons.ChevronDown else FeatherIcons.ChevronUp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            if (!collapsed) {
+                group.models.forEach { (model, ref) ->
+                    CliModelRow(
+                        display = model,
+                        selected = currentProviderId == group.providerId && currentModel == ref,
+                        onClick = { onSelect(group.providerId, ref) }
+                    )
+                }
+            }
+        }
+        if (groups.isEmpty()) {
+            Text(
+                text = stringResource(R.string.chat_no_models_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+            )
         }
     }
 }

@@ -157,10 +157,10 @@ class StatefulAgentWorkflow @Inject constructor(
         const val INSTANT_HANDOFF_TAIL_LIMIT = 24_000
         /** 外部引擎结论沉淀：只摘要最近一段镜像历史（成本有界），要求至少这么多条消息且有实质助手回复。 */
         const val EXTRACT_RECENT_MESSAGES = 40
-        const val EXTRACT_MIN_HISTORY = 12
-        const val EXTRACT_MIN_ASSISTANT = 3
+        const val EXTRACT_MIN_HISTORY = 8
+        const val EXTRACT_MIN_ASSISTANT = 2
         /** 距上次抽取至少新增这么多条历史才再摘要一次；另带少量上下文一起交给摘要模型。 */
-        const val EXTRACT_MIN_FRESH_MESSAGES = 12
+        const val EXTRACT_MIN_FRESH_MESSAGES = 6
         const val EXTRACT_CONTEXT_MESSAGES = 8
         /** 模式提醒提示词：复用 prompts 目录文件（用户可自定义覆盖），切换时随消息注入而非进 system。 */
         const val MODE_REMINDER_PLAN_FILE = "agent/plan-mode.md"

@@ -362,6 +362,21 @@ internal fun ChatInputBar(
     // 空闲紧凑态：无输入、非忙、无附件时才压高度。打字或任务进行中立刻恢复原尺寸——
     // 否则用户一敲字输入框就「长高」，等于在输入路径上放了一次布局跳动。
     val compactIdle = !isBusy && !hasContent
+    val voiceContext = LocalContext.current
+    // 业务规则：底栏已有多条待发送消息（≥2）时，发送键的「停止」不再强制中断。
+    // 用户连点发送排队时，按钮会在发完后切到停止态；若此时放行，会误停并把多条排队消息一起丢掉。
+    // 队列只有 0/1 条时仍按原行为停止；多条时给出提示，让用户先处理队列。
+    val stopUnlessQueued: () -> Unit = {
+        if (queuedRequests.size >= 2) {
+            android.widget.Toast.makeText(
+                voiceContext,
+                R.string.chat_stop_blocked_by_queue,
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            onStop()
+        }
+    }
 
     // 折叠态走早返回：整条输入卡（含 BasicTextField、待办/用量面板、所有底部弹层）都不组合，
     // 高度真正降到轨道那 44dp。不用 AnimatedVisibility 包住整个函数体——那需要给 700 行
@@ -373,6 +388,7 @@ internal fun ChatInputBar(
             queuedCount = queuedRequests.size,
             activityKey = activityKey,
             onExpand = onToggleCollapsed,
+            // 折叠态的停止是显式控件，不属于「发送键连点」手势，保持原行为。
             onStop = onStop,
             modifier = modifier
         )
@@ -400,7 +416,6 @@ internal fun ChatInputBar(
     val mentionQuery = if (!isBusy && !showSlashMenu) fileMentionQuery(value) else null
 
     // ── 语音「按住说话」：长按发送键录音，松手识别并发送；上滑取消。──
-    val voiceContext = LocalContext.current
     var voiceHoldActive by remember { mutableStateOf(false) }
     // 长按语音的手势分支，实时驱动浮层分支提示（微信式）；传对象引用给 SendButton 写、浮层读
     val voiceDragTarget = remember { mutableStateOf(VoiceDragTarget.SEND) }
@@ -1174,7 +1189,7 @@ internal fun ChatInputBar(
                             tokenProgress = tokenProgress,
                             tokenEstimated = tokenEstimated,
                             onSend = onSend,
-                            onStop = onStop,
+                            onStop = stopUnlessQueued,
                             onVoiceHoldStart = {
                                 if (voiceContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
                                     android.content.pm.PackageManager.PERMISSION_GRANTED

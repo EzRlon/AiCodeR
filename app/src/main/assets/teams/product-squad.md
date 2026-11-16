@@ -1,4 +1,5 @@
 ---
+nameZh: 产品组
 name: product-squad
 description: 产品设计团队：产品经理澄清需求与验收标准、界面设计师出交互与视觉方案、架构师评估可行性、质检独立复核。适合「从想法到可交付的产品方案」类任务。
 members: [product-manager, ui-designer, architect, qa]

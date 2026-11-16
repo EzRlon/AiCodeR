@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.team
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.containsCjk
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import org.yaml.snakeyaml.Yaml
 
@@ -38,7 +39,10 @@ object TeamDefinitionParser {
             lifecycle = stringList(frontmatter["lifecycle"]),
             gates = stringList(frontmatter["gates"]),
             prompt = prompt,
-            filePath = filePath
+            filePath = filePath,
+            // 只接受中文展示名，避免文件里混入英文摘要后污染选择器
+            displayName = frontmatter["nameZh"]?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() && it.containsCjk() }
         )
     }
 

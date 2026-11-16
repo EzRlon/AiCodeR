@@ -265,6 +265,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var proxySettingsRepository: com.aicode.feature.settings.data.repository.ProxySettingsRepository
 
+    /** 外部引擎 CLI 进程登记表：冷启动时回收上次被 LMK 遗留的孤儿 proot/CLI 进程。 */
+    @Inject
+    lateinit var engineProcessRegistry: com.aicode.feature.agent.domain.engine.EngineProcessRegistry
+
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -288,6 +292,12 @@ class AIEditorApp : Application(), Configuration.Provider {
         logDeviceInfo()
         // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
         appScope.launch { reportAbnormalExits() }
+        // 冷启动回收：上次进程被 LMK 时来不及收尸的 proot + claude/codex/opencode 进程树。
+        // 只按落盘 PID 精确回收（PID + /proc 启动时间 + cmdline 三重校验），不扫无关进程。
+        appScope.launch {
+            runCatching { engineProcessRegistry.reclaimOrphansOnColdStart() }
+                .onFailure { FileLogger.w(TAG, "冷启动回收孤儿引擎进程失败", it) }
+        }
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)

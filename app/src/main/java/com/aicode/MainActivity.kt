@@ -545,6 +545,7 @@ fun AppNavigation(
     val agentStates by agentViewModel.agentStates.collectAsStateWithLifecycle()
     val awaitingPermissionSessionIds by agentViewModel.awaitingPermissionSessionIds.collectAsStateWithLifecycle()
     val subSessionsByParent by agentViewModel.subSessionsByParent.collectAsStateWithLifecycle()
+    val runningSubSessionIds by agentViewModel.runningSubSessionIds.collectAsStateWithLifecycle()
     val teamMemberNames by agentViewModel.teamMemberNames.collectAsStateWithLifecycle()
     val expandedPaths by agentViewModel.expandedPaths.collectAsStateWithLifecycle()
     val expandingPath by agentViewModel.expandingPath.collectAsStateWithLifecycle()
@@ -795,6 +796,7 @@ fun AppNavigation(
             agentStates = agentStates,
             awaitingPermissionSessionIds = awaitingPermissionSessionIds,
             subSessionsByParent = subSessionsByParent,
+            runningSubSessionIds = runningSubSessionIds,
             browseState = browseState,
             deliverables = deliverables,
             deliverablesScanning = deliverablesScanning,

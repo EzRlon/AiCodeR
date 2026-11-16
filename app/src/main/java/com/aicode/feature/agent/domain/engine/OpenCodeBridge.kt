@@ -76,7 +76,8 @@ class OpenCodeBridge @Inject constructor(
     private val agentDefinitionRepository: com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository,
     private val deliveryRegistry: CliDeliveryRegistry,
     private val todoMirror: EngineTodoMirror,
-    private val orchestrationPrompt: CliOrchestrationPrompt
+    private val orchestrationPrompt: CliOrchestrationPrompt,
+    private val processRegistry: EngineProcessRegistry
 ) : AbstractCliBridge(cliAgentManager, pathHomeResolver, containerSettingsRepository) {
 
     override val cliCommand: String = "opencode"
@@ -112,6 +113,8 @@ class OpenCodeBridge @Inject constructor(
     private fun sessionsPath(): String = bridgeDir() + SESSIONS_FILE
 
     private val sessionIds = ConcurrentHashMap<String, String>()
+    /** session 映射读改写串行化：多会话并发时不能整体覆盖对方的条目。 */
+    private val mappingMutex = Mutex()
 
     // 可用性/认证缓存字段与 isAvailable() 由 AbstractCliBridge 提供。
 
@@ -285,14 +288,14 @@ class OpenCodeBridge @Inject constructor(
         val process = withContext(Dispatchers.IO) {
             try {
                 containerEngine.startStdioProcess("opencode", args, projectPath, extraEnv, resolveRuntimeProfile())
+                    .also { processRegistry.register(sessionId, it, engine = "opencode") }
             } catch (e: Exception) {
                 permissionBridgeServer.removeToken(bridgeToken)
                 throw e
             }
         }
-
         val killOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion {
-            runCatching { process.destroy() }
+            processRegistry.kill(sessionId, process)
         }
 
         val stderrTail = StringBuilder()
@@ -335,6 +338,7 @@ class OpenCodeBridge @Inject constructor(
 
             var gotResult = false
             val reader = process.inputStream.bufferedReader()
+            var persistedSessionId: String? = null
             while (!gotResult) {
                 val line = withContext(Dispatchers.IO) {
                     lastActivity.set(System.currentTimeMillis())
@@ -345,6 +349,11 @@ class OpenCodeBridge @Inject constructor(
                     acc.emittedAny = true
                     emit(event)
                     if (event is AgentEvent.Completed || event is AgentEvent.Failed) gotResult = true
+                }
+                // sessionID 一出现就落盘：回合中途 App 被杀也能续接，不只依赖 finally
+                acc.remoteSessionId?.takeIf { it != persistedSessionId }?.let { id ->
+                    persistedSessionId = id
+                    persistSessionId(sessionId, id)
                 }
                 // todowrite 全量待办镜像落库（快照式替换）：待办卡片的拉起/刷新/自动收起走既有 Flow
                 acc.pendingTodos.takeIf { it.isNotEmpty() }?.let { todos ->
@@ -388,7 +397,8 @@ class OpenCodeBridge @Inject constructor(
             stderrDrain.cancel()
             watchdog.cancel()
             permissionBridgeServer.removeToken(bridgeToken)
-            runCatching { process.destroy() }
+            processRegistry.unregister(sessionId, process)
+            runCatching { process.destroyForcibly() }
             // 编排指令文件只在进程存活期间需要（启动时读取）；回合结束删除本会话的那一份，
             // 避免按会话命名的文件在桥目录里堆积。取消场景也要删，故用 NonCancellable。
             withContext(NonCancellable + Dispatchers.IO) {
@@ -541,27 +551,40 @@ class OpenCodeBridge @Inject constructor(
 
     // ── session 映射持久化 ────────────────────────────────────────
 
-    private fun readMappedSessionId(appSessionId: String): String? {
+    private suspend fun readMappedSessionId(appSessionId: String): String? {
         sessionIds[appSessionId]?.let { return it }
-        return runCatching {
-            if (!fileAccess.exists(sessionsPath())) return null
-            val map = json.parseToJsonElement(fileAccess.readFile(sessionsPath()))
-                .let { it as? JsonObject } ?: return null
-            map[appSessionId]?.jsonPrimitive?.contentOrNull
-        }.getOrNull()
+        val id = withContext(Dispatchers.IO) {
+            runCatching {
+                if (!fileAccess.exists(sessionsPath())) return@runCatching null
+                val map = json.parseToJsonElement(fileAccess.readFile(sessionsPath()))
+                    .let { it as? JsonObject } ?: return@runCatching null
+                map[appSessionId]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+        }
+        if (id != null) sessionIds[appSessionId] = id
+        return id
     }
 
-    private fun persistSessionId(appSessionId: String, remoteSessionId: String) {
+    private suspend fun persistSessionId(appSessionId: String, remoteSessionId: String) = mappingMutex.withLock {
         sessionIds[appSessionId] = remoteSessionId
-        runCatching {
-            fileAccess.writeFile(
-                sessionsPath(),
-                buildJsonObject {
-                    for ((k, v) in sessionIds) put(k, JsonPrimitive(v))
-                }.toString(),
-                overwrite = true
-            )
-        }.onFailure { e -> FileLogger.w(TAG, "持久化 session 映射失败: ${e.message}") }
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val existing = runCatching {
+                    if (!fileAccess.exists(sessionsPath())) return@runCatching emptyMap()
+                    val obj = json.parseToJsonElement(fileAccess.readFile(sessionsPath()))
+                        .let { it as? JsonObject } ?: return@runCatching emptyMap()
+                    obj.mapNotNull { (k, v) -> v.jsonPrimitive.contentOrNull?.let { k to it } }.toMap()
+                }.getOrDefault(emptyMap())
+                val merged = existing + sessionIds
+                fileAccess.writeFile(
+                    sessionsPath(),
+                    buildJsonObject {
+                        for ((k, v) in merged) put(k, JsonPrimitive(v))
+                    }.toString(),
+                    overwrite = true
+                )
+            }.onFailure { e -> FileLogger.w(TAG, "持久化 session 映射失败: ${e.message}") }
+        }
     }
 
     // ── 桥接资产 ──────────────────────────────────────────────────

@@ -113,7 +113,12 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val floatBallStateStore: com.aicode.feature.floatball.FloatBallStateStore,
     private val floatBallSessionHub: com.aicode.feature.floatball.FloatBallSessionHub,
     private val engineTurnRouter: com.aicode.feature.agent.presentation.EngineTurnRouter,
+    private val engineProcessRegistry: com.aicode.feature.agent.domain.engine.EngineProcessRegistry,
+    private val queuedRequestStore: com.aicode.feature.agent.data.repository.QueuedRequestStore,
+    private val sessionRunStateStore: com.aicode.feature.agent.data.repository.SessionRunStateStore,
     private val handoffStateRepository: com.aicode.feature.agent.data.repository.HandoffStateRepository,
+    /** 改动账本：与主 VM 同源，定时任务回合也能自动补录改动。 */
+    private val changeLedgerRepository: com.aicode.feature.changelog.data.ChangeLedgerRepository,
     @param:ApplicationContext private val context: Context
 ) {
 
@@ -172,7 +177,12 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         floatBallStateStore,
         floatBallSessionHub,
         engineTurnRouter,
+        engineProcessRegistry,
+        queuedRequestStore,
+        sessionRunStateStore,
+        false, // 定时任务 VM 不接管用户排队消息
         handoffStateRepository,
+        changeLedgerRepository,
         context
     )
 }

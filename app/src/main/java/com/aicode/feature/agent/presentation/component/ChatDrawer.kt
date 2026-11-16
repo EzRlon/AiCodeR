@@ -310,6 +310,8 @@ fun ChatDrawerContent(
     onExport: (ChatSession) -> Unit,
     onImport: () -> Unit,
     subSessionsByParent: Map<String, List<ChatSession>> = emptyMap(),
+    /** 外部引擎当前真正在跑的子代理会话 id；与累计子会话数区分，用于「运行中/总数」。 */
+    runningSubSessionIds: Set<String> = emptySet(),
     browseState: FileBrowseState,
     expandedPaths: Set<String>,
     expandingPath: String? = null,
@@ -539,6 +541,7 @@ fun ChatDrawerContent(
                                 sessions = sessions,
                                 currentSessionId = currentSessionId,
                                 agentStates = agentStates,
+                        runningSubSessionIds = runningSubSessionIds,
                                 awaitingPermissionSessionIds = awaitingPermissionSessionIds,
                                 subSessionsByParent = subSessionsByParent,
                                 listState = listState,
@@ -867,6 +870,7 @@ private fun SessionListTab(
     agentStates: Map<String, AgentUIState>,
     awaitingPermissionSessionIds: Set<String>,
     subSessionsByParent: Map<String, List<ChatSession>>,
+    runningSubSessionIds: Set<String> = emptySet(),
     listState: LazyListState,
     searchQuery: String,
     searchState: ChatSearchState,
@@ -889,6 +893,7 @@ private fun SessionListTab(
             agentStates = agentStates,
             awaitingPermissionSessionIds = awaitingPermissionSessionIds,
             subSessionsByParent = subSessionsByParent,
+            runningSubSessionIds = runningSubSessionIds,
             listState = listState,
             selectionMode = selectionMode,
             selectedSessionIds = selectedSessionIds,
@@ -914,6 +919,7 @@ private fun SessionListContent(
     agentStates: Map<String, AgentUIState>,
     awaitingPermissionSessionIds: Set<String>,
     subSessionsByParent: Map<String, List<ChatSession>>,
+    runningSubSessionIds: Set<String> = emptySet(),
     listState: LazyListState,
     selectionMode: Boolean = false,
     selectedSessionIds: List<String> = emptyList(),
@@ -1012,8 +1018,12 @@ private fun SessionListContent(
                         if (group.groupKey == "pinned") Spacer(Modifier.height(Spacing.sm)) else SettingsDivider()
                     }
                     val state = agentStates[session.id]
-                    val isExecuting = state is AgentUIState.Loading || state is AgentUIState.Streaming
                     val subSessions = subSessionsByParent[session.id].orEmpty()
+                    val runningSubCount = subSessions.count { it.id in runningSubSessionIds }
+                    // 父回合已结束但子代理仍在跑时，父行也要亮运行态，用户才知道后台还有活。
+                    val isExecuting = state is AgentUIState.Loading ||
+                        state is AgentUIState.Streaming ||
+                        runningSubCount > 0
                     val expanded = session.id in expandedIds
                     ChatSessionRow(
                         session = session,
@@ -1043,6 +1053,7 @@ private fun SessionListContent(
                                 SubAgentExpandToggle(
                                     expanded = expanded,
                                     count = subSessions.size,
+                                    runningCount = runningSubCount,
                                     onToggle = {
                                         expandedIds = if (expanded) {
                                             expandedIds - session.id
@@ -1067,7 +1078,8 @@ private fun SessionListContent(
                                         session = sub,
                                         selected = if (selectionMode) false else sub.id == currentSessionId,
                                         isExecuting = subState is AgentUIState.Loading ||
-                                            subState is AgentUIState.Streaming,
+                                            subState is AgentUIState.Streaming ||
+                                            sub.id in runningSubSessionIds,
                                         awaitingPermission = sub.id in awaitingPermissionSessionIds,
                                         pinned = false,
                                         compact = true,
@@ -1425,6 +1437,7 @@ private fun highlightSnippet(snippet: String, query: String, highlight: SpanStyl
 private fun SubAgentExpandToggle(
     expanded: Boolean,
     count: Int,
+    runningCount: Int = 0,
     onToggle: () -> Unit
 ) {
     Row(
@@ -1435,9 +1448,15 @@ private fun SubAgentExpandToggle(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = count.toString(),
+            // 有子代理在跑时显示「运行中/总数」，让用户一眼知道后台还有多少活；
+            // 没有运行时仍显示累计总数，与旧行为一致。
+            text = if (runningCount > 0) "$runningCount/${maxOf(count, runningCount)}" else count.toString(),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (runningCount > 0) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
         )
         ExpandableChevronIcon(
             expanded = expanded,

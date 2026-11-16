@@ -1,4 +1,5 @@
 ---
+nameZh: 开发小队
 name: dev-squad
 description: 全栈开发五人组：产品经理定需求、架构师定方案、前端与后端分工实现、质检独立验收。适合从需求到落地的完整交付。
 members: [product-manager, architect, frontend, backend, qa]
