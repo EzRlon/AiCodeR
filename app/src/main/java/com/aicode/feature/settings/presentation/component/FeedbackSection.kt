@@ -11,13 +11,17 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppSwitch
@@ -58,8 +65,16 @@ import java.util.Locale
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun FeedbackSection() {
+internal fun FeedbackSection(
+    viewModel: com.aicode.feature.settings.presentation.FeedbackViewModel = hiltViewModel()
+) {
     val context = LocalContext.current
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.message) {
+        val message = state.message ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        viewModel.consumeMessage()
+    }
     // 草稿用 rememberSaveable：分区切换/旋转后回来不能把写了一半的反馈丢掉。
     // 日志片段可能较大，不进 Bundle，重新打开开关时再读。
     var kindName by rememberSaveable { mutableStateOf(FeedbackKind.SUGGESTION.name) }
@@ -92,9 +107,6 @@ internal fun FeedbackSection() {
 
     val diagnostics = remember { buildFeedbackDiagnostics(context) }
     val canSubmit = subject.isNotBlank() && description.isNotBlank()
-    val openedHint = stringResource(R.string.settings_feedback_opened)
-    val noBrowserHint = stringResource(R.string.settings_feedback_no_browser)
-    val copiedHint = stringResource(R.string.settings_feedback_copied)
 
     fun currentDraft() = FeedbackDraft(
         kind = kind,
@@ -104,16 +116,6 @@ internal fun FeedbackSection() {
         diagnostics = if (includeDiagnostics) diagnostics else "",
         logExcerpt = if (includeLogs) logExcerpt else ""
     )
-
-    fun copyToClipboard(text: String) {
-        val manager = context.getSystemService(ClipboardManager::class.java) ?: return
-        val clip = ClipData.newPlainText("AiCodeR feedback", text)
-        // 日志虽已脱敏，仍可能含路径/主机名：标记敏感，Android 13+ 不在剪贴板预览里展示全文
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            clip.description.extras?.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-        }
-        manager.setPrimaryClip(clip)
-    }
 
     Column(
         modifier = Modifier
@@ -204,34 +206,29 @@ internal fun FeedbackSection() {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Button(
-            onClick = {
-                val report = FeedbackReportBuilder.build(currentDraft())
-                // 先复制完整正文：即使浏览器打开失败或 Issue 页未自动填充，用户也不会丢内容
-                copyToClipboard(report.fullBody)
-                val opened = runCatching {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(report.issueUrl))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    true
-                }.getOrDefault(false)
-                Toast.makeText(context, if (opened) openedHint else noBrowserHint, Toast.LENGTH_LONG).show()
-            },
-            enabled = canSubmit,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(stringResource(R.string.settings_feedback_submit))
+        if (state.pending > 0) {
+            Text(
+                text = stringResource(R.string.settings_feedback_pending, state.pending),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
-        OutlinedButton(
-            onClick = {
-                copyToClipboard(FeedbackReportBuilder.build(currentDraft()).fullBody)
-                Toast.makeText(context, copiedHint, Toast.LENGTH_SHORT).show()
-            },
-            enabled = canSubmit,
+
+        Button(
+            onClick = { viewModel.submit(currentDraft()) },
+            enabled = canSubmit && !state.submitting,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(stringResource(R.string.settings_feedback_copy))
+            if (state.submitting) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(Spacing.sm))
+            }
+            Text(
+                stringResource(
+                    if (state.submitting) R.string.settings_feedback_submitting
+                    else R.string.settings_feedback_submit
+                )
+            )
         }
     }
 }

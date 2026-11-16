@@ -311,7 +311,9 @@ data class TeamUiEntry(
     val memberCount: Int,
     val disabled: Boolean,
     val nameZh: String = "",
-    val descriptionZh: String = ""
+    val descriptionZh: String = "",
+    /** 定义文件自带的中文展示名（内置团队）；为空时由商店译文兜底。 */
+    val displayName: String? = null
 )
 
 /** 子代理列表页的 UI 状态：定义内容 + 来源作用域 + 启停状态。 */
@@ -2124,7 +2126,8 @@ class SettingsViewModel @Inject constructor(
                         memberCount = team.members.size,
                         disabled = team.name.lowercase() in disabled,
                         nameZh = translation?.nameZh.orEmpty(),
-                        descriptionZh = translation?.descriptionZh.orEmpty()
+                        descriptionZh = translation?.descriptionZh.orEmpty(),
+                        displayName = team.displayName
                     )
                 }
             }

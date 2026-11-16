@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -23,6 +24,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -53,7 +56,9 @@ import com.aicode.feature.settings.domain.model.KeySource
 import com.aicode.feature.settings.presentation.DevKeysUiState
 import com.aicode.feature.settings.presentation.KeysViewModel
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Check
 import compose.icons.feathericons.CheckCircle
+import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Package
@@ -75,6 +80,8 @@ private const val FINGERPRINT_SHORT_LENGTH = 12
 @Composable
 internal fun DevKeysSection(
     state: DevKeysUiState,
+    currentProject: com.aicode.feature.workspace.domain.model.Workspace?,
+    onRecheck: () -> Unit,
     onImportClick: () -> Unit,
     onExportAll: () -> Unit,
     onExportBundle: () -> Unit,
@@ -102,27 +109,60 @@ internal fun DevKeysSection(
             .padding(bottom = Spacing.xl)
     ) {
         Text(
-            text = stringResource(R.string.dev_keys_intro),
+            text = stringResource(R.string.dev_keys_value_title),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = Spacing.md)
+        )
+        Text(
+            text = stringResource(R.string.dev_keys_value_desc),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.semanticColors.subtleText,
-            modifier = Modifier.padding(vertical = Spacing.md)
+            modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.md)
         )
 
-        // ── 发布就绪卡：回答「现在打正式包，够不够」，而不是只列文件 ──
-        // 当年发布踩坑：备份只带走 .jks，同目录 keystore.properties（口令）没跟上，正式包当天签不出。
-        state.readiness?.let { readiness ->
-            ReleaseReadinessCard(readiness = readiness)
+        // 当前工作区就是当前项目：只读展示，切换工作区后由 KeysViewModel 自动重扫。
+        SettingsGroup {
+            SettingsRow(
+                icon = FeatherIcons.Folder,
+                title = stringResource(R.string.dev_keys_project),
+                subtitle = currentProject?.name ?: "—",
+                showChevron = false
+            )
+        }
+        Spacer(Modifier.height(Spacing.md))
+
+        // ── 发布就绪卡：回答「现在打正式包，够不够」，并给出每一项的下一步 ──
+        state.readiness
+            ?.takeIf { it.projectName == null || it.projectName == currentProject?.name }
+            ?.let { readiness ->
+            ReleaseReadinessCard(readiness = readiness, onRecheck = onRecheck)
             SettingsGroup {
                 SettingsRow(
                     icon = FeatherIcons.Package,
                     title = stringResource(R.string.dev_keys_export_bundle),
-                    subtitle = stringResource(R.string.dev_keys_export_bundle_desc),
+                    subtitle = if (readiness.ready) {
+                        stringResource(R.string.dev_keys_export_bundle_desc)
+                    } else {
+                        stringResource(R.string.dev_keys_export_bundle_hint)
+                    },
                     enabled = !state.exporting && readiness.ready,
                     onClick = onExportBundle
                 )
+                if (readiness.ready) {
+                    // 包内含 keystore.properties 明文口令：明确提示存放边界（反馈 2）。
+                    Text(
+                        text = stringResource(R.string.dev_keys_export_plaintext_warning),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                    )
+                }
             }
         }
 
+        SettingsGroupHeader(text = stringResource(R.string.dev_keys_actions_prepare))
         SettingsGroup {
             SettingsRow(
                 icon = FeatherIcons.Upload,
@@ -133,8 +173,10 @@ internal fun DevKeysSection(
                 enabled = !state.importing && !state.exporting,
                 onClick = onImportClick
             )
-            if (state.entries.isNotEmpty()) {
-                SettingsDivider()
+        }
+        if (state.entries.isNotEmpty()) {
+            SettingsGroupHeader(text = stringResource(R.string.dev_keys_actions_backup))
+            SettingsGroup {
                 SettingsRow(
                     icon = FeatherIcons.Download,
                     title = stringResource(R.string.dev_keys_export_all),
@@ -191,14 +233,14 @@ internal fun DevKeysSection(
                     )
                     Spacer(Modifier.height(Spacing.md))
                     Text(
-                        text = stringResource(R.string.dev_keys_empty),
+                        text = stringResource(R.string.dev_keys_empty_title),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
                     Spacer(Modifier.height(Spacing.xs))
                     Text(
-                        text = stringResource(R.string.dev_keys_empty_hint),
+                        text = stringResource(R.string.dev_keys_empty_next),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.semanticColors.subtleText,
                         textAlign = TextAlign.Center
@@ -390,13 +432,18 @@ private fun categoryLabelRes(category: KeyCategory): Int = when (category) {
  * 这是对「备份只带了证书、发布当天才发现缺口令配置」那次踩坑的结构性回应。
  */
 @Composable
-private fun ReleaseReadinessCard(readiness: com.aicode.feature.settings.domain.model.ReleaseReadiness) {
-    val accent = if (readiness.ready) MaterialTheme.semanticColors.success else MaterialTheme.semanticColors.warning
+private fun ReleaseReadinessCard(
+    readiness: com.aicode.feature.settings.domain.model.ReleaseReadiness,
+    onRecheck: () -> Unit
+) {
+    val blockingFailures = readiness.items.count { !it.passed && it.blocking }
+    val ready = readiness.ready
+    val accent = if (ready) MaterialTheme.semanticColors.success else MaterialTheme.semanticColors.warning
     SettingsGroup {
         Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = if (readiness.ready) FeatherIcons.CheckCircle else FeatherIcons.Key,
+                    imageVector = if (ready) FeatherIcons.CheckCircle else FeatherIcons.Key,
                     contentDescription = null,
                     tint = accent,
                     modifier = Modifier.size(18.dp)
@@ -411,7 +458,7 @@ private fun ReleaseReadinessCard(readiness: com.aicode.feature.settings.domain.m
                 Spacer(Modifier.weight(1f))
                 Text(
                     text = stringResource(
-                        if (readiness.ready) R.string.dev_keys_readiness_ready
+                        if (ready) R.string.dev_keys_readiness_ready
                         else R.string.dev_keys_readiness_not_ready
                     ),
                     style = MaterialTheme.typography.labelSmall,
@@ -419,23 +466,62 @@ private fun ReleaseReadinessCard(readiness: com.aicode.feature.settings.domain.m
                 )
             }
             Spacer(Modifier.height(Spacing.xs))
+            // 先用一句话说清「现在能不能打」，细节再逐项列，普通用户不用读术语。
+            Text(
+                text = if (ready) {
+                    stringResource(R.string.dev_keys_ready_summary)
+                } else {
+                    stringResource(R.string.dev_keys_not_ready_summary, blockingFailures)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (ready) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(Spacing.sm))
             readiness.items.forEach { item ->
                 Row(
-                    modifier = Modifier.padding(vertical = 2.dp),
+                    modifier = Modifier.padding(vertical = 3.dp),
                     verticalAlignment = Alignment.Top
                 ) {
                     Text(
-                        text = if (item.passed) "✓" else "✗",
+                        text = when {
+                            item.passed -> "✓"
+                            !item.blocking -> "⚠"
+                            else -> "✗"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (item.passed) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error
+                        color = when {
+                            item.passed -> MaterialTheme.semanticColors.success
+                            !item.blocking -> MaterialTheme.semanticColors.warning
+                            else -> MaterialTheme.colorScheme.error
+                        }
                     )
                     Spacer(Modifier.width(Spacing.xs))
-                    Text(
-                        text = item.detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (item.passed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-                    )
+                    Column {
+                        Text(
+                            text = item.detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (item.passed) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            }
+                        )
+                        val next = item.nextStep
+                        if (!item.passed && next != null) {
+                            Text(
+                                text = stringResource(R.string.dev_keys_next_step, next),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.semanticColors.subtleText
+                            )
+                        }
+                    }
                 }
+            }
+            TextButton(
+                onClick = onRecheck,
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+            ) {
+                Text(stringResource(R.string.dev_keys_recheck), style = MaterialTheme.typography.labelMedium)
             }
         }
     }
@@ -446,6 +532,7 @@ internal fun DevKeysSectionHost(viewModel: KeysViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val currentProject by viewModel.currentProject.collectAsStateWithLifecycle()
     var pendingExportKey by remember { mutableStateOf<KeyFile?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -498,6 +585,8 @@ internal fun DevKeysSectionHost(viewModel: KeysViewModel) {
 
     DevKeysSection(
         state = state,
+        currentProject = currentProject,
+        onRecheck = viewModel::refresh,
         onImportClick = { importLauncher.launch(arrayOf("*/*")) },
         onExportAll = { exportAllLauncher.launch("aicode-keys-${System.currentTimeMillis()}.zip") },
         onExportBundle = { exportBundleLauncher.launch("aicode-release-bundle-${System.currentTimeMillis()}.zip") },

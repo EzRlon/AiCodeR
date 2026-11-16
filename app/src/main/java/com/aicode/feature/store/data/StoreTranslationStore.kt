@@ -2,6 +2,7 @@ package com.aicode.feature.store.data
 
 import android.content.Context
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.containsCjk
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -25,6 +26,20 @@ data class StoreTranslation(
     /** 翻译所依据的源文名称：安装后的本地条目（技能 / MCP / 专家团）按名称回查译文时用。 */
     val sourceName: String = ""
 )
+
+/**
+ * 翻译结果按源文校正：源文本身是中文时保留源文，绝不采用可能由 en→zh 回译产生的
+ * 英文摘要。存量缓存里已经被污染的解释，也会在读取/展示时被这一层纠正。
+ */
+fun StoreTranslation.localizedAgainst(sourceName: String, sourceDescription: String): StoreTranslation {
+    val name = if (sourceName.containsCjk()) sourceName.trim() else nameZh
+    val description = if (sourceDescription.containsCjk()) sourceDescription.trim() else descriptionZh
+    return if (name == nameZh && description == descriptionZh) {
+        this
+    } else {
+        copy(nameZh = name, descriptionZh = description)
+    }
+}
 
 /** 翻译缓存的 key，如 "SKILL:pdf-toolkit" / "MCP:ac.inference.sh/mcp"。 */
 fun StoreItem.storeTranslationKey(): String = "${kind.name}:$id"
@@ -144,14 +159,15 @@ class StoreTranslationStore @Inject constructor(
             name: String,
             description: String
         ): StoreTranslation? {
-            map[key]?.let { return it }
             val prefix = key.substringBefore(':') + ":"
             val sameKind = map.filterKeys { it.startsWith(prefix) }
             val hash = sourceHashOf(name, description)
-            sameKind.values.firstOrNull { it.sourceHash == hash }?.let { return it }
-            return sameKind.values.firstOrNull {
-                it.sourceName.isNotBlank() && it.sourceName.equals(name, ignoreCase = true)
-            }
+            val hit = map[key]
+                ?: sameKind.values.firstOrNull { it.sourceHash == hash }
+                ?: sameKind.values.firstOrNull {
+                    it.sourceName.isNotBlank() && it.sourceName.equals(name, ignoreCase = true)
+                }
+            return hit?.localizedAgainst(name, description)
         }
     }
 }

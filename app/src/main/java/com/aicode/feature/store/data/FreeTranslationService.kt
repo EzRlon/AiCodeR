@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.containsCjk
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,10 +41,26 @@ class FreeTranslationService @Inject constructor(
         caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     }.getOrDefault(false)
 
-    /** 批量翻译 en→zh；返回与输入等长且同序的结果，失败返回 null。 */
+    /**
+     * 批量翻译 en→zh；返回与输入等长且同序的结果，失败返回 null。
+     *
+     * 已经是中文的条目原样返回，不再送翻：免费源把源语言固定成 en，中文再走一遍
+     * en→zh 会被当成英文回译成一段英文摘要（商店专家团「设计小组」卡片的英文论文摘要
+     * 就是这样产生的）。只翻译确实非中文的字段。
+     */
     suspend fun translate(texts: List<String>): List<String>? = withContext(Dispatchers.IO) {
         if (texts.isEmpty()) return@withContext emptyList()
-        translateTencent(texts) ?: translateMyMemory(texts)
+        val pendingIndexes = texts.indices.filterNot { texts[it].containsCjk() }
+        if (pendingIndexes.isEmpty()) return@withContext texts
+        val pending = pendingIndexes.map { texts[it] }
+        val translated = translateTencent(pending) ?: translateMyMemory(pending)
+            ?: return@withContext null
+        if (translated.size != pending.size) return@withContext null
+        val result = texts.toMutableList()
+        pendingIndexes.forEachIndexed { index, originalIndex ->
+            result[originalIndex] = translated[index]
+        }
+        result.toList()
     }
 
     /** 腾讯交互翻译：一次请求翻整批（text_list）。 */

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.containsCjk
 import com.aicode.feature.agent.domain.mcp.McpConfigRepository
 import com.aicode.feature.agent.domain.skill.SkillRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
@@ -23,6 +24,7 @@ import com.aicode.feature.store.data.StoreTranslation
 import com.aicode.feature.store.data.StoreTranslationService
 import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.store.data.nextCursorOrNull
+import com.aicode.feature.store.data.localizedAgainst
 import com.aicode.feature.store.data.storeTranslationKey
 import com.aicode.feature.store.data.storeTranslationSourceHash
 import com.aicode.feature.store.data.toStoreItem
@@ -762,6 +764,9 @@ class StoreViewModel @Inject constructor(
                     ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                 val desc = Regex("(?m)^description:\\s*(.+)$").find(text)
                     ?.groupValues?.get(1)?.trim().orEmpty()
+                val nameZh = Regex("(?m)^nameZh:\\s*(.+)$").find(text)
+                    ?.groupValues?.get(1)?.trim()
+                    ?.takeIf { it.containsCjk() }
                 val memberText = Regex("(?m)^members:\\s*\\[(.+?)]\\s*$").find(text)
                     ?.groupValues?.get(1).orEmpty()
                 val members = memberText.split(',')
@@ -772,6 +777,7 @@ class StoreViewModel @Inject constructor(
                     name = name,
                     description = desc,
                     members = members,
+                    displayName = nameZh,
                     installed = runCatching {
                         fileAccess.exists("~/.aicode/teams/$file")
                     }.getOrDefault(false)
@@ -856,7 +862,7 @@ class StoreViewModel @Inject constructor(
     }
 
     /** 专家团安装第一阶段：收齐将写入的全部文本（内置读 assets / 在线下载），过安全扫描。 */
-    private fun prepareTeamPlan(item: TeamStoreItem): TeamInstallPlan {
+    private suspend fun prepareTeamPlan(item: TeamStoreItem): TeamInstallPlan {
         val (teamText, agents) = if (item.online) prepareOnlineTeam(item) else prepareBuiltinTeam(item)
         val scan = scanner.scanTexts(
             listOf("团队定义 ${item.fileName}" to teamText) +
@@ -918,7 +924,7 @@ class StoreViewModel @Inject constructor(
      * frontmatter（外部工具名与本地不一致，剔除 tools/model 行，默认全工具由权限引擎兜底）→
      * 生成可直接召唤的团队定义。写盘动作在扫描确认后由 [commitTeam] 执行。
      */
-    private fun prepareOnlineTeam(item: TeamStoreItem): Pair<String, List<Pair<String, String>>> {
+    private suspend fun prepareOnlineTeam(item: TeamStoreItem): Pair<String, List<Pair<String, String>>> {
         val base = item.pluginBase ?: throw IllegalStateException("该团队缺少插件目录信息")
         val files = fetchAgentFiles(base) ?: throw IllegalStateException("读取插件目录失败")
         if (files.isEmpty()) throw IllegalStateException("插件中没有成员定义")
@@ -934,17 +940,72 @@ class StoreViewModel @Inject constructor(
             agents.add(defName to cleaned)
         }
         if (agents.isEmpty()) throw IllegalStateException("成员定义下载失败")
-        val description = item.description.replace('\n', ' ').take(180)
+
+        // 本地化纪律：在线团队来自英文市场，安装时必须把团队名/描述和成员描述落成中文，
+        // 不能依赖「商店页翻译缓存碰巧存在」——缓存丢失或离线时团队卡会退回英文。
+        // 翻译失败不阻断安装，但团队描述使用明确的中文兜底，绝不写回英文摘要。
+        val teamItem = StoreItem(
+            id = item.fileName,
+            kind = StoreKind.EXPERT,
+            name = item.name,
+            description = item.description,
+            category = "",
+            popularity = 0L,
+            detailUrl = ""
+        )
+        val memberItems = agents.map { (name, text) ->
+            StoreItem(
+                id = "agent:$name",
+                kind = StoreKind.EXPERT,
+                name = name,
+                description = frontmatterDescription(text),
+                category = "",
+                popularity = 0L,
+                detailUrl = ""
+            )
+        }
+        val fresh = runCatching { translationService.translateBatch(listOf(teamItem) + memberItems) }
+            .getOrElse { e ->
+                FileLogger.w(TAG, "在线专家团安装翻译失败: ${item.name}", e)
+                emptyMap()
+            }
+        val cache = runCatching { translationStore.all() }.getOrDefault(emptyMap())
+        fun translationOf(key: String) = fresh[key] ?: cache[key]
+
+        val teamTranslation = translationOf(teamItem.storeTranslationKey())
+        val nameZh = teamTranslation?.nameZh?.takeIf { it.containsCjk() }
+            ?: item.name.takeIf { it.containsCjk() }
+            ?: context.getString(R.string.store_team_localized_name_fallback, item.name)
+        val description = teamTranslation?.descriptionZh?.takeIf { it.containsCjk() }
+            ?: item.description.takeIf { it.containsCjk() }
+            ?: context.getString(R.string.store_team_localized_fallback, agents.size)
+
+        val localizedAgents = agents.map { (name, text) ->
+            val desc = translationOf("EXPERT:agent:$name")?.descriptionZh?.takeIf { it.containsCjk() }
+            if (desc == null) name to text else name to replaceFrontmatterDescription(text, desc)
+        }
         val team = buildString {
             appendLine("---")
             appendLine("name: ${item.name}")
-            appendLine("description: $description")
-            appendLine("members: [${agents.map { it.first }.joinToString(", ")}]")
+            nameZh?.let { appendLine("nameZh: $it") }
+            appendLine("description: ${description.replace('\n', ' ').take(500)}")
+            appendLine("members: [${localizedAgents.map { it.first }.joinToString(", ")}]")
             appendLine("---")
-            appendLine("你是「${item.name}」专家团的团长。可派发的成员子代理：${agents.map { it.first }.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
+            appendLine("你是「${item.name}」专家团的团长。可派发的成员子代理：${localizedAgents.map { it.first }.joinToString("、")}（用 task 工具，agent 参数填成员名）。")
             appendLine("收到任务后先判断涉及哪些环节，再决定派谁与顺序；派活时写清目标、已知上下文、边界与期望产出（成员看不到你与用户的对话）；成员回报后整合结果并向用户交付。")
         }
-        return team to agents
+        return team to localizedAgents
+    }
+
+    /** 取 agent 定义 frontmatter 里的 description（用于成员名本地化），缺失返回空串。 */
+    private fun frontmatterDescription(text: String): String =
+        Regex("(?m)^description:\\s*(.+)$").find(text)?.groupValues?.get(1)?.trim().orEmpty()
+
+    /** 用中文译文替换 agent 定义 frontmatter 里的 description 行；没有该行时原样返回。 */
+    private fun replaceFrontmatterDescription(text: String, description: String): String {
+        // 译文里的 $ / \ 不能被当成正则替换串解释
+        val replacement = Regex.escapeReplacement("description: ${description.replace('\n', ' ')}")
+        return Regex("(?m)^description:\\s*(.+)$").replaceFirst(text, replacement)
     }
 
     /** GitHub contents API 列插件 agents 目录；raw 直链统一改走 gh-proxy 镜像（国内可直连）。 */
@@ -1022,9 +1083,6 @@ class StoreViewModel @Inject constructor(
     }
 
     private suspend fun translatePendingItems() {
-        // 缓存先载入 state：已有译文立即可见，再只翻译缺失 / 源文变化的条目
-        val cached = translationStore.all()
-        _state.update { it.copy(translations = it.translations + cached) }
         // 技能/MCP 列表 + 专家团 + 引擎插件（映射为 StoreItem 共用同一缓存键体系）
         val candidates = _state.value.items + _state.value.teams.map { team ->
             StoreItem(
@@ -1047,8 +1105,21 @@ class StoreViewModel @Inject constructor(
                 detailUrl = ""
             )
         }
+        // 缓存先载入 state：已有译文立即可见。但必须先按当前源文校正——
+        // 早期免费翻译把中文源文回译成英文摘要写进了缓存，直接合并会让商店页继续显示脏值。
+        val cached = translationStore.all()
+        val corrected = if (cached.isEmpty()) {
+            cached
+        } else {
+            val byKey = candidates.associateBy { it.storeTranslationKey() }
+            cached.mapValues { (key, translation) ->
+                byKey[key]?.let { translation.localizedAgainst(it.name, it.description) } ?: translation
+            }
+        }
+        if (corrected != cached) translationStore.putAll(corrected)
+        _state.update { it.copy(translations = it.translations + corrected) }
         val pending = candidates.filter { item ->
-            val entry = cached[item.storeTranslationKey()]
+            val entry = corrected[item.storeTranslationKey()]
             entry == null || entry.sourceHash != item.storeTranslationSourceHash()
         }
         if (pending.isEmpty()) return

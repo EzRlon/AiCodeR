@@ -52,7 +52,9 @@ data class TeamStoreItem(
     /** 在线市场条目（非内置 assets）。 */
     val online: Boolean = false,
     /** 在线条目的插件目录（安装时据此下载成员定义）。 */
-    val pluginBase: String? = null
+    val pluginBase: String? = null,
+    /** 定义文件自带的中文展示名（内置团队），避免离线时退回英文标识。 */
+    val displayName: String? = null
 )
 
 /**

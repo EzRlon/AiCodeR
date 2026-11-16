@@ -50,6 +50,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.SegmentedTabs
+import com.aicode.core.util.containsCjk
 import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
@@ -398,6 +399,15 @@ internal fun StoreScreen(
     detailTeam?.let { team ->
         val teamTranslation = state.translations[team.storeTranslationKey()]
         val nameZh = teamTranslation?.nameZh.orEmpty()
+        val descZh = teamTranslation?.descriptionZh.orEmpty()
+        val displayName = team.displayName?.takeIf { it.containsCjk() }
+            ?: nameZh.takeIf { it.containsCjk() }
+            ?: team.name
+        val displayDescription = when {
+            team.description.containsCjk() -> team.description
+            descZh.containsCjk() -> descZh
+            else -> stringResource(R.string.team_description_unavailable)
+        }
         AdaptiveModalBottomSheet(onDismissRequest = { detailTeam = null }) {
             Column(
                 modifier = Modifier
@@ -408,22 +418,15 @@ internal fun StoreScreen(
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 Text(
-                    text = if (nameZh.isBlank()) team.name else "${team.name}（$nameZh）",
+                    text = displayName,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                if (teamTranslation?.descriptionZh?.isNotBlank() == true) {
+                if (displayDescription.isNotBlank()) {
                     Text(
-                        text = teamTranslation.descriptionZh,
+                        text = displayDescription,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                if (team.description.isNotBlank()) {
-                    Text(
-                        text = team.description,
-                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -773,6 +776,14 @@ private fun TeamList(
             val teamTranslation = state.translations[team.storeTranslationKey()]
             val nameZh = teamTranslation?.nameZh.orEmpty()
             val descZh = teamTranslation?.descriptionZh.orEmpty()
+            val displayName = team.displayName?.takeIf { it.containsCjk() }
+                ?: nameZh.takeIf { it.containsCjk() }
+                ?: team.name
+            val displayDescription = when {
+                team.description.containsCjk() -> team.description
+                descZh.containsCjk() -> descZh
+                else -> stringResource(R.string.team_description_unavailable)
+            }
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.semanticColors.cardSurface,
@@ -787,13 +798,13 @@ private fun TeamList(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (nameZh.isBlank()) team.name else "${team.name}（$nameZh）",
+                            text = displayName,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        if (team.description.isNotBlank()) {
+                        if (displayDescription.isNotBlank()) {
                             Text(
-                                text = if (descZh.isBlank()) team.description else descZh,
+                                text = displayDescription,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 3,

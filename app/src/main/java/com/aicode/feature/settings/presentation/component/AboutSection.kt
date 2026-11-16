@@ -63,8 +63,10 @@ import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Book
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Download
+import compose.icons.feathericons.ExternalLink
 import compose.icons.feathericons.Github
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.Heart
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Tag
 
@@ -88,6 +90,7 @@ internal fun AboutSection(
     var showChannelSheet by remember { mutableStateOf(false) }
     var showMirrorDialog by remember { mutableStateOf(false) }
     var showDisclaimer by remember { mutableStateOf(false) }
+    var showAcknowledgements by remember { mutableStateOf(false) }
 
     // 通过 PackageManager 读取 versionName/versionCode（项目未开启 BuildConfig）
     val appInfo = remember {
@@ -210,6 +213,14 @@ internal fun AboutSection(
                 onClick = { openUrl(context, LICENSE_URL) }
             )
             SettingsDivider()
+            // 致谢：参考过经验/思路的开源项目（常规开源项目惯例）
+            SettingsRow(
+                icon = FeatherIcons.Heart,
+                title = stringResource(R.string.about_acknowledgements),
+                subtitle = stringResource(R.string.about_acknowledgements_desc),
+                onClick = { showAcknowledgements = true }
+            )
+            SettingsDivider()
             // 免责声明
             SettingsRow(
                 icon = FeatherIcons.AlertCircle,
@@ -217,6 +228,10 @@ internal fun AboutSection(
                 onClick = { showDisclaimer = true }
             )
         }
+    }
+
+    if (showAcknowledgements) {
+        AcknowledgementsDialog(onDismiss = { showAcknowledgements = false })
     }
 
     if (showDisclaimer) {
@@ -302,8 +317,7 @@ private fun UpdateChannelSheet(
     current: UpdateChannel,
     onSelect: (UpdateChannel) -> Unit,
     onDismiss: () -> Unit
-) {
-    val sheetState = rememberModalBottomSheetState()
+) {    val sheetState = rememberModalBottomSheetState()
     AdaptiveModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -472,6 +486,83 @@ private fun MirrorSourceDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        }
+    )
+}
+
+/** 一条致谢条目：项目名 + 一句话说明 + 仓库链接。 */
+private data class Acknowledgement(val name: String, val noteRes: Int, val url: String)
+
+/** 参考过经验/思路的关键项目：只列真正影响过本项目实现的（2026-11-16 用户反馈 4）。 */
+private val ACKNOWLEDGEMENTS = listOf(
+    Acknowledgement("AiCode (jieapi)", R.string.ack_note_upstream, UPSTREAM_REPO_URL),
+    Acknowledgement("Termux", R.string.ack_note_termux, "https://github.com/termux/termux-app"),
+    Acknowledgement("proot", R.string.ack_note_proot, "https://github.com/proot-me/proot"),
+    Acknowledgement("sora-editor", R.string.ack_note_sora, "https://github.com/Rosemoe/sora-editor"),
+    Acknowledgement("Claude Code", R.string.ack_note_claude, "https://github.com/anthropics/claude-code"),
+    Acknowledgement("OpenAI Codex CLI", R.string.ack_note_codex, "https://github.com/openai/codex"),
+    Acknowledgement("OpenCode", R.string.ack_note_opencode, "https://github.com/sst/opencode"),
+    Acknowledgement("RikkaHub", R.string.ack_note_rikka, "https://github.com/rikkahub/rikkahub")
+)
+
+/**
+ * 致谢弹窗：常规开源项目惯例（列表 + 项目名 + 一句话 + 可点链接），只写关键的。
+ */
+@Composable
+private fun AcknowledgementsDialog(onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.about_acknowledgements)) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
+                Text(
+                    text = stringResource(R.string.acknowledgements_intro),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.size(Spacing.xs))
+                ACKNOWLEDGEMENTS.forEach { item ->
+                    Surface(
+                        onClick = { openUrl(context, item.url) },
+                        color = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = stringResource(item.noteRes),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = FeatherIcons.ExternalLink,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.about_ok)) }
         }
     )
 }

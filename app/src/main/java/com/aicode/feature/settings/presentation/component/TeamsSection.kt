@@ -41,6 +41,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.SwipeToDeleteRow
+import com.aicode.core.util.containsCjk
 import com.aicode.feature.agent.domain.team.TeamDefinitionScope
 import com.aicode.feature.settings.presentation.TeamUiEntry
 import compose.icons.FeatherIcons
@@ -124,7 +125,14 @@ private fun TeamCard(
     onToggle: (Boolean) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val description = entry.descriptionZh.ifBlank { entry.description }
+    val displayName = entry.displayName?.takeIf { it.containsCjk() }
+        ?: entry.nameZh.takeIf { it.containsCjk() }
+        ?: entry.name
+    val description = when {
+        entry.description.containsCjk() -> entry.description
+        entry.descriptionZh.containsCjk() -> entry.descriptionZh
+        else -> stringResource(R.string.team_description_unavailable)
+    }
     val membersText = stringResource(R.string.team_members_count, entry.memberCount)
 
     SettingsGroup {
@@ -139,7 +147,7 @@ private fun TeamCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = entry.name,
+                            text = displayName,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = if (entry.disabled) {
@@ -148,11 +156,12 @@ private fun TeamCard(
                                 MaterialTheme.colorScheme.onSurface
                             }
                         )
-                        if (entry.nameZh.isNotBlank()) {
+                        // 中文展示名与英文标识不同时，把标识作为次级信息保留，便于对账文件
+                        if (displayName != entry.name) {
                             Spacer(Modifier.width(Spacing.sm))
                             Text(
-                                text = entry.nameZh,
-                                style = MaterialTheme.typography.bodyMedium,
+                                text = entry.name,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis

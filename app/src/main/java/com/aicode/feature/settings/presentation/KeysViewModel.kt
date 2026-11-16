@@ -21,6 +21,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,7 +59,11 @@ class KeysViewModel @Inject constructor(
     private val scanner: KeyFilesScanner,
     private val readinessChecker: ReleaseReadinessChecker,
     private val fileAccess: FileAccessProvider,
+    private val workspaceRepository: com.aicode.feature.workspace.data.repository.WorkspaceRepository,
 ) : ViewModel() {
+
+    /** 当前工作区即当前项目；页面只读展示，不再提供独立项目切换器。 */
+    val currentProject = workspaceRepository.current
 
     private companion object {
         const val MANIFEST_ENTRY = "manifest.txt"
@@ -70,24 +76,61 @@ class KeysViewModel @Inject constructor(
 
     init {
         refresh()
+        // 当前工作区就是当前项目：切换工作区后自动重扫，不再维护第二套项目选择逻辑。
+        viewModelScope.launch {
+            workspaceRepository.current
+                .drop(1)
+                .distinctUntilChanged()
+                .collect { refresh() }
+        }
     }
 
     /** 重新扫描三处来源（进入页面 / 导入完成时调用），顺带刷新发布就绪检查。 */
     fun refresh() {
         scanJob?.cancel()
-        _state.update { it.copy(scanning = true) }
+        // 先清掉上一项目的就绪结论：切换项目/重新检查期间不能继续显示旧项目的「已就绪」，
+        // 否则用户可能在扫描完成前导出旧项目的资产。
+        _state.update { it.copy(scanning = true, readiness = null) }
         scanJob = viewModelScope.launch {
             val entries = scanner.scan()
-            // 发布就绪检查跟着扫描走：证书/配置任一变化，就绪结论立刻更新。
-            val releaseJks = entries
-                // 口令配置也归 RELEASE，但它不是证书本体：挑证书时排除，否则可能拿 properties 去查证书
-                .filter { it.category == com.aicode.feature.settings.domain.model.KeyCategory.RELEASE && !it.isSigningConfig }
-                // 统一密钥库优先（导入的发布证书应归位），其次工作区；SSH 来源不含签名证书。
-                .sortedBy { if (it.source == KeySource.LIBRARY) 0 else 1 }
-                .firstOrNull()
-            val readiness = runCatching { readinessChecker.check(releaseJks?.containerPath) }
-                .onFailure { FileLogger.w("KeysVM", "发布就绪检查失败: ${it.message}") }
-                .getOrNull()
+            val project = workspaceRepository.current.value
+            // 文件探测、读取配置、keytool 全部是 IO（远程模式还是 SFTP 往返）：不能压在主线程，
+            // 否则进入签名页/切项目/点重新检查会有明显卡顿甚至 ANR。
+            val (projectConfig, readiness) = withContext(Dispatchers.IO) {
+                // 多项目：Gradle 实际读取的是 app/keystore.properties；其它位置只用于迁移诊断。
+                val gradleConfigPath =
+                    "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/app/keystore.properties"
+                val config = listOf(
+                    gradleConfigPath,
+                    "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/keystore.properties",
+                    "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/signing.properties"
+                ).firstOrNull { fileAccess.exists(it) }
+                // 配置里 storeFile 指向的证书优先；否则回退到统一密钥库/工作区的第一张发布证书。
+                val declaredStorePath = runCatching {
+                    val content = config?.let { fileAccess.readFile(it) } ?: return@runCatching null
+                    val raw = readinessChecker.parseKeystoreProperties(content)["storeFile"] ?: return@runCatching null
+                    readinessChecker.resolveStoreFile(raw, config)
+                }.getOrNull()
+                val releaseJks = entries.firstOrNull { it.containerPath == declaredStorePath }
+                    // storeFile 指向扫描范围外的证书（如同一项目自定义目录）时，按路径补一条描述
+                    ?: declaredStorePath?.let { scanner.describeFile(it) }
+                    ?: entries
+                        // 口令配置也归 RELEASE，但它不是证书本体：挑证书时排除
+                        .filter { it.category == com.aicode.feature.settings.domain.model.KeyCategory.RELEASE && !it.isSigningConfig }
+                        // 统一密钥库优先（导入的发布证书应归位），其次工作区
+                        .sortedBy { if (it.source == KeySource.LIBRARY) 0 else 1 }
+                        .firstOrNull()
+                val checked = runCatching {
+                    readinessChecker.check(
+                        jksPath = releaseJks?.containerPath,
+                        // 只把 Gradle 真正读取的位置标为「合规」；root/证书同目录配置会显示为非阻断警告
+                        projectConfigPath = gradleConfigPath,
+                        projectName = project?.name
+                    )
+                }.onFailure { FileLogger.w("KeysVM", "发布就绪检查失败: ${it.message}") }
+                    .getOrNull()
+                config to checked
+            }
             // 「导出全部」与发布资产包同口径：就绪检查认定的配置必须进清单，
             // 包括 `<证书同名>.properties` 这类不在候选名里的配置。
             val configPath = readiness?.configPath

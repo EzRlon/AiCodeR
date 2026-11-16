@@ -12,13 +12,22 @@ data class ReleaseReadiness(
     /** 配套的口令配置路径；未找到为 null。 */
     val configPath: String? = null,
     /** 解析出的配置（含口令，**仅供打包发布资产时原样带走**，UI 不展示明文）。 */
-    val config: Map<String, String> = emptyMap()
+    val config: Map<String, String> = emptyMap(),
+    /** 当前检查的项目名（多项目/多工作区时区分卡片）。 */
+    val projectName: String? = null,
+    /** 配置里 `storeFile` 的原始值与按项目解析后的文件路径（用于发现「指向不存在」）。 */
+    val storeFileRaw: String? = null,
+    val storeFilePath: String? = null
 ) {
     companion object {
         const val KEY_CERT = "cert"
         const val KEY_CONFIG = "config"
         const val KEY_ENTRIES = "entries"
+        const val KEY_STORE_FILE = "storeFile"
         const val KEY_ALIAS = "alias"
+        const val KEY_KEY_PASSWORD = "keyPassword"
+        const val KEY_SIGNING_SCHEME = "signingScheme"
+        const val KEY_CERT_META = "certMeta"
     }
 }
 
@@ -28,7 +37,14 @@ data class ReadinessItem(
     val key: String,
     val passed: Boolean,
     /** 一句话结论（大白话，直接展示）。 */
-    val detail: String
+    val detail: String,
+    /**
+     * 是否阻断发布：false 表示「无法自动验证」这类不确定项，展示为警告但不算未就绪
+     * （例如容器内没有 keytool）。把「没验成」当失败会让页面长期红着，反而不可信。
+     */
+    val blocking: Boolean = true,
+    /** 失败时的下一步建议（一句话）；通过时为 null。 */
+    val nextStep: String? = null
 )
 
 /** 解析后的签名配置（供打包资产与交叉验证使用；不含展示逻辑）。 */

@@ -288,11 +288,14 @@ class StorageUsageScanner @Inject constructor(
     private fun workspacesEntry(cancelled: () -> Boolean): StorageEntry {
         val root = File(context.filesDir, PROJECTS_DIR)
         val projects = root.listFiles { f: File -> f.isDirectory }?.sortedBy { it.name } ?: emptyList()
+        // 单遍历同时拿到「项目总大小 + 附件大小」（此前每项目两次全量递归；项目大时这是最慢的一条）。
+        // 附件行在 workspaceArtifacts 里仍会单独出现，这里只做 note。
+        val projectSizes = projects.associate { it to dirSizeWithAttachments(it, cancelled) }
         val projectRows = projects.map { project ->
-            val attachments = dirSize(File(project, ATTACHMENTS_RELATIVE), cancelled)
+            val (total, attachments) = projectSizes[project] ?: (0L to 0L)
             StorageDetail(
                 label = project.name,
-                bytes = dirSize(project, cancelled),
+                bytes = total,
                 note = attachments.takeIf { it > 0 }?.let {
                     context.getString(R.string.storage_workspace_attachments, formatStorageSize(it))
                 }
@@ -302,7 +305,7 @@ class StorageUsageScanner @Inject constructor(
         val rows = buildList {
             projects.forEachIndexed { index, project ->
                 add(projectRows[index])
-                addAll(workspaceArtifacts(project, cancelled))
+                addAll(workspaceArtifacts(project, cancelled, attachmentsSize = projectSizes[project]?.second ?: 0L))
             }
         }
         val looseFiles = root.listFiles { f: File -> f.isFile }?.sumOf { it.length() } ?: 0L
@@ -318,7 +321,11 @@ class StorageUsageScanner @Inject constructor(
      * 构建目录、依赖目录（node_modules / venv）与下载的大文件（压缩包、安装包、库文件等）。
      * 全部为可重建的派生物，逐条可选中清理；一次目录遍历收集全部目标，跳过 .git / node_modules 内部。
      */
-    private fun workspaceArtifacts(project: File, cancelled: () -> Boolean): List<StorageDetail> {
+    private fun workspaceArtifacts(
+        project: File,
+        cancelled: () -> Boolean,
+        attachmentsSize: Long = 0L
+    ): List<StorageDetail> {
         val apks = mutableListOf<Pair<File, Long>>()
         val downloads = mutableListOf<Pair<File, Long>>()
         val buildDirs = mutableListOf<File>()
@@ -329,9 +336,12 @@ class StorageUsageScanner @Inject constructor(
                     if (cancelled()) return FileVisitResult.TERMINATE
                     val name = dir.fileName?.toString().orEmpty()
                     if (dir != projectPath && name in SKIP_DIRS) return FileVisitResult.SKIP_SUBTREE
-                    // build 目录记录后继续深入：编译完成的安装包就在 build/outputs 下（下载物另行排除 build）。
+                    // build 目录记录后**不再深入**：安装包明细则单独用浅层查找定位（APK 几乎总在
+                    // build/outputs/apk 下，深度 ≤6）。深层 build/intermediates 有几万个文件，
+                    // 全遍历是存储页扫描慢的主因（2026-11-16 用户反馈 12）。
                     if (dir != projectPath && name == "build") {
                         if (buildDirs.size < MAX_BUILD_DIRS) buildDirs += dir.toFile()
+                        return FileVisitResult.SKIP_SUBTREE
                     }
                     return FileVisitResult.CONTINUE
                 }
@@ -356,6 +366,34 @@ class StorageUsageScanner @Inject constructor(
             })
         }.onFailure { FileLogger.w(TAG, "扫描工作区产物失败: ${project.name}", it) }
 
+        // build 目录在主遍历中已 SKIP_SUBTREE（intermediates 动辄几万文件）；这里对每个 build
+        // 做一次**限深浅扫**（≤6 层），只捞安装包，保证「可清理的 APK」入口不因提速而丢失。
+        buildDirs.forEach { buildDir ->
+            runCatching {
+                Files.walkFileTree(
+                    buildDir.toPath(),
+                    emptySet(),
+                    6,
+                    object : SimpleFileVisitor<Path>() {
+                        override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                            if (cancelled()) return FileVisitResult.TERMINATE
+                            if (!attrs.isRegularFile) return FileVisitResult.CONTINUE
+                            val lower = file.fileName?.toString().orEmpty().lowercase()
+                            if (lower.endsWith(".apk") || lower.endsWith(".apks") || lower.endsWith(".xapk")) {
+                                if (apks.size < MAX_ARTIFACT_FILES * 3) {
+                                    apks += file.toFile() to attrs.lastModifiedTime().toMillis()
+                                }
+                            }
+                            return FileVisitResult.CONTINUE
+                        }
+
+                        override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult =
+                            FileVisitResult.CONTINUE
+                    }
+                )
+            }.onFailure { FileLogger.w(TAG, "浅扫构建目录安装包失败: ${buildDir.absolutePath}", it) }
+        }
+
         val result = mutableListOf<StorageDetail>()
         apks.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
             result += artifactDetail(project, file, mtime, label = file.name)
@@ -377,11 +415,13 @@ class StorageUsageScanner @Inject constructor(
         }
         // 聊天附件（随会话上传/生成的图片等，存于项目 .aicode/attachments）单独成行可勾选清理。
         // 它是用户上传的原始文件、删了没有二次来源，因此标 KEEP_HISTORY 而不是「可安全删除」。
+        // 大小直接用 workspacesEntry 传下来的单遍历结果（attachmentsSize），不再二次全量递归。
         File(project, ATTACHMENTS_RELATIVE).takeIf { it.isDirectory }?.let { dir ->
-            if (dirSize(dir, cancelled) > 0) {
+            if (attachmentsSize > 0) {
                 result += artifactDetail(project, dir, dir.lastModified(),
                     label = context.getString(R.string.storage_artifacts_attachments), isDirectory = true,
-                    safety = StorageSafety.KEEP_HISTORY)
+                    safety = StorageSafety.KEEP_HISTORY,
+                    knownBytes = attachmentsSize)
             }
         }
         downloads.sortedByDescending { it.second }.take(MAX_ARTIFACT_FILES).forEach { (file, mtime) ->
@@ -400,12 +440,13 @@ class StorageUsageScanner @Inject constructor(
         modifiedAt: Long,
         label: String,
         isDirectory: Boolean = false,
-        safety: StorageSafety = StorageSafety.SAFE
+        safety: StorageSafety = StorageSafety.SAFE,
+        knownBytes: Long = -1L
     ): StorageDetail {
         val rel = target.relativeTo(project).path
         return StorageDetail(
             label = label,
-            bytes = dirSize(target),
+            bytes = if (knownBytes >= 0) knownBytes else dirSize(target),
             note = "${project.name} · ${formatTime(modifiedAt)} · $rel",
             indent = true,
             path = "${project.name}/$rel",
@@ -600,6 +641,39 @@ class StorageUsageScanner @Inject constructor(
 
         /** 遍历时整体跳过内部的大目录（大小按整目录另行统计；.aicode 含附件与配置，不视为内存产物）。 */
         private val SKIP_DIRS = setOf(".git", ".aicode", "node_modules", "venv", ".venv")
+
+        /**
+         * 单遍历统计目录总大小，顺带返回 [RELATIVE_ATTACHMENTS] 子目录的大小（免二次全量递归）。
+         * 跳过规则与 [dirSize] 一致：不跟随符号链接。
+         */
+        private fun dirSizeWithAttachments(target: File, cancelled: () -> Boolean): Pair<Long, Long> {
+            if (!target.exists()) return 0L to 0L
+            val path = target.toPath()
+            if (runCatching { Files.isSymbolicLink(path) }.getOrDefault(false)) return 0L to 0L
+            if (target.isFile) return target.length() to 0L
+            val attachmentsPrefix = path.resolve(ATTACHMENTS_RELATIVE)
+            var total = 0L
+            var attachments = 0L
+            runCatching {
+                Files.walkFileTree(path, object : SimpleFileVisitor<Path>() {
+                    override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        if (attrs.isRegularFile) {
+                            val size = attrs.size()
+                            total += size
+                            if (file.startsWith(attachmentsPrefix)) attachments += size
+                        }
+                        return if (cancelled()) FileVisitResult.TERMINATE else FileVisitResult.CONTINUE
+                    }
+
+                    override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult =
+                        FileVisitResult.CONTINUE
+
+                    override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult =
+                        if (cancelled()) FileVisitResult.TERMINATE else FileVisitResult.CONTINUE
+                })
+            }.onFailure { FileLogger.w(TAG, "统计目录占用失败: ${target.absolutePath}", it) }
+            return total to attachments
+        }
 
         /** 产物明细里展示的最后修改时间。 */
         private fun formatTime(ts: Long): String =

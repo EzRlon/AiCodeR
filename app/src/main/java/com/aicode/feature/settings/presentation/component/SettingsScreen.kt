@@ -213,7 +213,7 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     DevKeys(R.string.settings_dev_keys),
     Backup(R.string.settings_backup),
     Feedback(R.string.settings_feedback_title),
-    About(R.string.settings_about)
+    About(R.string.settings_about_ack)
 }
 
 /**
@@ -2366,7 +2366,7 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.Shield,
+                icon = FeatherIcons.Key,
                 title = stringResource(SettingsSection.DevKeys.titleRes),
                 subtitle = stringResource(R.string.settings_dev_keys_desc),
                 onClick = { onOpen(SettingsSection.DevKeys) }

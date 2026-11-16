@@ -1,6 +1,7 @@
 package com.aicode.feature.store.data
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.containsCjk
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.provider.AIProviderFactory
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
@@ -115,8 +116,8 @@ class StoreTranslationService @Inject constructor(
         return parsed.mapNotNull { entry ->
             val item = byKey[entry.id] ?: return@mapNotNull null
             entry.id to StoreTranslation(
-                nameZh = entry.nameZh.trim(),
-                descriptionZh = entry.descriptionZh.trim(),
+                nameZh = localizedOrSource(item.name, entry.nameZh),
+                descriptionZh = localizedOrSource(item.description, entry.descriptionZh),
                 sourceHash = item.storeTranslationSourceHash(),
                 sourceName = item.name
             )
@@ -134,13 +135,16 @@ class StoreTranslationService @Inject constructor(
         val translated = freeTranslation.translate(texts) ?: return null
         val result = buildMap {
             pending.forEachIndexed { index, item ->
-                val nameZh = translated[index * 2].trim()
+                val nameZh = localizedOrSource(item.name, translated[index * 2])
                 if (nameZh.isNotEmpty()) {
                     put(
                         item.storeTranslationKey(),
                         StoreTranslation(
                             nameZh = nameZh,
-                            descriptionZh = translated[index * 2 + 1].trim(),
+                            descriptionZh = localizedOrSource(
+                                item.description,
+                                translated[index * 2 + 1]
+                            ),
                             sourceHash = item.storeTranslationSourceHash(),
                             sourceName = item.name
                         )
@@ -150,6 +154,13 @@ class StoreTranslationService @Inject constructor(
         }
         return result.ifEmpty { null }
     }
+
+    /**
+     * 源文已经是中文时保留源文，避免免费翻译把中文再走一遍 en→zh 回译成英文摘要；
+     * 非中文源文才采用译文。
+     */
+    private fun localizedOrSource(source: String, translated: String): String =
+        if (source.containsCjk()) source.trim() else translated.trim()
 
     /** 批输入 JSON：[{"id","name","description"}]。 */
     private fun buildInput(items: List<StoreItem>): String = buildJsonArray {
