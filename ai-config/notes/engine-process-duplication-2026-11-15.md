@@ -38,3 +38,15 @@
 - qa/optimizer 被多次中断后，改为「重派 + 主编自查」双轨，结论已记录在
   `feedback-notebook-review-2026-11-15.md`。
 - **未在 App 代码中修改**：这属于引擎桥进程管理面，需单独立项 + 真机验证，不在本轮两功能范围内。
+
+## 五、2026-11-15 晚修复（本批已改）
+
+- 新增 `EngineProcessRegistry`（进程级单例）：按 sessionId 登记存活 CLI，`kill` 先关三路流解除 `readLine` 阻塞，SIGTERM 1.5s 后 `destroyForcibly`；同会话再登记会先回收旧进程。
+- 三桥 spawn 改在 IO 块内 `.also { registry.register(sessionId, it) }`，孵化窗口内取消也不留未登记进程；finally 定向 `unregister`。
+- `AIAgentViewModel` 新增 `stoppingSessions` 闸门：停止后 300ms 退出窗口内新消息只入队、不消费；15s 看门狗兜底；`onCleared`/`stopAllAgents` 只杀本 VM 的会话进程，不再 killAll。
+- 首回合按 App 历史是否为空传 `resume=false`，消除「--resume 失败再起第二份」的固定双起。
+- 队列从纯内存改为 `filesDir/queued-requests.json` 持久化，按主 VM 归属（定时任务 VM 不恢复/回写），停止/重启不丢消息。
+- 外部引擎跳过 App 自动交接（摘要对 CLI 无效，只会换会话丢上下文），手动 `/handoff` 保留。
+- 现场清理：同一会话发现 5 组 `proot + claude --resume 9d304073…`，保留当前 1 组、清理 4 组；清理后编译/单测/构建恢复正常。
+
+**仍需真机验证**：停止后旧进程是否在 1.5s 内消失、队列跨进程恢复、首回合只起一份、App 被 LMK 后的孤儿进程（未做 PID 冷启动回收）。
