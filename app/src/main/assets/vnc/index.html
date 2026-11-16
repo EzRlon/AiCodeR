@@ -45,6 +45,14 @@
     font: 12px/1 sans-serif;
   }
   #vncbar button.active { background: #2563eb; border-color: #3b82f6; }
+  /* 自绘小光标：noVNC 的触摸 fallback 光标按远端像素原尺寸绘制、不随缩放，
+     在手机小窗里又大又糊。这里用 12px 圆环跟随远端坐标，大小固定、定位精确。 */
+  #vncCursor {
+    position: fixed; left: 0; top: 0; width: 12px; height: 12px;
+    margin: -6px 0 0 -6px; border: 1.5px solid #fff; border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.85), inset 0 0 0 1px rgba(0,0,0,.85);
+    pointer-events: none; z-index: 40; display: none;
+  }
 </style>
 </head>
 <body>
@@ -55,6 +63,7 @@
   <button id="rightBtn">右键</button>
   <button id="middleBtn">中键</button>
 </div>
+<div id="vncCursor"></div>
 <textarea id="kbdinput" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-hidden="true"></textarea>
 <script type="module">
 import RFB from './core/rfb.js';
@@ -110,11 +119,32 @@ function centerCursor() {
   cursor = { x: rfb._fbWidth / 2, y: rfb._fbHeight / 2 };
 }
 
+const cursorEl = document.getElementById('vncCursor');
+
+/** 把远端光标坐标换算到画布当前显示位置；触控板模式下用 12px 自绘圆环代替远端巨大光标。 */
+function updateCursorOverlay() {
+  if (!cursorEl) return;
+  if (pointerMode !== 'trackpad' || !rfb || !vncConnected) {
+    cursorEl.style.display = 'none';
+    return;
+  }
+  const cv = canvasEl();
+  if (!cv) { cursorEl.style.display = 'none'; return; }
+  const r = cv.getBoundingClientRect();
+  if (!r.width || !r.height) { cursorEl.style.display = 'none'; return; }
+  const x = r.left + (cursor.x / rfb._fbWidth) * r.width;
+  const y = r.top + (cursor.y / rfb._fbHeight) * r.height;
+  cursorEl.style.left = x + 'px';
+  cursorEl.style.top = y + 'px';
+  cursorEl.style.display = 'block';
+}
+
 function sendMask(mask) {
   if (!rfb) return;
   cursor.x = Math.max(0, Math.min(rfb._fbWidth - 1, cursor.x));
   cursor.y = Math.max(0, Math.min(rfb._fbHeight - 1, cursor.y));
   try { rfb._sendMouse(Math.round(cursor.x), Math.round(cursor.y), mask); } catch (e) {}
+  updateCursorOverlay();
 }
 
 function clickMask(mask) {
@@ -129,7 +159,10 @@ function trackpadMove(dx, dy) {
   const r = cv.getBoundingClientRect();
   if (!r.width || !r.height) return;
   const base = rfb._fbWidth / r.width;
-  const speed = Math.min(2.2, 1 + Math.hypot(dx, dy) / 120);
+  // 非线性加速：慢速时（<1px 级微调）约 0.45×，可精细对齐按钮；快速滑动最高约 2.6×，
+  // 一次滑动就能横跨屏幕。此前恒定 ≥1× 导致“要么挪不动、要么一下飞过去”。
+  const dist = Math.hypot(dx, dy);
+  const speed = 0.45 + Math.min(2.2, dist / 50);
   cursor.x += dx * base * speed;
   cursor.y += dy * base * speed;
   sendMask(0);
@@ -207,6 +240,7 @@ function setMode(mode) {
   pointerMode = mode === 'trackpad' ? 'trackpad' : 'direct';
   document.getElementById('modeBtn').classList.toggle('active', pointerMode === 'trackpad');
   if (pointerMode === 'trackpad') centerCursor();
+  updateCursorOverlay();
 }
 window.vncSetPointerMode = setMode;
 
@@ -262,6 +296,7 @@ window.vncTryConnect = function () {
       const cv = canvasEl();
       if (cv) wireTrackpad(cv);
       centerCursor();
+      updateCursorOverlay();
       const b = bridge();
       if (b) b.onVncStatus('connected');
       setTimeout(() => {

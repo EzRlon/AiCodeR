@@ -257,8 +257,9 @@ private fun FloatingVncWindow(
         modifier = Modifier
             .offset { IntOffset(offX.roundToPx(), offY.roundToPx()) }
             .size(winWidth, winHeight)
-            .shadow(8.dp, RoundedCornerShape(Radius.lg))
-            .clip(RoundedCornerShape(Radius.lg)),
+            // 用户要求接近直角的窗体：只留 2dp，视觉上仍是圆角但不占空间。
+            .shadow(6.dp, RoundedCornerShape(2.dp))
+            .clip(RoundedCornerShape(2.dp)),
     ) {
         VncWindowSurface(
             viewModel = viewModel,
@@ -281,7 +282,7 @@ private fun VncWindowSurface(
     fullscreen: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(if (fullscreen) 0.dp else Radius.lg)
+    val shape = RoundedCornerShape(if (fullscreen) 0.dp else 2.dp)
     val mouseButton by viewModel.mouseButton.collectAsStateWithLifecycle()
     var specialKeys by remember { mutableStateOf(false) }
     Column(

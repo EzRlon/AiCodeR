@@ -6,7 +6,10 @@
 
 import { supportsCursorURIs, isTouchDevice } from './browser.js';
 
-const useFallback = !supportsCursorURIs || isTouchDevice;
+// AiCodeR 定制：Android WebView 在触摸设备上会走 fallback 画布，而该画布按远端像素
+// 原尺寸绘制、不随 scaleViewport 缩放——表现为“光标巨大且不跟手”（真机实测）。
+// 这里强制关闭 fallback，由 index.html 自绘小十字光标跟随远端坐标。
+const useFallback = false;
 
 export default class Cursor {
     constructor() {
