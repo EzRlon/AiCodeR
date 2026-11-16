@@ -11,6 +11,13 @@
      百分比链，而 Android WebView 里这条链会解析成 0（实测 screen=393x0 而 window=392x832），
      结果容器高 0、缩放后画面不可见，只剩黑屏（帧数据本身是好的）。 */
   #screen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; }
+  /* 画面强制铺满浮窗：noVNC 用内联样式设置 canvas 尺寸，这里用 !important 覆盖，
+     避免出现黑边。远端分辨率会跟随浮窗宽高比（见 VncOverlayViewModel），因此拉伸极小。 */
+  #screen canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+  }
   #status {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     display: flex; align-items: center; justify-content: center;
@@ -23,11 +30,31 @@
     padding: 0; margin: 0; border: 0; resize: none; outline: none;
     opacity: 0.01; color: transparent; background: transparent;
   }
+  /* 右下角紧凑控制条：模式切换 + 右键/中键。默认直触（用 noVNC 原生手势），
+     开启触控板后单指相对移动，适合小浮窗里精确定位。 */
+  #vncbar {
+    position: fixed; right: 8px; bottom: 8px; z-index: 30;
+    display: none; gap: 6px; align-items: center;
+    font: 12px/1 sans-serif; touch-action: none; user-select: none;
+  }
+  #vncbar.show { display: flex; }
+  #vncbar button {
+    min-height: 34px; padding: 0 10px; border-radius: 17px;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: rgba(15, 23, 42, 0.78); color: #e2e8f0;
+    font: 12px/1 sans-serif;
+  }
+  #vncbar button.active { background: #2563eb; border-color: #3b82f6; }
 </style>
 </head>
 <body>
 <div id="screen"></div>
 <div id="status"></div>
+<div id="vncbar">
+  <button id="modeBtn">触控板</button>
+  <button id="rightBtn">右键</button>
+  <button id="middleBtn">中键</button>
+</div>
 <textarea id="kbdinput" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-hidden="true"></textarea>
 <script type="module">
 import RFB from './core/rfb.js';
@@ -38,17 +65,17 @@ const TEXT = zh
   : { connecting: 'Connecting to VNC…', reconnecting: 'Service not ready or disconnected, retrying…' };
 
 const statusEl = document.getElementById('status');
+const barEl = document.getElementById('vncbar');
 let rfb = null;
 let vncConnected = false;
 
 // Android WebView 里布局视口高度不可信：html/body 的百分比高度和 100vh 都解析成 0
 // （实测 screen=393x0 而 window.innerHeight=832），容器没有高度就缩放不出画面。
 // 因此不再依赖任何 CSS 视口单位，直接用 window 尺寸写死像素，并周期性对账防止被覆盖。
-const PAGE_BUILD = 'v12';
+const PAGE_BUILD = 'v13';
 function fitScreen() {
   const w = window.innerWidth + 'px';
   const h = window.innerHeight + 'px';
-  // #status 与 #screen 同因：100vh 在这里解析成 0，flex 居中的提示文字会落到顶部。
   for (const id of ['screen', 'status']) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -60,33 +87,100 @@ fitScreen();
 window.addEventListener('resize', fitScreen);
 setInterval(fitScreen, 1000);
 
-// 触摸拖动 → 鼠标事件：页面里只监听 mouse*，而 WebView 下触摸拖动不会持续产生 mousemove，
-// 导致远端光标轨迹断断续续。这里按触摸位置合成对应的 mouse* 事件派发到 canvas。
-// 同时点画面时聚焦隐藏 textarea，软键盘才会弹出。
-function bindInput(screenEl, kbd) {
-  const sendMouse = (type, t) => {
-    const cv = screenEl.querySelector('canvas');
-    if (!cv || !t) return;
-    cv.dispatchEvent(new MouseEvent(type, {
-      bubbles: true, cancelable: true, view: window, detail: 1,
-      clientX: t.clientX, clientY: t.clientY,
-      screenX: t.screenX, screenY: t.screenY,
-      button: 0, buttons: type === 'mouseup' ? 0 : 1,
-    }));
+// ── 鼠标：noVNC 原生手势为主 ─────────────────────────────────────────
+// 单指点按=左键；双指点按=右键；三指点按=中键；长按=右键；
+// 单指拖动=拖动；双指拖动=滚轮；双指捏合=缩放。这些都是 noVNC gesturehandler
+// 自带的，**不再自写触控层覆盖它**（上一版覆盖后三键/滚动全部失效）。
+// 这里只做两件事：点画面时唤起键盘；可选「触控板」模式做相对移动。
+let pointerMode = 'direct'; // direct = 交给 noVNC 原生手势；trackpad = 单指相对移动
+let tapMask = 1;            // 轻点使用哪个键（默认左键；原生侧可切右键）
+let cursor = { x: 0, y: 0 };
+let dragging = false;
+let moved = false;
+let startPoint = null;
+let lastPoint = null;
+let longPressTimer = null;
+
+function canvasEl() { return document.querySelector('#screen canvas'); }
+
+function centerCursor() {
+  if (!rfb) return;
+  cursor = { x: rfb._fbWidth / 2, y: rfb._fbHeight / 2 };
+}
+
+function sendMask(mask) {
+  if (!rfb) return;
+  cursor.x = Math.max(0, Math.min(rfb._fbWidth - 1, cursor.x));
+  cursor.y = Math.max(0, Math.min(rfb._fbHeight - 1, cursor.y));
+  try { rfb._sendMouse(Math.round(cursor.x), Math.round(cursor.y), mask); } catch (e) {}
+}
+
+function clickMask(mask) {
+  sendMask(mask);
+  setTimeout(() => sendMask(0), 40);
+}
+
+/** 触控板移动：把屏幕像素位移换算成远端像素，并带一点速度加速（走得远时更快）。 */
+function trackpadMove(dx, dy) {
+  const cv = canvasEl();
+  if (!cv || !rfb) return;
+  const r = cv.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const base = rfb._fbWidth / r.width;
+  const speed = Math.min(2.2, 1 + Math.hypot(dx, dy) / 120);
+  cursor.x += dx * base * speed;
+  cursor.y += dy * base * speed;
+  sendMask(0);
+}
+
+function wireTrackpad(cv) {
+  const onStart = (e) => {
+    if (pointerMode !== 'trackpad') return;
+    if (e.touches.length !== 1) return; // 双指手势继续交给 noVNC
+    const t = e.touches[0];
+    moved = false;
+    dragging = true;
+    startPoint = { x: t.clientX, y: t.clientY };
+    lastPoint = { ...startPoint };
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      if (!moved && dragging) { clickMask(4); dragging = false; }
+    }, 500);
+    e.preventDefault();
+    e.stopImmediatePropagation();
   };
-  screenEl.addEventListener('touchstart', (e) => {
+  const onMove = (e) => {
+    if (pointerMode !== 'trackpad' || !dragging) return;
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - lastPoint.x;
+    const dy = t.clientY - lastPoint.y;
+    if (Math.abs(t.clientX - startPoint.x) + Math.abs(t.clientY - startPoint.y) > 8) moved = true;
+    lastPoint = { x: t.clientX, y: t.clientY };
+    trackpadMove(dx, dy);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  const onEnd = (e) => {
+    if (pointerMode !== 'trackpad' || !dragging) return;
+    clearTimeout(longPressTimer);
+    if (!moved) clickMask(tapMask);
+    dragging = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  cv.addEventListener('touchstart', onStart, { capture: true, passive: false });
+  cv.addEventListener('touchmove', onMove, { capture: true, passive: false });
+  cv.addEventListener('touchend', onEnd, { capture: true, passive: false });
+  cv.addEventListener('touchcancel', onEnd, { capture: true, passive: false });
+}
+
+// 点画面唤起键盘（不拦截事件，原生手势照常工作）。
+function wireKeyboardFocus(screenEl, kbd) {
+  screenEl.addEventListener('touchstart', () => {
     if (kbd) { try { kbd.focus(); } catch (err) {} }
-    // Android WebView 不会因为页面内 focus() 就自动弹键盘，需原生侧主动请求一次输入法。
     const b = (typeof bridge === 'function') ? bridge() : null;
     if (b && b.onVncWantKeyboard) { try { b.onVncWantKeyboard(); } catch (err) {} }
-    sendMouse('mousedown', e.touches[0]);
-  }, { passive: true });
-  screenEl.addEventListener('touchmove', (e) => {
-    sendMouse('mousemove', e.touches[0]);
-    e.preventDefault();
-  }, { passive: false });
-  screenEl.addEventListener('touchend', (e) => {
-    sendMouse('mouseup', (e.changedTouches && e.changedTouches[0]) || null);
   }, { passive: true });
 }
 
@@ -107,29 +201,52 @@ function setStatus(text) {
 
 function bridge() { return window.VncBridge || null; }
 
+function setMode(mode) {
+  pointerMode = mode === 'trackpad' ? 'trackpad' : 'direct';
+  document.getElementById('modeBtn').classList.toggle('active', pointerMode === 'trackpad');
+  if (pointerMode === 'trackpad') centerCursor();
+}
+window.vncSetPointerMode = setMode;
+
+// 右键/中键按钮：在触控板模式下点在当前光标；直触模式下 noVNC 原生手势已覆盖，
+// 这里作为显式入口仍然可用（光标默认居中）。
+function wireBar() {
+  const btn = document.getElementById('modeBtn');
+  btn.addEventListener('touchstart', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    setMode(pointerMode === 'trackpad' ? 'direct' : 'trackpad');
+  }, { passive: false });
+  const bindClick = (id, mask) => {
+    const el = document.getElementById(id);
+    el.addEventListener('touchstart', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      clickMask(mask);
+    }, { passive: false });
+  };
+  bindClick('rightBtn', 4);
+  bindClick('middleBtn', 2);
+  barEl.style.display = '';
+  barEl.classList.add('show');
+}
+
 window.vncTryConnect = function () {
   if (rfb) return;
   setStatus(TEXT.connecting);
   try {
     rfb = new RFB(document.getElementById('screen'), 'ws://127.0.0.1:6080', { shared: true });
     // noVNC 把 keydown/keyup 挂在 canvas 上，而 Android WebView 里 canvas 不可编辑、
-    // 点它不会唤起输入法。把键盘目标换成隐藏的可编辑 textarea，点画面时聚焦它，
-    // 软键盘就会弹出，按键也仍走 noVNC 原有逻辑转发到远端。
+    // 点它不会唤起输入法。把键盘目标换成隐藏的可编辑 textarea。
     const kbdSink = document.getElementById('kbdinput');
     if (rfb._keyboard && kbdSink) rfb._keyboard._target = kbdSink;
     bindKeyboardSink(kbdSink);
-    bindInput(document.getElementById('screen'), kbdSink);
-    // 自适应窗口：canvas 是 720x1280，浮窗尺寸远小于它，不缩放就只能露出左上角一片。
-    // scaleViewport 会把整幅画面缩放到窗口内（noVNC 会自动把点击坐标换算回远端坐标，不影响定位准确度）。
-    // resizeSession 仍关闭：Xvfb 尺寸启动即写死，请求会被服务端拒绝。
+    wireKeyboardFocus(document.getElementById('screen'), kbdSink);
+    wireBar();
+    // 铺满浮窗：远端分辨率已按浮窗宽高比同步（xrandr），这里缩放铺满即可。
     rfb.scaleViewport = true;
     rfb.resizeSession = false;
     rfb.clipViewport = false;
     rfb.dragViewport = false;
     rfb.background = '#000000';
-    // 握手卡死自救：RFB 只靠 connect/disconnect 事件推进，若连接停在半途
-    // （rfb 非空、既不 connect 也不 disconnect），重试逻辑永远不会触发，画面永久黑屏。
-    // 超时后主动 disconnect()，由下面的 disconnect 处理统一走重试。
     const stallTimer = setTimeout(() => {
       if (!vncConnected && rfb) {
         try { rfb.disconnect(); } catch (err) { rfb = null; setTimeout(() => window.vncTryConnect(), 2000); }
@@ -139,12 +256,14 @@ window.vncTryConnect = function () {
       clearTimeout(stallTimer);
       vncConnected = true;
       setStatus('');
+      // 远端尺寸就绪后再挂触控板监听（canvas 此时已创建）。
+      const cv = canvasEl();
+      if (cv) wireTrackpad(cv);
+      centerCursor();
       const b = bridge();
       if (b) b.onVncStatus('connected');
-      // 画面自检：连上不等于画出来了（canvas 尺寸为 0 或首帧未到都会呈现黑屏），把三个尺寸
-      // 一起回报，便于在 App 日志里直接分辨是布局塌陷还是帧没到。
       setTimeout(() => {
-        const c = document.querySelector('canvas');
+        const c = canvasEl();
         const s = document.getElementById('screen');
         const r = s ? s.getBoundingClientRect() : null;
         const bb = bridge();
@@ -161,7 +280,6 @@ window.vncTryConnect = function () {
       rfb = null;
       const b = bridge();
       if (b) b.onVncStatus('disconnected');
-      // 无限定时重试：服务未拉起时连接会被拒绝，拉起后即自动恢复画面。
       setStatus(TEXT.reconnecting);
       setTimeout(() => window.vncTryConnect(), 2000);
     });
@@ -180,12 +298,9 @@ window.vncPasteFromAndroid = function () {
   try {
     const b = bridge();
     rfb.clipboardPasteFrom((b && b.getAndroidClipboard()) || '');
-  } catch (err) {
-    // 远端剪贴板同步失败不影响画面。
-  }
+  } catch (err) {}
 };
 
-// 原生输入框把字符送到这里：逐个字符发给远端（noVNC 内部按 keysym 映射）。
 window.vncSendText = function (text) {
   if (!rfb || !text) return;
   for (const ch of text) {
@@ -194,35 +309,15 @@ window.vncSendText = function (text) {
   }
 };
 
-// 原生侧直接送一个 X keysym 的按下/抬起：删除、回车、方向键、修饰键、Ctrl 组合都走这条。
-// 修饰键按住不放时由原生侧维护状态，这里只负责转发，不做去重。
 window.vncSendKeysym = function (code, down) {
   if (!rfb || !code) return;
   try { rfb.sendKey(code, null, !!down); } catch (err) {}
 };
 
-// 鼠标按键模式：0=左键 2=右键。noVNC 的触控只会产生左键，
-// 虚拟机式键鼠需要能切换左右键，所以触点按下时按此模式改写 button/buttons。
-let mouseButton = 0;
+// 兼容旧原生调用：让「轻点」变成右键（1=左，2=右键）。
 window.vncSetMouseButton = function (b) {
-  mouseButton = (b === 2) ? 2 : 0;
+  tapMask = (b === 2) ? 4 : 1;
 };
-
-// 把 noVNC 的鼠标事件改写成当前按键模式：拦在 canvas 上，按下时把 button/buttons 换成 mouseButton。
-// 只在按下阶段改写，移动/抬起沿用同一按键，保证远端看到完整的按下-抬起对。
-let pendingMouseButton = 0;
-window.addEventListener('mousedown', function (e) {
-  if (mouseButton === 0) return;
-  pendingMouseButton = e.button;
-  Object.defineProperty(e, 'button', { value: mouseButton });
-  Object.defineProperty(e, 'buttons', { value: 1 << mouseButton });
-}, true);
-window.addEventListener('mouseup', function (e) {
-  if (mouseButton === 0) return;
-  Object.defineProperty(e, 'button', { value: mouseButton });
-  Object.defineProperty(e, 'buttons', { value: 0 });
-  pendingMouseButton = 0;
-}, true);
 
 setStatus(TEXT.connecting);
 window.vncTryConnect();

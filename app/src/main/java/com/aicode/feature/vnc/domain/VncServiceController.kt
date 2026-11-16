@@ -236,8 +236,9 @@ class VncServiceController @Inject constructor(
                     apt-get update -y >/dev/null 2>&1 || true
                     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                         xvfb x11vnc python3-websockify openbox lxpanel pcmanfm lxterminal \
-                        lxrandr lxappearance synaptic fonts-wqy-zenhei fonts-dejavu-core locales dbus-x11 \
-                        x11-xserver-utils >/dev/null 2>&1 || true
+                        lxrandr lxappearance synaptic fonts-wqy-zenhei fonts-noto-cjk fonts-dejavu-core \
+                        locales dbus-x11 x11-xserver-utils >/dev/null 2>&1 || true
+                    command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
                     # 生成中文 locale：没有它 GTK/Qt 程序仍按英文渲染。
                     if command -v locale-gen >/dev/null 2>&1 && [ -f /etc/locale.gen ]; then
                         grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen
@@ -262,14 +263,26 @@ class VncServiceController @Inject constructor(
                 'Name[zh_CN]=系统设置' 'Exec=sh -c "lxrandr & lxappearance"' \
                 'Icon=preferences-system' 'Terminal=false' 'Categories=Settings;' \
                 > /usr/share/applications/aicode-settings.desktop
+            # 文件名用 ASCII，中文只放 Name[zh_CN]：避免文件系统/字体缺失时中文文件名变乱码。
             printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Terminal' 'Name[zh_CN]=终端' \
                 'Exec=lxterminal' 'Icon=utilities-terminal' 'Terminal=false' \
-                > /root/Desktop/终端.desktop
+                > /root/Desktop/Terminal.desktop
             printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Files' 'Name[zh_CN]=文件' \
                 'Exec=pcmanfm /root' 'Icon=system-file-manager' 'Terminal=false' \
-                > /root/Desktop/文件.desktop
-            cp /usr/share/applications/aicode-package-manager.desktop /root/Desktop/软件包管理.desktop 2>/dev/null || true
-            cp /usr/share/applications/aicode-settings.desktop /root/Desktop/系统设置.desktop 2>/dev/null || true
+                > /root/Desktop/Files.desktop
+            cp /usr/share/applications/aicode-package-manager.desktop /root/Desktop/PackageManager.desktop 2>/dev/null || true
+            cp /usr/share/applications/aicode-settings.desktop /root/Desktop/Settings.desktop 2>/dev/null || true
+            # 清理旧版中文文件名的快捷方式（它们就是乱码来源）。
+            rm -f /root/Desktop/终端.desktop /root/Desktop/文件.desktop \
+                  /root/Desktop/软件包管理.desktop /root/Desktop/系统设置.desktop 2>/dev/null || true
+            chmod +x /root/Desktop/*.desktop 2>/dev/null || true
+            # 已安装的常见图形程序（Chrome/Chromium/Firefox/VS Code 等）自动补桌面图标。
+            # 之前只创建了四个内置快捷方式，用户装的浏览器不会自动出现在桌面。
+            for app in google-chrome google-chrome-stable chromium chromium-browser firefox code; do
+                for src in /usr/share/applications/${'$'}app.desktop /usr/share/applications/${'$'}app-*.desktop; do
+                    [ -f "${'$'}src" ] && cp -f "${'$'}src" /root/Desktop/ 2>/dev/null
+                done
+            done
             chmod +x /root/Desktop/*.desktop 2>/dev/null || true
             # jwm 作为兜底配置（lxpanel 缺失时仍能有菜单）。
             printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc

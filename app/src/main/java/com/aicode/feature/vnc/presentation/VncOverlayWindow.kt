@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemBars
@@ -222,13 +223,14 @@ private fun FloatingVncWindow(
     parentWidth: Dp,
     parentHeight: Dp,
 ) {
-    // 默认尺寸按远端桌面 1280x800（宽高比 1.6）取横屏比例，scaleViewport 铺满时黑边最小。
-    val defaultWidth = (parentWidth - 24.dp).coerceAtMost(420.dp)
-    val defaultHeight = (defaultWidth / 1.6f).coerceAtLeast(180.dp)
+    // 默认尺寸更贴合屏幕：宽度占满（留 16dp 边），高度约占 62%，画面等比铺满。
+    // 远端分辨率会跟随这个宽高比，因此不会出现大片黑边。
+    val defaultWidth = (parentWidth - 16.dp).coerceAtMost(560.dp)
+    val defaultHeight = (parentHeight * 0.62f).coerceIn(240.dp, (parentHeight - 96.dp).coerceAtLeast(240.dp))
     LaunchedEffect(parentWidth, parentHeight) {
         viewModel.ensureGeometry(
-            defaultXDp = (parentWidth - defaultWidth - 12.dp).value,
-            defaultYDp = (parentHeight * 0.18f).value,
+            defaultXDp = ((parentWidth - defaultWidth) / 2).value,
+            defaultYDp = (parentHeight * 0.16f).value,
             defaultWDp = defaultWidth.value,
             defaultHDp = defaultHeight.value,
         )
@@ -239,8 +241,22 @@ private fun FloatingVncWindow(
         .coerceIn(VncOverlayViewModel.MIN_HEIGHT_DP.dp, parentHeight - 48.dp)
     val offX = (if (window.offsetX == Float.MIN_VALUE) (parentWidth - winWidth - 12.dp).value else window.offsetX)
         .dp.coerceIn(-(winWidth - 56.dp), parentWidth - 56.dp)
+    // 关键禁令：窗口顶部永远不允许进入状态栏区域（此前允许 y=0，窗口标题栏被状态栏盖住，
+    // 连重置按钮都点不到）。竖屏/横屏都用实时 inset 计算；横屏状态栏在侧边时最小 Y 回到 8dp。
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val statusTopDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+    val minYDp = statusTopDp + 8.dp
+    val maxYDp = (parentHeight - 56.dp).coerceAtLeast(minYDp)
     val offY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight * 0.18f).value else window.offsetY)
-        .dp.coerceIn(0.dp, parentHeight - 56.dp)
+        .dp.coerceIn(minYDp, maxYDp)
+    // 已保存的坏位置（在状态栏内）或处于钉住状态时，显示即自动归位并解钉，
+    // 不依赖用户点到标题栏里的重置按钮。
+    LaunchedEffect(window.visible, window.offsetY, minYDp, window.pinned) {
+        val invalidY = window.offsetY != Float.MIN_VALUE && window.offsetY < minYDp.value
+        if (window.visible && invalidY) {
+            viewModel.resetGeometry()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -540,8 +556,11 @@ private fun MinimizedBall(
     val ballSize = 56.dp
     val ballX = (if (window.offsetX == Float.MIN_VALUE) (parentWidth - ballSize - 12.dp).value else window.offsetX)
         .dp.coerceIn(0.dp, parentWidth - ballSize)
+    // 球同样不允许进状态栏：否则最小化后也点不到，用户彻底失去入口。
+    val ballDensity = androidx.compose.ui.platform.LocalDensity.current
+    val ballMinY = with(ballDensity) { WindowInsets.statusBars.getTop(this).toDp() } + 8.dp
     val ballY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight - ballSize - 96.dp).value else window.offsetY)
-        .dp.coerceIn(0.dp, parentHeight - ballSize)
+        .dp.coerceIn(ballMinY, (parentHeight - ballSize).coerceAtLeast(ballMinY))
     Box(
         modifier = Modifier
             .offset { IntOffset(ballX.roundToPx(), ballY.roundToPx()) }
