@@ -1575,6 +1575,10 @@ class AIAgentViewModel @Inject constructor(
 
         /** 「准备交接」自然语言短语：直触快照交接（与 /handoff 同一命令）。 */
         const val HANDOFF_PHRASE = "准备交接"
+
+        /** 交接类命令（自然语言短语或 /handoff）：零模型调用，赶在排队/忙碌判定前放行。 */
+        fun isHandoffCommand(request: String): Boolean =
+            request.trim() == HANDOFF_PHRASE || request.trim().startsWith("/handoff")
         const val AGENT_COMPLETE_CHANNEL = "agent_complete"
         const val AGENT_COMPLETE_NOTIFICATION_ID = 100
         /** wakeLock 超时保险：构建、装依赖类工具动辄十几分钟，给足 60 分钟；任务正常结束会主动释放。 */
@@ -2556,10 +2560,10 @@ class AIAgentViewModel @Inject constructor(
         persistUserMessage: Boolean = true
     ): Boolean {
         val sid = targetSessionId ?: _currentSessionId.value
-        // 「准备交接」直触快照：零模型调用、只读本地历史并复制剪贴板，与进行中的回合/后台
+        // 交接类命令直触快照：零模型调用、只读本地历史并复制剪贴板，与进行中的回合/后台
         // CLI/暂停态都不冲突（交接时机恰恰常是后台还在跑），必须赶在一切排队/忙碌判定之前
         // 放行——否则会被塞进队列既不执行也不提示，看起来就是「没反应」。（2026-11-17）
-        if (request.trim() == HANDOFF_PHRASE && sid != null) {
+        if (sid != null && isHandoffCommand(request)) {
             runResolvedCommand(ResolvedCommand.Action(handoffCommandHandler, ""), request, sid)
             return true
         }
@@ -3070,8 +3074,9 @@ class AIAgentViewModel @Inject constructor(
             _handoffPrompt.value = HandoffPrompt(sessionId, pausedHandoffSessions.getValue(sessionId), paused = true)
             return@launch
         }
-        // 「准备交接」：自然语言短语直触快照交接（与 /handoff 同一命令），不进入模型回合。
-        if (request.trim() == HANDOFF_PHRASE) {
+        // 「准备交接」/「/handoff」：直触快照交接，不进入模型回合（enqueueAgentRequest
+        // 入口已提前放行；此处兜底覆盖直调路径）。
+        if (isHandoffCommand(request)) {
             runResolvedCommand(ResolvedCommand.Action(handoffCommandHandler, ""), request, sessionId)
             return@launch
         }
