@@ -3456,7 +3456,8 @@ class AIAgentViewModel @Inject constructor(
                                     sessionId,
                                     event.inputTokens,
                                     event.outputTokens,
-                                    event.cachedInputTokens
+                                    event.cachedInputTokens,
+                                    event.cacheCreationTokens
                                 )
                                 if (event.inputTokens > 0) {
                                     chatSessionDao.updateLastInputTokens(sessionId, event.inputTokens)

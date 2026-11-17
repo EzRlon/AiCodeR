@@ -772,7 +772,8 @@ class ClaudeCodeBridge @Inject constructor(
                 reasoning = reasoning.toString(),
                 inputTokens = usage.inputTokens,
                 outputTokens = usage.outputTokens,
-                cachedInputTokens = usage.cachedInputTokens
+                cachedInputTokens = usage.cachedInputTokens,
+                cacheCreationTokens = usage.cacheCreationTokens
             )
         )
         events += spawnEvents

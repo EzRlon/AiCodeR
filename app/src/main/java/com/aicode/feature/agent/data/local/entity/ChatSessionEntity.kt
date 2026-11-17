@@ -50,6 +50,11 @@ data class ChatSessionEntity(
      * **不参与总消耗**（总量已含缓存）。口径由 `UsageNormalizer` 在适配器出口统一。
      */
     val totalCachedInputTokens: Int = 0,
+    /**
+     * 会话累计缓存写入输入：是 [totalInputTokens] 的子集（与 [totalCachedInputTokens] 互不重叠），
+     * 缓存写入按 1.25× 溢价计费，构成条需与全价输入区分展示，故单独累计。
+     */
+    val totalCacheCreationTokens: Int = 0,
     /** 引擎原生工作模式 id（见 EngineModeCatalog）；null = 跟随该引擎默认档。 */
     val engineMode: String? = null
 ) {
@@ -79,6 +84,7 @@ data class ChatSessionEntity(
         deletedAt = deletedAt,
         engine = engine,
         totalCachedInputTokens = totalCachedInputTokens,
+        totalCacheCreationTokens = totalCacheCreationTokens,
         engineMode = engineMode
     )
 
@@ -109,6 +115,7 @@ data class ChatSessionEntity(
             deletedAt = session.deletedAt,
             engine = session.engine,
             totalCachedInputTokens = session.totalCachedInputTokens,
+            totalCacheCreationTokens = session.totalCacheCreationTokens,
             engineMode = session.engineMode
         )
     }

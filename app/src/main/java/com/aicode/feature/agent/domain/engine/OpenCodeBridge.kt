@@ -383,7 +383,8 @@ class OpenCodeBridge @Inject constructor(
                                 content = "",
                                 inputTokens = usage.inputTokens,
                                 outputTokens = usage.outputTokens,
-                                cachedInputTokens = usage.cachedInputTokens
+                                cachedInputTokens = usage.cachedInputTokens,
+                                cacheCreationTokens = usage.cacheCreationTokens
                             )
                         )
                     }

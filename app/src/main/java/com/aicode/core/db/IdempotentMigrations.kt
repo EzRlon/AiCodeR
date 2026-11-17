@@ -289,6 +289,19 @@ internal class Migration76To77 : Migration(76, 77) {
     }
 }
 
+/**
+ * 77→78：会话累计新增「缓存写入」列。
+ *
+ * 此前会话级累计只记缓存命中，缓存写入（cache_creation，按 1.25× 溢价计费）被错算进
+ * 「全新输入」，记忆图谱构成条因此虚高。列与 `totalCachedInputTokens` 同为
+ * `totalInputTokens` 的子集且互不重叠，累计时两者分开累加。
+ */
+internal class Migration77To78 : Migration(77, 78) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "chat_sessions", "totalCacheCreationTokens", "ALTER TABLE `chat_sessions` ADD COLUMN `totalCacheCreationTokens` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 /** 列是否存在；检查失败按「已存在」处理（与 [addColumnIfMissing] 同一保守口径）。 */
 private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
     runCatching {

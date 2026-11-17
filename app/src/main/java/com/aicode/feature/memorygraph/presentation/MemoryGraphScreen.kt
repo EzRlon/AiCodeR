@@ -815,7 +815,8 @@ private fun SessionLaneCard(
             }
             // 统计行：消息 / 总量 / 缓存命中率 / 相对时间 + token 构成条
             val cachedTokens = session.totalCachedInputTokens
-            val freshTokens = (session.totalInputTokens - cachedTokens).coerceAtLeast(0)
+            val cacheCreationTokens = session.totalCacheCreationTokens
+            val freshTokens = (session.totalInputTokens - cachedTokens - cacheCreationTokens).coerceAtLeast(0)
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     text = stringResource(R.string.memory_graph_detail_messages, stat?.messageCount ?: 0),
@@ -853,6 +854,7 @@ private fun SessionLaneCard(
             LaneCompositionBar(
                 fresh = freshTokens,
                 cached = cachedTokens,
+                cacheCreation = cacheCreationTokens,
                 output = session.totalOutputTokens
             )
             // 子代理行（内嵌泳道层级）
@@ -1056,12 +1058,13 @@ private fun LaneFilterChip(selected: Boolean, label: String, onClick: () -> Unit
     )
 }
 
-/** 单条线索的 token 构成：新增输入 / 缓存 / 输出。 */
+/** 单条会话的 token 构成：全价输入 / 缓存读取 / 缓存写入 / 输出。 */
 @Composable
-private fun LaneCompositionBar(fresh: Int, cached: Int, output: Int) {
+private fun LaneCompositionBar(fresh: Int, cached: Int, cacheCreation: Int, output: Int) {
     val segments = listOf(
         fresh to TokenStatsPalette.Input,
         cached to TokenStatsPalette.Cache,
+        cacheCreation to TokenStatsPalette.CacheWrite,
         output to TokenStatsPalette.Output,
     ).filter { it.first > 0 }
     if (segments.isEmpty()) return

@@ -655,6 +655,7 @@ private fun StoreItemCard(
             }
             val descriptionZh = translation?.descriptionZh.orEmpty()
             if (descriptionZh.isNotBlank()) {
+                // 中文界面本土化硬规则：有中文译文时不再追加英文原文，避免双语摘要混排。
                 Spacer(Modifier.size(4.dp))
                 Text(
                     text = descriptionZh,
@@ -663,15 +664,6 @@ private fun StoreItemCard(
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (item.description.isNotBlank()) {
-                    Text(
-                        text = item.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             } else if (item.description.isNotBlank()) {
                 Spacer(Modifier.size(4.dp))
                 Text(

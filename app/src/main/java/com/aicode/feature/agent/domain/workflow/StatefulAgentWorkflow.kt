@@ -950,6 +950,7 @@ class StatefulAgentWorkflow @Inject constructor(
                                         aiResponse.inputTokens,
                                         aiResponse.outputTokens,
                                         aiResponse.cachedInputTokens,
+                                        aiResponse.cacheCreationTokens,
                                         aiResponse.thinkingBlocksJson ?: "",
                                         attachments = attachments,
                                         messageId = responseMessageId,
