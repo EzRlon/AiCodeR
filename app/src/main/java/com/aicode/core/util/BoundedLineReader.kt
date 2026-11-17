@@ -75,3 +75,6 @@ internal fun boundedLines(open: () -> Reader): Sequence<String> = sequence {
         }
     }
 }
+/** LIKE 通配符转义（配合 SQL 侧 `ESCAPE '!'`）：`!` `%` `_` 三个字符前置转义符。 */
+fun escapeLikePattern(raw: String): String =
+    raw.replace("!", "!!").replace("%", "!%").replace("_", "!_")

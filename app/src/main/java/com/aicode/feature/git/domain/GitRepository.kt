@@ -1,6 +1,7 @@
 package com.aicode.feature.git.domain
 
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.shellQuote
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.git.domain.model.GitBranch
 import com.aicode.feature.git.domain.model.GitCommit
@@ -36,6 +37,11 @@ class GitRepository @Inject constructor(
     private val engine: CommandEngine,
     private val workspaceRepository: WorkspaceRepository
 ) {
+    /** 当前选中的 git 仓库路径；null 表示未指定（用工作区根）。 */
+    @Volatile
+    var currentRepoPath: String? = null
+        private set
+
     private companion object {
         /** 提交拓扑图每页加载条数。首批与每次「加载更多」都取这么多条，超过的需滚到底再拉。 */
         const val GRAPH_PAGE_SIZE = 100
@@ -45,14 +51,63 @@ class GitRepository @Inject constructor(
     }
     /**
      * 执行一条 `git` 子命令，返回合并后的 stdout+stderr 文本。仅用于只读命令（status/branches/log/remote 等）：
-     * 这些靠输出解析、容错，git 非零退出码不会让 UI 误判（解析得空罢了）。凭据由 `credential.helper=store`
-     * 经凭据文件自动注入（见 [com.aicode.feature.credentials.data.repository.FileCredentialRepository]），
+     * 这些靠输出解析、容错，git 非零退出码不会让 UI 误判（解析得空罢了）。凭据由容器内自定义
+     * helper `git-credential-aicode`（`credential.helper` 指向它）按 host 命中注入，
+     * 凭据真源见 [com.aicode.feature.credentials.data.repository.FileCredentialRepository]，
      * 不在此按命令塞 `http.extraHeader`。
      * 每条参数经 [shellQuote] 单引号转义，含空格/特殊字符的值（提交消息、含空格路径等）安全传递。
      */
     private suspend fun git(
         vararg args: String
     ): String = gitRaw(args)
+
+    /** 当前 git 命令的执行目录：选中了子目录仓库用其路径，否则工作区根。 */
+    private fun repoCwd(): String = currentRepoPath ?: workspaceRepository.currentPath()
+
+    /** 设置当前选中的 git 仓库路径（null 回到工作区根）。 */
+    fun setRepoPath(path: String?) {
+        currentRepoPath = path
+    }
+
+    /**
+     * 发现工作区里的 git 仓库：工作区根 + 一层直接子目录。
+     * 本地模式用 File 列子目录；远程模式下 File 操作无效（路径是远程的），runCatching 捕获后
+     * 自动退化为只检查工作区根。返回按「根优先、子目录按名称排序」的路径列表。
+     */
+    suspend fun discoverRepos(): List<String> {
+        val root = workspaceRepository.currentPath()
+        val candidates = mutableListOf(root)
+        runCatching {
+            java.io.File(root).listFiles { f -> f.isDirectory }
+                ?.sortedBy { it.name }
+                ?.forEach { candidates.add(it.absolutePath) }
+        }
+        return candidates.filter { isGitRepo(it) }
+    }
+
+    /** 指定路径是否处于 git 工作树内（用于仓库发现与手动指定校验）。 */
+    suspend fun isGitRepo(path: String): Boolean {
+        return runCatching {
+            engine.runCommandSyncUnbounded("git rev-parse --is-inside-work-tree", path).output.trim() == "true"
+        }.getOrElse { false }
+    }
+
+    /**
+     * 列出工作区根的一层直接子目录（供仓库选择弹窗展示扫描范围）。
+     * 本地模式用 File 列；远程模式下 File 操作无效（路径是远程的），runCatching 捕获后返回空。
+     */
+    fun listSubdirectories(): List<String> {
+        val root = workspaceRepository.currentPath()
+        return runCatching {
+            java.io.File(root).listFiles { f -> f.isDirectory }
+                ?.sortedBy { it.name }
+                ?.map { it.absolutePath }
+                .orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    /** 当前工作区根路径（git 命令的默认执行目录）。 */
+    fun workspaceRoot(): String = workspaceRepository.currentPath()
 
     /**
      * 执行一条 `git` **写**子命令，据退出码判成败：非零（真实失败）抛 [GitCommandFailureException]
@@ -70,7 +125,7 @@ class GitRepository @Inject constructor(
     ): String {
         // 用不限幅执行：diff 内容/文件内容可能远超 AI 工具链路的 4 万字符限幅，
         // 截断占位符会混入 diff 数据流被 UI 渲染成伪 diff 行。
-        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), workspaceRepository.currentPath(), timeoutMs)
+        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), repoCwd(), timeoutMs)
         if (result.outputTruncated) throw GitOutputTooLargeException()
         if (result.exitCode == 0) return result.output
         throw GitCommandFailureException(result.output.ifBlank { "git 退出码 ${result.exitCode}" })
@@ -78,7 +133,7 @@ class GitRepository @Inject constructor(
 
     /** 拼命令并跑（不判退出码），[git] 与 [gitChecked] 复用。 */
     private suspend fun gitRaw(args: Array<out String>): String {
-        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), workspaceRepository.currentPath())
+        val result = engine.runCommandSyncUnbounded(buildGitCommand(args), repoCwd())
         if (result.outputTruncated) throw GitOutputTooLargeException()
         return result.output
     }
@@ -426,8 +481,8 @@ class GitRepository @Inject constructor(
             .let { it.isNotBlank() && !it.startsWith("fatal") }
 
     /**
-     * 拉取：直接 `git pull`，凭据由容器 `credential.helper` 链自动注入——`store` 命中已有凭据秒过，
-     * 未命中时自定义 helper 经文件 IPC 触发 app 弹窗回填，git 自动续跑（见 [CredentialRequestBridge]）。
+     * 拉取：直接 `git pull`，凭据由容器 `credential.helper`（自定义 `git-credential-aicode`）自动注入——
+     * 已存凭据秒过，未命中时 helper 经文件 IPC 触发 app 弹窗回填，git 自动续跑（见 [CredentialRequestBridge]）。
      * 故不再在此预查 host 凭据：三端（UI/终端/AI）共用同一 helper 兜底，逻辑单一来源。remote 不存在
      * 或真实失败由 [gitChecked] 据退出码抛 [GitCommandFailureException]，上层 toast。
      */
@@ -526,12 +581,12 @@ class GitRepository @Inject constructor(
         if (normalized.isBlank()) return ""
         // 先检查 .gitignore 是否已有该规则
         val checkCmd = "grep -F -x -- ${shellQuote(normalized)} .gitignore"
-        val checkResult = engine.runCommandSyncUnbounded(checkCmd, workspaceRepository.currentPath())
+        val checkResult = engine.runCommandSyncUnbounded(checkCmd, repoCwd())
         if (checkResult.exitCode == 0) return normalized // 已存在，无需重复追加
 
         // 不存在则通过 printf 安全追加（如果文件不存在则自动创建）
         val appendCmd = "printf '%s\\n' ${shellQuote(normalized)} >> .gitignore"
-        val appendResult = engine.runCommandSyncUnbounded(appendCmd, workspaceRepository.currentPath())
+        val appendResult = engine.runCommandSyncUnbounded(appendCmd, repoCwd())
         if (appendResult.exitCode != 0) {
             throw GitCommandFailureException(appendResult.output.ifBlank { "写入 .gitignore 失败" })
         }
@@ -648,9 +703,32 @@ class GitRepository @Inject constructor(
      * 空值跳过对应项不动现有配置。由 UI 在用户保存身份时显式调用。
      */
     suspend fun setUserIdentity(name: String, email: String) {
-        if (name.isNotBlank()) gitChecked("config", if (hasLocalConfig("user.name")) "--local" else "--global", "user.name", name)
-        if (email.isNotBlank()) gitChecked("config", if (hasLocalConfig("user.email")) "--local" else "--global", "user.email", email)
+        // 作用域**一次决定、name/email 同进同退**。逐键各自判断会把同一个身份拆到两个作用域：
+        // 仓库已有 local user.name 但没有 local user.email 时，name 写 local、email 写 global，
+        // 之后 `git config --get` 读回的值与 UI 回显就不一致。
+        val scope = if (hasLocalConfig("user.name") || hasLocalConfig("user.email")) "--local" else "--global"
+        applyIdentity(scope, "user.name", name)
+        applyIdentity(scope, "user.email", email)
     }
+
+    /**
+     * 写单个署名键。空值 = 撤销该作用域的覆盖、回落到上一级解析结果；
+     * 原来空值直接跳过，导致项目级覆盖无法撤销（用户清空后保存等于没保存）。
+     */
+    private suspend fun applyIdentity(scope: String, key: String, value: String) {
+        if (value.isNotBlank()) {
+            gitChecked("config", scope, key, value)
+        } else if (getConfig(scope, key).isNotEmpty()) {
+            runCatching { gitChecked("config", scope, "--unset", key) }
+        }
+    }
+
+    /** 读指定作用域（`--local` / `--global`）的配置值；不存在或非仓库时返回空串。 */
+    private suspend fun getConfig(scope: String, key: String): String =
+        runCatching { git("config", scope, "--get", key).trim() }.getOrDefault("").removeSuffix("\r")
+
+    /** 全局署名的 user.name（只读 global，区别于 [getUserName] 的生效值）。 */
+    suspend fun getGlobalUserName(): String = getConfig("--global", "user.name")
 
     /** 当前工作区是否有项目级（`--local`）配置值。非 git 仓库或无值时返回 false。 */
     private suspend fun hasLocalConfig(key: String): Boolean =
@@ -717,7 +795,7 @@ class GitRepository @Inject constructor(
     suspend fun worktreeFileContent(path: String): String {
         val local = withContext(Dispatchers.IO) {
             runCatching {
-                java.io.File(workspaceRepository.currentPath(), path)
+                java.io.File(repoCwd(), path)
                     .takeIf { it.isFile }
                     ?.also { if (it.length() > MAX_DIFF_FILE_BYTES) throw GitOutputTooLargeException() }
                     ?.readText()
@@ -729,7 +807,7 @@ class GitRepository @Inject constructor(
         if (local != null) return local
         val result = engine.runCommandSyncUnbounded(
             "cat -- ${shellQuote(path)}",
-            workspaceRepository.currentPath()
+            repoCwd()
         )
         if (result.outputTruncated) throw GitOutputTooLargeException()
         return if (result.exitCode == 0) result.output else ""
@@ -742,16 +820,6 @@ class GitRepository @Inject constructor(
         return if (out.startsWith("fatal:") || out.startsWith("error:")) "" else out
     }
 
-    /**
-     * 对单个 shell 参数做单引号转义。含「安全字符」之外的字符（空格、`|`、`$`、反引号、`*` 等）时
-     * 整体包单引号，内嵌单引号用 `'\''` 关闭-转义-重开。格式串（带 `|`、`%(...)`）、含空格路径、
-     * 提交消息均由此安全传递。注意 `|` 是 shell 管道符，**不可**列入安全集。
-     */
-    private fun shellQuote(arg: String): String {
-        if (arg.isEmpty()) return "''"
-        if (arg.all { it.isLetterOrDigit() || it in "_.@/:=+,%-" }) return arg
-        return "'" + arg.replace("'", "'\\''") + "'"
-    }
 }
 
 /**

@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.core.ui.markdown.DiffExpandToggle
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
@@ -46,6 +47,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +63,7 @@ import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -72,6 +75,7 @@ import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.feature.agent.domain.engine.EngineSubagent
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.core.ui.ExpandableChevronIcon
@@ -84,6 +88,9 @@ import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Database
 import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Globe
+import compose.icons.feathericons.HelpCircle
+import compose.icons.feathericons.Image
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.Tool
@@ -119,6 +126,12 @@ internal val DiffRemoveText: Color
 
 internal const val DIFF_COLLAPSE_THRESHOLD = 20
 internal const val TOOL_SECTION_LINE_LIMIT = 20
+
+/** 落库工具结果超过该行数折叠为摘要（实时输出走 TOOL_SECTION_LINE_LIMIT 截尾，不走折叠）。 */
+internal const val TOOL_RESULT_COLLAPSE_THRESHOLD = 40
+
+/** 折叠态保留行数（与 240dp 内容窗口大致一屏）。 */
+internal const val TOOL_RESULT_KEEP_LINES = 12
 
 /** 工具「指令 / 结果」展开窗口的最大高度：超出后在窗口内滚动，不再无限撑高。 */
 private val ToolSectionMaxHeight = 240.dp
@@ -176,6 +189,7 @@ internal fun ToolMessageBody(
                 ToolArgumentMetadata(
                     hint = toolArgHint(message.toolArgs),
                     path = extractFilePathArg(message.toolArgs),
+                    member = taskMemberName(message.toolArgs, message.toolName),
                     hasArgs = hasToolArgs(message.toolArgs)
                 )
             }
@@ -203,6 +217,8 @@ internal fun ToolMessageBody(
     } else {
         argumentMetadata?.path
     }
+    // 专家团成员名（task 派发）：行首直接给成员名，不再是笼统的 task
+    val memberName = argumentMetadata?.member
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -254,6 +270,29 @@ internal fun ToolMessageBody(
                         style = monoLabel,
                         maxLines = 1
                     )
+                } else if (memberName != null) {
+                    // 专家团成员（task 派发）：行首直接给成员名，不再是笼统的 task
+                    Text(
+                        text = memberName,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!argHint.isNullOrBlank()) {
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = argHint,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                 } else {
                     Text(
                         text = toolLabel,
@@ -279,11 +318,17 @@ internal fun ToolMessageBody(
                 }
             }
             if (running) {
-                // 运行中的这条：行尾用统一的涟漪场景文案说明「正在做什么」。工具名在开始执行前
+                // 运行中的这条：行尾用统一的场景文案说明「正在做什么」。工具名在开始执行前
                 // 就已到达（AgentEvent.ToolCallStarted），所以不必停在笼统的「执行中」；
                 // 折叠态也看得见，不必展开才知道它在跑。
                 Spacer(Modifier.width(Spacing.sm))
-                RippleText(text = stringResource(toolRunningLabelRes(message.toolName)))
+                Text(
+                    text = stringResource(toolRunningLabelRes(message.toolName, running = true)),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             if (edit != null) {
                 DiffStat(added = edit.added, removed = edit.removed)
@@ -373,7 +418,7 @@ internal fun ToolMessageBody(
                 ) {
                 if (todoData != null && todoData.items.isNotEmpty()) {
                     Spacer(Modifier.height(Spacing.xs))
-                    TodoCard(items = todoData.items)
+                    TodoCard(items = todoData.items, animateInProgress = false)
                 } else if (webSearchData != null) {
                     Spacer(Modifier.height(Spacing.xs))
                     WebSearchResultCard(result = webSearchData)
@@ -431,7 +476,13 @@ private data class ToolMessageMetadata(
     val hasResult: Boolean
 )
 
-private data class ToolArgumentMetadata(val hint: String?, val path: String?, val hasArgs: Boolean)
+private data class ToolArgumentMetadata(
+    val hint: String?,
+    val path: String?,
+    /** 专家团成员名（task 派发时的 agent/description），非 task 调用为 null。 */
+    val member: String?,
+    val hasArgs: Boolean
+)
 
 private data class ToolMessageDetails(
     val args: String?,
@@ -584,7 +635,8 @@ internal fun ToolStatusIcon(running: Boolean, isError: Boolean, toolName: String
             modifier = Modifier
                 // 与思考行同一格宽：两行的图标中心与后续文字左边缘才对得齐
                 .size(ChatStyle.rowIconSize)
-                .graphicsLayer { alpha = pulseAlpha }
+                // 仅在执行中挂呼吸层；结束后摘层，避免图标 tint 缓存旧主题色。
+                .then(if (running) Modifier.graphicsLayer { alpha = pulseAlpha } else Modifier)
         )
     }
 }
@@ -592,9 +644,12 @@ internal fun ToolStatusIcon(running: Boolean, isError: Boolean, toolName: String
 /** 工具名字形映射：键与 [com.aicode.feature.agent.domain.tool.ToolRegistry] 注册名一致（比对时忽略大小写）。 */
 private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase()) {
     "editfile", "writefile", "generateimage" -> FeatherIcons.Edit3
-    "readfile", "list", "sendfile", "viewimage" -> FeatherIcons.FileText
-    "search", "websearch", "webfetch", "browser" -> FeatherIcons.Search
+    "readfile", "list", "sendfile" -> FeatherIcons.FileText
+    "viewimage" -> FeatherIcons.Image
+    "search", "websearch", "webfetch" -> FeatherIcons.Search
+    "browser" -> FeatherIcons.Globe
     "bash", "terminal" -> FeatherIcons.Terminal
+    "askuserquestion" -> FeatherIcons.HelpCircle
     "todo" -> FeatherIcons.Check
     "task" -> FeatherIcons.Cpu
     "memory" -> FeatherIcons.Database
@@ -603,7 +658,7 @@ private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase
 
 /**
  * 工具执行中的场景文案：把工具名归成用户一眼能懂的「正在做什么」，供统一忙碌指示器
- * （[AgentBusyIndicator] / [RippleText]）使用。
+ * （[AgentBusyIndicator]）与工具行使用。
  *
  * 键与 [toolIcon] 一致（工具注册名，忽略大小写）。归类原则是「用户视角」而不是「实现视角」：
  * 读文件与列目录都算「正在读取文件」，联网搜索与抓网页都算「正在联网搜索」。工具名在执行前
@@ -611,14 +666,19 @@ private fun toolIcon(toolName: String?): ImageVector = when (toolName?.lowercase
  * MCP 动态注册工具、自定义工具等未归类的，一律回落 [R.string.chat_status_calling_tool]。
  */
 @StringRes
-internal fun toolRunningLabelRes(toolName: String?): Int = when (toolName?.lowercase()) {
+internal fun toolRunningLabelRes(toolName: String?, running: Boolean = false): Int = when (toolName?.lowercase()) {
     "editfile", "writefile" -> R.string.chat_status_editing_file
-    "readfile", "list", "sendfile", "viewimage" -> R.string.chat_status_reading_file
-    "search", "websearch", "webfetch", "browser" -> R.string.chat_status_searching_web
+    "readfile", "list", "sendfile" -> R.string.chat_status_reading_file
+    "viewimage" -> R.string.chat_status_viewing_image
+    "search", "websearch", "webfetch" -> R.string.chat_status_searching_web
+    "browser" -> R.string.chat_status_browsing_web
     "bash", "terminal" -> R.string.chat_status_running_command
+    "askuserquestion" -> R.string.chat_status_asking_user
     "generateimage" -> R.string.chat_status_generating_image
     "todo" -> R.string.chat_status_updating_todo
-    "task" -> R.string.chat_status_starting_subagent
+    // 外部引擎的 task 往往同步等待子代理跑完（Claude 的 Task 要等结果才返回）：
+    // 开始执行后再说「正在启动」会让人以为卡死，运行期改用「子代理运行中」。
+    "task" -> if (running) R.string.chat_status_subagent_running else R.string.chat_status_starting_subagent
     "memory" -> R.string.chat_status_reading_memory
     else -> R.string.chat_status_calling_tool
 }
@@ -633,12 +693,13 @@ internal fun AgentUIMessage.isToolRunning(liveOutput: String?): Boolean =
         content.startsWith(SessionUseCase.LEGACY_PENDING_TOOL_MARKER)
 
 /**
- * 「N 次工具调用」分组头：DSH 把一轮任务里连续的工具调用折成一行，**默认收起**，
- * 点一下手动展开/收起（运行中也不自动弹开）。
+ * 「N 次工具调用」分组头：DSH 把一轮任务里连续的工具调用折成一行。
+ * 展开态由宿主（[AIChatPanel]）控制：跟随所在轮的轮头展开态——运行中的轮随轮头铺开，
+ * 完成后随轮头一并收进「构造过程」；用户手动开关过的分组以其选择为准。
  * 布局对齐思考行：左侧工具图标（锤子/施工） + 中间调用计数 + 折叠箭头。
  *
- * [running] 为真时给「N 次工具调用」这行文案本身走涟漪高光，表示这批调用还在跑。
- * 不再另挂三个跳动的点，也不在这里重复场景文案（「正在编辑文件」这类说的是**具体哪个工具**，
+ * [running] 为真时「N 次工具调用」用主题色标注（静态色差，不做文字动画）；
+ * 不另挂三个跳动的点，也不在这里重复场景文案（「正在编辑文件」这类说的是**具体哪个工具**，
  * 展开后由每条工具行的运行状态给出，见 [ToolMessageBody]）。
  */
 @Composable
@@ -670,12 +731,13 @@ internal fun ToolCallGroupHeader(
             modifier = Modifier.size(ChatStyle.rowIconSize)
         )
         Spacer(Modifier.width(Spacing.sm))
-        // 权重挂在外层占位，涟漪画在文字自身的尺寸上：光带只扫「N 次工具调用」这几个字，
-        // 不会在整行空白里慢慢爬（见 Modifier.rippleHighlight）。
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            RippleText(
+            Text(
                 text = stringResource(R.string.chat_tool_calls_count, count),
-                highlight = if (running) Color.White else null
+                color = if (running) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         ExpandableChevronIcon(
@@ -717,6 +779,14 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
     LaunchedEffect(content, live, followLive, scrollState.isScrollInProgress) {
         if (!live || (followLive && !scrollState.isScrollInProgress)) displayedContent = content
     }
+    // 落库结果行数截断：超阈值默认折叠为保留行 + 「展开剩余 N 行」页脚（与 diff 卡同一交互范式），
+    // 否则长结果只能靠底部渐隐“猜”还有内容
+    val totalLines = remember(content) { content.trimEnd('\n').count { it == '\n' } + 1 }
+    val collapsible = !live && totalLines > TOOL_RESULT_COLLAPSE_THRESHOLD
+    var expanded by rememberSaveable(content) { mutableStateOf(false) }
+    val collapsedContent = remember(content) {
+        content.lines().take(TOOL_RESULT_KEEP_LINES).joinToString("\n")
+    }
     val fadeColor = MaterialTheme.colorScheme.background
     Box {
         ChatMonoPanel(
@@ -725,9 +795,44 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
                 .nestedScroll(rememberBoundNestedScrollConnection(scrollState))
                 .verticalScroll(scrollState)
         ) {
+            val shownText = when {
+                live -> displayedContent
+                collapsible && !expanded -> collapsedContent
+                else -> content
+            }
+            // 普通文本结果里的 unified diff（bash git diff 等）也按增删行上色，
+            // 与 editFile/writeFile 差异卡同一套语义色；非 diff 文本零开销直通。
+            val addText = DiffAddText
+            val addBg = DiffAddBg
+            val removeText = DiffRemoveText
+            val removeBg = DiffRemoveBg
+            val metaColor = MaterialTheme.colorScheme.primary
+            val baseColor = MaterialTheme.colorScheme.onSurfaceVariant
+            val annotated: AnnotatedString = remember(shownText) {
+                if (!looksLikeUnifiedDiff(shownText)) {
+                    AnnotatedString(shownText)
+                } else {
+                    buildAnnotatedString {
+                        shownText.lines().forEachIndexed { index, line ->
+                            if (index > 0) append('\n')
+                            when {
+                                line.startsWith("+++") || line.startsWith("---") ||
+                                    line.startsWith("@@") || line.startsWith("diff ") ||
+                                    line.startsWith("index ") ->
+                                    withStyle(SpanStyle(color = metaColor, fontWeight = FontWeight.Bold)) { append(line) }
+                                line.startsWith('+') ->
+                                    withStyle(SpanStyle(color = addText, background = addBg)) { append(line) }
+                                line.startsWith('-') ->
+                                    withStyle(SpanStyle(color = removeText, background = removeBg)) { append(line) }
+                                else -> withStyle(SpanStyle(color = baseColor)) { append(line) }
+                            }
+                        }
+                    }
+                }
+            }
             SelectionContainer {
                 Text(
-                    text = if (live) displayedContent else content,
+                    text = annotated,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace
@@ -745,6 +850,13 @@ internal fun ToolSection(label: String, content: String, live: Boolean = false) 
                     .background(Brush.verticalGradient(listOf(Color.Transparent, fadeColor)))
             )
         }
+    }
+    if (collapsible) {
+        DiffExpandToggle(
+            expanded = expanded,
+            hiddenCount = totalLines - TOOL_RESULT_KEEP_LINES,
+            onToggle = { expanded = !expanded }
+        )
     }
 }
 
@@ -849,32 +961,19 @@ internal fun DiffView(diff: String, startLine: Int) {
     }
 }
 
-/** 长差异的页脚切换 */
-@Composable
-internal fun DiffExpandToggle(expanded: Boolean, hiddenCount: Int, onToggle: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.sm))
-            .clickable(onClick = onToggle)
-            .padding(vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        ExpandableChevronIcon(
-            expanded = expanded,
-            contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
-            tint = Brand.IconGray,
-            size = 16.dp
-        )
-        Spacer(Modifier.width(Spacing.xs))
-        Text(
-            text = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.tool_expand_remaining, hiddenCount),
-            color = MaterialTheme.colorScheme.primary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium
-        )
+/** 判定普通文本结果是否是 unified diff：必须有 diff 头/@@ 标记，且有至少 2 行增删。避免给普通 +/- 列表上色。 */
+private fun looksLikeUnifiedDiff(text: String): Boolean {
+    var markers = 0
+    var changes = 0
+    for (raw in text.lineSequence()) {
+        val line = raw.trimEnd()
+        when {
+            line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@") ||
+                line.startsWith("diff ") || line.startsWith("index ") -> markers++
+            line.startsWith('+') || line.startsWith('-') -> changes++
+        }
     }
+    return markers >= 1 && changes >= 2
 }
 
 /** editFile 单处编辑的差异片段。 */
@@ -1085,4 +1184,14 @@ private fun extractFilePathArg(argsJson: String?): String? {
             (obj[key] as? JsonPrimitive)?.contentOrNull
         }
     }.getOrNull()
+}
+
+/**
+ * 专家团成员名：只有 task（派子代理/专家团成员）才解析。
+ * 派发时 agent 字段是成员名（如 backend-architect），没有时退回 description；
+ * 都没有则不加名字标识，避免把普通任务调用也标注成成员。
+ */
+private fun taskMemberName(argsJson: String?, toolName: String?): String? {
+    if (!EngineSubagent.isSubagentTool(toolName) || argsJson.isNullOrBlank()) return null
+    return EngineSubagent.memberName(argsJson)
 }

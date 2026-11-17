@@ -98,6 +98,12 @@ object AgentNotificationFormatter {
             AgentNotificationKind.SUBAGENT -> {
                 appendLine("  <subagent-id>$sourceId</subagent-id>")
                 appendLine("  <subagent-title>$title</subagent-title>")
+                changedFiles.takeIf { it.isNotEmpty() }?.let { files ->
+                    appendLine("  <changed-files>${escapeXml(files.joinToString(", "))}</changed-files>")
+                }
+                resultExcerpt?.takeIf { it.isNotBlank() }?.let { excerpt ->
+                    appendLine("  <result-excerpt>${escapeXml(excerpt)}</result-excerpt>")
+                }
             }
             AgentNotificationKind.AGENT_MESSAGE -> {
                 appendLine("  <from-id>$sourceId</from-id>")
@@ -138,6 +144,10 @@ object AgentNotificationFormatter {
             AgentNotificationKind.SUBAGENT -> {
                 put("subagent_id", sourceId)
                 put("subagent_title", title)
+                if (changedFiles.isNotEmpty()) {
+                    put("changed_files", JsonArray(changedFiles.map { JsonPrimitive(it) }))
+                }
+                resultExcerpt?.takeIf { it.isNotBlank() }?.let { put("result_excerpt", JsonPrimitive(it)) }
             }
             AgentNotificationKind.AGENT_MESSAGE -> {
                 put("from_id", sourceId)
@@ -191,8 +201,12 @@ object AgentNotificationFormatter {
         AgentNotificationKind.SUBAGENT -> when (outcome) {
             NotificationOutcome.STOPPED ->
                 "该子代理已停止，不会再有后续通知；如需看它停止前的进展可用 task(action=\"read\", id=\"$sourceId\") 读取。是否重新派发请征求用户意见，不要自行重试。"
-            else ->
+            // 摘要随通知到达时，先按摘要推进；只有需要完整报告或核对细节才再读一次。
+            else -> if (resultExcerpt.isNullOrBlank()) {
                 "可用 task(action=\"read\", id=\"$sourceId\") 读取子代理的最后输出。"
+            } else {
+                "结果摘要已随通知给出，通常无需再读；需要完整报告或核对细节时用 task(action=\"read\", id=\"$sourceId\")。"
+            }
         }
         AgentNotificationKind.AGENT_MESSAGE ->
             if (fromParent) {
@@ -223,7 +237,7 @@ object AgentNotificationFormatter {
         when (subAgents.size) {
             0 -> {}
             1 -> lines.add(subAgents.first().singleHint())
-            else -> lines.add("可用 task(action=\"read\", id=\"...\") 逐个读取子代理的最后输出。")
+            else -> lines.add("各子代理的结果摘要已随通知给出；需要完整报告时用 task(action=\"read\", id=\"...\") 逐个读取。")
         }
         when (messages.size) {
             0 -> {}

@@ -20,6 +20,19 @@ class AgentDefinitionRepository @Inject constructor(
     private val configRepository: AgentDefinitionConfigRepository,
     private val fileAccess: FileAccessProvider
 ) {
+    /**
+     * 定义内容版本：经本仓库的 save/delete/setDisabled 修改定义后递增。
+     * 系统提示词里的可用清单按它做缓存失效——否则会话中途新建的子代理
+     * 要等到下一个会话才出现在主代理的派发清单里。外部直接改文件不经过这里，
+     * 这部分维持原有的「新会话才刷新」行为。
+     */
+    @Volatile private var definitionsVersionField: Long = 0
+    val definitionsVersion: Long get() = definitionsVersionField
+
+    private fun bumpVersion() {
+        definitionsVersionField++
+    }
+
     /** 全部定义（含来源作用域），未过滤禁用，按名称排序。 */
     fun listAll(): List<AgentDefinitionEntry> =
         mergeAll(globalSource.listDefinitions(), projectSource.listDefinitions())
@@ -32,14 +45,25 @@ class AgentDefinitionRepository @Inject constructor(
 
     /** 按名称查找可派发的定义（忽略大小写）；不存在或已被禁用时返回 null。 */
     fun find(name: String): AgentDefinition? =
-        listEnabled().firstOrNull { it.definition.name.equals(name, ignoreCase = true) }?.definition
+        listEnabled().firstOrNull { it.matchesNameOrFile(name) }?.definition
 
     /**
      * 按名称查找定义，包含已禁用的。已经派出去的子会话要用它还原自己的提示词与工具集——
      * 禁用只该拦住新的派发，不该让在跑的子代理中途换一套配置。
      */
     fun findIncludingDisabled(name: String): AgentDefinition? =
-        listAll().firstOrNull { it.definition.name.equals(name, ignoreCase = true) }?.definition
+        listAll().firstOrNull { it.matchesNameOrFile(name) }?.definition
+
+    /**
+     * 名称匹配：定义名（frontmatter `name`）或文件名（不含 `.md`）任一命中即可（忽略大小写）。
+     *
+     * 为什么两种都认：团队定义里的 `members` 引用成员时有两种自然写法——写定义名（商店安装按
+     * `name:` 生成，天然一致），或写文件名（内置团队按文件名引用，而 `product-manager.md` 的
+     * 定义名是缩写 `PM`）。只认定义名会让后一种写法直接派发失败（AGENT_NOT_FOUND），
+     * 因此这里按文件名兜底，让两种写法都能正确解析到同一定义。
+     */
+    private fun AgentDefinitionEntry.matchesNameOrFile(name: String): Boolean =
+        matchesDefinitionName(definition, name)
 
     /** 当前被禁用的子代理名集合（小写归一化）。批量判断取一次即可，避免逐个重读配置文件。 */
     fun disabledNames(): Set<String> = configRepository.disabledNames()
@@ -48,8 +72,10 @@ class AgentDefinitionRepository @Inject constructor(
     fun isDisabled(name: String): Boolean = name.lowercase() in configRepository.disabledNames()
 
     /** 在指定作用域启用/禁用某个子代理。 */
-    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope) =
+    fun setDisabled(name: String, disabled: Boolean, scope: AgentDefinitionScope) {
         configRepository.setDisabled(name, disabled, scope)
+        bumpVersion()
+    }
 
     /**
      * 写入定义文件（新建或编辑）。[originalName] 为编辑前的名称，新建时传 null；
@@ -105,6 +131,7 @@ class AgentDefinitionRepository @Inject constructor(
                     FileLogger.w(TAG, "重命名后删除旧定义失败: $existingFile")
                 }
             }
+            bumpVersion()
             null
         } catch (e: Exception) {
             FileLogger.e(TAG, "保存子代理定义失败: $name", e)
@@ -120,7 +147,9 @@ class AgentDefinitionRepository @Inject constructor(
         val filePath = entry.definition.filePath ?: return false
         val provider = fileAccess
         if (!provider.isFile(filePath)) return false
-        return runCatching { provider.delete(filePath); true }.getOrDefault(false)
+        val deleted = runCatching { provider.delete(filePath); true }.getOrDefault(false)
+        if (deleted) bumpVersion()
+        return deleted
     }
 
     /** 指定作用域的定义目录（容器路径）。 */
@@ -129,6 +158,16 @@ class AgentDefinitionRepository @Inject constructor(
 
     companion object {
         private const val TAG = "AgentDefinitionRepository"
+
+        /**
+         * 定义是否响应某个引用名：定义名或文件名（不含 `.md`）任一命中即算命中（忽略大小写）。
+         * 抽成纯函数便于单测钉住「团队成员按文件名引用内置成员」这一约定。
+         */
+        internal fun matchesDefinitionName(definition: AgentDefinition, name: String): Boolean {
+            if (definition.name.equals(name, ignoreCase = true)) return true
+            val fileName = definition.filePath?.substringAfterLast('/')?.removeSuffix(".md")
+            return fileName != null && fileName.equals(name, ignoreCase = true)
+        }
 
         /** 名称同时用作文件名，禁掉路径分隔符与保留字符；长度上限防止极端文件名。 */
         internal fun isValidName(name: String): Boolean {

@@ -1,5 +1,8 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.settingsPageBackground
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,6 +12,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -31,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aicode.R
+import compose.icons.feathericons.Check
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
 import com.aicode.feature.agent.domain.prompt.PromptFragment
@@ -71,6 +76,7 @@ internal fun PromptEditorScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
@@ -90,7 +96,7 @@ internal fun PromptEditorScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    IconButton(
                         enabled = canSave,
                         onClick = {
                             onSave(
@@ -101,7 +107,11 @@ internal fun PromptEditorScreen(
                             )
                         }
                     ) {
-                        Text(stringResource(R.string.common_save))
+                        Icon(
+                            FeatherIcons.Check,
+                            contentDescription = stringResource(R.string.common_save),
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             )

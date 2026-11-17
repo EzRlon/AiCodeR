@@ -2,11 +2,7 @@ package com.aicode.core.watch
 
 import android.os.FileObserver
 import com.aicode.core.util.FileLogger
-import com.aicode.feature.agent.domain.container.ContainerInstaller
-import com.aicode.feature.settings.data.repository.ExecutionMode
-import com.aicode.feature.settings.data.repository.ExecutionModeHolder
-import com.aicode.feature.workspace.data.repository.WorkspaceRepository
-import com.aicode.feature.workspace.domain.WorkspacePathMapper
+
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -48,10 +44,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class FileChangeHub @Inject constructor(
-    private val workspaceRepository: WorkspaceRepository,
-    private val containerInstaller: ContainerInstaller,
-    private val pathMapper: WorkspacePathMapper,
-    private val executionModeHolder: ExecutionModeHolder
+    private val watchContext: WorkspaceWatchContext
 ) {
     companion object {
         private const val TAG = "FileChangeHub"
@@ -62,8 +55,15 @@ class FileChangeHub @Inject constructor(
         /** 单批明细上限，超出即截断（只保留「有变更」信号）。 */
         private const val MAX_BATCH_SIZE = 512
 
-        /** 快照轮询兜底间隔。 */
+        /** 快照轮询兜底默认间隔。 */
         private const val POLL_INTERVAL_MS = 2000L
+
+        /**
+         * 配置类订阅（权限规则 / MCP 配置等 24 小时常驻且目录很小的订阅）的兜底轮询间隔：
+         * 这些订阅在 App 进程存活期间一直跑（含切后台），单层扫描虽小，但按「禁止无谓唤醒」
+         * 纪律不必 2 秒一问——inotify 主通道不受影响，间隔只影响兜底发现速度。
+         */
+        const val CONFIG_POLL_INTERVAL_MS = 15_000L
 
         /** 订阅根尚不存在时的探测间隔。 */
         private const val ROOT_WAIT_INTERVAL_MS = 2000L
@@ -71,7 +71,9 @@ class FileChangeHub @Inject constructor(
         /** 单次快照最多收集的条目数，防止超大订阅每轮遍历开销失控。 */
         private const val MAX_SNAPSHOT_ENTRIES = 4096
 
-        /** 单订阅可持有 inotify 句柄的目录数上限，防止大仓库把 inotify watch 用尽。 */
+        /** 单订阅可持有 inotify 句柄的目录数上限，防止大仓库把 inotify watch 用尽。
+         *  配额按订阅自己的目录集合算（`myDirs`），不是全局共享表——否则一个大仓库订阅吃满后，
+         * 权限规则/MCP 配置/技能目录等其它订阅会静默失去 inotify，只剩轮询兑底。 */
         private const val MAX_WATCHED_DIRS = 512
 
         /** 待处理原始事件队列上限；超出时丢弃最旧事件（有快照轮询兜底），防止文件暴增时内存无界增长。 */
@@ -81,10 +83,10 @@ class FileChangeHub @Inject constructor(
         private const val MAX_PENDING_BATCHES = 256
 
         /** AI 看到的工作区根路径。 */
-        const val CONTAINER_ROOT = WorkspacePathMapper.CONTAINER_ROOT
+        const val CONTAINER_ROOT = "~/workspace"
 
         /** AI 配置目录在容器内的根路径。 */
-        const val AICODE_ROOT = WorkspacePathMapper.AICODE_ROOT
+        const val AICODE_ROOT = "/root/.aicode"
 
         private const val IN_IGNORED = 0x00008000
 
@@ -139,22 +141,23 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
-    ): Flow<FileChangeBatch> = workspaceRepository.current
-        .map { workspaceRepository.currentPath() }
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        pollIntervalMs: Long = POLL_INTERVAL_MS
+    ): Flow<FileChangeBatch> = watchContext.workspacePathFlow
         .distinctUntilChanged()
         .flatMapLatest {
-            if (executionModeHolder.currentMode() == ExecutionMode.REMOTE_SSH) {
+            if (watchContext.isRemoteMode()) {
                 emptyFlow()
             } else {
                 watchHostDir(
-                    hostDir = pathMapper.toHostFile(containerSubPath),
+                    hostDir = watchContext.toHostFile(containerSubPath),
                     containerRootPath = containerSubPath.trimEnd('/'),
                     root = ChangeRoot.WORKSPACE,
                     recursive = recursive,
                     filter = filter,
                     fallbackPoll = fallbackPoll,
-                    batchWindowMs = batchWindowMs
+                    batchWindowMs = batchWindowMs,
+                    pollIntervalMs = pollIntervalMs
                 )
             }
         }
@@ -165,17 +168,19 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        pollIntervalMs: Long = POLL_INTERVAL_MS
     ): Flow<FileChangeBatch> {
         val sub = containerSubPath.trim('/')
         return watchHostDir(
-            hostDir = if (sub.isEmpty()) containerInstaller.aicodeDir else File(containerInstaller.aicodeDir, sub),
+            hostDir = if (sub.isEmpty()) watchContext.aicodeHostDir else File(watchContext.aicodeHostDir, sub),
             containerRootPath = if (sub.isEmpty()) AICODE_ROOT else "$AICODE_ROOT/$sub",
             root = ChangeRoot.AICODE,
             recursive = recursive,
             filter = filter,
             fallbackPoll = fallbackPoll,
-            batchWindowMs = batchWindowMs
+            batchWindowMs = batchWindowMs,
+            pollIntervalMs = pollIntervalMs
         )
     }
 
@@ -191,7 +196,8 @@ class FileChangeHub @Inject constructor(
         recursive: Boolean = false,
         filter: WatchFilter = WatchFilter.DEFAULT,
         fallbackPoll: Boolean = true,
-        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS
+        batchWindowMs: Int = DEFAULT_BATCH_WINDOW_MS,
+        pollIntervalMs: Long = POLL_INTERVAL_MS
     ): Flow<FileChangeBatch> = flow {
         val subscription = Subscription(
             rootDir = hostDir,
@@ -200,7 +206,8 @@ class FileChangeHub @Inject constructor(
             recursive = recursive,
             filter = filter,
             fallbackPoll = fallbackPoll,
-            windowMs = batchWindowMs
+            windowMs = batchWindowMs,
+            pollIntervalMs = pollIntervalMs
         )
         try {
             subscription.start()
@@ -220,7 +227,8 @@ class FileChangeHub @Inject constructor(
         private val recursive: Boolean,
         private val filter: WatchFilter,
         private val fallbackPoll: Boolean,
-        private val windowMs: Int
+        private val windowMs: Int,
+        private val pollIntervalMs: Long
     ) {
         private val events = Channel<RawEvent>(
             capacity = MAX_PENDING_EVENTS,
@@ -295,9 +303,9 @@ class FileChangeHub @Inject constructor(
                 diag("目录监听已登记，跳过重复注册: $path")
                 return
             }
-            if (dirWatches.size >= MAX_WATCHED_DIRS && !dirWatches.containsKey(path)) {
+            if (myDirs.size > MAX_WATCHED_DIRS) {
                 myDirs.remove(path)
-                FileLogger.w(TAG, "监听目录数达上限 $MAX_WATCHED_DIRS，停止扩展: $path")
+                FileLogger.w(TAG, "本订阅监听目录数达上限 $MAX_WATCHED_DIRS，停止扩展: $path")
                 return
             }
             // 新出现的目录在 watch 生效前，其内条目没有任何 watcher 在场、inotify 不会汇报。
@@ -351,7 +359,7 @@ class FileChangeHub @Inject constructor(
             pollJob = ioScope.launch {
                 var last = snapshotOfScope()
                 while (isActive) {
-                    delay(POLL_INTERVAL_MS)
+                    delay(pollIntervalMs)
                     val now = snapshotOfScope()
                     val diff = diffSnapshot(last, now)
                     last = now
@@ -396,7 +404,7 @@ class FileChangeHub @Inject constructor(
         }
 
         private fun containerPathOf(hostPath: String): String {
-            val base = containerRootPath ?: return pathMapper.toContainerPath(hostPath)
+            val base = containerRootPath ?: return watchContext.toContainerPath(hostPath)
             val rel = relativePartsOf(rootDir, File(hostPath)).joinToString("/")
             return if (rel.isEmpty()) base else "$base/$rel"
         }

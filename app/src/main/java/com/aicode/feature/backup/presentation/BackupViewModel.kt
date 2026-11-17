@@ -8,6 +8,7 @@ import com.aicode.feature.backup.data.BackupTargetRepository
 import com.aicode.feature.backup.domain.BackupDecryptionException
 import com.aicode.feature.backup.domain.BackupManager
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.containsSecrets
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.remote.BackupTarget
@@ -104,6 +105,9 @@ class BackupViewModel @Inject constructor(
             .putBoolean(KEY_PERMISSION_RULES, options.permissionRules)
             .putBoolean(KEY_APP_SETTINGS, options.appSettings)
             .putBoolean(KEY_WORKSPACE_FILES, options.workspaceFiles)
+            .putBoolean(KEY_AI_ASSETS, options.aiAssets)
+            .putBoolean(KEY_CONTAINER_ENV, options.containerEnv)
+            .putBoolean(KEY_KEYS, options.keys)
             .apply()
     }
 
@@ -114,11 +118,20 @@ class BackupViewModel @Inject constructor(
         mcpServers = prefs.getBoolean(KEY_MCP_SERVERS, true),
         permissionRules = prefs.getBoolean(KEY_PERMISSION_RULES, true),
         appSettings = prefs.getBoolean(KEY_APP_SETTINGS, true),
-        workspaceFiles = prefs.getBoolean(KEY_WORKSPACE_FILES, false)
+        workspaceFiles = prefs.getBoolean(KEY_WORKSPACE_FILES, false),
+        aiAssets = prefs.getBoolean(KEY_AI_ASSETS, true),
+        containerEnv = prefs.getBoolean(KEY_CONTAINER_ENV, false),
+        keys = prefs.getBoolean(KEY_KEYS, false)
     )
 
     /** 流式导出到 [output]（调用方打开，本方法负责关闭）。 */
     fun export(password: String, options: BackupOptions, output: OutputStream) {
+        // 兜底：含凭据/私钥的段必须加密（UI 已禁用空口令确认，此处防未来绕过 UI 的调用路径）。
+        if (options.containsSecrets() && password.isEmpty()) {
+            _state.value = BackupState.Error(context.getString(R.string.backup_sensitive_needs_password))
+            runCatching { output.close() }
+            return
+        }
         _state.value = BackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
@@ -155,8 +168,12 @@ class BackupViewModel @Inject constructor(
         }
     }
 
-    /** 导出当前备份并上传到 [target]。 */
+    /** 导出当前备份并上传到 [target]。备份默认含解密后的 API Key / SSH 凭据，禁止明文上传远端。 */
     fun uploadToTarget(target: BackupTarget, password: String) {
+        if (password.isEmpty()) {
+            _networkState.value = NetworkBackupState.Error(context.getString(R.string.backup_net_upload_password_required))
+            return
+        }
         _networkState.value = NetworkBackupState.Working
         viewModelScope.launch {
             val pw = password.toCharArray().takeIf { it.isNotEmpty() }
@@ -436,5 +453,8 @@ class BackupViewModel @Inject constructor(
         private const val KEY_PERMISSION_RULES = "permission_rules"
         private const val KEY_APP_SETTINGS = "app_settings"
         private const val KEY_WORKSPACE_FILES = "workspace_files"
+        private const val KEY_AI_ASSETS = "ai_assets"
+        private const val KEY_CONTAINER_ENV = "container_env"
+        private const val KEY_KEYS = "keys"
     }
 }

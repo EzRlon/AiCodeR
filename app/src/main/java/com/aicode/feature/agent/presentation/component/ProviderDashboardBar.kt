@@ -73,10 +73,19 @@ fun ProviderDashboardBar(
     modifier: Modifier = Modifier,
     forceCollapse: Boolean = false,
     onRefreshByButton: () -> Unit = {},
-    onExpandedChange: (Boolean) -> Unit = {}
+    onExpandedChange: (Boolean) -> Unit = {},
+    /**
+     * 自增信号：外部（顶栏状态条长按）要求把面板展开一次。
+     * 用自增而不是布尔，是为了「已经展开时再长按一次」也能重新触发。
+     */
+    expandSignal: Int = 0
 ) {
     val context = LocalContext.current
     var isExpanded by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(expandSignal) {
+        if (expandSignal > 0) isExpanded = true
+    }
 
     // 弹窗/键盘叠加时同帧收起：用派生状态而不是 LaunchedEffect 异步改 isExpanded，
     // 否则弹窗先出现顶开布局、面板后折叠，中间产生空档闪屏。

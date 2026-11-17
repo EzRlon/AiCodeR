@@ -91,6 +91,38 @@ sealed class AgentEvent {
 
     /** 模式已切换（由 AI 调用 planMode 触发），UI 据此展示计划审查面板等。 */
     data class ModeChanged(val newMode: AgentMode, val reason: String) : AgentEvent()
+
+    /**
+     * 收尾独立验收完成：由「验收模型」（设置中独立配置的另一个模型）对目标清单完成度
+     * 做交叉检查后的报告。UI 落库为验收卡片；无配对 toolCallId，回放不进模型上下文。
+     */
+    data class VerificationReport(val content: String) : AgentEvent()
+
+    /** 单次任务 token 预算用尽且用户选择停止：本轮就此结束，UI 落一条说明消息。 */
+    data class BudgetStopped(val usedTokens: Int, val budgetTokens: Int) : AgentEvent()
+
+    /**
+     * 外部 CLI 引擎在**引擎进程内部**派生了子代理（Claude `Task` / Codex `collab_tool_call` /
+     * OpenCode `task`）。这类子代理不经过本体 TaskTool，桥接层只能拿到「调用参数 + 最终结果」，
+     * 因此由桥接在声明时发本事件、在结果返回时发 [SubagentFinished]，ViewModel 据此建子会话，
+     * 让侧栏出现分级会话、结束后给主会话回执。
+     */
+    data class SubagentSpawned(
+        val subSessionId: String,
+        val memberName: String,
+        val title: String,
+        val prompt: String
+    ) : AgentEvent()
+
+    /**
+     * 外部引擎子代理结束：[result] 为最终报告（或失败原因），落子会话末条回复并给父会话回执。
+     * 引擎侧拿不到完整过程，子会话内容是「任务描述 + 最终报告」，与内置子代理的完整时间线不同。
+     */
+    data class SubagentFinished(
+        val subSessionId: String,
+        val result: String,
+        val isError: Boolean
+    ) : AgentEvent()
 }
 
 interface AgentWorkflow {
@@ -113,11 +145,51 @@ interface AgentWorkflow {
     suspend fun compactSession(sessionId: String, onEvent: suspend (AgentEvent) -> Unit = {}): Boolean
 
     /**
+     * 交接提醒：解析当前会话模型的有效输入预算（tokens）。
+     * 无法解析（未配置供应商 / 异常）时返回 null。
+     */
+    suspend fun handoffInputBudget(sessionId: String): Int?
+
+    /**
+     * 交接提醒：为指定会话生成「接手摘要」。
+     * 复用压缩的分块摘要逻辑，但不改动会话历史、不落库；历史过短或生成失败返回 null。
+     */
+    suspend fun buildHandoffSummary(sessionId: String): String?
+
+    /**
+     * 外部引擎会话的结论沉淀：从最近一段 App 侧镜像历史生成九段式摘要并抽取结论（不落库、不改历史）。
+     *
+     * 内置引擎在上下文压缩后零额外调用完成抽取；外部引擎的上下文在 CLI 进程内部，App 从不压缩它，
+     * 因此由回合结束按节奏调用本方法补齐，避免「结论页长期空白」。开关关闭、历史过短、
+     * 无可用供应商或摘要失败时返回 false，绝不影响对话本身。
+     */
+    suspend fun extractRecentConclusions(sessionId: String): Boolean
+
+    /**
+     * 快照交接：即时拼装「接手材料」——最近一次压缩的结构化摘要（若有）+ 其后的最新原文
+     * （从未压缩过则取最近原文窗口）。零模型调用、毫秒级返回，文本原样不做改写；
+     * 历史为空或拼不出有效内容返回 null。
+     */
+    suspend fun buildInstantHandoffDoc(sessionId: String): String?
+
+    /**
      * 为新建会话生成标题（供首条用户消息后异步调用）。
      * 默认跟随当前聊天模型；若配置了标题总结专用模型且可用则用之。
      * 生成失败或取不到标题时返回 null（调用方保留临时标题）。
      */
     suspend fun generateTitle(sessionId: String, request: String): String?
+
+    /**
+     * 润色输入框草稿：修正错别字、理顺逻辑、换成更专业的表述，不改变原意、不执行请求。
+     * 失败或无有效输出时返回 null（调用方保留原文）。
+     */
+    suspend fun polishText(sessionId: String, text: String): String?
+
+    /**
+     * 按一段自然语言指令改写文本（随记的「整理 / 总结 / 提取待办」共用）。
+     * 与 [polishText] 同一条零工具调用链路，只替换 system 指令；失败返回 null。
+     */
+    suspend fun transformText(sessionId: String, text: String, instruction: String): String?
 
     /**
      * 根据 Git 差异文本生成符合 Conventional Commits 规范的提交信息。

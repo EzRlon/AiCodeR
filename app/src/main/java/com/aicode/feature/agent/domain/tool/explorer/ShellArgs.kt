@@ -1,5 +1,7 @@
 package com.aicode.feature.agent.domain.tool.explorer
 
+import com.aicode.core.util.shellQuote
+
 /**
  * explorer 工具（search/list）共用的 shell 参数解析与安全白名单逻辑。
  *
@@ -144,7 +146,3 @@ fun expandTilde(arg: String, home: String = "/root"): String =
         else -> arg
     }
 
-/** 单引号包裹，shell 命令安全。 */
-fun shellQuote(value: String): String {
-    return "'" + value.replace("'", "'\"'\"'") + "'"
-}

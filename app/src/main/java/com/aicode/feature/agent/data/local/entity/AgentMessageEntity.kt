@@ -7,9 +7,11 @@ import androidx.room.PrimaryKey
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.BACKGROUND_NOTIFICATION_PREFIX
 import com.aicode.feature.agent.presentation.COMPACTION_FAILURE_TOOL_NAME
+import com.aicode.feature.agent.presentation.VERIFICATION_REPORT_TOOL_NAME
 import com.aicode.feature.agent.presentation.MessageRole
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 @Entity(
@@ -54,7 +56,9 @@ data class AgentMessageEntity(
     val cachedInputTokens: Int = 0,
     @ColumnInfo(defaultValue = "0")
     val isContextExcluded: Boolean = false,
-    val compactedBySummaryId: String? = null
+    val compactedBySummaryId: String? = null,
+    /** 仅 USER 行：消息类型标签键（如 "bug_fix"）；null=未分类。追加在表尾：备份 DTO 按位置映射。 */
+    val intentType: String? = null
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)
@@ -71,20 +75,27 @@ data class AgentMessageEntity(
             isCompactionMarker = isCompactionMarker,
             isContextSummary = isContextSummary,
             isCompactionFailure = roleEnum == MessageRole.TOOL && toolName == COMPACTION_FAILURE_TOOL_NAME,
+            isVerificationReport = roleEnum == MessageRole.TOOL && toolName == VERIFICATION_REPORT_TOOL_NAME,
             isBackgroundNotification = roleEnum == MessageRole.USER &&
                 content.startsWith(BACKGROUND_NOTIFICATION_PREFIX),
             inputTokens = inputTokens,
             outputTokens = outputTokens,
-            cachedInputTokens = cachedInputTokens
+            cachedInputTokens = cachedInputTokens,
+            intentType = intentType
         )
     }
 
-    private fun decodeAttachments(value: String?): List<AgentAttachment> {
-        if (value.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<AgentAttachment>>(value) }.getOrDefault(emptyList())
-    }
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
 
-    private companion object {
-        val json = Json { ignoreUnknownKeys = true }
+        /** 解析 attachmentsJson；交付物页只持有投影列时也复用。 */
+        internal fun decodeAttachments(value: String?): List<AgentAttachment> {
+            if (value.isNullOrBlank()) return emptyList()
+            return runCatching { json.decodeFromString<List<AgentAttachment>>(value) }.getOrDefault(emptyList())
+        }
+
+        /** 编码附件列表回 JSON（交付物删除后回写剩余附件用）。 */
+        internal fun encodeAttachments(attachments: List<AgentAttachment>): String =
+            json.encodeToString(attachments)
     }
 }

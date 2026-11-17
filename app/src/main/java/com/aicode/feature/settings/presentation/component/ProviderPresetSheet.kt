@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,7 +47,7 @@ import compose.icons.feathericons.ExternalLink
  * 选择自定义时回调 [onSelectCustom]；选择官方预设时回调 [onSelectOfficial]。
  */
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 internal fun ProviderPresetSheet(
     onDismiss: () -> Unit,
     onSelectCustom: () -> Unit,
@@ -174,8 +176,10 @@ internal fun ProviderPresetSheet(
                                         }
                                     }
                                     Spacer(Modifier.height(2.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
+                                    // 标签用 FlowRow：长说明（如本地模型的安装提示）在窄屏上会超出可用宽度，
+                                    // 放 Row 里会被挤成挤压错位的窄条；FlowRow 让超宽标签自动换行到下一行。
+                                    FlowRow(
+                                        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                                         horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                                     ) {
                                         McpPill(

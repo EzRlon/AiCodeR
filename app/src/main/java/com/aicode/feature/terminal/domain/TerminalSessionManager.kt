@@ -49,9 +49,16 @@ class TerminalSessionManager @Inject constructor(
     private companion object {
         const val TAG = "TerminalSessionManager"
         const val TRANSCRIPT_ROWS = 2000
-        // 无视图挂载时用于「就地启动」会话的默认终端尺寸；视图挂载后会按真实尺寸 resize。
-        const val DEFAULT_COLUMNS = 80
-        const val DEFAULT_ROWS = 24
+        /**
+         * 无视图挂载时用于「就地启动」会话的默认终端尺寸。
+         *
+         * 视图挂载后 [com.termux.view.TerminalView.updateSize] 会按真实像素重算，但 CLI 的 TUI
+         * （Claude Code / Codex / OpenCode）在启动早期就读取一次尺寸并据此排版——若此刻仍是
+         * 80x24 这种窄屏，长行会被截断、对话框会被挤成两行，即便后续 resize 也不会重排已输出内容。
+         * 所以按手机屏幕实际尺寸预估算一个接近真实的初始值。
+         */
+        val DEFAULT_COLUMNS = 100
+        val DEFAULT_ROWS = 30
         /** 命令打印 `[command exited: N]` 后等待正常 onFinished 回调的缓冲（毫秒）。 */
         const val EXIT_MARKER_GRACE_MS = 1_500L
         /** 完成兜底监控轮询屏幕缓冲的间隔（毫秒）。旧值 200ms 每轮都会构建 2000 行 transcript 字符串，
@@ -64,7 +71,7 @@ class TerminalSessionManager @Inject constructor(
     }
 
     private val _tabs = MutableStateFlow<List<TerminalTab>>(emptyList())
-    val tabs: StateFlow<List<TerminalTab>> = _tabs.asStateFlow()
+    override val tabs: StateFlow<List<TerminalTab>> = _tabs.asStateFlow()
 
     private val _activeTabId = MutableStateFlow<String?>(null)
     val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
@@ -275,7 +282,7 @@ class TerminalSessionManager @Inject constructor(
     }
 
     /** 切换当前标签。 */
-    fun activate(id: String) {
+    override fun activate(id: String) {
         if (_tabs.value.any { it.id == id }) _activeTabId.value = id
     }
 

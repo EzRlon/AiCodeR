@@ -1,5 +1,6 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsDivider
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -137,6 +138,8 @@ internal fun ProviderModelRow(
     testing: Boolean,
     result: ModelTestResult?,
     onTest: () -> Unit,
+    /** 是否可点击「测试」；批量测试进行中由调用方置 false，避免结果互相覆盖。 */
+    testEnabled: Boolean = true,
     onRemove: () -> Unit,
     onEdit: () -> Unit = {},
     showDivider: Boolean = false,
@@ -220,6 +223,7 @@ internal fun ProviderModelRow(
                             } else {
                                 TextButton(
                                     onClick = onTest,
+                                    enabled = testEnabled,
                                     contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                     modifier = Modifier
                                         .width(ModelTestButtonWidth)
@@ -284,6 +288,7 @@ internal fun ProviderModelRow(
         Surface(
             onClick = onToggleSelect,
             color = MaterialTheme.semanticColors.cardSurface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth()
         ) {
             rowContent()

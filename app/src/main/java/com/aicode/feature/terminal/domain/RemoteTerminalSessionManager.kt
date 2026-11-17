@@ -21,8 +21,8 @@ import javax.inject.Singleton
 
 private const val TAG = "RemoteTerminalSessionManager"
 private const val TRANSCRIPT_ROWS = 2000
-private const val DEFAULT_COLUMNS = 80
-private const val DEFAULT_ROWS = 24
+private const val DEFAULT_COLUMNS = 100
+private const val DEFAULT_ROWS = 30
 
 /**
  * 远程 SSH 终端会话管理器：用 sshj shell channel 驱动 [TerminalSession]（接 [SshShellBackend]），
@@ -38,7 +38,7 @@ class RemoteTerminalSessionManager @Inject constructor(
 ) : TerminalSessionProvider {
 
     private val _tabs = MutableStateFlow<List<TerminalTab>>(emptyList())
-    val tabs: StateFlow<List<TerminalTab>> = _tabs.asStateFlow()
+    override val tabs: StateFlow<List<TerminalTab>> = _tabs.asStateFlow()
 
     private val _activeTabId = MutableStateFlow<String?>(null)
     val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
@@ -191,7 +191,7 @@ class RemoteTerminalSessionManager @Inject constructor(
         return true
     }
 
-    fun activate(id: String) {
+    override fun activate(id: String) {
         if (_tabs.value.any { it.id == id }) _activeTabId.value = id
     }
 

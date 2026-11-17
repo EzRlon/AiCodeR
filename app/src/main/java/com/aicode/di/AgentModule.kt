@@ -1,15 +1,21 @@
 package com.aicode.di
 
 import android.content.Context
+import com.aicode.core.net.applyTcpKeepAlive
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
+import com.aicode.feature.agent.data.local.dao.PermissionAuditDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
 import com.aicode.feature.agent.data.local.dao.CheckpointDao
 import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.FailureEventDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
+import com.aicode.feature.annotation.data.local.dao.AnnotationDao
 import com.aicode.feature.backup.data.local.dao.BackupTargetDao
+import com.aicode.feature.fixledger.data.local.dao.FixLedgerDao
+import com.aicode.feature.memorygraph.data.local.dao.GraphDao
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import com.aicode.feature.agent.data.local.database.AgentDatabase
@@ -48,6 +54,7 @@ import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
+import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.ToolOutputStore
@@ -75,7 +82,6 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
-import javax.inject.Named
 import javax.inject.Singleton
 
 import com.aicode.core.db.MigrationLoader
@@ -87,21 +93,29 @@ import com.aicode.feature.agent.domain.notification.DefaultAgentEventInjector
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.tool.mcp.ManageMcpTool
+import com.aicode.feature.agent.domain.tool.recall.RecallTool
 import com.aicode.feature.agent.domain.tool.memory.MemoryTool
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanModeTool
+import com.aicode.feature.agent.domain.tool.goal.GoalStatusTool
+import com.aicode.feature.agent.domain.tool.script.RunScriptTool
+import com.aicode.feature.agent.domain.tool.team.SummonTeamTool
 import com.aicode.feature.agent.domain.tool.search.WebFetchTool
 import com.aicode.feature.agent.domain.tool.search.WebSearchTool
 import com.aicode.feature.agent.domain.tool.browser.BrowserTool
+import com.aicode.feature.agent.domain.workflow.BudgetApprovalManager
 import com.aicode.feature.agent.domain.workflow.ContextCompactor
 import com.aicode.feature.agent.domain.workflow.StatefulAgentWorkflow
+import com.aicode.feature.agent.domain.provider.AIProviderFactory
+import com.aicode.feature.hooks.domain.HookRunner
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
-import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.data.repository.TitleModelSettingsRepository
+import com.aicode.feature.settings.data.repository.VerificationModelSettingsRepository
 import com.aicode.feature.workspace.data.local.dao.RemoteConnectionDao
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import javax.inject.Named
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -156,6 +170,12 @@ object AgentModule {
 
     @Provides
     @Singleton
+    fun provideFailureEventDao(database: AgentDatabase): FailureEventDao {
+        return database.failureEventDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideTodoItemDao(database: AgentDatabase): TodoItemDao {
         return database.todoItemDao()
     }
@@ -164,6 +184,36 @@ object AgentModule {
     @Singleton
     fun provideBackupTargetDao(database: AgentDatabase): BackupTargetDao {
         return database.backupTargetDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideAnnotationDao(database: AgentDatabase): AnnotationDao {
+        return database.annotationDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFixLedgerDao(database: AgentDatabase): FixLedgerDao {
+        return database.fixLedgerDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideChangeLedgerDao(database: AgentDatabase): com.aicode.feature.changelog.data.local.dao.ChangeLedgerDao {
+        return database.changeLedgerDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideGraphDao(database: AgentDatabase): GraphDao {
+        return database.graphDao()
+    }
+
+    @Provides
+    @Singleton
+    fun providePermissionAuditDao(database: AgentDatabase): PermissionAuditDao {
+        return database.permissionAuditDao()
     }
 
     @Provides
@@ -238,6 +288,8 @@ object AgentModule {
                     override fun connectionAcquired(call: Call, connection: Connection) {
                         connectionId = Integer.toHexString(System.identityHashCode(connection))
                         protocol = connection.protocol().toString()
+                        // 长连接在后台空闲时会被 NAT/路由器回收，缩短 keepalive 探测间隔以维持映射。
+                        connection.socket().applyTcpKeepAlive()
                     }
 
                     override fun callFailed(call: Call, ioe: IOException) {
@@ -357,6 +409,7 @@ object AgentModule {
         editFileTool: EditFileTool,
         generateImageTool: GenerateImageTool,
         executeCommandTool: ExecuteCommandTool,
+        runScriptTool: RunScriptTool,
         shizukuTool: ShizukuTool,
         terminalSessionTool: TerminalSessionTool,
         listFilesTool: ListFilesTool,
@@ -367,11 +420,20 @@ object AgentModule {
         webSearchTool: WebSearchTool,
         webFetchTool: WebFetchTool,
         planModeTool: PlanModeTool,
+        goalStatusTool: GoalStatusTool,
+        summonTeamTool: SummonTeamTool,
         todoTool: TodoTool,
         memoryTool: MemoryTool,
+        recallTool: RecallTool,
+        graphSearchTool: com.aicode.feature.memorygraph.domain.tool.GraphSearchTool,
         taskTool: TaskTool,
         messageParentTool: MessageParentTool,
-        browserTool: BrowserTool
+        browserTool: BrowserTool,
+        fixLedgerTool: com.aicode.feature.fixledger.domain.tool.FixLedgerTool,
+        changeLedgerTool: com.aicode.feature.changelog.domain.tool.ChangeLedgerTool,
+        taskLedgerTool: com.aicode.feature.agent.domain.tool.ledger.TaskLedgerTool,
+        knowledgeSearchTool: com.aicode.feature.agent.domain.tool.knowledge.KnowledgeSearchTool,
+        knowledgeSaveTool: com.aicode.feature.agent.domain.tool.knowledge.KnowledgeSaveTool
     ): ToolRegistry {
         return ToolRegistry().apply {
             register("readFile", readFileTool)
@@ -381,6 +443,7 @@ object AgentModule {
             register("editFile", editFileTool)
             register("generateImage", generateImageTool)
             register("Bash", executeCommandTool)
+            register("run_script", runScriptTool)
             register("Shizuku", shizukuTool)
             register("terminal", terminalSessionTool)
             register("list", listFilesTool)
@@ -391,11 +454,20 @@ object AgentModule {
             register("websearch", webSearchTool)
             register("webfetch", webFetchTool)
             register("planMode", planModeTool)
+            register("goalStatus", goalStatusTool)
+            register("summon_team", summonTeamTool)
             register("todo", todoTool)
             register("memory", memoryTool)
+            register("recall", recallTool)
+            register("graph_search", graphSearchTool)
             register("task", taskTool)
             register("messageParent", messageParentTool)
             register("browser", browserTool)
+            register("fixledger", fixLedgerTool)
+            register("changelog", changeLedgerTool)
+            register("taskLedger", taskLedgerTool)
+            register("kb_search", knowledgeSearchTool)
+            register("kb_save", knowledgeSaveTool)
         }
     }
 
@@ -408,54 +480,66 @@ object AgentModule {
     fun provideAgentWorkflow(
         toolRegistry: ToolRegistry,
         aiProviderRepository: AIProviderRepository,
-        openAIApi: OpenAIApi,
-        anthropicApi: AnthropicApi,
-        geminiApi: GeminiApi,
+        aiProviderFactory: AIProviderFactory,
         promptProvider: SystemPromptProvider,
         permissionManager: ToolPermissionManager,
         policyEngine: ToolPermissionPolicyEngine,
         contextCompactor: ContextCompactor,
         planApprovalManager: PlanApprovalManager,
+        budgetApprovalManager: BudgetApprovalManager,
         toolOutputStore: ToolOutputStore,
         modelMetadataService: ModelMetadataService,
         compactionModelSettingsRepository: CompactionModelSettingsRepository,
         titleModelSettingsRepository: TitleModelSettingsRepository,
+        verificationModelSettingsRepository: VerificationModelSettingsRepository,
         defaultModelSettingsRepository: DefaultModelSettingsRepository,
         generalSettingsRepository: GeneralSettingsRepository,
         sessionUseCase: SessionUseCase,
         messagePersistenceUseCase: MessagePersistenceUseCase,
         checkpointManager: CheckpointManager,
         llmCallRecordDao: LlmCallRecordDao,
-        keyRotator: ProviderKeyRotator,
+        todoItemDao: TodoItemDao,
         agentNotificationCenter: AgentNotificationCenter,
         eventInjector: AgentEventInjector,
-        fileAccess: FileAccessProvider
+        hookRunner: HookRunner,
+        fileAccess: FileAccessProvider,
+        auditRecorder: PermissionAuditRecorder
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
             aiProviderRepository,
-            openAIApi,
-            anthropicApi,
-            geminiApi,
+            aiProviderFactory,
             promptProvider,
             permissionManager,
             policyEngine,
             contextCompactor,
             planApprovalManager,
+            budgetApprovalManager,
             toolOutputStore,
             modelMetadataService,
             compactionModelSettingsRepository,
             titleModelSettingsRepository,
+            verificationModelSettingsRepository,
             defaultModelSettingsRepository,
             generalSettingsRepository,
             sessionUseCase,
             messagePersistenceUseCase,
             checkpointManager,
             llmCallRecordDao,
-            keyRotator,
+            todoItemDao,
             agentNotificationCenter,
             eventInjector,
-            fileAccess
+            hookRunner,
+            fileAccess,
+            auditRecorder
         )
     }
+
+    /**
+     * 排队消息持久化归属：主 Activity 的 VM 负责恢复/回写用户队列；
+     * 定时任务 worker 的 VM 传 false，避免把用户排队消息当成自己的任务跑掉或覆盖文件。
+     */
+    @Provides
+    @Named("queue_persistence")
+    fun provideQueuePersistence(): Boolean = true
 }

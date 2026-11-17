@@ -1,5 +1,7 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.rememberSheetFlingFix
+import com.aicode.core.ui.settings.ModelSearchField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -53,13 +56,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aicode.feature.agent.domain.mcp.McpAuthConfig
 import com.aicode.feature.agent.domain.mcp.McpScope
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.mcp.McpToolDescriptor
+import com.aicode.feature.settings.presentation.McpAuthUiState
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Tool
 import kotlinx.serialization.json.JsonObject
@@ -71,36 +77,51 @@ import com.aicode.R
 fun McpServerEditDialog(
     initial: McpServerConfig?,
     initialScope: McpScope? = null,
+    /** 新增时的预填配置（如推荐条目的 URL）；仅当 [initial] 为 null 时生效，各字段仍可编辑。 */
+    prefill: McpServerConfig? = null,
     tools: List<McpToolDescriptor> = emptyList(),
+    authState: McpAuthUiState = McpAuthUiState(),
+    needsAuth: Boolean = false,
+    connected: Boolean = false,
     onRefreshTools: () -> Unit = {},
     onOpenLogs: (() -> Unit)? = null,
+    onAuthorize: (McpServerConfig, McpScope) -> Unit = { _, _ -> },
+    onLogout: (String) -> Unit = {},
+    onCancel: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (McpServerConfig, McpScope) -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) } // 0: 基础设置, 1: 工具
 
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var enabled by remember { mutableStateOf(initial?.enabled ?: true) }
-    var isStdio by remember { mutableStateOf(initial?.isStdio ?: false) }
+    // 预填仅用于新增：编辑（initial 非空）时忽略 prefill，避免两者混用时字段串值。
+    val prefillConfig = if (initial == null) prefill else null
+    var name by remember { mutableStateOf(initial?.name ?: prefillConfig?.name ?: "") }
+    var enabled by remember { mutableStateOf(initial?.enabled ?: prefillConfig?.enabled ?: true) }
+    var isStdio by remember { mutableStateOf(initial?.isStdio ?: prefillConfig?.isStdio ?: false) }
     // 作用域：新增默认当前项目，编辑保持原作用域。
     var scope by remember { mutableStateOf(initialScope ?: McpScope.PROJECT) }
 
     // HTTP 形态字段
-    var url by remember { mutableStateOf(initial?.url ?: "") }
+    var url by remember { mutableStateOf(initial?.url ?: prefillConfig?.url ?: "") }
     val headers = remember {
         mutableStateListOf<Pair<String, String>>().apply {
-            addAll(initial?.headers?.toList() ?: emptyList())
+            addAll(initial?.headers?.toList() ?: prefillConfig?.headers?.toList() ?: emptyList())
         }
     }
 
+    // OAuth 认证字段（仅 HTTP 形态）
+    var authEnabled by remember { mutableStateOf(initial?.auth != null || prefillConfig?.auth != null || needsAuth) }
+    var clientId by remember { mutableStateOf(initial?.auth?.clientId ?: prefillConfig?.auth?.clientId ?: "") }
+    var authServer by remember { mutableStateOf(initial?.auth?.authServer ?: prefillConfig?.auth?.authServer ?: "") }
+
     // stdio 形态字段
-    var command by remember { mutableStateOf(initial?.command ?: "") }
+    var command by remember { mutableStateOf(initial?.command ?: prefillConfig?.command ?: "") }
     val argsList = remember {
-        mutableStateListOf<String>().apply { addAll(initial?.args ?: emptyList()) }
+        mutableStateListOf<String>().apply { addAll(initial?.args ?: prefillConfig?.args ?: emptyList()) }
     }
     val envList = remember {
         mutableStateListOf<Pair<String, String>>().apply {
-            addAll(initial?.env?.toList() ?: emptyList())
+            addAll(initial?.env?.toList() ?: prefillConfig?.env?.toList() ?: emptyList())
         }
     }
 
@@ -109,10 +130,54 @@ fun McpServerEditDialog(
         mutableStateListOf<String>().apply { addAll(initial?.disabledTools ?: emptyList()) }
     }
 
+    // 白名单（REA 等预设配置携带）：非空时仅名单内工具会被注册。
+    // 本编辑界面不改动白名单本身，但启用计数与行状态需按真实生效集显示（保存时透传）。
+    val whitelistTools = initial?.enabledTools ?: prefillConfig?.enabledTools ?: emptySet()
+
+    var toolSearchQuery by remember { mutableStateOf("") }
+
     // 名称会拼进 `mcp__<名称>__<工具名>` 送给模型，必须符合 function-calling 命名规范。
     val nameError = name.isNotBlank() && !McpServerConfig.isValidName(name)
 
     val canSave = name.isNotBlank() && !nameError && if (isStdio) command.isNotBlank() else url.isNotBlank()
+
+    val currentConfig: () -> McpServerConfig = {
+        if (isStdio) {
+            McpServerConfig(
+                name = name.trim(),
+                command = command.trim(),
+                args = argsList.map { it.trim() }.filter { it.isNotEmpty() },
+                env = envList
+                    .map { it.first.trim() to it.second }
+                    .filter { it.first.isNotEmpty() }
+                    .toMap(),
+                enabled = enabled,
+                disabledTools = disabledToolsSet.toSet(),
+                enabledTools = whitelistTools
+            )
+        } else {
+            McpServerConfig(
+                name = name.trim(),
+                url = url.trim(),
+                headers = headers
+                    .map { it.first.trim() to it.second }
+                    .filter { it.first.isNotEmpty() }
+                    .toMap(),
+                enabled = enabled,
+                disabledTools = disabledToolsSet.toSet(),
+                enabledTools = whitelistTools,
+                auth = if (authEnabled) {
+                    McpAuthConfig(
+                        type = McpAuthConfig.TYPE_OAUTH,
+                        clientId = clientId.trim().ifBlank { null },
+                        authServer = authServer.trim().ifBlank { null }
+                    )
+                } else {
+                    null
+                }
+            )
+        }
+    }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val configuration = LocalConfiguration.current
@@ -297,6 +362,25 @@ fun McpServerEditDialog(
                                     onUrlChange = { url = it },
                                     headers = headers
                                 )
+
+                                McpAuthFields(
+                                    enabled = authEnabled,
+                                    onEnabledChange = { authEnabled = it },
+                                    clientId = clientId,
+                                    onClientIdChange = { clientId = it },
+                                    authServer = authServer,
+                                    onAuthServerChange = { authServer = it },
+                                    serverName = initial?.name,
+                                    authState = authState,
+                                    connected = connected,
+                                    onAuthorize = {
+                                        if (canSave) {
+                                            onAuthorize(currentConfig(), scope)
+                                        }
+                                    },
+                                    onLogout = onLogout,
+                                    onCancel = onCancel
+                                )
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -329,93 +413,184 @@ fun McpServerEditDialog(
                         }
                     } else {
                         // Tab 1: 工具
+                        val filteredTools = remember(tools, toolSearchQuery) {
+                            if (toolSearchQuery.isBlank()) tools
+                            else tools.filter { tool ->
+                                tool.name.contains(toolSearchQuery, ignoreCase = true) ||
+                                    (tool.description?.contains(toolSearchQuery, ignoreCase = true) == true)
+                            }
+                        }
+
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .verticalScroll(rememberScrollState())
                                 .padding(horizontal = 20.dp, vertical = 8.dp)
                                 .navigationBarsPadding(),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            tools.forEach { tool ->
-                                val isToolEnabled = tool.name !in disabledToolsSet
-                                var descriptionExpanded by remember(tool.name) { mutableStateOf(false) }
+                            // 工具搜索与快捷操作栏
+                            if (tools.size > 2) {
+                                ModelSearchField(
+                                    query = toolSearchQuery,
+                                    onQueryChange = { toolSearchQuery = it },
+                                    placeholder = stringResource(R.string.mcp_tools_search)
+                                )
+                            }
 
-                                Card(
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                val enabledCount = tools.count {
+                                    (whitelistTools.isEmpty() || it.name in whitelistTools) && it.name !in disabledToolsSet
+                                }
+                                Text(
+                                    text = stringResource(R.string.mcp_tools_summary, enabledCount, tools.size),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.mcp_tools_enable_all),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable { disabledToolsSet.clear() }
+                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.mcp_tools_disable_all),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                disabledToolsSet.clear()
+                                                disabledToolsSet.addAll(tools.map { it.name })
+                                            }
+                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            if (whitelistTools.isNotEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.mcp_tools_whitelist_note, whitelistTools.size),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            if (filteredTools.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 36.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(10.dp)
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = tool.name,
-                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = if (isToolEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            AppSwitch(
-                                                checked = isToolEnabled,
-                                                onCheckedChange = { checked ->
-                                                    if (checked) disabledToolsSet.remove(tool.name) else disabledToolsSet.add(tool.name)
-                                                }
-                                            )
-                                        }
-
+                                        Icon(
+                                            FeatherIcons.Search,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                        )
                                         Text(
-                                            text = tool.description ?: stringResource(R.string.mcp_no_description),
+                                            text = stringResource(R.string.mcp_tools_search_empty),
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = if (descriptionExpanded) Int.MAX_VALUE else 2,
-                                            overflow = TextOverflow.Ellipsis
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        Text(
-                                            text = stringResource(if (descriptionExpanded) R.string.common_collapse else R.string.common_expand),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier
-                                                .clickable { descriptionExpanded = !descriptionExpanded }
-                                                .padding(top = 2.dp)
-                                        )
+                                    }
+                                }
+                            } else {
+                                filteredTools.forEach { tool ->
+                                    val isToolEnabled = (whitelistTools.isEmpty() || tool.name in whitelistTools) && tool.name !in disabledToolsSet
+                                    var descriptionExpanded by remember(tool.name) { mutableStateOf(false) }
 
-                                        val paramKeys = remember(tool.inputSchema) {
-                                            (tool.inputSchema?.get("properties") as? JsonObject)?.keys ?: emptySet()
-                                        }
-                                        if (paramKeys.isNotEmpty()) {
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            FlowRow(
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    Card(
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                paramKeys.forEach { key ->
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .background(
-                                                                MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                                                                RoundedCornerShape(6.dp)
+                                                Text(
+                                                    text = tool.name,
+                                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = if (isToolEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                AppSwitch(
+                                                    checked = isToolEnabled,
+                                                    enabled = whitelistTools.isEmpty() || tool.name in whitelistTools,
+                                                    onCheckedChange = { checked ->
+                                                        if (checked) disabledToolsSet.remove(tool.name) else disabledToolsSet.add(tool.name)
+                                                    }
+                                                )
+                                            }
+
+                                            Text(
+                                                text = tool.description ?: stringResource(R.string.mcp_no_description),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = if (descriptionExpanded) Int.MAX_VALUE else 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = stringResource(if (descriptionExpanded) R.string.common_collapse else R.string.common_expand),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier
+                                                    .clickable { descriptionExpanded = !descriptionExpanded }
+                                                    .padding(top = 2.dp)
+                                            )
+
+                                            val paramKeys = remember(tool.inputSchema) {
+                                                (tool.inputSchema?.get("properties") as? JsonObject)?.keys ?: emptySet()
+                                            }
+                                            if (paramKeys.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                FlowRow(
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    paramKeys.forEach { key ->
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .background(
+                                                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                                                                    RoundedCornerShape(6.dp)
+                                                                )
+                                                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = key,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                                             )
-                                                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = key,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
-
-                                        Spacer(modifier = Modifier.height(10.dp))
                                     }
                                 }
                             }
@@ -437,31 +612,7 @@ fun McpServerEditDialog(
                     Button(
                         enabled = canSave,
                         onClick = {
-                            val config = if (isStdio) {
-                                McpServerConfig(
-                                    name = name.trim(),
-                                    command = command.trim(),
-                                    args = argsList.map { it.trim() }.filter { it.isNotEmpty() },
-                                    env = envList
-                                        .map { it.first.trim() to it.second }
-                                        .filter { it.first.isNotEmpty() }
-                                        .toMap(),
-                                    enabled = enabled,
-                                    disabledTools = disabledToolsSet.toSet()
-                                )
-                            } else {
-                                McpServerConfig(
-                                    name = name.trim(),
-                                    url = url.trim(),
-                                    headers = headers
-                                        .map { it.first.trim() to it.second }
-                                        .filter { it.first.isNotEmpty() }
-                                        .toMap(),
-                                    enabled = enabled,
-                                    disabledTools = disabledToolsSet.toSet()
-                                )
-                            }
-                            onSave(config, scope)
+                            onSave(currentConfig(), scope)
                         },
                         modifier = Modifier
                             .fillMaxWidth()

@@ -1,5 +1,7 @@
 package com.aicode.core.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -20,10 +22,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.contentColorFor
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
@@ -56,6 +64,9 @@ fun rememberSheetFlingFix(sheetState: SheetState): NestedScrollConnection =
         }
     }
 
+/** 弹层统一圆角：窄屏 sheet 与宽屏 dialog 共用，避免同一弹层在不同屏幕下圆角不一致。 */
+private val SHEET_CORNER_RADIUS = 24.dp
+
 /**
  * 自适应模态底栏/弹窗：
  * - 紧凑屏幕（手机竖屏、窄分屏等，< 600dp）：呈现为标准贴底 [ModalBottomSheet]，保留下拉手势与拖拽手柄，
@@ -68,7 +79,10 @@ fun AdaptiveModalBottomSheet(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     sheetState: SheetState = rememberModalBottomSheetState(),
-    shape: Shape = BottomSheetDefaults.ExpandedShape,
+    shape: Shape = RoundedCornerShape(
+        topStart = SHEET_CORNER_RADIUS,
+        topEnd = SHEET_CORNER_RADIUS
+    ),
     containerColor: Color = MaterialTheme.colorScheme.surface,
     contentColor: Color = contentColorFor(containerColor),
     tonalElevation: Dp = BottomSheetDefaults.Elevation,
@@ -105,17 +119,42 @@ fun AdaptiveModalBottomSheet(
             }
         }
     } else {
+        // 宽屏 Dialog 本体无入场动画：补淡入 + 0.92→1 缩放（与 AnchorMenuPopup 同节奏），
+        // 消除与窄屏 sheet（M3 默认动画）之间的形态不一致。
+        val appear = remember { Animatable(0f) }
+        // 入场动画结束后必须摘掉图层：常驻 graphicsLayer 会把弹层整块画进离屏图层，
+        // 而该缓存在系统深浅色切换后不刷新 —— 表现就是「弹窗还开着时切主题，卡片里的文字
+        // 与底色停在旧配色/半透明状态，只有胶囊标题等图层外内容跟着变」。
+        // 与设置页三个分区、输入栏、聊天气泡同一类修复（grep「常驻离屏图层」可见）。
+        var appearing by remember { mutableStateOf(true) }
+        LaunchedEffect(Unit) {
+            appear.animateTo(1f, tween(durationMillis = Motion.NORMAL, easing = Motion.Easing))
+            appearing = false
+        }
         Dialog(
             onDismissRequest = onDismissRequest,
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Surface(
                 modifier = modifier
+                    .then(
+                        if (appearing) {
+                            Modifier.graphicsLayer {
+                                alpha = appear.value
+                                val scale = 0.92f + 0.08f * appear.value
+                                scaleX = scale
+                                scaleY = scale
+                                transformOrigin = TransformOrigin(0.5f, 0.5f)
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .widthIn(min = 280.dp, max = dialogMaxWidth)
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.lg, vertical = Spacing.xl)
                     .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(SHEET_CORNER_RADIUS),
                 color = containerColor,
                 contentColor = contentColor,
                 tonalElevation = tonalElevation

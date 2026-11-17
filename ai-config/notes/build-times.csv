@@ -1,0 +1,119 @@
+date,time,task,seconds,exit
+2026-10-26,09:03:02,assembleArmsoloRelease --no-configuration-cache,798,0
+2026-10-26,09:13:12,:app:compileArmsoloReleaseKotlin --profile,215,0
+2026-10-26,09:21:36,:app:compileArmsoloReleaseKotlin --profile,80,0
+2026-10-26,09:29:07,:app:compileArmsoloReleaseKotlin --profile,55,0
+2026-10-26,09:33:00,:app:compileArmsoloReleaseKotlin --profile,60,0
+2026-10-26,11:32:18,:app:compileArmsoloReleaseKotlin,99,0
+2026-10-26,11:46:21,:app:compileArmsoloReleaseKotlin :app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.eval.*,146,0
+2026-10-26,11:51:59,:app:compileArmsoloReleaseKotlin,85,0
+2026-10-26,12:08:38,:app:compileArmsoloReleaseKotlin,90,0
+2026-10-26,13:30:25,:app:compileArmsoloReleaseKotlin,327,0
+2026-10-26,13:48:22,assembleArmsoloRelease --no-configuration-cache,628,0
+2026-10-26,14:01:48,:app:compileArmsoloReleaseKotlin,72,0
+2026-10-26,14:34:21,assembleArmsoloRelease --no-configuration-cache,594,0
+2026-10-26,15:41:48,:app:compileArmsoloReleaseKotlin,78,0
+2026-10-26,15:56:06,assembleArmsoloRelease --no-configuration-cache,458,0
+2026-10-26,17:28:59,:app:compileArmsoloReleaseKotlin,101,0
+2026-10-26,17:38:39,assembleArmsoloRelease --no-configuration-cache,536,0
+2026-10-26,17:53:43,assembleArmsoloRelease --no-configuration-cache,664,0
+2026-10-26,21:14:43,assembleArmsoloRelease --no-configuration-cache,990,0
+2026-10-27,04:26:25,:app:compileArmsoloReleaseKotlin,483,0
+2026-10-27,04:35:34,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest --tests com.aicode.feature.agent.domain.workflow.ContextCompactorTest,83,0
+2026-10-27,04:57:40,:app:compileArmsoloReleaseKotlin,184,0
+2026-10-27,05:03:40,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.tool.container.BackgroundTerminalToolsParsingTest,164,0
+2026-10-27,05:26:12,:app:compileArmsoloReleaseKotlin,172,0
+2026-10-27,05:30:30,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest,207,0
+2026-10-27,05:44:50,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.permission.ShellCommandParserTest --tests com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngineTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest,282,0
+2026-10-27,05:56:37,:app:compileArmsoloReleaseKotlin,63,0
+2026-10-27,06:37:35,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest,152,0
+2026-10-27,06:57:26,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest --tests com.aicode.feature.agent.domain.permission.ShellCommandParserTest --tests com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngineTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest --tests com.aicode.feature.agent.domain.tool.container.BackgroundTerminalToolsParsingTest --tests com.aicode.feature.agent.domain.workflow.ContextCompactorTest,233,0
+2026-10-27,07:16:16,assembleArmsoloRelease --no-configuration-cache,885,0
+2026-10-27,08:14:21,:app:compileArmsoloReleaseKotlin,386,0
+2026-10-27,08:20:05,:app:testArmsoloReleaseUnitTest --tests com.aicode.core.ui.ListSelectionStateTest --tests com.aicode.feature.agent.domain.subagent.SubAgentDigesterTest --tests com.aicode.feature.agent.domain.subagent.AgentDefinitionTest --tests com.aicode.feature.agent.domain.permission.ShellCommandParserTest --tests com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngineTest --tests com.aicode.feature.agent.domain.session.SessionUseCaseModeTest --tests com.aicode.feature.agent.domain.tool.container.BackgroundTerminalToolsParsingTest --tests com.aicode.feature.agent.domain.workflow.ContextCompactorTest,236,0
+2026-10-27,08:31:41,assembleArmsoloRelease --no-configuration-cache,621,0
+2026-10-27,10:31:03,:app:testArmsoloReleaseUnitTest :app:compileArmsoloReleaseKotlin,315,0
+2026-10-27,10:40:39,assembleArmsoloRelease --no-configuration-cache,546,0
+2026-10-27,10:52:38,:app:testArmsoloReleaseUnitTest assembleArmsoloRelease --no-configuration-cache,491,0
+2026-10-27,10:31:02,:app:testArmsoloReleaseUnitTest :app:compileArmsoloReleaseKotlin,313,0
+2026-10-27,10:40:39,assembleArmsoloRelease --no-configuration-cache,545,0
+2026-10-27,10:52:38,:app:testArmsoloReleaseUnitTest assembleArmsoloRelease --no-configuration-cache,490,0
+2026-10-27,13:44:47,:app:compileArmsoloReleaseKotlin --no-build-cache,509,0
+2026-10-27,13:57:30,:app:testArmsoloReleaseUnitTest --tests com.aicode.core.util.SafeDeleteTest --tests com.aicode.feature.editor.domain.FileEncodingTest,36,0
+2026-10-27,14:14:15,:app:compileArmsoloReleaseKotlin,85,0
+2026-10-27,14:17:24,:app:compileArmsoloReleaseKotlin,80,0
+2026-10-27,14:30:26,:app:compileArmsoloReleaseKotlin,81,0
+2026-10-27,14:35:36,:app:testArmsoloReleaseUnitTest,186,0
+2026-10-27,16:13:02,:app:compileArmsoloReleaseKotlin,326,0
+2026-10-27,16:24:10,:app:compileArmsoloReleaseKotlin,151,0
+2026-10-27,16:40:13,:app:testArmsoloReleaseUnitTest,84,0
+2026-10-27,16:50:22,:app:compileArmsoloReleaseKotlin,88,0
+2026-10-27,17:04:45,:app:testArmsoloReleaseUnitTest,255,0
+2026-10-27,17:07:44,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.editor.domain.FileEncodingTest --tests com.aicode.core.util.ShellQuoteTest,57,0
+2026-10-27,17:21:46,:app:testArmsoloReleaseUnitTest,262,0
+2026-10-27,17:30:17,:app:compileArmsoloReleaseKotlin,121,0
+2026-10-27,17:33:01,:app:hiltJavaCompileArmsoloRelease,62,0
+2026-10-27,17:38:32,:app:testArmsoloReleaseUnitTest,189,0
+2026-10-27,17:43:50,:app:compileArmsoloReleaseKotlin,68,0
+2026-10-27,17:55:47,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.workspace.domain.remote.SyncEngineIgnoreTest,13,0
+2026-10-27,17:58:33,:app:testArmsoloReleaseUnitTest,37,0
+2026-10-27,19:10:46,:app:mergeArmsoloReleaseAssets,15,0
+2026-10-27,19:18:40,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.skill.*,61,0
+2026-10-27,20:02:10,:app:compileArmsoloReleaseKotlin,87,0
+2026-10-27,20:07:48,:app:testArmsoloReleaseUnitTest,256,0
+2026-10-27,20:17:39,:app:compileArmsoloReleaseKotlin,5,0
+2026-10-27,20:19:28,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.ConclusionParserTest,19,0
+2026-10-27,20:37:54,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.skill.* --tests com.aicode.feature.agent.domain.container.*,32,0
+2026-10-27,20:45:56,assembleArmsoloRelease --no-configuration-cache,467,0
+2026-10-27,21:22:57,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.*,52,0
+2026-10-27,22:25:13,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.skill.* --tests com.aicode.feature.agent.domain.container.*,39,0
+2026-10-27,22:44:03,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.agent.domain.tool.editor.EditFileToolLineEndingScanTest,31,0
+2026-10-27,22:57:52,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.*,109,0
+2026-10-27,22:59:53,:app:compileArmsoloReleaseKotlin,70,0
+2026-10-27,23:01:31,:app:testArmsoloReleaseUnitTest --tests com.aicode.feature.memorygraph.* --tests com.aicode.feature.agent.domain.container.* --tests com.aicode.feature.agent.domain.skill.*,92,0
+2026-10-28,01:22:25,:app:testArmsoloReleaseUnitTest --no-configuration-cache,73,0
+2026-10-28,01:36:32,assembleArmsoloRelease --no-configuration-cache,672,0
+2026-10-28,01:53:51,assembleArmsoloRelease --no-configuration-cache,655,0
+2026-10-28,07:44:58,assembleArmsoloRelease --no-configuration-cache,1492,0
+2026-10-28,10:50:53,assembleArmsoloRelease --no-configuration-cache,705,0
+2026-10-28,11:18:16,assembleArmsoloRelease --no-configuration-cache,381,0
+2026-10-28,12:17:01,assembleArmsoloRelease --no-configuration-cache,572,0
+2026-10-28,12:25:07,assembleArmsoloRelease --no-configuration-cache,402,0
+2026-10-28,13:34:16,:app:compileArmsoloReleaseKotlin,118,0
+2026-10-28,13:42:28,assembleArmsoloRelease --no-configuration-cache,428,0
+2026-10-28,18:07:13,assembleArmsoloRelease --no-configuration-cache,549,0
+2026-10-28,18:21:55,assembleArmsoloRelease --no-configuration-cache,319,0
+2026-10-29,08:41:42,:app:compileArmsoloReleaseKotlin,564,0
+2026-10-29,09:27:09,:app:compileArmsoloReleaseKotlin --no-build-cache,258,0
+2026-10-29,09:51:36,:app:testArmsoloReleaseUnitTest,144,0
+2026-10-29,10:14:32,:app:assembleArmsoloRelease --no-configuration-cache,1134,0
+2026-10-29,10:30:44,:app:testArmsoloReleaseUnitTest,249,0
+2026-10-29,10:40:24,:app:assembleArmsoloRelease --no-configuration-cache,421,0
+2026-10-29,10:41:30,:app:assembleArmsoloRelease --no-configuration-cache,29,0
+2026-10-29,11:09:16,:app:assembleArmsoloRelease --no-configuration-cache,389,0
+2026-10-29,11:35:53,:app:assembleArmsoloRelease --no-configuration-cache,345,0
+2026-10-29,11:48:38,:app:assembleArmsoloRelease --no-configuration-cache,498,0
+2026-10-29,11:57:36,:app:compileArmsoloReleaseKotlin,87,0
+2026-10-29,12:27:39,:app:assembleArmsoloRelease --no-configuration-cache,943,0
+2026-10-29,13:17:59,:app:assembleArmsoloRelease --no-configuration-cache,586,0
+2026-10-29,17:13:04,:app:compileArmsoloReleaseKotlin,467,0
+2026-10-29,18:27:23,:app:compileArmsoloReleaseKotlin --no-build-cache,486,0
+2026-10-29,18:42:58,:app:compileArmsoloReleaseKotlin,77,0
+2026-10-29,19:30:03,:app:compileArmsoloReleaseKotlin,71,0
+2026-10-29,19:36:00,:app:compileArmsoloReleaseKotlin,59,0
+2026-10-29,20:02:21,:app:compileArmsoloReleaseKotlin,263,0
+2026-10-29,20:05:19,:app:compileArmsoloReleaseKotlin,88,0
+2026-10-29,20:49:38,:app:compileArmsoloReleaseKotlin,88,0
+2026-10-29,21:10:54,:app:compileArmsoloReleaseKotlin,40,0
+2026-10-29,21:41:50,assembleArmsoloRelease --no-configuration-cache,972,0
+2026-10-29,21:44:35,assembleArmsoloRelease --no-configuration-cache,33,0
+2026-10-29,22:14:27,assembleArmsoloRelease --no-configuration-cache,484,0
+2026-10-29,23:04:16,:app:compileArmsoloReleaseKotlin,22,0
+2026-11-01,06:04:19,compileArmsoloReleaseKotlin,613,0
+2026-11-01,06:22:49,assembleArmsoloRelease,1104,0
+2026-11-01,06:54:33,compileArmsoloReleaseKotlin,128,0
+2026-11-01,07:09:22,assembleArmsoloRelease,884,0
+2026-11-01,08:52:44,compileArmsoloReleaseKotlin,276,0
+2026-11-01,09:11:57,assembleArmsoloRelease,1145,0
+2026-11-01,09:40:20,compileArmsoloReleaseKotlin,229,0
+2026-11-01,09:56:52,assembleArmsoloRelease,985,0

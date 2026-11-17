@@ -27,6 +27,9 @@ import javax.inject.Singleton
 
 private const val TAG = "RemoteSshConnection"
 
+/** 未配置远程连接时监督器的空转间隔：仅做一次 null 检查，无需高频唤醒。 */
+private const val UNCONFIGURED_IDLE_MS = 60_000L
+
 /**
  * 共享的 SSH 连接管理器：持有两条独立的 sshj [SSHClient]——exec 通道供 [RemoteSshEngine] 执行命令，
  * SFTP 通道供 [RemoteSftpFileAccess] 读写文件。两者隔离，SFTP 的 Buffer 溢出不会拖垮命令通道。
@@ -237,8 +240,13 @@ class RemoteSshConnection @Inject constructor(
             var backoffMs = 5000L
             val maxBackoffMs = 30000L
             while (isActive) {
+                if (config == null) {
+                    // 未配置远程连接：长间隔兜底空转即可。配置出现时由 activeConfigFlow 立即触发 connect，
+                    // 不依赖这里轮询（原实现随活跃连接的节奏每 5 秒空醒一次）。
+                    delay(UNCONFIGURED_IDLE_MS)
+                    continue
+                }
                 delay(backoffMs)
-                val cfg = config ?: continue
                 if (isConnected()) {
                     backoffMs = 15000 // 连接正常，拉长探活间隔（仅兜底，断开有 DisconnectListener 即时通知）
                     continue

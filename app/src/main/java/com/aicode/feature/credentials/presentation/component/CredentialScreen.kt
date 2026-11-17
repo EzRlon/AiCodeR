@@ -20,14 +20,17 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import com.aicode.core.ui.AppSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,16 +63,17 @@ import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.credentials.domain.model.GitCredential
 import com.aicode.feature.credentials.presentation.CredentialViewModel
+import com.aicode.feature.credentials.presentation.QuickLoginUiState
 import com.aicode.feature.git.presentation.component.SectionHeader
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsLightMode
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.settingsLightMode
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Github
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Plus
@@ -112,9 +116,11 @@ fun CredentialScreen(
     // editingCredential != null -> 编辑现有；editingCredential == null && isAddingCredential -> 新增；否则列表态。
     var editingCredential by remember { mutableStateOf<GitCredential?>(null) }
     var isAddingCredential by remember { mutableStateOf(false) }
+    val quickLoginState by viewModel.quickLogin.collectAsStateWithLifecycle()
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.git_credentials_and_identity)) },
@@ -125,11 +131,6 @@ fun CredentialScreen(
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { isAddingCredential = true }) {
-                        Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.credential_add))
                     }
                 }
             )
@@ -175,41 +176,50 @@ fun CredentialScreen(
                             }
                         }
                     }
-                    1 -> if (state.credentials.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(Spacing.lg),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = stringResource(R.string.credential_empty_hint),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
-                            )
+                    1 -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = credentialListState,
+                        contentPadding = PaddingValues(start = Spacing.lg, end = Spacing.lg, bottom = 70.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                    ) {
+                        // 账号授权：在浏览器 / GitHub 客户端里确认，令牌由设备码流自动写入。
+                        item(key = "oauth-header") {
+                            SectionHeader(stringResource(R.string.credential_section_oauth))
                         }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            state = credentialListState,
-                            contentPadding = PaddingValues(start = Spacing.lg, end = Spacing.lg, bottom = 70.dp),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.md)
-                        ) {
-                            item(key = "header") {
-                                SectionHeader(stringResource(R.string.git_credentials_count, state.credentials.size))
+                        item(key = "oauth-group") {
+                            SettingsGroup {
+                                SettingsRow(
+                                    icon = FeatherIcons.Github,
+                                    title = stringResource(R.string.credential_oauth_github_title),
+                                    subtitle = stringResource(R.string.credential_oauth_github_desc),
+                                    onClick = viewModel::startGitHubLogin
+                                )
                             }
-                            item(key = "credential-group") {
-                                SettingsGroup {
-                                    state.credentials.forEachIndexed { index, cred ->
-                                        if (index > 0) SettingsDivider()
-                                        CredentialItem(
-                                            credential = cred,
-                                            onEdit = { editingCredential = cred },
-                                            onDelete = { viewModel.deleteCredential(cred.id) }
-                                        )
-                                    }
+                        }
+                        // 凭据授权：逐条填主机 + 用户名 + 令牌，适用于 GitHub 以外主机或自建服务。
+                        item(key = "manual-header") {
+                            SectionHeader(stringResource(R.string.credential_section_manual))
+                        }
+                        item(key = "manual-group") {
+                            SettingsGroup {
+                                state.credentials.forEachIndexed { index, cred ->
+                                    if (index > 0) SettingsDivider()
+                                    CredentialItem(
+                                        credential = cred,
+                                        onEdit = { editingCredential = cred },
+                                        onDelete = { viewModel.deleteCredential(cred.id) }
+                                    )
                                 }
+                                if (state.credentials.isNotEmpty()) SettingsDivider()
+                                SettingsRow(
+                                    icon = FeatherIcons.Plus,
+                                    title = stringResource(R.string.credential_add_manual_title),
+                                    subtitle = stringResource(
+                                        if (state.credentials.isEmpty()) R.string.credential_empty_desc
+                                        else R.string.credential_add_manual_desc
+                                    ),
+                                    onClick = { isAddingCredential = true }
+                                )
                             }
                         }
                     }
@@ -243,6 +253,16 @@ fun CredentialScreen(
             initial = null,
             onDismiss = { isAddingCredential = false },
             onSave = { viewModel.saveCredential(it); isAddingCredential = false }
+        )
+    }
+
+    // 设备码流进行中（请求/等待/成功/失败）时展示登录弹层。
+    if (quickLoginState !is QuickLoginUiState.Idle) {
+        GitHubDeviceFlowSheet(
+            state = quickLoginState,
+            onCancel = { viewModel.cancelQuickLogin() },
+            onRetry = { viewModel.startGitHubLogin() },
+            onSuccessDismiss = { viewModel.consumeQuickLoginResult() }
         )
     }
 
@@ -381,3 +401,4 @@ private fun hostBadgeLabel(host: String): String {
         else -> clean.substringBefore('.').ifBlank { clean }.replaceFirstChar { it.uppercase() }
     }
 }
+

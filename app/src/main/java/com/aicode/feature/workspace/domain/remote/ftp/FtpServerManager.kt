@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
+import com.aicode.core.security.KeystoreCipher
 import com.aicode.core.util.FileLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.SecureRandom
 import org.apache.ftpserver.FtpServer
 import org.apache.ftpserver.FtpServerFactory
 import org.apache.ftpserver.ftplet.Authority
@@ -45,6 +47,17 @@ class FtpServerManager @Inject constructor(
 ) {
     private companion object {
         const val TAG = "FtpServerManager"
+
+        /** 旧版本内置的固定弱口令；读到即视为「未设置」，改用随机口令。 */
+        const val LEGACY_DEFAULT_PASSWORD = "123456"
+
+        private const val PASSWORD_ALPHABET =
+            "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+        fun generateRandomPassword(): String {
+            val random = SecureRandom()
+            return (1..10).map { PASSWORD_ALPHABET[random.nextInt(PASSWORD_ALPHABET.length)] }.joinToString("")
+        }
         val PORT_KEY = intPreferencesKey("port")
         val USERNAME_KEY = stringPreferencesKey("username")
         val PASSWORD_KEY = stringPreferencesKey("password")
@@ -64,7 +77,7 @@ class FtpServerManager @Inject constructor(
     private val _username = MutableStateFlow("aicode")
     val username: StateFlow<String> = _username.asStateFlow()
 
-    private val _password = MutableStateFlow("123456")
+    private val _password = MutableStateFlow(generateRandomPassword())
     val password: StateFlow<String> = _password.asStateFlow()
 
     private val _isAnonymous = MutableStateFlow(false)
@@ -88,7 +101,16 @@ class FtpServerManager @Inject constructor(
             val prefs = context.ftpServerDataStore.data.first()
             _port.value = prefs[PORT_KEY] ?: 2121
             _username.value = prefs[USERNAME_KEY] ?: "aicode"
-            _password.value = prefs[PASSWORD_KEY] ?: "123456"
+            val storedPassword = prefs[PASSWORD_KEY]?.let { KeystoreCipher.decryptString(it) }
+            // 从未设置或仍是旧版固定弱口令时，改用随机口令（UI 展示供用户复制），
+            // 避免默认 123456 被同网段直接利用。
+            _password.value = if (storedPassword.isNullOrBlank() || storedPassword == LEGACY_DEFAULT_PASSWORD) {
+                generateRandomPassword().also { fresh ->
+                    context.ftpServerDataStore.edit { it[PASSWORD_KEY] = KeystoreCipher.encryptString(fresh) }
+                }
+            } else {
+                storedPassword
+            }
             _isAnonymous.value = prefs[ANONYMOUS_KEY] ?: false
             _autoStart.value = prefs[AUTO_START_KEY] ?: false
 
@@ -141,7 +163,7 @@ class FtpServerManager @Inject constructor(
         context.ftpServerDataStore.edit { prefs ->
             prefs[PORT_KEY] = port
             prefs[USERNAME_KEY] = username
-            prefs[PASSWORD_KEY] = password
+            prefs[PASSWORD_KEY] = KeystoreCipher.encryptString(password)
             prefs[ANONYMOUS_KEY] = isAnonymous
             prefs[AUTO_START_KEY] = autoStart
         }

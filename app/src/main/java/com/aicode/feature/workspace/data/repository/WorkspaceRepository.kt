@@ -9,6 +9,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aicode.core.datastore.preferencesCorruptionHandler
 import com.aicode.R
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeDelete
+import com.aicode.core.util.shellQuote
 import com.aicode.feature.agent.domain.container.ConnectionState
 import com.aicode.feature.agent.domain.container.RemoteSshConnection
 import com.aicode.feature.agent.domain.session.SessionUseCase
@@ -453,13 +455,15 @@ class WorkspaceRepository @Inject constructor(
             }
             FileLogger.i(TAG, "移除外部工作区关联: $name")
         } else if (isLocal()) {
-            File(projectsRoot, name).deleteRecursively()
+            // NOFOLLOW 删除：工作区 bind mount 进容器，AI/用户脚本可投放符号链接；
+            // File.deleteRecursively 会跟链接下钻删到链接目标（如 ~/.aicode）。
+            SafeDelete.deleteTree(File(projectsRoot, name))
             target?.let { sessionUseCase.deleteSessionsByWorkspace(it.path) }
         } else {
             val cfg = remoteSshConnection.config
             if (cfg != null) {
                 val remotePath = "${pathHomeResolver.expandHome(cfg.remoteWorkspacePath).trimEnd('/')}/$name"
-                runCatching { execRemoteExit("rm -rf ${shellQuote(remotePath)}") }
+                runCatching { execRemoteExit("rm -rf -- ${shellQuote(remotePath)}") }
                     .onFailure { FileLogger.e(TAG, "远程删除工作区失败: $remotePath", it) }
             }
             target?.let { sessionUseCase.deleteSessionsByWorkspace(it.path) }
@@ -489,8 +493,6 @@ class WorkspaceRepository @Inject constructor(
         context.workspaceDataStore.edit { it[externalWorkspacesKey] = json.encodeToString(list) }
     }
 
-    /** 单引号转义，保证 shell 命令安全。 */
-    private fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
     /** 当前工作区的路径，供 projectRoot / 命令执行目录使用。
      * 本地模式返回宿主工作区绝对路径；远程模式返回选中工作区的远程绝对路径（命令 cd 到此）。

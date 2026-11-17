@@ -1,5 +1,6 @@
 package com.aicode.feature.onboarding.presentation
 
+import com.aicode.core.ui.onboarding.OnboardingTargetRegistry
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue

@@ -69,7 +69,8 @@ internal fun LanguageSelectionSheet(
                     onDismiss()
                     onSelect(null)
                 },
-                color = Color.Transparent
+                color = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onSurface,
             ) {
                 Row(
                     modifier = Modifier
@@ -103,7 +104,8 @@ internal fun LanguageSelectionSheet(
                         onDismiss()
                         onSelect(lang.tag)
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier

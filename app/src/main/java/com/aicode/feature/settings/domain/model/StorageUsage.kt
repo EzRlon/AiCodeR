@@ -27,14 +27,37 @@ enum class StorageCategory(@param:StringRes val labelRes: Int) {
  *
  * @param key 稳定标识，供界面按项取值（如按 `tool-output` 找可清理大小）；纯展示项为 null。
  * @param indent 是否作为上一层明细的下钻项缩进显示。
+ * @param path 可操作产物的定位标识（`<项目名>/<相对路径>`，以内置工作区根为基准）；纯统计项为 null。
+ * @param modifiedAt 最后修改/构建时间（epoch millis）；null 不显示。
+ * @param isDirectory 目录行不提供「安装/打开」。
+ * @param safety 该产物的处置建议（是否过期、能否安全删除）；null 表示本行不支持勾选清理。
  */
 data class StorageDetail(
     val label: String,
     val bytes: Long,
     val note: String? = null,
     val key: String? = null,
-    val indent: Boolean = false
+    val indent: Boolean = false,
+    val path: String? = null,
+    val modifiedAt: Long? = null,
+    val isDirectory: Boolean = false,
+    val safety: StorageSafety? = null
 )
+
+/** 交付物/产物的处置建议：界面上直接告诉用户「能不能删」。 */
+enum class StorageSafety(@param:StringRes val labelRes: Int) {
+    /** 可安全删除：可重建的临时数据，删了自动重建。 */
+    SAFE(R.string.storage_safety_safe),
+
+    /** 过期可删：长期未使用，删除只影响历史回看。 */
+    STALE(R.string.storage_safety_stale),
+
+    /** 谨慎：删除会丢失历史产物（工具输出存档、识图会话、生成图片、检查点）。 */
+    KEEP_HISTORY(R.string.storage_safety_keep_history),
+
+    /** 保留：用户数据或运行必需，不可删。 */
+    PROTECTED(R.string.storage_safety_protected)
+}
 
 data class StorageEntry(
     val category: StorageCategory,
@@ -46,6 +69,13 @@ data class StorageEntry(
 object StorageDetailKey {
     const val TOOL_OUTPUT = "toolOutput"
     const val VISION_SESSIONS = "visionSessions"
+    const val GENERATED_IMAGES = "generatedImages"
+
+    /** 容器内构建缓存（容器数据分类下的探测行，供 ContainerCaches 勾选清理）。 */
+    const val CONTAINER_CACHES = "containerCaches"
+
+    /** 聊天记录页按会话勾选删除的前缀（后接会话 id）。 */
+    const val CHAT_SESSION_PREFIX = "chat-session:"
 }
 
 /** 可清理项：都是能自动重建或仅影响历史回看的临时数据，不含用户内容。 */
@@ -56,7 +86,11 @@ enum class CleanupKind(
     Caches(R.string.storage_clean_caches, R.string.storage_clean_caches_desc),
     Logs(R.string.storage_clean_logs, R.string.storage_clean_logs_desc),
     ToolOutput(R.string.storage_clean_tool_output, R.string.storage_clean_tool_output_desc),
-    VisionSessions(R.string.storage_clean_vision, R.string.storage_clean_vision_desc)
+    VisionSessions(R.string.storage_clean_vision, R.string.storage_clean_vision_desc),
+    Checkpoints(R.string.storage_clean_checkpoints, R.string.storage_clean_checkpoints_desc),
+    ContainerImages(R.string.storage_clean_images, R.string.storage_clean_images_desc),
+    GeneratedImages(R.string.storage_clean_generated, R.string.storage_clean_generated_desc),
+    ContainerCaches(R.string.storage_clean_container_caches, R.string.storage_clean_container_caches_desc)
 }
 
 /** 所在存储卷的容量信息（App 私有目录所在卷）。 */

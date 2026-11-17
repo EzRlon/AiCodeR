@@ -12,8 +12,9 @@
 # 多镜像候选（按优先级排序，换源时自动探测跳过不可用；阿里云对服务器访问全量 403 放最后，探测会跳过）
 MIRRORS="mirrors.huaweicloud.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.cloud.tencent.com mirrors.aliyun.com"
 MIRROR=""
-# 基础工具（不参与自定义勾选，始终安装）：git/ripgrep 是 AI 工作流与版本管理基础，bash/curl 是通用依赖
-BASE_PKGS="bash curl ripgrep git"
+# 基础工具（不参与自定义勾选，始终安装）：git/ripgrep 是 AI 工作流与版本管理基础，bash/curl 是通用依赖；
+# procps 提供完整版 ps（BusyBox ps 无 lstart 选项，Codex 等依赖 procps 语法的 CLI 守护进程需要）
+BASE_PKGS="bash curl ripgrep git procps"
 
 # ── 诊断日志：写入宿主可见的 $HOME/.aicode/provision.log（容器内 /root/.aicode 绑定到 App 私有目录）。
 # 终端 PTY 起不来或卡住时，App 侧「容器诊断」会把本文件尾部一并打进日志，用于判断脚本执行到了哪一步、
@@ -55,12 +56,105 @@ detect_pmgr() {
     fi
 }
 
+# ── 通用下载助手：curl / wget 双兼容（busybox wget 只认 -T，GNU wget 同样接受）。
+#    场景脚本与版本探测共用，避免各自重写一套超时参数。──
+env_download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --connect-timeout 20 --max-time 900 -o "$2" "$1" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 30 -O "$2" "$1" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# ── 语义化版本比较：$1 >= $2 返回 0（仅比较前三段数字，忽略 -rN/后缀）。
+#    各发行版仓库的包版本差异很大，场景脚本需要统一的判定口径。──
+env_ver_ge() {
+    _have=$(echo "$1" | sed 's/^v//; s/[^0-9.].*$//')
+    _need=$(echo "$2" | sed 's/^v//; s/[^0-9.].*$//')
+    [ -z "$_have" ] && return 1
+    _hm=$(echo "$_have" | cut -d. -f1); _hn=$(echo "$_have" | cut -d. -f2); _hp=$(echo "$_have" | cut -d. -f3)
+    _nm=$(echo "$_need" | cut -d. -f1); _nn=$(echo "$_need" | cut -d. -f2); _np=$(echo "$_need" | cut -d. -f3)
+    [ "${_hm:-0}" -gt "${_nm:-0}" ] 2>/dev/null && return 0
+    [ "${_hm:-0}" -lt "${_nm:-0}" ] 2>/dev/null && return 1
+    [ "${_hn:-0}" -gt "${_nn:-0}" ] 2>/dev/null && return 0
+    [ "${_hn:-0}" -lt "${_nn:-0}" ] 2>/dev/null && return 1
+    [ "${_hp:-0}" -ge "${_np:-0}" ] 2>/dev/null
+}
+
+# ── 当前 node 版本是否满足最低要求（如 22.19.0）；未装返回非 0 ──
+env_node_ok() {
+    _v=$(node -v 2>/dev/null)
+    [ -z "$_v" ] && return 1
+    env_ver_ge "$_v" "$1"
+}
+
+# ── 当前系统是否为 musl libc（Alpine）。──
+env_is_musl() {
+    ls /lib/ld-musl-*.so.1 >/dev/null 2>&1
+}
+
+# ── 确保 Node ≥ $1：先试包管理器，仍不够就装官方预编译包（不依赖发行版仓库版本）。
+#
+# 必要性：Debian/Ubuntu 仓库的 nodejs 长期停在 20.x，而 REA 等场景要求 ≥22.19；
+# Alpine 的 nodejs 虽新，但用户也可能用别的镜像。统一走「仓库 → 官方二进制」两级，
+# 而不是让用户自己换容器。安装到 /usr/local（在 PATH 中且优先于发行版自带）。
+#
+# 官方二进制是 glibc 编译的：musl（Alpine）下跑会报 fcntl64 符号缺失，故只在 glibc 系统上走这一级。
+# 返回 0=已满足，1=无法满足（调用方决定是否中止）。
+env_ensure_node() {
+    _need="$1"
+    env_node_ok "$_need" && return 0
+
+    # 一级：发行版仓库（Alpine 的 nodejs 足够新，这一级就能成）
+    case "$PMGR" in
+        apk|apt|dnf|yum|pacman) pkg_add nodejs npm >/dev/null 2>&1 ;;
+    esac
+    env_node_ok "$_need" && return 0
+
+    # 二级：官方预编译包。musl 系统跳过（glibc 二进制不可用）
+    env_is_musl && return 1
+
+    case "$(uname -m)" in
+        aarch64|arm64) _arch="arm64" ;;
+        x86_64|amd64)  _arch="x64" ;;
+        *)             return 1 ;;
+    esac
+
+    _ver="v$_need"
+    _tmp="${HOME:-/root}/.aicode/node-dist"
+    mkdir -p "$_tmp"
+    _pkg="node-$_ver-linux-$_arch"
+    for _base in \
+        "https://registry.npmmirror.com/-/binary/node" \
+        "https://nodejs.org/dist"
+    do
+        rm -f "$_tmp/node.tar.gz"
+        echo "  下载 Node $_ver（$_arch，来自 $(echo "$_base" | cut -d/ -f3)）..."
+        env_download "$_base/$_ver/$_pkg.tar.gz" "$_tmp/node.tar.gz" || continue
+        rm -rf "$_tmp/$_pkg"
+        tar -xzf "$_tmp/node.tar.gz" -C "$_tmp" 2>/dev/null || continue
+        [ -x "$_tmp/$_pkg/bin/node" ] || continue
+        # 装到 /usr/local：优先级高于发行版自带的 /usr/bin，无需卸载旧版
+        cp -R "$_tmp/$_pkg/." /usr/local/ 2>/dev/null || continue
+        rm -rf "$_tmp/$_pkg"
+        hash -r 2>/dev/null
+        env_node_ok "$_need" && return 0
+    done
+    rm -rf "$_tmp"
+    return 1
+}
+
 # ── 按包管理器安装一批包 ──
 pkg_add() {
     case "$PMGR" in
         apk)
             apk update
-            apk add --no-cache "$@"
+            # PRoot 实测坑：apk add 对已装包必 exit 2 且无明细，整批装会整体失败——按缺补装
+            for p in "$@"; do
+                apk info -e "$p" >/dev/null 2>&1 || apk add --no-cache "$p" || return 1
+            done
             ;;
         apt)
             export DEBIAN_FRONTEND=noninteractive
@@ -451,7 +545,7 @@ setup_apk_mirror() {
     mkdir -p /etc/apk
     # Alpine 大版本分支从镜像自身动态读取，兼容用户导入的不同版本 Alpine 镜像：
     # 1) 优先从现有 repositories 提取（官方源 / 已换过的源都含 `alpine/<分支>/`，edge 也能拿到）；
-    # 2) 读不到再回退到 /etc/os-release 的 VERSION_ID（如 3.21.3 → v3.21）；
+    # 2) 读不到再回退到 /etc/os-release 的 VERSION_ID（如 3.21.8 → v3.21）；
     # 3) 最后兜底 v3.21（与内置 Alpine 一致）。
     branch=""
     if [ -f /etc/apk/repositories ]; then
@@ -610,7 +704,7 @@ EOF
 # ── 场景框架 ──
 # 每个开发环境一个脚本，放在 lib/scenarios/ 下，定义 scenario_name_<id> 与 install_scenario_<id>；
 # SCENARIO_IDS 决定菜单顺序。android / flutter 较重，逻辑在各自文件里（共用 lib/android-sdk.sh）。
-SCENARIO_IDS="common python node android flutter java go rust php base"
+SCENARIO_IDS="common python node android flutter java go rust php qemu rea multillm localmodel codeintel base"
 
 # 载入共享工具与各场景脚本（android-sdk.sh 供 android / flutter 场景共用）
 [ -f "$AICODE_LIB_DIR/android-sdk.sh" ] && . "$AICODE_LIB_DIR/android-sdk.sh"
@@ -628,6 +722,83 @@ scenario_name() {
 install_scenario() {
     fn="install_scenario_$1"
     if command -v "$fn" >/dev/null 2>&1; then "$fn"; else echo "${C_RED}未知场景：$1${C_RESET}"; return 1; fi
+}
+
+# ── 图形/VNC 组件包名映射（VNC 悬浮小窗依赖：Xvfb + x11vnc + websockify；web 前端由 App 内嵌页面提供）。
+#    注意：Alpine 的 websockify 包名就是 websockify，不是 py3-websockify（后者不存在，装上会整批失败）。──
+vnc_pkgs() {
+    case "$PMGR" in
+        apk) echo "xvfb x11vnc websockify" ;;
+        apt) echo "xvfb x11vnc python3-websockify" ;;
+        *)   echo "" ;;
+    esac
+}
+
+# ── 中文字体包名映射（Chromium 缺 CJK 字体时中文界面/网页会渲染成方框）。──
+cjk_font_pkgs() {
+    case "$PMGR" in
+        apk) echo "font-wqy-zenhei" ;;
+        apt) echo "fonts-wqy-zenhei" ;;
+        dnf|yum) echo "wqy-zenhei-fonts" ;;
+        pacman) echo "wqy-zenhei" ;;
+        *)   echo "" ;;
+    esac
+}
+
+# 是否已有可用 CJK 字体（有则秒过）；fc-list 不可用时退回看字体目录。
+cjk_font_ready() {
+    if command -v fc-list >/dev/null 2>&1; then
+        fc-list 2>/dev/null | grep -qiE "cjk|wqy|zenhei|noto sans (sc|cjk)|droid sans fallback"
+        return $?
+    fi
+    ls -d /usr/share/fonts/*/*wqy* /usr/share/fonts/*wqy* >/dev/null 2>&1
+}
+
+# ── 安装中文字体（幂等；已有则秒过）。失败仅警告不返回非零：
+#    字体缺失只影响中文显示（会成方框），不阻断环境安装。──
+install_cjk_fonts() {
+    if cjk_font_ready; then
+        plog "中文字体已就绪，跳过"
+        return 0
+    fi
+    pkgs=$(cjk_font_pkgs)
+    if [ -z "$pkgs" ]; then
+        plog "中文字体：包管理器 ${PMGR:-未识别} 无映射，跳过"
+        return 0
+    fi
+    echo "安装中文字体（$pkgs，约 15MB；否则 Chromium 中文界面会显示成方框）..."
+    if pkg_add $pkgs; then
+        command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1
+        plog "中文字体安装完成"
+    else
+        echo "${C_YELLOW}中文字体安装失败（中文可能显示成方框，可稍后重试）${C_RESET}"
+        plog "中文字体安装失败"
+    fi
+    return 0
+}
+
+# ── 安装图形/VNC 组件（幂等；已装则秒过）。失败仅警告不返回非零：
+#    图形组件缺失不影响其它环境安装与初始化标记的写入，首次触发 VNC 小窗时 App 侧还有一次懒安装兜底。──
+install_vnc_stack() {
+    # 字体有自己的判据：下面的 websockify 短路会提前返回，不能把字体检查放在它之后。
+    install_cjk_fonts
+    pkgs=$(vnc_pkgs)
+    if [ -z "$pkgs" ]; then
+        plog "图形组件：包管理器 ${PMGR:-未识别} 无映射，跳过"
+        return 0
+    fi
+    if command -v websockify >/dev/null 2>&1; then
+        plog "图形组件已就绪，跳过"
+        return 0
+    fi
+    echo "安装图形/VNC 组件（$pkgs）..."
+    if pkg_add $pkgs; then
+        plog "图形组件安装完成"
+    else
+        echo "${C_YELLOW}图形组件安装失败（不影响其它功能；首次打开 VNC 小窗时会自动重试安装）${C_RESET}"
+        plog "图形组件安装失败"
+    fi
+    return 0
 }
 
 # ── 轻场景安装器（供轻量场景调用）：换源 → 更新索引 → 列出清单确认 → 装包。

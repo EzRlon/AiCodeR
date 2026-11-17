@@ -110,10 +110,10 @@ internal fun parseTodoResult(content: String): ParsedTodoResult? {
 
 /** 待办列表结构化卡片 */
 @Composable
-internal fun TodoCard(items: List<ParsedTodoItem>) {
+internal fun TodoCard(items: List<ParsedTodoItem>, animateInProgress: Boolean = true) {
     Column(modifier = Modifier.fillMaxWidth()) {
         items.forEach { item ->
-            TodoItemRow(item = item)
+            TodoItemRow(item = item, animateInProgress = animateInProgress)
             if (item != items.last()) {
                 Spacer(modifier = Modifier.height(2.dp))
             }
@@ -121,9 +121,9 @@ internal fun TodoCard(items: List<ParsedTodoItem>) {
     }
 }
 
-/** 单条待办项行：状态图标 + 标题 + 状态标签 */
+/** 单条待办项行：状态图标 + 标题 + 状态标签；[animateInProgress] 为假时进行中点静态展示（停止/历史快照场景不跑无谓动画）。 */
 @Composable
-internal fun TodoItemRow(item: ParsedTodoItem) {
+internal fun TodoItemRow(item: ParsedTodoItem, animateInProgress: Boolean = true) {
     val isCompleted = item.status == "completed"
     val isInProgress = item.status == "in_progress"
 
@@ -142,23 +142,32 @@ internal fun TodoItemRow(item: ParsedTodoItem) {
                 )
             }
             isInProgress -> {
-                val transition = rememberInfiniteTransition(label = "todo-progress-dot")
-                val alpha by transition.animateFloat(
-                    initialValue = 1f,
-                    targetValue = 0.3f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(650),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "todo-progress-dot-alpha"
-                )
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .graphicsLayer { this.alpha = alpha }
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                )
+                if (animateInProgress) {
+                    val transition = rememberInfiniteTransition(label = "todo-progress-dot")
+                    val alpha by transition.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 0.3f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(650),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "todo-progress-dot-alpha"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .graphicsLayer { this.alpha = alpha }
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                }
             }
             else -> {
                 Box(

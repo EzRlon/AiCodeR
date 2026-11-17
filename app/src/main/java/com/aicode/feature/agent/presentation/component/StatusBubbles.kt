@@ -1,7 +1,8 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.core.ui.markdown.MarkdownContent
+import com.aicode.core.ui.markdown.MarkdownRenderCache
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,7 +13,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -39,16 +39,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -72,103 +66,10 @@ import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Key
 import kotlinx.coroutines.delay
 
-/** 涟漪高光一个来回的周期（ms）。 */
-private const val RIPPLE_PERIOD_MS = 1600
-
-/** 高光带宽度占内容宽度的比例：太宽像整段变色，太窄看不出来。 */
-private const val RIPPLE_BAND_RATIO = 0.5f
-
-/** 高光带边缘的不透明度（渐变两端）。 */
-private const val RIPPLE_EDGE_ALPHA = 0.12f
-
 /**
- * 高光带峰值不透明度。
+ * 统一的「正在忙什么」状态行：静态文案 + 可选的三点跳动。
  *
- * 高光是白色（主流做法）：深色主题下把字「打亮」，浅色主题下把字朝背景方向提亮成一道光泽。
- * 峰值不能太高——浅色主题下白色 0.85 会直接把字擦掉，0.5 左右是「亮一下但仍认得出字」。
- */
-private const val RIPPLE_PEAK_ALPHA = 0.5f
-
-/**
- * 涟漪高光：一条中间亮、两端透明的高光带周期性从左划到右。
- *
- * 用 [BlendMode.SrcAtop] 叠在已绘制内容上——它只作用在不透明像素上，所以不会在空白处
- * 画出一条色带方块。高光默认白色（Claude Code / 主流 shimmer 的做法）；浅色主题下白色会在
- * 文字像素上把字朝背景提亮，形成一道掠过的光泽，而不是盖上一层灰。
- *
- * 性能：进度在 [drawWithContent] 的绘制阶段读取（`by` 委托在 lambda 内取值），只重绘、不重组。
- */
-@Composable
-internal fun Modifier.rippleHighlight(
-    highlight: Color = Color.White,
-    bandRatio: Float = RIPPLE_BAND_RATIO,
-    periodMs: Int = RIPPLE_PERIOD_MS
-): Modifier {
-    val transition = rememberInfiniteTransition(label = "ripple-highlight")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = periodMs, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "ripple-progress"
-    )
-    return drawWithContent {
-        drawContent()
-        val band = size.width * bandRatio
-        // 起点在左侧完全移出、终点在右侧完全移出，两端各留一个带的余量做「停顿感」
-        val center = -band + progress * (size.width + 2 * band)
-        drawRect(
-            brush = Brush.linearGradient(
-                // 五档渐变：两端全透明、中间一个软峰，扫过时是「亮一下」而不是一条硬边色带
-                colors = listOf(
-                    Color.Transparent,
-                    highlight.copy(alpha = RIPPLE_EDGE_ALPHA),
-                    highlight.copy(alpha = RIPPLE_PEAK_ALPHA),
-                    highlight.copy(alpha = RIPPLE_EDGE_ALPHA),
-                    Color.Transparent
-                ),
-                start = Offset(center - band / 2f, 0f),
-                end = Offset(center + band / 2f, 0f)
-            ),
-            blendMode = BlendMode.SrcAtop
-        )
-    }
-}
-
-/**
- * 一条会走涟漪高光的文字（[Modifier.rippleHighlight] 的文字版）。
- *
- * 涟漪画在**文字自身宽度**上：调用方不要给它 `weight`，否则光带会在整段可分配宽度里爬、
- * 扫过这几个字只是一瞬间（要占位就让外层容器去占）。
- *
- * [highlight] 传 null 表示只画静态文字：同一处文案要在「空闲」与「进行中」之间切换时，
- * 用同一个组件、只换这一个参数即可（避免两个分支各写一套 Text 参数）。
- */
-@Composable
-internal fun RippleText(
-    text: String,
-    modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    style: TextStyle = MaterialTheme.typography.labelMedium,
-    highlight: Color? = Color.White
-) {
-    val rippleModifier = if (highlight != null) modifier.rippleHighlight(highlight) else modifier
-    Text(
-        text = text,
-        color = color,
-        style = style,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = rippleModifier
-    )
-}
-
-/**
- * 统一的「正在忙什么」状态行：涟漪高光文案（+ 可选的三点跳动）。
- *
- * 高光只盖在文案上，三个跳动的点是独立的动画，不参与高光（两层动画叠在一起会糊）。
+ * 文案保持静态——动画只在独立元素上（三个跳动的点），不作用在文字上。
  * 外层 [modifier]（撑满宽度、定高）交给容器，内层内容按自身宽度靠左排。
  *
  * 读屏语义统一由本行给出（文案即语义），所以内部的 [TypingDots] 关掉自己的播报。
@@ -187,14 +88,20 @@ internal fun AgentBusyIndicator(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            RippleText(text = label)
+            Text(
+                text = label,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             if (showDots) TypingDots(color = dotColor, dotSize = dotSize, announce = false)
         }
     }
 }
 
 /**
- * 等待模型响应时的状态行：涟漪高光的文案 + 三个跳动的点，不套描边卡片。
+ * 等待模型响应时的状态行：静态文案 + 三个跳动的点，不套描边卡片。
  *
  * [label] 由调用方决定说「正在思考」还是更具体的场景（模型已在吐某次工具调用的参数时，
  * 说「正在编辑文件」），见 [toolRunningLabelRes]。
@@ -377,6 +284,15 @@ private const val TYPEWRITER_RATE_WINDOW_MS = 500L
 /** 打字机渲染节流间隔（ms）：~40fps 高频平滑快照，彻底消除低速模型的顿挫感。 */
 private const val TYPEWRITER_RENDER_INTERVAL_MS = 24L
 
+/**
+ * 打字机推进 tick 间隔（ms）：定频 30Hz 驱动显示进度。
+ *
+ * 有意不逐帧（`withFrameNanos`）：帧回调频率随屏幕刷新率走，高刷屏上每帧都唤醒主线程并触发
+ * 文本重组，是长回答期间持续发热的主要来源；打字本身是匀速推进、不需要逐帧精度，
+ * 30Hz 观感一致而唤醒次数减半到四分之一（120Hz → 30Hz）。
+ */
+private const val TYPEWRITER_TICK_MS = 33L
+
 /** 按码点数量截断字符串，避免把 emoji 等代理对截成孤立的半个字符。 */
 private fun truncateToCodePoints(text: String, codePoints: Int): String {
     if (codePoints <= 0) return ""
@@ -541,48 +457,51 @@ internal fun rememberTypewriterStreamingText(
             lastArrivalNanos = now
         }
 
-        // 帧驱动推进显示进度，追平本次文本即退出（text 再变化时本协程被取消重启）
+        // 定频 tick 推进显示进度，追平本次文本即退出（text 再变化时本协程被取消重启）。
+        // 用 delay 定频而非 withFrameNanos 逐帧：逐帧回调会把主线程唤醒次数绑到屏幕刷新率上，
+        // 高刷屏（120Hz）上打字机每秒唤醒 120 次、连带 120 次 md 重排，是持续发热的主因；
+        // 30Hz 已足够平滑（打字本就不是逐帧动画），高刷设备唤醒与重排直接降到 1/4。
         var lastRenderNanos = 0L
-        var lastFrameNanos = 0L
+        var lastTickNanos = 0L
         while (shownCodePoints < codePoints) {
-            withFrameNanos { frameNanos ->
-                if (lastFrameNanos != 0L) {
-                    val dtSec = (frameNanos - lastFrameNanos) / 1_000_000_000f
-                    // 播出阶段才需要估算上游速率：收尾阶段上游已经不动了
-                    var arrivalRate = 0f
-                    if (!draining) {
-                        val oldest = arrivals.firstOrNull()
-                        if (arrivals.size >= 2 && oldest != null) {
-                            val spanSec = (frameNanos - oldest.first) / 1_000_000_000f
-                            if (spanSec > 0f) {
-                                arrivalRate = (arrivals.last().second - oldest.second) / spanSec
-                            }
+            delay(TYPEWRITER_TICK_MS)
+            val tickNanos = System.nanoTime()
+            if (lastTickNanos != 0L) {
+                val dtSec = (tickNanos - lastTickNanos) / 1_000_000_000f
+                // 播出阶段才需要估算上游速率：收尾阶段上游已经不动了
+                var arrivalRate = 0f
+                if (!draining) {
+                    val oldest = arrivals.firstOrNull()
+                    if (arrivals.size >= 2 && oldest != null) {
+                        val spanSec = (tickNanos - oldest.first) / 1_000_000_000f
+                        if (spanSec > 0f) {
+                            arrivalRate = (arrivals.last().second - oldest.second) / spanSec
                         }
                     }
-                    val rate = typewriterRate(
-                        lag = codePoints - shownCodePoints,
-                        arrivalRate = arrivalRate,
-                        drainRate = drainRate
-                    )
-                    shownCodePoints = (shownCodePoints + rate * dtSec)
-                        .coerceAtMost(codePoints.toFloat())
                 }
-                lastFrameNanos = frameNanos
+                val rate = typewriterRate(
+                    lag = codePoints - shownCodePoints,
+                    arrivalRate = arrivalRate,
+                    drainRate = drainRate
+                )
+                shownCodePoints = (shownCodePoints + rate * dtSec)
+                    .coerceAtMost(codePoints.toFloat())
+            }
+            lastTickNanos = tickNanos
 
-                // 收尾硬上限：极端情况（文本被整体替换、渲染跟不上）也必须在这之内追平，
-                // 否则尾巴会一直挂在未追平状态，落库消息永远等不到交棒。
-                if (draining && frameNanos >= drainDeadlineNanos) {
-                    shownCodePoints = codePoints.toFloat()
-                }
+            // 收尾硬上限：极端情况（文本被整体替换、渲染跟不上）也必须在这之内追平，
+            // 否则尾巴会一直挂在未追平状态，落库消息永远等不到交棒。
+            if (draining && tickNanos >= drainDeadlineNanos) {
+                shownCodePoints = codePoints.toFloat()
+            }
 
-                // 渲染节流：到间隔就快照当前显示进度；追平瞬间强制渲染完整文本
-                val intervalNanos = TYPEWRITER_RENDER_INTERVAL_MS * 1_000_000L
-                if (frameNanos - lastRenderNanos >= intervalNanos || shownCodePoints >= codePoints) {
-                    val snapshot = truncateToCodePoints(text, shownCodePoints.toInt())
-                    if (snapshot != renderText) {
-                        lastRenderNanos = frameNanos
-                        commitRender(snapshot)
-                    }
+            // 渲染节流：到间隔就快照当前显示进度；追平瞬间强制渲染完整文本
+            val intervalNanos = TYPEWRITER_RENDER_INTERVAL_MS * 1_000_000L
+            if (tickNanos - lastRenderNanos >= intervalNanos || shownCodePoints >= codePoints) {
+                val snapshot = truncateToCodePoints(text, shownCodePoints.toInt())
+                if (snapshot != renderText) {
+                    lastRenderNanos = tickNanos
+                    commitRender(snapshot)
                 }
             }
         }
@@ -702,7 +621,9 @@ internal fun ReasoningBubble(
             elapsedMillis = (System.currentTimeMillis() - timerStartMillis).coerceAtLeast(0L)
             timerSeenChars = latestText.length
             timerSeenHead = streamHeadFingerprint(latestText)
-            delay(100)
+            // 计时显示精确到秒，100ms 一次只是让秒数跟手；500ms 同样不误秒，
+            // 但把思考期间的重组频率降到 1/5（长思考动辄几十秒，这一项不小）。
+            delay(500)
         }
     }
     // 展开渲染用节流文本（流式思考时降低 md 解析频率）；preRendered 时外部已按打字机节奏给出渲染文本。
@@ -763,6 +684,7 @@ internal fun ReasoningBubble(
                     cache = cache,
                     compact = true,
                     lazyScroll = true,
+                    autoFollow = live,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = ReasoningWindowMaxHeight)

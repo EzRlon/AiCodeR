@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.provider
 
+import com.aicode.core.net.NetworkStatus
 import com.aicode.core.util.FileLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -10,6 +11,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.HttpException
 import retrofit2.await
 import java.io.IOException
@@ -33,13 +35,16 @@ private const val TAG = "RetryPolicy"
 // 对应 opencode 的 attempts = 3（最多 2 次重试）→ 提升至 6 次重试以应对不稳定网络
 const val MAX_NETWORK_RETRIES = 6
 
+/** 网络不可用时单次等待恢复的上限；超时后照常重试，交由重试逻辑自行失败。 */
+private const val NETWORK_WAIT_TIMEOUT_MS = 30_000L
+
 /**
  * 每次流式尝试从发起请求到首个有效内容的等待上限，包含等待响应头。
  *
  * OkHttp 的 readTimeout 已设为无限制，首个内容之前由应用层取消请求兜底，
- * 故放宽到 5 分钟以容纳慢启动与长思考模型。
+ * 故放宽到 2 分钟以容纳慢启动与长思考模型（网络切换已有主动打断，此值只兜底静默挂起；极慢场景可在设置调大）。
  */
-const val FIRST_BYTE_TIMEOUT_MS = 300_000L
+const val FIRST_BYTE_TIMEOUT_MS = 120_000L
 
 class FirstContentGuard {
     @Volatile private var close: (() -> Unit)? = null
@@ -81,12 +86,36 @@ class FirstContentGuard {
     }
 }
 
+/**
+ * 活跃首内容守卫注册表：供「外部打断」场景（如网络切换）遍历并关闭所有活跃流。
+ * 关闭后底层 Call 被取消、响应流被关闭，阻塞中的读取随即抛 IOException——
+ * 与首字节超时同属 [isRetriableNetworkError] 可重试范畴，由重试机制自动换网重发。
+ */
+object ActiveStreamGuardRegistry {
+    private val guards: MutableSet<FirstContentGuard> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+    internal fun register(guard: FirstContentGuard) {
+        guards.add(guard)
+    }
+
+    internal fun unregister(guard: FirstContentGuard) {
+        guards.remove(guard)
+    }
+
+    /** 打断所有活跃流（网络切换时调用）；无活跃流时为空操作。 */
+    fun interruptAll() {
+        guards.forEach { runCatching { it.closeBody() } }
+    }
+}
+
 @OptIn(InternalCoroutinesApi::class)
 suspend fun withFirstContentTimeout(
     timeoutMs: Long,
     block: suspend (FirstContentGuard) -> Unit
 ) {
     val guard = FirstContentGuard()
+    ActiveStreamGuardRegistry.register(guard)
     val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
     try {
         coroutineScope {
@@ -116,6 +145,8 @@ suspend fun withFirstContentTimeout(
         coroutineContext.ensureActive()
         if (timedOut.get()) throw SocketTimeoutException("First content timeout after ${timeoutMs}ms")
         throw e
+    } finally {
+        ActiveStreamGuardRegistry.unregister(guard)
     }
 }
 
@@ -172,6 +203,17 @@ fun exponentialDelayMillis(retryIndex: Int): Long {
     val maxDelay = 10000L
     val wait = (delay * factor.pow(retryIndex)).toLong()
     return min(wait, maxDelay)
+}
+
+/**
+ * 网络不可用时先等待恢复（最长 [NETWORK_WAIT_TIMEOUT_MS]），避免把有限的重试次数消耗在
+ * 完全断网的窗口内（如切后台后网络被系统短暂收回）。超时后照常继续，交由重试逻辑自行失败。
+ */
+private suspend fun awaitNetworkIfOffline() {
+    if (NetworkStatus.isOnline) return
+    withTimeoutOrNull(NETWORK_WAIT_TIMEOUT_MS) {
+        while (!NetworkStatus.isOnline) delay(500)
+    }
 }
 
 /**
@@ -447,6 +489,7 @@ suspend fun <T> retryStaircase(
                 if (!isRateLimitError(e)) throw e
             }
             if (attempt >= maxRetries) throw e
+            awaitNetworkIfOffline()
             val wait = retryDelayMillis(attempt, e)
             FileLogger.w(TAG, "网络请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog()}")
             onRetry?.invoke(attempt + 1, maxRetries, e.toRetryErrorInfo())
@@ -494,6 +537,7 @@ suspend fun streamWithStaircaseRetry(
                 if (!(isRateLimitError(e) && !receivedContent)) throw e
             }
             if (attempt >= maxRetries) throw e
+            awaitNetworkIfOffline()
             val wait = retryDelayMillis(attempt, e)
             FileLogger.w(TAG, "流式请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog()}")
             onRetry?.invoke(attempt + 1, maxRetries, e.toRetryErrorInfo())

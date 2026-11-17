@@ -1,11 +1,20 @@
 package com.aicode.feature.agent.presentation.component
 
+import com.aicode.core.ui.markdown.formatTokenCount
+import com.aicode.core.ui.markdown.MarkdownContent
+import com.aicode.core.ui.markdown.MarkdownRenderCache
 import android.content.ClipData
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,9 +39,11 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,9 +53,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
@@ -56,15 +72,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
 import com.aicode.core.theme.Brand
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ContentWidth
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import com.aicode.feature.agent.presentation.hasVisibleContent
 import com.aicode.feature.agent.presentation.MessageRole
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
@@ -110,7 +129,7 @@ internal data class TurnUsage(
  */
 private fun splitTurns(messages: List<AgentUIMessage>, lastTurnFinished: Boolean): List<AgentTurn> {
     val turnMessages = messages.filter {
-        !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure
+        !it.isCompactionMarker && !it.isContextSummary && !it.isCompactionFailure && !it.isVerificationReport
     }
     if (turnMessages.isEmpty()) return emptyList()
     val turns = mutableListOf<AgentTurn>()
@@ -205,7 +224,8 @@ internal fun AgentMessageItem(
     liveOutput: String? = null,
     markdownCache: MarkdownRenderCache? = null,
     onRewindClick: ((String) -> Unit)? = null,
-    onMoreClick: ((AgentUIMessage) -> Unit)? = null,
+    /** 「更多」按钮回调：带出按钮 bounds（窗口坐标）供 mini 悬浮窗锚定；null = 不挂该按钮。 */
+    onMoreClick: ((AgentUIMessage, Rect) -> Unit)? = null,
     onToolToggle: (() -> Unit)? = null,
     /** 工具行展开态的持久化覆盖（null = 尚未手动开关过，按内容类型取默认）；见 [ToolMessageBody]。 */
     toolExpandedOverride: Boolean? = null,
@@ -230,6 +250,16 @@ internal fun AgentMessageItem(
     reasoningDurationMs: Long? = null,
     /** 是否为分块的末块（渲染操作行、底部圆角、与下一条列表 item 的间距）；非分块消息恒为 true。 */
     isChunkFooter: Boolean = true,
+    /** in-message 思考块展开态的持久化覆盖（与过程项路径一致，见 [AIAgentViewModel.reasoningExpansionOverrides]）；null = 用内部状态。 */
+    reasoningExpandedOverride: Boolean? = null,
+    /** in-message 思考块手动展开/收起时回传新状态，由上层持久化。 */
+    onReasoningExpandedChange: ((Boolean) -> Unit)? = null,
+    /** 长按消息内容回调（弹「消息操作」mini 悬浮窗），带出长按触点的窗口坐标供锚定；null = 不启用（如工具消息）。 */
+    onMessageLongPress: ((AgentUIMessage, Rect) -> Unit)? = null,
+    /** 「选择文本」模式：正文挂 SelectionContainer 进入选字；false 时长按走操作菜单。 */
+    selectTextMode: Boolean = false,
+    /** 「选择文本」模式的完成/退出回调。 */
+    onSelectTextDone: (() -> Unit)? = null,
 ) {
     if (message.isCompactionMarker) {
         // 压缩内部锚点不再渲染分隔线：摘要卡片已提供压缩反馈，避免与卡片重复。
@@ -246,6 +276,11 @@ internal fun AgentMessageItem(
         return
     }
 
+    if (message.isVerificationReport) {
+        VerificationReportCard(message, markdownCache)
+        return
+    }
+
     if (message.isBackgroundNotification) {
         BackgroundNotificationBar(message)
         return
@@ -258,6 +293,28 @@ internal fun AgentMessageItem(
     if (message.role == MessageRole.ASSISTANT && !hasContent && !hasReasoning && !hasAttachments) return
 
     val isUser = message.role == MessageRole.USER
+    // 长按弹「消息操作」mini 悬浮窗的手势；未启用时为空 Modifier。只监听长按、不拦截点击：
+    // 正文内的链接点击（更内层 clickable）优先命中，长按空白/正文处才弹菜单。
+    // 锚点 = 长按触点：detectTapGestures 回调给的是节点局部坐标，配合 onGloballyPositioned
+    // 记录的节点窗口 bounds 换算成窗口坐标（零尺寸矩形），弹窗贴触点升起。
+    val latestMessage = rememberUpdatedState(message)
+    var nodeBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
+    val longPressModifier = remember(message.id, onMessageLongPress) {
+        if (onMessageLongPress == null) {
+            Modifier
+        } else {
+            Modifier
+                .onGloballyPositioned { nodeBoundsInWindow = it.boundsInWindow() }
+                .pointerInput(message.id) {
+                    detectTapGestures(onLongPress = { offset ->
+                        onMessageLongPress(
+                            latestMessage.value,
+                            Rect(nodeBoundsInWindow.topLeft + offset, Size.Zero)
+                        )
+                    })
+                }
+        }
+    }
     // 分块消息：块间只留一个段落间距，视觉上仍是连续的一段正文（DSH 扁平文档流下不再有描边接缝）。
     val chunked = contentSlice != null
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
@@ -308,7 +365,9 @@ internal fun AgentMessageItem(
             ReasoningBubble(
                 text = message.reasoning.orEmpty(),
                 cache = markdownCache,
-                durationMs = reasoningDurationMs
+                durationMs = reasoningDurationMs,
+                expandedOverride = reasoningExpandedOverride,
+                onExpandedChange = onReasoningExpandedChange
             )
         }
         if (hasContent || hasAttachments || message.role != MessageRole.ASSISTANT) {
@@ -317,19 +376,26 @@ internal fun AgentMessageItem(
                 // 助手消息左对齐，用户消息右对齐
                 horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
             ) {
+                // 消息类型小徽章：标在用户气泡上方（弱化色，仅展示）
+                if (isUser && message.intentType != null) {
+                    MessageIntentBadge(intentType = message.intentType)
+                }
                 if (hasContent || message.role == MessageRole.TOOL) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (message.role == MessageRole.TOOL) {
-                            // 工具行自带 1px 细线与状态图标；这里只负责入场动画（只改 draw 层，不动布局）
+                            // 工具行自带 1px 细线与状态图标；这里只负责入场动画（只改 draw 层，不动布局）。
+                            // 只在入场动画进行中挂层：常驻离屏图层不随主题切换刷新（同输入栏修复）。
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .graphicsLayer {
-                                        alpha = entryProgress
-                                        translationY = (1f - entryProgress) * MESSAGE_ENTRY_RISE.toPx()
-                                    }
+                                    .then(
+                                        if (entryProgress < 1f) Modifier.graphicsLayer {
+                                            alpha = entryProgress
+                                            translationY = (1f - entryProgress) * MESSAGE_ENTRY_RISE.toPx()
+                                        } else Modifier
+                                    )
                             ) {
                                 ToolMessageBody(
                                     message = message,
@@ -341,31 +407,41 @@ internal fun AgentMessageItem(
                             }
                         } else if (isUser) {
                             // 用户消息：右对齐浅色药丸 + 深色文字（不再整块主题色反白）。
+                            // 默认长按弹「消息操作」菜单；仅「选择文本」模式挂 SelectionContainer 进入选字。
+                            val userBubbleBody: @Composable () -> Unit = {
+                                CompositionLocalProvider(
+                                    LocalTextSelectionColors provides TextSelectionColors(
+                                        handleColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        backgroundColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.24f),
+                                    )
+                                ) {
+                                    Text(
+                                        text = message.content,
+                                        color = chatUserBubbleTextColor(),
+                                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
+                                        modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                                    )
+                                }
+                            }
                             Surface(
                                 shape = RoundedCornerShape(ChatStyle.bubbleCorner),
                                 color = chatUserBubbleColor(),
-                                modifier = Modifier.widthIn(max = maxUserBubbleWidth)
+                                modifier = Modifier
+                                    .widthIn(max = maxUserBubbleWidth)
+                                    // 选字模式不挂长按菜单手势：SelectionContainer 的选词长按会与菜单长按同时判定，两者竞争
+                                    .then(if (selectTextMode) Modifier else longPressModifier)
                             ) {
-                                SelectionContainer {
-                                    CompositionLocalProvider(
-                                        LocalTextSelectionColors provides TextSelectionColors(
-                                            handleColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            backgroundColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.24f),
-                                        )
-                                    ) {
-                                        Text(
-                                            text = message.content,
-                                            color = chatUserBubbleTextColor(),
-                                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                                            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                                        )
-                                    }
+                                if (selectTextMode) {
+                                    SelectionContainer { userBubbleBody() }
+                                } else {
+                                    userBubbleBody()
                                 }
                             }
                         } else {
                             // 助手正文：不套容器，直接铺在页面底色上（文档流）。分块之间只留一个段落间距，
                             // 整条消息看起来仍是连续的一段正文。
-                            SelectionContainer {
+                            // 默认长按弹「消息操作」菜单；仅「选择文本」模式挂 SelectionContainer 进入选字。
+                            val assistantBody: @Composable () -> Unit = {
                                 CompositionLocalProvider(
                                     LocalTextSelectionColors provides TextSelectionColors(
                                         handleColor = MaterialTheme.colorScheme.primary,
@@ -380,12 +456,47 @@ internal fun AgentMessageItem(
                                     )
                                 }
                             }
+                            if (selectTextMode) {
+                                SelectionContainer { assistantBody() }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(longPressModifier)
+                                ) {
+                                    assistantBody()
+                                }
+                            }
                         }
                     }
                 }
                 if ((isUser || message.role == MessageRole.ASSISTANT) && hasAttachments) {
                     MessageAttachmentList(attachments = message.attachments)
                 }
+                // 「选择文本」模式的退出条：给选字交互一个明确出口，避免用户被困在系统选择交互里。
+                if (selectTextMode && isChunkFooter) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = Spacing.xs)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.chat_select_text_mode),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(Spacing.xs))
+                        TextButton(
+                            onClick = { onSelectTextDone?.invoke() },
+                            contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.common_done),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+
                 // 气泡下方的元信息行（工具消息不显示）：用户消息每条都常驻「时间 + 复制/回退/更多」，
                 // 助手消息只挂整段会话最新的一条，避免每条回复下面都吊一排按钮把聊天记录割碎。
                 // 排列固定为「统计（用量/缓存/耗时）→ 复制 → 更多选项」：信息在前，操作入口收在行尾。
@@ -395,7 +506,10 @@ internal fun AgentMessageItem(
                 val tokenStats = turnUsage
                     ?.takeIf { it.inputTokens > 0 || it.outputTokens > 0 }
                     ?.let {
-                        val inStr = formatTokenCount(it.inputTokens.toLong())
+                        // inputTokens 已含缓存命中（与设置页同口径）；气泡上显示「新增输入」更贴近真实增量，
+                        // 缓存命中量由后面的命中率图标表达，避免把百万级缓存读取误当成新消耗。
+                        val fresh = (it.inputTokens - it.cachedInputTokens).coerceAtLeast(0)
+                        val inStr = formatTokenCount(fresh.toLong())
                         val outStr = formatTokenCount(it.outputTokens.toLong())
                         "↑$inStr ↓$outStr"
                     }
@@ -483,14 +597,24 @@ internal fun AgentMessageItem(
                         }
                         // 「更多选项」排在这一行的**最后**：助手消息里它跟在复制按钮后面（先给信息，
                         // 再给操作入口）；用户消息没有统计项，它自然接着回退按钮，间距与按钮组一致。
-                        if (actionsVisible && onMoreClick != null) {
+                        // 助手消息无可见正文（纯附件）时不挂：mini 悬浮窗对助手只提供文本类操作，
+                        // 打开会是空菜单（用户消息的编辑/删除不受此限）。
+                        if (actionsVisible && onMoreClick != null && (isUser || hasContent)) {
                             if (emitted) Spacer(Modifier.width(Spacing.xs))
-                            MessageActionIconButton(
-                                icon = FeatherIcons.MoreHorizontal,
-                                contentDescription = stringResource(R.string.chat_more_options),
-                                tint = iconTint,
-                                onClick = { onMoreClick(message) }
-                            )
+                            // 记录按钮 bounds（窗口坐标）作为 mini 悬浮窗锚点：贴按钮上方升起。
+                            var moreButtonBounds by remember { mutableStateOf(Rect.Zero) }
+                            Box(
+                                modifier = Modifier.onGloballyPositioned {
+                                    moreButtonBounds = it.boundsInWindow()
+                                }
+                            ) {
+                                MessageActionIconButton(
+                                    icon = FeatherIcons.MoreHorizontal,
+                                    contentDescription = stringResource(R.string.chat_more_options),
+                                    tint = iconTint,
+                                    onClick = { onMoreClick(message, moreButtonBounds) }
+                                )
+                            }
                         }
                     }
                     // 复制成功 1.5s 后恢复图标
@@ -506,11 +630,35 @@ internal fun AgentMessageItem(
     }
 }
 
+/** 用户气泡上方的消息类型小徽章（图标+名称，弱化色）：标出「这条消息是什么」。 */
+@Composable
+private fun MessageIntentBadge(intentType: String) {
+    val intent = MessageIntentCatalog.find(intentType) ?: return
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(bottom = 1.dp)
+    ) {
+        Icon(
+            intent.icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(11.dp)
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = stringResource(intent.labelRes),
+            style = MaterialTheme.typography.labelSmall,
+            color = tint
+        )
+    }
+}
+
 /**
- * 整轮任务折叠头（最外层）：一行「执行中 / 已完成 Xs + 箭头」，点一下展开/收起整轮过程。
+ * 整轮任务折叠头（最外层）：一行「构造过程 · 执行中 / 构造过程 · 12.3s + 箭头」，点一下展开/收起整轮过程。
  *
  * 收起态用右箭头（ChevronRight），展开态用下箭头（ChevronDown）——与参考图一致；
- * 运行中（[running]）只显示「执行中」，完成后显示本轮耗时。风格对齐 [ToolCallGroupHeader]。
+ * 运行中（[running]）只说「构造过程 · 执行中」，完成后附本轮耗时。风格对齐 [ToolCallGroupHeader]。
  */
 @Composable
 internal fun TurnCollapseHeader(
@@ -534,10 +682,11 @@ internal fun TurnCollapseHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = if (running) {
-                stringResource(R.string.chat_turn_running)
-            } else {
-                stringResource(R.string.chat_turn_completed, durationMs?.let { formatTaskDuration(it) } ?: "")
+            text = when {
+                running -> stringResource(R.string.chat_turn_process_running)
+                durationMs != null -> stringResource(R.string.chat_turn_process_done, formatTaskDuration(durationMs))
+                // 拿不到耗时（被窗口截断的半轮、消息缺时间戳）时只说「构造过程」，不留空档
+                else -> stringResource(R.string.chat_turn_process_plain)
             },
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
@@ -743,6 +892,133 @@ private fun CompactionFailureCard(message: AgentUIMessage) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 独立验收报告卡：默认折叠为「圆点 + 独立验收 + 结论首行 + 箭头」，点击展开查看完整报告。
+ * 报告由收尾时的独立验收模型给出（另一个模型交叉检查目标完成度），以无配对 TOOL 消息
+ * 落库，回放不进模型上下文。
+ */
+@Composable
+private fun VerificationReportCard(message: AgentUIMessage, markdownCache: MarkdownRenderCache?) {
+    var expanded by remember(message.id) { mutableStateOf(false) }
+    val firstLine = message.content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs)) {
+        ChatHairline()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(ChatStyle.panelCorner))
+                .background(chatMutedSurfaceColor())
+                .clickable { expanded = !expanded }
+                .padding(horizontal = Spacing.sm, vertical = Spacing.sm)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.tertiary)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.chat_verification_report),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                if (!expanded && firstLine.isNotBlank()) {
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        text = firstLine,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                ExpandableChevronIcon(
+                    expanded = expanded,
+                    contentDescription = if (expanded) stringResource(R.string.common_collapse_action) else stringResource(R.string.common_expand),
+                    tint = Brand.IconGray,
+                    size = 16.dp
+                )
+            }
+            if (expanded && message.content.hasVisibleContent()) {
+                Spacer(Modifier.height(Spacing.xs))
+                MarkdownContent(
+                    text = message.content,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth(),
+                    cache = markdownCache
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 本轮产物聚合块：仅当轮内助手/工具消息携带附件时渲染（sendFile / 生成图片等交付物）。
+ * 折叠为一行摘要，展开复用消息附件行（图片预览 / 文件打开走既有链路）。
+ * 作为「结果」常显于轮块末尾，不随过程折叠。
+ */
+@Composable
+internal fun TurnArtifactsBlock(artifacts: List<AgentAttachment>) {
+    if (artifacts.isEmpty()) return
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val opener = LocalAttachmentOpener.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.xs)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(Radius.md),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    FeatherIcons.Package,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = stringResource(R.string.chat_turn_artifacts, artifacts.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                ExpandableChevronIcon(
+                    expanded = expanded,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    size = 16.dp
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+        ) {
+            MessageAttachmentList(
+                attachments = artifacts,
+                onClick = { opener.open(it) }
+            )
         }
     }
 }

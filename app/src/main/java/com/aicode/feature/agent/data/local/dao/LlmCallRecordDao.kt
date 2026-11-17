@@ -18,7 +18,9 @@ data class DayCallStats(
     val errors: Int,
     val avgTtfbMillis: Double?,
     val avgDurationMillis: Double?,
-    val retryCount: Long = 0
+    val retryCount: Long = 0,
+    /** 写入缓存的 token 数之和（inputTokens 的子集）。 */
+    val cacheCreationTokens: Long = 0
 )
 
 /** 按渠道（provider）聚合的调用统计，供渠道排行使用。 */
@@ -30,7 +32,9 @@ data class ProviderCallStats(
     val outputTokens: Long,
     val cachedInputTokens: Long,
     val errors: Int,
-    val retryCount: Long = 0
+    val retryCount: Long = 0,
+    /** 写入缓存的 token 数之和（inputTokens 的子集）。 */
+    val cacheCreationTokens: Long = 0
 )
 
 /** 按模型聚合的调用统计，供模型排行使用。 */
@@ -90,6 +94,10 @@ interface LlmCallRecordDao {
     @Query("DELETE FROM llm_call_records")
     suspend fun deleteAll()
 
+    /** 删除早于 [cutoffTimestamp] 的调用记录（用量统计只保留近期，避免无上限累积）。 */
+    @Query("DELETE FROM llm_call_records WHERE createdAt < :cutoffTimestamp")
+    suspend fun deleteBefore(cutoffTimestamp: Long)
+
     /**
      * 按天聚合（本地时区：把 createdAt 平移 [tzOffsetMillis] 后再按 86400000 取整切天）。
      * [tzOffsetMillis] 由调用方按当前系统时区提供（TimeZone.getDefault().getOffset(now)）。
@@ -100,6 +108,7 @@ interface LlmCallRecordDao {
                SUM(inputTokens) AS inputTokens,
                SUM(outputTokens) AS outputTokens,
                SUM(cachedInputTokens) AS cachedInputTokens,
+               SUM(cacheCreationTokens) AS cacheCreationTokens,
                COUNT(*) AS calls,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
                AVG(ttfbMillis) AS avgTtfbMillis,
@@ -127,6 +136,7 @@ interface LlmCallRecordDao {
                SUM(inputTokens) AS inputTokens,
                SUM(outputTokens) AS outputTokens,
                SUM(cachedInputTokens) AS cachedInputTokens,
+               SUM(cacheCreationTokens) AS cacheCreationTokens,
                COUNT(*) AS calls,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
                AVG(ttfbMillis) AS avgTtfbMillis,
@@ -156,6 +166,7 @@ interface LlmCallRecordDao {
                SUM(r.inputTokens) AS inputTokens,
                SUM(r.outputTokens) AS outputTokens,
                SUM(r.cachedInputTokens) AS cachedInputTokens,
+               SUM(r.cacheCreationTokens) AS cacheCreationTokens,
                SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END) AS errors,
                SUM(r.retryCount) AS retryCount
         FROM llm_call_records r
@@ -221,6 +232,27 @@ interface LlmCallRecordDao {
         providerId: String? = null,
         model: String? = null
     ): Flow<List<ModelProviderCostStats>>
+
+    /**
+     * 单个会话按「渠道 + 模型」聚合的 token 用量，供顶栏状态条估算本会话花费。
+     *
+     * 用一次性 suspend 查询而不是 Flow：调用它的是「会话总量变了」这一事件（由会话 Flow 驱动），
+     * 不需要为每张卡片再挂一条数据库观察。
+     */
+    @Query(
+        """
+        SELECT providerId AS providerId,
+               model AS model,
+               SUM(inputTokens) AS inputTokens,
+               SUM(cachedInputTokens) AS cachedInputTokens,
+               SUM(outputTokens) AS outputTokens,
+               SUM(cacheCreationTokens) AS cacheCreationTokens
+        FROM llm_call_records
+        WHERE sessionId = :sessionId AND model IS NOT NULL AND model != ''
+        GROUP BY providerId, model
+        """
+    )
+    suspend fun getSessionModelProviderCostStats(sessionId: String): List<ModelProviderCostStats>
 
     /** 周期整体汇总（无 GROUP BY，恒返回一行）。 */
     @Query(

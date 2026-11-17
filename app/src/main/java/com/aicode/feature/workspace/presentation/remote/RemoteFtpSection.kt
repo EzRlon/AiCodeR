@@ -39,9 +39,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.Spacing
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
-import com.aicode.feature.settings.presentation.component.settingsLightMode
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.settingsLightMode
 import com.aicode.R
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Copy

@@ -4,6 +4,7 @@
     "name": "OpenAI",
     "type": "OPENAI",
     "baseUrl": "https://api.openai.com/",
+    "models": ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"],
     "isRecommended": false,
     "badge": null,
     "websiteUrl": null,
@@ -14,6 +15,7 @@
     "name": "Anthropic",
     "type": "ANTHROPIC",
     "baseUrl": "https://api.anthropic.com/",
+    "models": ["claude-opus-5-5", "claude-sonnet-5-5"],
     "isRecommended": false,
     "badge": null,
     "websiteUrl": null,
@@ -24,6 +26,7 @@
     "name": "DeepSeek",
     "type": "OPENAI",
     "baseUrl": "https://api.deepseek.com/",
+    "models": ["deepseek-v4-pro", "deepseek-flash"],
     "isRecommended": false,
     "badge": null,
     "websiteUrl": null,
@@ -54,6 +57,7 @@
     "name": "Qwen",
     "type": "OPENAI",
     "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "models": ["qwen3.8-max", "qwen3.8-2.4t-a95b", "qwen3.8-27b"],
     "isRecommended": false,
     "badge": null,
     "websiteUrl": null,
@@ -64,6 +68,7 @@
     "name": "Z.AI (智谱)",
     "type": "OPENAI",
     "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "models": ["glm-5.3", "glm-5.3-flash"],
     "isRecommended": false,
     "badge": null,
     "websiteUrl": null,
@@ -74,6 +79,7 @@
     "name": "Kimi",
     "type": "OPENAI",
     "baseUrl": "https://api.moonshot.cn/v1",
+    "models": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.6"],
     "isRecommended": false,
     "badge": null,
     "websiteUrl": null,
@@ -98,7 +104,8 @@
     "badge": null,
     "websiteUrl": "https://platform.xiaomimimo.com?ref=66QSUD",
     "tags": [
-      "注册送10元"
+      "注册送10元",
+      "需实名"
     ]
   },
   {
@@ -111,6 +118,31 @@
     "websiteUrl": "https://ai.murk.top",
     "tags": [
       "签到领额度"
+    ]
+  },
+  {
+    "id": "siliconflow",
+    "name": "SiliconFlow",
+    "type": "OPENAI",
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "isRecommended": false,
+    "badge": null,
+    "websiteUrl": "https://cloud.siliconflow.cn/i/HNDIQWXd",
+    "tags": [
+      "注册送16元",
+      "需实名"
+    ]
+  },
+  {
+    "id": "qiniu",
+    "name": "七牛云 AI",
+    "type": "OPENAI",
+    "baseUrl": "https://api.qnaigc.com/v1",
+    "isRecommended": false,
+    "badge": null,
+    "websiteUrl": "https://s.qiniu.com/vUryau",
+    "tags": [
+      "注册送300万Token"
     ]
   }
 ]

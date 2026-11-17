@@ -24,6 +24,17 @@ interface TodoItemDao {
     @Query("SELECT * FROM todo_items")
     suspend fun getAllOnce(): List<TodoItemEntity>
 
+    /** 记忆图谱：各会话待办进度聚合（一次全表分组，IO 线程调用）。 */
+    @Query(
+        """
+        SELECT sessionId AS sessionId,
+               SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS done,
+               COUNT(*) AS total
+        FROM todo_items GROUP BY sessionId
+        """
+    )
+    suspend fun todoCountsBySession(): List<TodoCountRow>
+
     /** 分页读取（keyset：按 createdAt,id 字典序取 [limit] 条），供备份流式导出。 */
     @Query("SELECT * FROM todo_items WHERE createdAt > :lastCreatedAt OR (createdAt = :lastCreatedAt AND id > :lastId) ORDER BY createdAt ASC, id ASC LIMIT :limit")
     suspend fun getPageAfter(lastCreatedAt: Long, lastId: String, limit: Int): List<TodoItemEntity>
@@ -41,3 +52,10 @@ interface TodoItemDao {
     @Query("SELECT MAX(`order`) FROM todo_items WHERE sessionId = :sessionId")
     suspend fun getMaxOrder(sessionId: String): Int?
 }
+
+/** 记忆图谱的待办进度聚合（[TodoItemDao.todoCountsBySession] 的投影）。 */
+data class TodoCountRow(
+    val sessionId: String,
+    val done: Int,
+    val total: Int
+)

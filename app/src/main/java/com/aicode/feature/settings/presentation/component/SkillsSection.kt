@@ -1,10 +1,13 @@
 package com.aicode.feature.settings.presentation.component
 
-import androidx.compose.animation.AnimatedVisibility
+import com.aicode.core.ui.settings.CollapsibleGroupHeader
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.LazyGroupItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,20 +15,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
@@ -33,9 +37,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Radius
-import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.BatchDeleteConfirmDialog
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.rememberListSelection
+import com.aicode.core.ui.SelectionActionBar
+import com.aicode.core.ui.SelectionActionButton
+import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.feature.agent.domain.skill.SkillScope
 import com.aicode.feature.settings.presentation.SkillUiEntry
 import compose.icons.FeatherIcons
@@ -45,16 +54,32 @@ import compose.icons.feathericons.ChevronRight
 /**
  * 技能二级页：与「工具授权」一致的折叠分组列表——「当前项目 / 全局」两组各自可折叠，
  * 每行一个技能（图标 + 名称 + 描述），左滑删除，点击行进入详情。
+ *
+ * 列表走 [LazyColumn] 只组合可见行：技能数量随项目增长且没有上限，
+ * 用 Column + verticalScroll 一次性组合全部行会让滚动明显掉帧。
+ *
+ * 顶栏右上角「多选」进入批量模式（[selection] 由 SettingsScreen 持有）：可批量启用 / 停用 / 删除。
+ * 全选覆盖两组（含折叠起来的组），避免「点了全选却漏掉折叠里的」。
  */
 @Composable
 internal fun SkillsSection(
     projectName: String?,
     entries: List<SkillUiEntry>,
+    selection: ListSelectionState,
     onDelete: (SkillUiEntry) -> Unit,
-    onOpenDetail: (SkillUiEntry) -> Unit
+    onOpenDetail: (SkillUiEntry) -> Unit,
+    onBatchDelete: (List<SkillUiEntry>) -> Unit,
+    onBatchSetEnabled: (List<SkillUiEntry>, Boolean) -> Unit
 ) {
-    val projectSkills = entries.filter { it.scope == SkillScope.PROJECT }
-    val globalSkills = entries.filter { it.scope == SkillScope.GLOBAL }
+    // 只在数据变化时分组，避免每次重组都产生两份新 List。
+    val (projectSkills, globalSkills) = remember(entries) {
+        entries.filter { it.scope == SkillScope.PROJECT } to entries.filter { it.scope == SkillScope.GLOBAL }
+    }
+
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    val allKeys = remember(entries) { entries.map { skillSelectionKey(it) } }
+    val keyToEntry = remember(entries) { entries.associateBy { skillSelectionKey(it) } }
+    val scaffold = rememberListSelection(allKeys, selection, entries.isEmpty()) { keyToEntry[it] }
 
     if (entries.isEmpty()) {
         Box(
@@ -99,78 +124,148 @@ internal fun SkillsSection(
     var projectExpanded by rememberSaveable { mutableStateOf(true) }
     var globalExpanded by rememberSaveable { mutableStateOf(true) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        CollapsibleGroupHeader(
-            text = if (projectName != null) {
-                stringResource(R.string.perm_current_project, projectName)
-            } else {
-                stringResource(R.string.perm_current_project_none)
-            },
-            expanded = projectExpanded,
-            onToggle = { projectExpanded = !projectExpanded }
-        )
-        AnimatedVisibility(visible = projectExpanded) {
-            SettingsGroup {
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (selection.isActive) {
+            SelectionActionBar(
+                selectedCount = selection.selectedCount,
+                allSelected = scaffold.allSelected,
+                // 全选覆盖两组（含折叠起来的），否则「点了全选却漏掉折叠里的」。
+                onToggleSelectAll = { scaffold.toggleSelectAll() },
+                onExit = { selection.exit() },
+                actions = {
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_enabled),
+                        enabled = selection.selectedCount > 0,
+                        onClick = { onBatchSetEnabled(scaffold.selectedEntries, true) }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_disabled),
+                        enabled = selection.selectedCount > 0,
+                        onClick = { onBatchSetEnabled(scaffold.selectedEntries, false) }
+                    )
+                    SelectionActionButton(
+                        text = stringResource(R.string.common_delete),
+                        enabled = selection.selectedCount > 0,
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = { showBatchDeleteConfirm = true }
+                    )
+                }
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            item(key = "project-header", contentType = "header") {
+                CollapsibleGroupHeader(
+                    text = if (projectName != null) {
+                        stringResource(R.string.perm_current_project, projectName)
+                    } else {
+                        stringResource(R.string.perm_current_project_none)
+                    },
+                    expanded = projectExpanded,
+                    onToggle = { projectExpanded = !projectExpanded }
+                )
+            }
+            if (projectExpanded) {
                 if (projectSkills.isEmpty()) {
-                    SkillEmptyHint(stringResource(R.string.skills_no_project_skills))
+                    item(key = "project-empty", contentType = "empty") {
+                        SettingsGroup { SkillEmptyHint(stringResource(R.string.skills_no_project_skills)) }
+                    }
                 } else {
-                    projectSkills.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
-                        SkillRow(
-                            entry = entry,
-                            onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
-                        )
+                    itemsIndexed(
+                        items = projectSkills,
+                        key = { _, entry -> "project:${entry.name}" },
+                        contentType = { _, _ -> "skill-row" }
+                    ) { index, entry ->
+                        LazyGroupItem(index = index, lastIndex = projectSkills.lastIndex) {
+                            SkillRow(
+                                entry = entry,
+                                onDelete = { onDelete(entry) },
+                                onClick = { onOpenDetail(entry) },
+                                selectionMode = selection.isActive,
+                                selected = selection.isSelected(skillSelectionKey(entry)),
+                                onToggleSelect = { selection.toggle(skillSelectionKey(entry)) }
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        CollapsibleGroupHeader(
-            text = stringResource(R.string.perm_global),
-            expanded = globalExpanded,
-            onToggle = { globalExpanded = !globalExpanded }
-        )
-        AnimatedVisibility(visible = globalExpanded) {
-            SettingsGroup {
+            item(key = "global-header", contentType = "header") {
+                CollapsibleGroupHeader(
+                    text = stringResource(R.string.perm_global),
+                    expanded = globalExpanded,
+                    onToggle = { globalExpanded = !globalExpanded }
+                )
+            }
+            if (globalExpanded) {
                 if (globalSkills.isEmpty()) {
-                    SkillEmptyHint(stringResource(R.string.skills_no_global_skills))
+                    item(key = "global-empty", contentType = "empty") {
+                        SettingsGroup { SkillEmptyHint(stringResource(R.string.skills_no_global_skills)) }
+                    }
                 } else {
-                    globalSkills.forEachIndexed { index, entry ->
-                        if (index > 0) SettingsDivider()
-                        SkillRow(
-                            entry = entry,
-                            onDelete = { onDelete(entry) },
-                            onClick = { onOpenDetail(entry) }
-                        )
+                    itemsIndexed(
+                        items = globalSkills,
+                        key = { _, entry -> "global:${entry.name}" },
+                        contentType = { _, _ -> "skill-row" }
+                    ) { index, entry ->
+                        LazyGroupItem(index = index, lastIndex = globalSkills.lastIndex) {
+                            SkillRow(
+                                entry = entry,
+                                onDelete = { onDelete(entry) },
+                                onClick = { onOpenDetail(entry) },
+                                selectionMode = selection.isActive,
+                                selected = selection.isSelected(skillSelectionKey(entry)),
+                                onToggleSelect = { selection.toggle(skillSelectionKey(entry)) }
+                            )
+                        }
                     }
                 }
             }
         }
     }
+
+    if (showBatchDeleteConfirm) {
+        BatchDeleteConfirmDialog(
+            title = stringResource(R.string.skills_batch_delete_title),
+            message = stringResource(R.string.skills_batch_delete_confirm, scaffold.selectedEntries.size),
+            onConfirm = {
+                showBatchDeleteConfirm = false
+                selection.exit()
+                onBatchDelete(scaffold.selectedEntries)
+            },
+            onDismiss = { showBatchDeleteConfirm = false }
+        )
+    }
 }
+
+/** 多选 key：同名技能可能同时存在于项目层与全局层，必须带作用域前缀。 */
+private fun skillSelectionKey(entry: SkillUiEntry): String = "${entry.scope.name}:${entry.name}"
 
 /** 单个技能行：图标 + 名称/描述 + 右箭头；左滑删除，点击行进入详情。 */
 @Composable
 private fun SkillRow(
     entry: SkillUiEntry,
     onDelete: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
-    val rowBackground = MaterialTheme.semanticColors.cardSurface
-
-    SwipeToDeleteRow(onDelete = onDelete, onClick = onClick) {
+    // 行背景由 SwipeToDeleteRow 提供，这里不再重复画一层，省一次整行绘制。
+    SwipeToDeleteRow(
+        onDelete = onDelete,
+        onClick = onClick,
+        selectionMode = selectionMode,
+        selected = selected,
+        onToggleSelect = onToggleSelect
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(rowBackground)
                 .padding(start = Spacing.lg, end = Spacing.xs, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -199,7 +294,8 @@ private fun SkillRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = entry.name,
+                        text = entry.name +
+                            (if (entry.nameZh.isNotBlank()) "（${entry.nameZh}）" else ""),
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -213,7 +309,8 @@ private fun SkillRow(
                     )
                 }
                 Text(
-                    text = entry.description.ifBlank { stringResource(R.string.mcp_no_description) },
+                    text = entry.descriptionZh.ifBlank { entry.description }
+                        .ifBlank { stringResource(R.string.mcp_no_description) },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

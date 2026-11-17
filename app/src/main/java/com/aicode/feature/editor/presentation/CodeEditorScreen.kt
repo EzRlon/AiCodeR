@@ -17,11 +17,13 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,9 +41,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,14 +69,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.R
 import com.aicode.core.theme.Spacing
+import com.aicode.core.util.LineDiff
 import com.aicode.feature.editor.data.EditorSettings
 import com.aicode.feature.editor.domain.TextMateSetup
 import com.aicode.feature.editor.presentation.component.MarkdownPreviewWebView
+import com.aicode.feature.note.presentation.component.NoteEditorWebView
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Code
+import compose.icons.feathericons.Edit3
 import compose.icons.feathericons.Eye
 import compose.icons.feathericons.Save
 import compose.icons.feathericons.Settings
@@ -89,6 +96,14 @@ import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import kotlin.math.abs
 
 /**
+ * 待确认的离开动作：确认保存后执行。
+ *
+ * [confirmLabelRes] 是未保存提示里确认键的文案：关编辑页是「保存并退出」，
+ * 大屏右栏换个文件接着看是「保存并切换」。
+ */
+private data class PendingLeave(val confirmLabelRes: Int, val action: () -> Unit)
+
+/**
  * 独立全屏代码编辑页。支持语法高亮、撤销/重做、底部符号快捷栏与保存。
  * 保存直接覆盖写回，不做外部并发写检测——AI 工具或终端可能同时改同一文件。
  */
@@ -99,6 +114,7 @@ fun CodeEditorScreen(
     onBack: () -> Unit,
     initialLine: Int = 0,
     embedded: Boolean = false,
+    leaveGuard: EditorLeaveGuard? = null,
     viewModel: CodeEditorViewModel = hiltViewModel()
 ) {
     LaunchedEffect(path) { viewModel.load(path) }
@@ -107,14 +123,19 @@ fun CodeEditorScreen(
     val editorRef = remember { mutableStateOf<CodeEditor?>(null) }
     var canUndo by remember { mutableStateOf(false) }
     var canRedo by remember { mutableStateOf(false) }
-    var dirty by remember { mutableStateOf(false) }
+    // 脏标记的 State 单独留一份引用：注册给宿主的回调要读「调用时」的值，不能捕获布尔快照。
+    val dirtyState = remember { mutableStateOf(false) }
+    var dirty by dirtyState
     // 已保存（或刚加载）的内容。脏标记按与它的差异判定，撤销回原样时才能自行复位。
     val baselineText = remember { mutableStateOf("") }
     var pendingSaveText by remember { mutableStateOf("") }
-    var pendingExit by remember { mutableStateOf(false) }
+    // 待确认的离开动作（关页面 / 大屏右栏换文件），保存成功后执行。
+    var pendingLeave by remember { mutableStateOf<PendingLeave?>(null) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var previewMode by remember { mutableStateOf(false) }
+    var noteMode by remember { mutableStateOf(false) }
+    var noteReloadTick by remember { mutableStateOf(0) }
     var cursorLine by remember { mutableStateOf(1) }
     var cursorColumn by remember { mutableStateOf(1) }
     val isMarkdown = remember(path) {
@@ -129,15 +150,46 @@ fun CodeEditorScreen(
         canUndo = false
         canRedo = false
         dirty = false
-        pendingExit = false
+        pendingLeave = null
         cursorLine = 1
         cursorColumn = 1
         previewMode = false
+        noteMode = false
+    }
+
+    // 退出笔记模式：从磁盘重载，反映笔记的自动保存结果
+    LaunchedEffect(noteReloadTick) {
+        if (noteReloadTick > 0) viewModel.load(path)
+    }
+
+    // 大屏右栏宿主（点文件树 / 点聊天里的路径链接）要换文件时，先过这里：无脏数据直接放行，
+    // 有脏数据复用同一套保存提示，确认后再换，避免静默丢弃未保存的修改。
+    LaunchedEffect(leaveGuard) {
+        leaveGuard?.register { onLeave ->
+            if (!dirtyState.value) {
+                onLeave()
+            } else {
+                pendingLeave = PendingLeave(R.string.editor_save_and_switch, onLeave)
+                showUnsavedDialog = true
+            }
+        }
+    }
+    // 脏状态实时上报给宿主。
+    LaunchedEffect(leaveGuard, dirty) { leaveGuard?.isDirty = dirtyState.value }
+    // 离开组合（右栏切到终端、收起等）时撤掉上报与处理，不拿旧状态拦人。
+    DisposableEffect(leaveGuard) {
+        onDispose {
+            leaveGuard?.register(null)
+            leaveGuard?.isDirty = false
+        }
     }
 
     val context = LocalContext.current
     val savedText = stringResource(R.string.editor_save_success)
     val saveFailedText = stringResource(R.string.editor_save_failed)
+    val conflictDiscardedText = stringResource(R.string.editor_save_conflict_discarded)
+    // 保存冲突：磁盘内容在编辑器打开之后被改过。非空时弹对话框让用户选，不自动覆盖也不自动丢弃。
+    var saveConflictDiskContent by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         viewModel.saveEvents.collect { result ->
             when (result) {
@@ -145,13 +197,19 @@ fun CodeEditorScreen(
                     baselineText.value = pendingSaveText
                     dirty = false
                     Toast.makeText(context, savedText, Toast.LENGTH_SHORT).show()
-                    if (pendingExit) {
-                        pendingExit = false
-                        onBack()
+                    pendingLeave?.let { leave ->
+                        pendingLeave = null
+                        leave.action()
                     }
                 }
+                is SaveResult.Conflict -> {
+                    // 冲突时放弃"保存并退出"的意图：先让用户决定怎么处理这次冲突。
+                    // rc5 起 pendingExit 已被 pendingLeave（+ EditorLeaveGuard）取代，这里跟着换成它。
+                    pendingLeave = null
+                    saveConflictDiskContent = result.diskContent
+                }
                 is SaveResult.Error -> {
-                    pendingExit = false
+                    pendingLeave = null
                     Toast.makeText(
                         context,
                         result.detail ?: saveFailedText,
@@ -169,10 +227,15 @@ fun CodeEditorScreen(
     }
 
     fun handleBack() {
-        if (dirty) showUnsavedDialog = true else onBack()
+        if (dirty) {
+            pendingLeave = PendingLeave(R.string.editor_save_and_exit) { onBack() }
+            showUnsavedDialog = true
+        } else {
+            onBack()
+        }
     }
 
-    BackHandler(enabled = !showSettings && !previewMode) { handleBack() }
+    BackHandler(enabled = !showSettings && !previewMode && !noteMode) { handleBack() }
     BackHandler(enabled = showSettings) { showSettings = false }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -199,12 +262,28 @@ fun CodeEditorScreen(
                     actions = {
                         val editable = state is EditorUiState.Success
                         if (isMarkdown && editable) {
-                            IconButton(onClick = { previewMode = !previewMode }) {
+                            IconButton(onClick = {
+                                previewMode = !previewMode
+                                if (previewMode) noteMode = false
+                            }) {
                                 Icon(
                                     if (previewMode) FeatherIcons.Code else FeatherIcons.Eye,
                                     contentDescription = stringResource(
                                         if (previewMode) R.string.editor_md_show_source
                                         else R.string.editor_md_preview
+                                    )
+                                )
+                            }
+                            IconButton(onClick = {
+                                val enter = !noteMode
+                                noteMode = enter
+                                if (enter) previewMode = false else noteReloadTick++
+                            }) {
+                                Icon(
+                                    if (noteMode) FeatherIcons.Code else FeatherIcons.Edit3,
+                                    contentDescription = stringResource(
+                                        if (noteMode) R.string.editor_md_show_source
+                                        else R.string.editor_note_mode
                                     )
                                 )
                             }
@@ -229,7 +308,7 @@ fun CodeEditorScreen(
                         }
                         IconButton(
                             onClick = { requestSave() },
-                            enabled = editable && dirty && !saving
+                            enabled = editable && dirty && !saving && !noteMode
                         ) {
                             if (saving) {
                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -262,7 +341,7 @@ fun CodeEditorScreen(
             }
         },
         bottomBar = {
-            if (state is EditorUiState.Success && !previewMode) {
+            if (state is EditorUiState.Success && !previewMode && !noteMode) {
                 EditorSymbolBar(
                     backgroundColor = editorBackground ?: MaterialTheme.colorScheme.background,
                     onInsert = { editorRef.value?.commitText(it) },
@@ -279,24 +358,31 @@ fun CodeEditorScreen(
         when (val s = state) {
             is EditorUiState.Loading -> CenterBox(content) { CircularProgressIndicator() }
             is EditorUiState.Success -> Box(modifier = content) {
-                EditorSurface(
-                    state = s,
-                    modifier = Modifier.fillMaxSize(),
-                    editorRef = editorRef,
-                    settings = settings,
-                    baselineText = baselineText,
-                    initialLine = initialLine,
-                    onBackgroundResolved = { editorBackground = it },
-                    onCursorChanged = { l, c ->
-                        cursorLine = l
-                        cursorColumn = c
-                    },
-                    onContentChanged = { undo, redo, changed ->
-                        canUndo = undo
-                        canRedo = redo
-                        dirty = changed
-                    }
-                )
+                // 文档身份作 key：窄窗全屏路由每次导航都是新组合，编辑器自然重建；
+                // 但大屏右栏常驻在聊天页里，切换文件时这个组合位置不变，AndroidView 的 factory
+                // 不会重跑，会一直显示上一个文件的内容、沿用上一个文件的语法语言。
+                // 这里按加载出的文档（内容 + 语法）重建编辑器，与窄窗行为对齐。
+                // 只按内容/语法而非路径作 key：路径先变、内容后到，按路径会先用旧内容白建一次。
+                key(s.content, s.scopeName) {
+                    EditorSurface(
+                        state = s,
+                        modifier = Modifier.fillMaxSize(),
+                        editorRef = editorRef,
+                        settings = settings,
+                        baselineText = baselineText,
+                        initialLine = initialLine,
+                        onBackgroundResolved = { editorBackground = it },
+                        onCursorChanged = { l, c ->
+                            cursorLine = l
+                            cursorColumn = c
+                        },
+                        onContentChanged = { undo, redo, changed ->
+                            canUndo = undo
+                            canRedo = redo
+                            dirty = changed
+                        }
+                    )
+                }
                 if (previewMode) {
                     // 预览覆盖在编辑器上方（编辑器保留在组合中不销毁，切回源码不丢状态）。
                     // 进入预览时快照编辑器当前文本，确保反映未保存的编辑。
@@ -307,6 +393,22 @@ fun CodeEditorScreen(
                         text = previewText,
                         path = path,
                         onExitPreview = { previewMode = false },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    )
+                }
+                if (noteMode) {
+                    // 笔记模式同样覆盖在编辑器上方（源码编辑器保留不销毁）。
+                    // 进入时快照当前文本，编辑内容由 NoteEditorWebView 自动保存回文件；退出时重载源码。
+                    val noteText = remember(noteMode) {
+                        editorRef.value?.text?.toString() ?: s.content
+                    }
+                    NoteEditorWebView(
+                        text = noteText,
+                        path = path,
+                        onContentChanged = {},
+                        onSaved = {},
                         modifier = Modifier
                             .fillMaxSize()
                             .background(MaterialTheme.colorScheme.background)
@@ -332,21 +434,71 @@ fun CodeEditorScreen(
 
     if (showUnsavedDialog) {
         AlertDialog(
-            onDismissRequest = { showUnsavedDialog = false },
+            onDismissRequest = {
+                // 取消：丢掉待执行的离开动作，留在当前文件。
+                showUnsavedDialog = false
+                pendingLeave = null
+            },
             title = { Text(stringResource(R.string.editor_unsaved_title)) },
             text = { Text(stringResource(R.string.editor_unsaved_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     showUnsavedDialog = false
-                    pendingExit = true
                     requestSave()
-                }) { Text(stringResource(R.string.editor_save_and_exit)) }
+                }) { Text(stringResource(pendingLeave?.confirmLabelRes ?: R.string.editor_save_and_exit)) }
             },
             dismissButton = {
                 TextButton(onClick = {
                     showUnsavedDialog = false
-                    onBack()
+                    pendingLeave?.let { leave ->
+                        pendingLeave = null
+                        leave.action()
+                    }
                 }) { Text(stringResource(R.string.editor_dont_save)) }
+            }
+        )
+    }
+
+    saveConflictDiskContent?.let { diskContent ->
+        AlertDialog(
+            onDismissRequest = { saveConflictDiskContent = null },
+            title = { Text(stringResource(R.string.editor_save_conflict_title)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.editor_save_conflict_message))
+                    // 差异按「磁盘 → 你的编辑」方向渲染：`-` 是磁盘现有内容，`+` 是你的修改。
+                    val diff = remember(diskContent, pendingSaveText) {
+                        LineDiff.toUnified(diskContent, pendingSaveText)
+                    }
+                    Text(
+                        text = stringResource(R.string.editor_save_conflict_diff, diff),
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .padding(top = Spacing.sm)
+                            .fillMaxWidth()
+                            .heightIn(max = 240.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    saveConflictDiskContent = null
+                    viewModel.saveForce(pendingSaveText)
+                }) { Text(stringResource(R.string.editor_save_conflict_overwrite)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { saveConflictDiskContent = null }) {
+                        Text(stringResource(R.string.editor_save_conflict_cancel))
+                    }
+                    TextButton(onClick = {
+                        saveConflictDiskContent = null
+                        viewModel.reloadFromDisk()
+                        Toast.makeText(context, conflictDiscardedText, Toast.LENGTH_SHORT).show()
+                    }) { Text(stringResource(R.string.editor_save_conflict_discard)) }
+                }
             }
         )
     }
@@ -430,7 +582,10 @@ private fun EditorSurface(
     val scrolledByUser = remember { mutableStateOf(false) }
 
     AndroidView(
-        modifier = modifier.graphicsLayer { alpha = contentAlpha },
+        // 入场淡入结束后摘掉图层：常驻离屏缓存不随主题切换刷新。
+        modifier = modifier.then(
+            if (contentAlpha < 1f) Modifier.graphicsLayer { alpha = contentAlpha } else Modifier
+        ),
         factory = { ctx ->
             TextMateSetup.applyTheme(dark)
             // sora 默认把 8 秒内的连续输入并成一条撤销记录，一次撤销会吞掉整段输入。

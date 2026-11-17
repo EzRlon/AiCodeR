@@ -7,10 +7,22 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Android 16 实时通知（Live Updates）：声明后通知才可能被系统提升到状态栏/锁屏。API 36 引入，低版本忽略。 -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Android 11+ 包可见性：语音输入要检测系统语音识别服务是否可用（resolveActivity）。 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
 
     <application
         android:name=".AIEditorApp"
@@ -23,18 +35,25 @@
         android:usesCleartextTraffic="true"
         android:localeConfig="@xml/locales_config">
 
-        <!-- configChanges 自行接管旋转与窗口尺寸变化：Compose 会跟着新 Configuration 重组，
-             不重建 Activity 才能保住终端 TerminalView、编辑器未保存内容与聊天列表位置。
-             故意不含 locale —— 语言切换仍走 MainActivity 里的 recreate 路径。 -->
+        <!-- configChanges 自行接管旋转、窗口尺寸与系统深浅（uiMode）变化：Compose 会跟着新 Configuration 重组，
+             不重建 Activity 才能保住终端 TerminalView、编辑器未保存内容与聊天列表位置；
+             深浅切换不重建也就不会闪启动窗或丢页面状态。故意不含 locale —— 语言切换仍走 MainActivity 里的 recreate 路径。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode"
             android:theme="@style/Theme.AICode.Splash"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- 系统分享进：其他应用分享纯文本到 AiCode，填入当前会话输入框（MainActivity onNewIntent/onCreate 处理）。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 
@@ -71,7 +90,16 @@
             android:name=".feature.terminal.domain.TerminalKeepaliveService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="terminal-keepalive-agent-sessions-floatball" />
+        </service>
+
+        <!-- 通知栏工具授权按钮（批准/拒绝）的落点：显式广播，不对外暴露。 -->
+        <receiver
+            android:name=".feature.agent.domain.notification.PermissionActionReceiver"
+            android:exported="false" />
 
         <!-- Shizuku：用于以 adb shell 身份执行命令（UserService）。
              permission 声明为 INTERACT_ACROSS_USERS_FULL 是官方要求，防止普通应用访问该 provider。 -->
@@ -82,6 +110,11 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- 审批通知上「允许/拒绝」按钮的回传接收器，仅接收本 App 显式 Intent 发的广播。 -->
+        <receiver
+            android:name=".feature.agent.presentation.notification.AgentApprovalActionReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

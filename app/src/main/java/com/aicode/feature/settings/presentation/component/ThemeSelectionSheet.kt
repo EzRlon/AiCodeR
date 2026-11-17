@@ -39,7 +39,6 @@ import com.aicode.R
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
-import com.aicode.core.theme.isDynamicColorSupported
 import com.aicode.core.ui.AppSwitch
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import compose.icons.FeatherIcons
@@ -84,7 +83,8 @@ internal fun ThemeSelectionSheet(
                 val isSelected = mode == selected
                 Surface(
                     onClick = { onSelected(mode) },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier
@@ -121,7 +121,7 @@ internal fun ThemeSelectionSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.lg)
-                    .alpha(if (dynamicColorEnabled) 0.4f else 1f),
+                    .alpha(if (dynamicColorEnabled || selected == AppThemeMode.BLACK) 0.4f else 1f),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
@@ -130,7 +130,7 @@ internal fun ThemeSelectionSheet(
                         preset = preset,
                         darkTheme = isDarkTheme,
                         isSelected = preset.id == activePreset.id,
-                        enabled = !dynamicColorEnabled,
+                        enabled = !dynamicColorEnabled && selected != AppThemeMode.BLACK,
                         onSelect = { onPresetSelected(preset.id) }
                     )
                 }
@@ -142,6 +142,7 @@ internal fun ThemeSelectionSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .alpha(if (selected == AppThemeMode.BLACK) 0.4f else 1f)
                     .padding(horizontal = Spacing.lg, vertical = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -152,22 +153,16 @@ internal fun ThemeSelectionSheet(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = stringResource(
-                            if (isDynamicColorSupported) {
-                                R.string.theme_dynamic_color_desc
-                            } else {
-                                R.string.theme_dynamic_color_unsupported
-                            }
-                        ),
+                        text = stringResource(R.string.theme_dynamic_color_desc),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Spacer(Modifier.width(Spacing.md))
                 AppSwitch(
-                    checked = dynamicColorEnabled && isDynamicColorSupported,
-                    onCheckedChange = onDynamicColorChanged,
-                    enabled = isDynamicColorSupported
+                    checked = dynamicColorEnabled && selected != AppThemeMode.BLACK,
+                    onCheckedChange = { if (selected != AppThemeMode.BLACK) onDynamicColorChanged(it) },
+                    enabled = selected != AppThemeMode.BLACK
                 )
             }
         }

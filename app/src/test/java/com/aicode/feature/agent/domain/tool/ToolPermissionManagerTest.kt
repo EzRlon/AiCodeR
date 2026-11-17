@@ -1,6 +1,11 @@
 package com.aicode.feature.agent.domain.tool
 
+import com.aicode.feature.agent.domain.permission.PermissionAuditRecorder
 import com.aicode.feature.agent.domain.permission.PermissionChoice
+import com.aicode.feature.agent.domain.permission.WatchModeSettingsRepository
+import io.mockk.coEvery
+import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -29,7 +34,7 @@ class ToolPermissionManagerTest {
 
     @Test
     fun twoSessionsPendSimultaneously_resolveByIdTargetsCorrectSession() = runBlocking {
-        val mgr = ToolPermissionManager()
+        val mgr = ToolPermissionManager(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
 
         val d1 = async { mgr.awaitApproval(req("id1", "s1")) }
         val d2 = async { mgr.awaitApproval(req("id2", "s2")) }
@@ -45,14 +50,14 @@ class ToolPermissionManagerTest {
 
         // 先解决 s2（乱序），只唤醒 s2
         mgr.resolve("id2", PermissionChoice.ONCE)
-        assertEquals(PermissionChoice.ONCE, d2.await())
+        assertEquals(ToolApprovalOutcome.Decided(PermissionChoice.ONCE), d2.await())
 
         withTimeout(1000) { while (mgr.awaitingSessionIds.value != setOf("s1")) yield() }
         assertEquals("id1", mgr.pendingRequest.value?.id)
         assertNull(mgr.pendingForSession("s2"))
 
         mgr.resolve("id1", PermissionChoice.ALWAYS)
-        assertEquals(PermissionChoice.ALWAYS, d1.await())
+        assertEquals(ToolApprovalOutcome.Decided(PermissionChoice.ALWAYS), d1.await())
 
         assertNull(mgr.pendingRequest.value)
         assertTrue(mgr.awaitingSessionIds.value.isEmpty())
@@ -60,7 +65,7 @@ class ToolPermissionManagerTest {
 
     @Test
     fun resolveUnknownId_isNoop() = runBlocking {
-        val mgr = ToolPermissionManager()
+        val mgr = ToolPermissionManager(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
         val d1 = async { mgr.awaitApproval(req("id1", "s1")) }
         withTimeout(1000) { while (mgr.pendingRequest.value == null) yield() }
 
@@ -70,6 +75,23 @@ class ToolPermissionManagerTest {
         assertEquals("id1", mgr.pendingRequest.value?.id)
 
         mgr.resolve("id1", PermissionChoice.REJECT)
-        assertEquals(PermissionChoice.REJECT, d1.await())
+        assertEquals(ToolApprovalOutcome.Decided(PermissionChoice.REJECT), d1.await())
+    }
+
+    @Test
+    fun watchMode_timeoutAutoRejects() = runBlocking {
+        val audit = mockk<PermissionAuditRecorder>(relaxed = true)
+        val watch = mockk<WatchModeSettingsRepository>(relaxed = true)
+        coEvery { watch.isArmed() } returns true
+        val mgr = ToolPermissionManager(audit, watch, mockk(relaxed = true))
+        mgr.watchApprovalTimeoutMs = 100
+
+        val outcome = async { mgr.awaitApproval(req("id1", "s1")) }
+        val result = withTimeout(2000) { outcome.await() }
+
+        assertTrue(result is ToolApprovalOutcome.WatchTimedOut)
+        verify { audit.recordWatchTimeout(any()) }
+        // 超时后请求已从待决表清理。
+        assertNull(mgr.pendingRequest.value)
     }
 }

@@ -1,0 +1,209 @@
+#!/bin/sh
+# 场景：模型顾问团（multi-llm）——把六家大模型网页版接入为 MCP 工具，
+# 装好后 AI 可直接咨询 ChatGPT / Claude / Gemini / Grok / Qwen / DeepSeek。
+# 服务端源码随「顾问团」插件包分发，由插件 install.sh 释放到 ~/.aicode/multi-llm/（本脚本只装运行时）。
+# 链路（musl 容器实测）：系统 chromium + Xvfb/x11vnc（server 自动拉起）+ pip --target 隔离依赖 +
+# playwright manylinux 轮子手工解压（musl 无官方轮子）+ driver/node 软链到系统 node。
+# 登录：首次使用需经 VNC 登录各站点（App 的 VNC 小窗或 VNC Viewer 连 127.0.0.1:5901），
+# 浏览器 profile 持久化在 /root/chrome_mcp_multi_llm，登录一次长期有效。
+# 支持：Alpine / Debian / Ubuntu 全自动（aarch64/x86_64）。
+scenario_name_multillm() { echo "模型顾问团（multi-llm：AI 可咨询 ChatGPT/Claude 等六个模型）"; }
+
+MULTI_LLM_HOME="$HOME/.aicode/multi-llm"
+MULTI_LLM_SITE="$HOME/.aicode/multi-llm-venv/site"
+MULTI_LLM_MARKER="$HOME/.aicode/multi-llm-venv/.installed"
+PLAYWRIGHT_VERSION="1.63.0"
+MULTI_PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
+# 与实测可用的依赖组合保持一致（对应服务端代码所适配的 mcp SDK 2.3.0）
+MULTI_LLM_PINS="pyee>=13,<14 greenlet>=3.1.1 mcp==2.3.0 mcp-types==2.3.0 pydantic==2.14.0 pydantic-settings==2.15.0 anyio==4.15.1 httpx2==2.13.1 httpcore2==2.13.1 tenacity==9.2.1 python-dotenv==1.2.4"
+
+# pip 安装助手：国内镜像优先，失败回退官方源
+multillm_pip_install() {
+    pip3 install --no-cache-dir -i "$MULTI_PIP_INDEX" "$@" >/dev/null 2>&1 \
+        || pip3 install --no-cache-dir "$@" >/dev/null 2>&1
+}
+
+install_scenario_multillm() {
+    # 0) 服务端源码由插件包释放；没装插件时这里会缺失。
+    if [ ! -f "$MULTI_LLM_HOME/server.py" ]; then
+        echo "${C_RED}未找到 multi-llm 服务端源码（$MULTI_LLM_HOME/server.py）。请先在「设置 → 插件」安装顾问团插件。${C_RESET}"
+        plog "multi-llm 安装中止：服务端源码缺失"
+        return 1
+    fi
+
+    # 幂等：标记存在且核心依赖可导入即视为已装（venv 目录被清等异常会自动重装）
+    if [ -f "$MULTI_LLM_MARKER" ] && \
+       PYTHONPATH="$MULTI_LLM_SITE" python3 -c "import mcp, playwright, pydantic, greenlet" >/dev/null 2>&1; then
+        plog "multi-llm 已就绪，跳过"
+        echo "${C_GREEN}✓ 模型顾问团已就绪${C_RESET}（设置 → MCP → 列表中的 multi-llm）"
+        return 0
+    fi
+
+    # 1) Python ≥3.10（依赖组合在 3.10–3.13 可用：3.12/3.13 为作者实测基线，
+    #    3.10/3.11 已验证轮子与依赖元数据均可解析）。包名按发行版映射。
+    multillm_pyver=""
+    multillm_py_ok() {
+        multillm_pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+        _maj=${multillm_pyver%%.*}
+        _min=${multillm_pyver#*.}
+        [ "$_maj" -eq 3 ] 2>/dev/null || return 1
+        [ "$_min" -ge 10 ] 2>/dev/null
+    }
+    if ! multillm_py_ok; then
+        echo "Python 版本不满足（需 ≥3.10，当前 ${multillm_pyver:-未安装}），尝试安装..."
+        case "$PMGR" in
+            apk) pkg_add python3 py3-pip >/dev/null 2>&1 ;;
+            apt) pkg_add python3 python3-pip python3-venv >/dev/null 2>&1 ;;
+            dnf|yum) pkg_add python3 python3-pip >/dev/null 2>&1 ;;
+            pacman) pkg_add python python-pip >/dev/null 2>&1 ;;
+        esac
+    fi
+    if ! multillm_py_ok; then
+        echo "${C_RED}Python 版本不足（需 ≥3.10，当前 ${multillm_pyver:-未安装}）。${C_RESET}"
+        echo "  · Debian 12/13 与 Ubuntu 22.04+ 自带版本均满足；Ubuntu 20.04 仓库无可用版本；"
+        echo "  · 也可换用内置 Alpine 镜像后重跑本场景。"
+        plog "multi-llm 安装中止：Python 版本不足（${multillm_pyver:-none}）"
+        return 1
+    fi
+    if ! command -v pip3 >/dev/null 2>&1; then
+        case "$PMGR" in
+            apk) pkg_add py3-pip >/dev/null 2>&1 ;;
+            apt) pkg_add python3-pip >/dev/null 2>&1 ;;
+            dnf|yum) pkg_add python3-pip >/dev/null 2>&1 ;;
+            pacman) pkg_add python-pip >/dev/null 2>&1 ;;
+        esac
+    fi
+    if ! command -v pip3 >/dev/null 2>&1; then
+        echo "${C_RED}未检测到 pip3，无法安装 Python 依赖。${C_RESET}"
+        plog "multi-llm 安装中止：pip3 缺失"
+        return 1
+    fi
+
+    # 2) 系统依赖：chromium（浏览器本体）+ Xvfb/x11vnc（无头显示与 VNC 登录）。
+    #    按缺补装而非整批 add：已装环境下 apk add 也会异常退出（PRoot 下实测 exit 2 无明细），
+    #    误判会阻断后续步骤；装后再验证二进制存在，才算真正成功。
+    missing=""
+    command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || missing="$missing chromium"
+    command -v Xvfb >/dev/null 2>&1 || missing="$missing xvfb"
+    command -v x11vnc >/dev/null 2>&1 || missing="$missing x11vnc"
+    if [ -n "$missing" ]; then
+        echo "安装系统依赖（chromium / Xvfb / x11vnc，首次约百余 MB）..."
+        # 包名按发行版映射：Debian 系部分版本 chromium 只提供 chromium-browser；其余发行版同名。
+        # 按缺补装，已装的不重复。
+        _pkgs=""
+        case "$missing" in *chromium*) _pkgs="$_pkgs chromium" ;; esac
+        case "$missing" in *xvfb*)     _pkgs="$_pkgs xvfb" ;; esac
+        case "$missing" in *x11vnc*)   _pkgs="$_pkgs x11vnc" ;; esac
+        case "$PMGR" in
+            apt)
+                # Debian/Ubuntu 的 chromium 包名：bookworm+ 为 chromium，旧版为 chromium-browser。
+                # 统一走 pkg_add（内部已设 DEBIAN_FRONTEND=noninteractive，直接调 apt-get 会卡交互提示）。
+                pkg_add $_pkgs >/dev/null 2>&1 \
+                    || pkg_add $(echo "$_pkgs" | sed 's/ chromium/ chromium-browser/') >/dev/null 2>&1
+                ;;
+            *) pkg_add $_pkgs >/dev/null 2>&1 ;;
+        esac
+    fi
+    # 装后验证：Debian 系部分版本只提供 chromium-browser 命令名
+    if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+        echo "${C_RED}系统依赖安装失败（chromium 缺失），请检查网络后重试。${C_RESET}"
+        plog "multi-llm 安装失败：chromium 缺失"
+        return 1
+    fi
+    if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1; then
+        echo "${C_RED}系统依赖安装失败（Xvfb/x11vnc 缺失），请检查网络后重试。${C_RESET}"
+        plog "multi-llm 安装失败：Xvfb/x11vnc 缺失"
+        return 1
+    fi
+
+    # 2.1) 中文字体：VNC 里就是 Chromium，缺 CJK 字体时中文界面/网页全是方框。
+    install_cjk_fonts
+
+    # 3) playwright 轮子：musl 无官方轮子，下载 manylinux 轮子后手工解压（aarch64/x86_64）
+    echo "下载 playwright 引擎（v$PLAYWRIGHT_VERSION，约 35MB）..."
+    case "$(uname -m)" in
+        aarch64) PW_PLATFORM="manylinux2014_aarch64" ;;
+        x86_64)  PW_PLATFORM="manylinux2014_x86_64" ;;
+        *) echo "${C_RED}不支持的架构：$(uname -m)。${C_RESET}"; plog "multi-llm 安装失败：架构不支持"; return 1 ;;
+    esac
+    PW_DIR="$HOME/.aicode/multi-llm-venv/wheel"
+    mkdir -p "$PW_DIR" "$MULTI_LLM_SITE"
+    rm -f "$PW_DIR"/playwright-*.whl
+    #    manylinux 轮子跨 3.10+ 通用，--python-version 动态取当前版本，避免按 3.12 过滤
+    PW_PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+    pip3 download --no-deps --platform "$PW_PLATFORM" --only-binary=:all: --python-version "${PW_PYVER:-3.12}" \
+        -i "$MULTI_PIP_INDEX" "playwright==$PLAYWRIGHT_VERSION" -d "$PW_DIR" >/dev/null 2>&1 \
+        || pip3 download --no-deps --platform "$PW_PLATFORM" --only-binary=:all: --python-version "${PW_PYVER:-3.12}" \
+            "playwright==$PLAYWRIGHT_VERSION" -d "$PW_DIR" >/dev/null 2>&1
+    PW_WHL=$(ls "$PW_DIR"/playwright-*.whl 2>/dev/null | head -1)
+    if [ -z "$PW_WHL" ]; then
+        echo "${C_RED}playwright 轮子下载失败（网络原因），可稍后重跑本场景重试。${C_RESET}"
+        plog "multi-llm 安装失败：playwright 轮子下载失败"
+        return 1
+    fi
+    python3 -m zipfile -e "$PW_WHL" "$MULTI_LLM_SITE/" >/dev/null 2>&1 || {
+        echo "${C_RED}playwright 轮子解压失败。${C_RESET}"; plog "multi-llm 安装失败：轮子解压失败"; return 1
+    }
+
+    # 4) playwright 驱动的 node 为 glibc 二进制（musl 报 fcntl64 符号错误）：软链到系统 node
+    DRIVER_DIR="$MULTI_LLM_SITE/playwright/driver"
+    rm -f "$DRIVER_DIR/node"
+    ln -sf /usr/bin/node "$DRIVER_DIR/node" 2>/dev/null
+    chmod +x "$DRIVER_DIR/node" 2>/dev/null
+
+    # 5) Python 依赖（pip --target 隔离安装，不污染系统站点；镜像优先回退官方）
+    echo "安装 Python 依赖..."
+    # shellcheck disable=SC2086
+    multillm_pip_install --upgrade --target "$MULTI_LLM_SITE" $MULTI_LLM_PINS || {
+        echo "${C_RED}Python 依赖安装失败（网络原因），可稍后重跑本场景重试。${C_RESET}"
+        plog "multi-llm 安装失败：pip 依赖安装失败"
+        return 1
+    }
+
+    # 6) Chromium 本体：优先 playwright 自带缓存；缺失时从 CDN 下载
+    #    （快 4.5 倍于 googleapis；Debian 系包管理器的 chromium 是 shell 套壳，PRoot 内启动即崩，不用）
+    PW_CHROMIUM_DIR="$HOME/.cache/ms-playwright/chromium-1243"
+    if [ ! -x "$PW_CHROMIUM_DIR/chrome-linux/chrome" ]; then
+        echo "下载 Chromium（约 190MB，一次即可）..."
+        PW_DL="$HOME/.cache/ms-playwright"
+        mkdir -p "$PW_DL"
+        PW_ZIP="$PW_DL/chromium-arm64.zip"
+        PW_OK=0
+        for PW_URL in \
+            "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1243/chromium-linux-arm64.zip" \
+            "https://playwright.download.prss.microsoft.com/dbazure/download/playwright/builds/chromium/1243/chromium-linux-arm64.zip" \
+            "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.12/linux-arm64/chrome-linux-arm64.zip"
+        do
+            if curl -L --retry 3 --retry-delay 3 -C - --progress-bar "$PW_URL" -o "$PW_ZIP" \
+                && python3 -m zipfile -e "$PW_ZIP" "$PW_CHROMIUM_DIR/" >/dev/null 2>&1; then
+                PW_OK=1
+                break
+            fi
+            rm -f "$PW_ZIP"; rm -rf "$PW_CHROMIUM_DIR"
+        done
+        [ "$PW_OK" = "1" ] || {
+            echo "${C_RED}Chromium 下载失败（网络原因），可稍后重跑本场景重试。VNC 登录功能暂不可用，不影响多模型提问。${C_RESET}"
+            plog "multi-llm：chromium 下载失败（非致命）"
+        }
+        rm -f "$PW_ZIP"
+        chmod +x "$PW_CHROMIUM_DIR/chrome-linux/chrome" 2>/dev/null
+        # playwright 以 INSTALLATION_COMPLETE 标记判定可用
+        touch "$PW_CHROMIUM_DIR/INSTALLATION_COMPLETE" 2>/dev/null
+    fi
+
+    # 7) 自检 + 完成标记 + 引导
+    if ! PYTHONPATH="$MULTI_LLM_SITE" python3 -c "import mcp, playwright, pydantic, greenlet" >/dev/null 2>&1; then
+        echo "${C_RED}依赖自检未通过，可稍后重跑本场景重试。${C_RESET}"
+        plog "multi-llm 安装失败：导入自检失败"
+        return 1
+    fi
+    date '+%Y-%m-%d %H:%M:%S' > "$MULTI_LLM_MARKER"
+    echo ""
+    echo "${C_GREEN}✓ 模型顾问团安装完成${C_RESET}"
+    echo "  下一步：设置 → MCP 服务器 → 列表中的 multi-llm 打开开关"
+    echo "  首次使用需要登录各模型网站：打开 VNC 小窗（或 VNC Viewer 连 127.0.0.1:5901），"
+    echo "  在弹出的浏览器里登录后即可长期使用（登录一次，profile 持久保存）。"
+    echo "  然后直接对 AI 说：帮我问问 ChatGPT，……"
+    plog "multi-llm 场景安装完成"
+    return 0
+}

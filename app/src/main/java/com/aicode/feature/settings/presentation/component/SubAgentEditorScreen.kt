@@ -1,5 +1,12 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.rememberSheetFlingFix
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.ModelSearchField
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.settingsPageBackground
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -119,6 +126,7 @@ internal fun SubAgentEditorScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
@@ -138,7 +146,7 @@ internal fun SubAgentEditorScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    IconButton(
                         enabled = canSave && saveState !is SubAgentSaveState.Saving,
                         onClick = {
                             onSave(
@@ -161,7 +169,11 @@ internal fun SubAgentEditorScreen(
                         if (saveState is SubAgentSaveState.Saving) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Text(stringResource(R.string.common_save))
+                            Icon(
+                                FeatherIcons.Check,
+                                contentDescription = stringResource(R.string.common_save),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }

@@ -2,11 +2,10 @@ package com.aicode.feature.agent.presentation.component
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.Image as ComposeImage
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,18 +21,24 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import com.aicode.R
 import com.aicode.core.theme.Brand
 import com.aicode.core.theme.Radius
@@ -41,6 +46,8 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.THUMBNAIL_MAX_EDGE
 import com.aicode.core.ui.decodeSampledBitmap
+import com.aicode.core.util.ApkInstaller
+import com.aicode.core.util.ExternalFileActions
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import compose.icons.FeatherIcons
@@ -87,6 +94,7 @@ private fun MessageAttachmentRow(
     onClick: ((AgentAttachment) -> Unit)? = null
 ) {
     val viewer = LocalImageViewer.current
+    val longPress = LocalAttachmentLongPress.current
     val handler: (() -> Unit)? = if (attachment.isImage) {
         { viewer.show(attachment.toViewerRequest()) }
     } else if (onClick != null) {
@@ -102,6 +110,28 @@ private fun MessageAttachmentRow(
     } else {
         stringResource(R.string.chat_attachment_open, name)
     }
+    // 点击与长按都需要响应时合并为 combinedClickable 单一手势：独立的 detectTapGestures
+    // 长按检测器与 clickable 同链叠加时，clickable（链尾）先收到并消费 down，长按检测器
+    // 会永远等不到未消费的 down（长按失效、松手仍触发点击）。锚点 = 卡片窗口 bounds
+    // （combinedClickable 不提供触点坐标）；仅长按（无点击）时才用长按触点锚定，与消息气泡一致。
+    var rowBounds by remember { mutableStateOf(Rect.Zero) }
+    val clickAndLongPressModifier: Modifier = when {
+        handler != null -> Modifier
+            .onGloballyPositioned { rowBounds = it.boundsInWindow() }
+            .combinedClickable(
+                onClickLabel = actionLabel,
+                onClick = handler,
+                onLongClick = longPress?.let { lp -> { lp(attachment, rowBounds) } }
+            )
+        longPress != null -> Modifier
+            .onGloballyPositioned { rowBounds = it.boundsInWindow() }
+            .pointerInput(attachment) {
+                detectTapGestures(onLongPress = { offset ->
+                    longPress(attachment, Rect(rowBounds.topLeft + offset, Size.Zero))
+                })
+            }
+        else -> Modifier
+    }
     // 次要信息：大小 + 容器路径。路径对「AI 发过来的文件」是关键信息（能直接在终端/编辑器里找到），
     // 整行放不下时靠省略号截断，不换行。
     val meta = remember(attachment.sizeBytes, attachment.containerPath) {
@@ -114,15 +144,9 @@ private fun MessageAttachmentRow(
         color = chatMutedSurfaceColor(),
         modifier = Modifier
             .fillMaxWidth()
-            // 先裁圆角再挂 clickable：涟漪才会被裁在圆角内，不会溢出成直角方块
+            // 先裁圆角再挂点击/长按：涟漪才会被裁在圆角内，不会溢出成直角方块
             .clip(RoundedCornerShape(Radius.md))
-            .then(
-                if (handler != null) {
-                    Modifier.clickable(onClickLabel = actionLabel, onClick = handler)
-                } else {
-                    Modifier
-                }
-            )
+            .then(clickAndLongPressModifier)
     ) {
         Row(
             modifier = Modifier
@@ -224,6 +248,11 @@ fun interface AttachmentOpener {
 internal val LocalAttachmentOpener = staticCompositionLocalOf<AttachmentOpener> { AttachmentOpener { } }
 
 /**
+ * 长按附件卡片回调：带长按触点的窗口坐标，供操作菜单锚定；null = 不响应长按。
+ */
+internal val LocalAttachmentLongPress = staticCompositionLocalOf<((AgentAttachment, Rect) -> Unit)?> { null }
+
+/**
  * 用系统对应 app 打开附件文件（FileProvider 授权 URI）。
  *
  * 卡片记录的 [AgentAttachment.localPath] 不保证仍然有效：远程 SSH 模式下它是 `copyToLocal` 的临时副本
@@ -241,36 +270,48 @@ internal suspend fun openSentAttachment(
         Toast.makeText(context, context.getString(R.string.chat_open_file_missing), Toast.LENGTH_SHORT).show()
         return
     }
-    // APK 安装包：系统安装器要求「允许安装未知应用」授权，未授权时引导用户去设置页开启，
-    // 否则点击只会弹出「没有权限安装」的拒绝提示。
-    if (isApk(attachment)) {
-        if (!context.packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(context, context.getString(R.string.chat_open_apk_permission), Toast.LENGTH_LONG).show()
-            try {
-                context.startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                )
-            } catch (e: Exception) {
-                Toast.makeText(context, context.getString(R.string.chat_open_file_no_app), Toast.LENGTH_SHORT).show()
-            }
+    openLocalFile(context, local, attachment.fileName, attachment.mimeType)
+}
+
+/**
+ * 打开已就绪的本地文件：APK 走安装引导（含「允许安装未知应用」判定与设置页引导），
+ * 其余走分享 / 系统打开。附件链路与存储空间等场景共用（后者直接持有宿主文件）。
+ */
+internal suspend fun openLocalFile(
+    context: Context,
+    local: File,
+    fileName: String,
+    mimeType: String
+) {
+    // APK 安装包：统一走 ApkInstaller（含「允许安装未知应用」的授权判定与设置页引导）。
+    // 外部本地目录工作区、自定义挂载源的文件不在 FileProvider 目录树内，先拷进 cacheDir 再授权。
+    if (isApkName(fileName, mimeType)) {
+        val installable = withContext(Dispatchers.IO) { ExternalFileActions.prepareShareable(context, local) }
+        if (installable == null) {
+            Toast.makeText(context, context.getString(R.string.chat_open_file_unshareable), Toast.LENGTH_SHORT).show()
             return
         }
+        when (ApkInstaller.install(context, installable)) {
+            ApkInstaller.Result.STARTED -> Unit
+            ApkInstaller.Result.NEED_PERMISSION -> {
+                Toast.makeText(context, context.getString(R.string.chat_open_apk_permission), Toast.LENGTH_LONG).show()
+                if (!ApkInstaller.openInstallPermissionSettings(context)) {
+                    Toast.makeText(context, context.getString(R.string.chat_open_file_no_app), Toast.LENGTH_SHORT).show()
+                }
+            }
+            ApkInstaller.Result.NO_HANDLER ->
+                Toast.makeText(context, context.getString(R.string.chat_open_file_no_app), Toast.LENGTH_SHORT).show()
+        }
+        return
     }
-    val shareable = withContext(Dispatchers.IO) {
-        if (isShareable(context, local)) local else copyToShareCache(context, local)
-    }
-    val uri = shareable?.let {
-        runCatching { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) }.getOrNull()
-    }
+    val shareable = withContext(Dispatchers.IO) { ExternalFileActions.prepareShareable(context, local) }
+    val uri = shareable?.let { ExternalFileActions.shareableUri(context, it) }
     if (uri == null) {
         Toast.makeText(context, context.getString(R.string.chat_open_file_unshareable), Toast.LENGTH_SHORT).show()
         return
     }
     val intent = Intent(Intent.ACTION_VIEW)
-        .setDataAndType(uri, attachment.mimeType.ifBlank { "*/*" })
+        .setDataAndType(uri, mimeType.ifBlank { "*/*" })
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     try {
         context.startActivity(intent)
@@ -280,33 +321,27 @@ internal suspend fun openSentAttachment(
 }
 
 /** 卡片记录的宿主路径失效（远程临时副本被清、文件被删或移动）时，退回容器路径重取。 */
-private suspend fun resolveLocalFile(attachment: AgentAttachment, fileAccess: FileAccessProvider): File? {
+internal suspend fun resolveLocalFile(attachment: AgentAttachment, fileAccess: FileAccessProvider): File? {
     attachment.localPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isFile }?.let { return it }
     val containerPath = attachment.containerPath
     if (containerPath.isBlank()) return null
+    // 若此前已按需导出过真机副本（下载/AiCodeR/），优先复用它——外部应用看不到容器内路径；
+    // 没有副本则回落到容器路径（copyToLocal），导出由具体动作（MT 打开/分享/安装）自行按需触发。
+    val exported = ExternalFileActions.findExported(attachment.fileName)
+    if (exported != null) return exported
     return runCatching { fileAccess.copyToLocal(containerPath) }.getOrNull()?.takeIf { it.isFile }
 }
 
-/** 路径落在 FileProvider 声明的目录树内时可直接授权；不能就抛异常，故按能否取到 URI 判定。 */
-private fun isShareable(context: Context, file: File): Boolean =
-    runCatching { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file) }.isSuccess
-
-/**
- * 把无法直接授权的文件（外部本地目录工作区、自定义挂载源、SD 卡等）复制进 cacheDir 再分享。
- * 目标目录按源路径散列分隔：既避开同名文件互相覆盖，也不把散列值挂进分享出去的文件名。
- */
-private fun copyToShareCache(context: Context, source: File): File? = runCatching {
-    val dir = File(File(context.cacheDir, SHARE_CACHE_DIR), source.absolutePath.hashCode().toString())
-    dir.mkdirs()
-    val target = File(dir, source.name.ifBlank { "file" })
-    source.copyTo(target, overwrite = true)
-    target
-}.getOrNull()
-
-private const val SHARE_CACHE_DIR = "sent_files"
-
-private fun isApk(attachment: AgentAttachment): Boolean {
-    if (attachment.mimeType.equals("application/vnd.android.package-archive", ignoreCase = true)) return true
-    val name = attachment.fileName.lowercase()
+internal fun isApkName(fileName: String, mimeType: String): Boolean {
+    if (mimeType.equals("application/vnd.android.package-archive", ignoreCase = true)) return true
+    val name = fileName.lowercase()
     return name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk")
+}
+
+/** 文本类附件：直接用内置编辑器打开（系统通常无 markdown/代码文件的处理应用）。 */
+internal fun isTextLikeAttachment(attachment: AgentAttachment): Boolean {
+    if (attachment.mimeType.lowercase().startsWith("text/")) return true
+    val name = attachment.fileName.lowercase()
+    return listOf(".md", ".txt", ".log", ".json", ".kt", ".java", ".py", ".js", ".ts", ".sh", ".xml", ".yml", ".yaml", ".toml", ".gradle", ".csv", ".html", ".css")
+        .any { name.endsWith(it) }
 }

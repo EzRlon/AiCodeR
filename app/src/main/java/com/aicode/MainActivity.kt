@@ -1,6 +1,8 @@
 package com.aicode
 
+import android.app.Activity
 import android.os.Build
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -11,11 +13,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
@@ -24,10 +30,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -43,15 +52,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -62,6 +77,7 @@ import androidx.navigation.navArgument
 import com.aicode.core.theme.AIEditorTheme
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.ui.BetaWatermark
+import com.aicode.core.ui.ContentWidth
 import com.aicode.core.ui.ImageSource
 import com.aicode.core.ui.ImageViewerHost
 import com.aicode.core.ui.ImageViewerRequest
@@ -70,28 +86,43 @@ import com.aicode.core.ui.PAGE_MOTION_MS
 import com.aicode.core.ui.VerticalSplitHandle
 import com.aicode.core.ui.drawerWidth
 import com.aicode.core.ui.isExpandedWidth
+import com.aicode.core.ui.isAnimationDisabled
+import com.aicode.core.ui.isRtlLayout
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
+import com.aicode.core.util.ApkInstaller
+import com.aicode.feature.annotation.presentation.AnnotationViewModel
+import com.aicode.feature.annotation.presentation.component.AnnotationCanvasScreen
+import com.aicode.feature.settings.presentation.component.MultiLlmWorkbenchScreen
+import com.aicode.feature.settings.presentation.component.ReaWorkbenchScreen
+import com.aicode.feature.preview.presentation.component.PreviewScreen
+import com.aicode.feature.workspace.presentation.remote.RemoteManagerScreen
 import com.aicode.feature.agent.presentation.AIAgentViewModel
+import com.aicode.feature.agent.presentation.overlay.AppOverlayViewModel
+import com.aicode.feature.note.presentation.component.NotebookOverlay
+import com.aicode.feature.note.presentation.notebook.NotebookViewModel
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.component.AIChatPanel
 import com.aicode.feature.agent.presentation.component.ChatDrawerContent
 import com.aicode.feature.agent.presentation.component.chatImageLoader
 import com.aicode.feature.agent.presentation.component.openSentAttachment
+import com.aicode.feature.disclaimer.presentation.DisclaimerGate
 import com.aicode.feature.editor.presentation.CodeEditorScreen
+import com.aicode.feature.editor.presentation.EditorLeaveGuard
 import com.aicode.feature.browser.presentation.BrowserScreen
+import com.aicode.feature.memorygraph.presentation.MemoryGraphScreen
 import com.aicode.feature.git.presentation.GitViewModel
 import com.aicode.feature.credentials.presentation.component.CredentialScreen
 import com.aicode.feature.git.presentation.component.GitScreen
 import com.aicode.feature.onboarding.data.OnboardingStatus
 import com.aicode.feature.onboarding.domain.OnboardingCoordinator
 import com.aicode.feature.onboarding.domain.OnboardingStateHolder
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.LocalOnboardingTargetRegistry
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.LocalOnboardingTargetRegistry
 import com.aicode.feature.onboarding.presentation.OnboardingOverlay
-import com.aicode.feature.onboarding.presentation.OnboardingTargetRegistry
+import com.aicode.core.ui.onboarding.OnboardingTargetRegistry
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.BackgroundSettingsRepository
@@ -105,15 +136,18 @@ import com.aicode.feature.settings.presentation.component.SettingsScreen
 import com.aicode.feature.settings.presentation.component.UpdateCheckDialog
 import com.aicode.feature.settings.presentation.component.decodeBackgroundBitmap
 import com.aicode.feature.settings.presentation.component.openUrl
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import com.aicode.feature.terminal.presentation.TerminalViewModel
 import com.aicode.feature.terminal.presentation.component.TerminalScreen
+import com.aicode.feature.vnc.presentation.VncOverlayViewModel
+import com.aicode.feature.vnc.presentation.VncOverlayWindow
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -155,6 +189,10 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository
 
+    /** 免责声明的同意状态持久化。 */
+    @Inject
+    lateinit var disclaimerRepository: com.aicode.feature.disclaimer.data.DisclaimerRepository
+
     @Inject
     lateinit var browserManager: com.aicode.feature.agent.domain.tool.browser.BrowserManager
 
@@ -180,6 +218,31 @@ class MainActivity : ComponentActivity() {
         // 绘制到系统状态栏/导航栏之下，让应用背景与系统栏融为一体（消除割裂的色块）。
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        // 首帧窗口底色随应用主题模式同步取值：夜色资源固定 #07111F 只与「系统深色＋App 深色」
+        // 同色，极黑会先闪蓝、系统浅色＋App 深色会先闪白。注入已完成（Hilt 在 super 链内注入），
+        // 内容视图尚未创建，此处阻塞读一次主题偏好（DataStore 首读，毫秒级）换覆盖主题。
+        runCatching {
+            val mode = kotlinx.coroutines.runBlocking { themeSettings.themeModeFlow.first() }
+            // 用 Application 级 uiMode 判系统深浅（不受 Activity 语言 wrapper 冻结影响）
+            val systemDark = (applicationContext.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val effectiveDark = when (mode) {
+                AppThemeMode.AUTO -> systemDark
+                AppThemeMode.DARK, AppThemeMode.BLACK -> true
+                AppThemeMode.LIGHT -> false
+            }
+            when {
+                mode == AppThemeMode.BLACK -> setTheme(R.style.Theme_AICode_BlackBg)
+                effectiveDark -> setTheme(R.style.Theme_AICode_DarkBg)
+            }
+        }
+
+        handleSendTextIntent(this, intent)
+
+        // 音量键直接控制媒体音量：浏览器/视频等媒体播放场景符合直觉（否则调的是铃声音量）。
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
         // 挂载离屏 WebView 隐藏宿主，确保后台/离屏状态下 WebView 也能触发 onAttachedToWindow 完成首帧真实光栅化渲染
         val hiddenHost = android.widget.FrameLayout(this).apply {
@@ -225,16 +288,34 @@ class MainActivity : ComponentActivity() {
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         }
         setContent {
+            // AUTO 模式的系统深浅判定不用 isSystemInDarkTheme()：语言 wrapper 冻结 uiMode、
+            // configChanges 含 uiMode 不重建，二者叠加导致系统自动切换时该值不更新。
+            // 改读 AIEditorApp.onConfigurationChanged 实时刷新的镜像流。
+            val systemDarkTheme by themeSettings.systemDark.collectAsStateWithLifecycle()
             val themeMode by themeSettings.themeModeFlow.collectAsStateWithLifecycle(initialValue = AppThemeMode.AUTO)
             val themePresetId by themeSettings.themePresetIdFlow.collectAsStateWithLifecycle(initialValue = null)
             val dynamicColor by themeSettings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
-            val systemDarkTheme = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {
                 AppThemeMode.AUTO -> systemDarkTheme
                 AppThemeMode.DARK -> true
+                AppThemeMode.BLACK -> true
                 AppThemeMode.LIGHT -> false
             }
             val view = LocalView.current
+            // 状态栏/导航栏图标色跟随主题；回到前台时再校正一遍——个别 ROM 会在后台重置系统栏外观，
+            // 只靠组合期的设置不足以覆盖（“切浅色后字色/图标色没反向”的加强）。
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner, darkTheme) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                        val controller = WindowCompat.getInsetsController(window, view)
+                        controller.isAppearanceLightStatusBars = !darkTheme
+                        controller.isAppearanceLightNavigationBars = !darkTheme
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
             SideEffect {
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.isAppearanceLightStatusBars = !darkTheme
@@ -248,10 +329,40 @@ class MainActivity : ComponentActivity() {
             AIEditorTheme(
                 darkTheme = darkTheme,
                 preset = AppThemePreset.findById(themePresetId),
-                dynamicColor = dynamicColor
+                dynamicColor = dynamicColor,
+                amoledBlack = themeMode == AppThemeMode.BLACK
             ) {
+                // 窗口底色与当前主题背景同步（含强制深浅与自定义预设）：启动窗/重建过渡到首帧
+                // 之间露出的窗口区域不闪色（“切回闪光/页面顶部异常”的加强）。
+                val windowBg = MaterialTheme.colorScheme.background
+                LaunchedEffect(windowBg) {
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(windowBg.toArgb()))
+                }
+                // 启动/重建时内容淡入：消除“启动图/白屏 → 界面”的硬切。
+                var contentAppeared by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { contentAppeared = true }
+                // 淡入结束后摘掉 graphicsLayer：它会把整个 App 子树画进一个离屏图层，
+                // 主题切换后该图层缓存不会及时失效，导致标题等文字先不可见、触摸局部重绘后才出现。
+                // 用布尔驱动而非在组合期读 alpha，避免淡入期间每帧重组整个 App；
+                // 动画值只在 graphicsLayer lambda 里读，走绘制期。摘除时机由动画完成回调给出，
+                // 不用硬编码 delay——首帧重时（启动期初始化）会提前摘除、造成可见跳变。
+                var fadingIn by remember { mutableStateOf(true) }
+                val startupAlpha by animateFloatAsState(
+                    targetValue = if (contentAppeared) 1f else 0f,
+                    animationSpec = tween(durationMillis = 260),
+                    finishedListener = { fadingIn = false },
+                    label = "startup-fade"
+                )
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (fadingIn) {
+                                Modifier.graphicsLayer { alpha = startupAlpha }
+                            } else {
+                                Modifier
+                            }
+                        ),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     // 全局自定义背景图：叠加在所有页面内容之上（水印效果），透明度可调。
@@ -264,6 +375,8 @@ class MainActivity : ComponentActivity() {
                         com.aicode.feature.credentials.presentation.component.GlobalCredentialDialogHost(
                             bridge = credentialRequestBridge
                         )
+                        // 首次启动免责声明门控：独立弹窗，覆盖所有页面。
+                        DisclaimerGate(repository = disclaimerRepository)
                         if (bgPath != null && bgAlpha > 0f) {
                             val screen = LocalView.current
                             val bitmap by produceState<ImageBitmap?>(initialValue = null, bgPath) {
@@ -303,6 +416,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 兜底：个别 ROM 前台期间深浅切换不分发 Application.onConfigurationChanged，回前台时主动刷一次。
+        themeSettings.refreshSystemDark()
         // 远程模式回到前台时，若 SSH 断了立即触发重连，不等 supervisor 轮询
         if (executionModeHolder.currentMode() == com.aicode.feature.settings.data.repository.ExecutionMode.REMOTE_SSH) {
             lifecycleScope.launch {
@@ -314,6 +429,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         browserManager.detachHiddenHost()
         super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleSendTextIntent(this, intent)
     }
 
 }
@@ -345,6 +465,9 @@ fun AppNavigation(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // 存储空间「在文件树中查看」：设置页触发后回聊天页、开抽屉，文件树切到「文件」页签并展开目标。
+    var drawerRevealRequest by remember { mutableStateOf<String?>(null) }
+
     // 用于判断当前路由：仅在聊天页允许 Drawer 手势。
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
@@ -357,6 +480,11 @@ fun AppNavigation(
     // Activity 级别的 ViewModel——Drawer 和 AIChatPanel 共享同一个实例。
     val agentViewModel: AIAgentViewModel = hiltViewModel()
     val settingsViewModel: SettingsViewModel = hiltViewModel()
+    // Activity 级：聊天页内挂 VncOverlayWindow、模型顾问团工作台「打开 VNC 登录」共用同一实例
+    val vncOverlayViewModel: VncOverlayViewModel = hiltViewModel()
+    // 随记浮窗：顶栏按钮与浮窗渲染共用 Activity 级实例（与 VNC 同一纪律）
+    val appOverlayViewModel: AppOverlayViewModel = hiltViewModel()
+    val notebookViewModel: NotebookViewModel = hiltViewModel()
     val workspaceViewModel: WorkspaceViewModel = hiltViewModel()
 
     // ── 首次启动引导 ──
@@ -379,9 +507,23 @@ fun AppNavigation(
         onboardingCoordinator.initialize(status ?: OnboardingStatus.IN_PROGRESS)
     }
 
-    // 自动检查更新：进入主页时异步检测（开关开启且每天最多一次，失败静默）
+    // 自动检查更新：进入主页时触发；自建分支已在 checkUpdate 内禁用自动检查（非 manual 提前返回），
+    // 保留调用以兼容将来恢复。
     LaunchedEffect(Unit) {
         settingsViewModel.checkUpdate(manual = false)
+    }
+
+    // 模型能力自动探测（4.1）：启动后延迟跑一次，1 小时 TTL 内不重复打网络；
+    // 失败静默不影响主流程。放在延迟里是为了不与首屏渲染、会话加载抢网络与 CPU。
+    val probeContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(8_000)
+        runCatching {
+            val probe = dagger.hilt.android.EntryPointAccessors
+                .fromApplication(probeContext.applicationContext, ModelProbeEntryPoint::class.java)
+                .modelProbeService()
+            probe.probeAll()
+        }
     }
 
     // 侧边栏打开时，系统返回键先收起侧边栏。
@@ -397,15 +539,21 @@ fun AppNavigation(
         agentViewModel.setWorkspace(path)
     }
 
+    val notebookOpen by appOverlayViewModel.notebookOpen.collectAsStateWithLifecycle()
     val sessions by agentViewModel.sessions.collectAsStateWithLifecycle()
     val currentSessionId by agentViewModel.currentSessionId.collectAsStateWithLifecycle()
     val agentStates by agentViewModel.agentStates.collectAsStateWithLifecycle()
     val awaitingPermissionSessionIds by agentViewModel.awaitingPermissionSessionIds.collectAsStateWithLifecycle()
     val subSessionsByParent by agentViewModel.subSessionsByParent.collectAsStateWithLifecycle()
+    val runningSubSessionIds by agentViewModel.runningSubSessionIds.collectAsStateWithLifecycle()
+    val teamMemberNames by agentViewModel.teamMemberNames.collectAsStateWithLifecycle()
     val expandedPaths by agentViewModel.expandedPaths.collectAsStateWithLifecycle()
     val expandingPath by agentViewModel.expandingPath.collectAsStateWithLifecycle()
     val fileOpPaths by agentViewModel.fileOpPaths.collectAsStateWithLifecycle()
     val browseState by agentViewModel.browseState.collectAsStateWithLifecycle()
+    val deliverables by agentViewModel.deliverables.collectAsStateWithLifecycle()
+    val deliverablesScanning by agentViewModel.deliverablesScanning.collectAsStateWithLifecycle()
+    val trashedSessions by agentViewModel.trashedSessions.collectAsStateWithLifecycle()
     val browseClipboard by agentViewModel.browseClipboard.collectAsStateWithLifecycle()
     val pasteConflict by agentViewModel.pasteConflict.collectAsStateWithLifecycle()
     val chatSearchQuery by agentViewModel.chatSearchQuery.collectAsStateWithLifecycle()
@@ -439,6 +587,57 @@ fun AppNavigation(
         }
     }
 
+    // ── 导入会话：SAF 选择单会话包（导出会话的 tar.gz）──
+    val sessionImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            agentViewModel.importSession(uri) { result ->
+                val (msgRes, long) = when (result) {
+                    AIAgentViewModel.SessionImportResult.SUCCESS ->
+                        R.string.chat_import_session_done to false
+                    AIAgentViewModel.SessionImportResult.NOT_SESSION_PACKAGE ->
+                        R.string.chat_import_session_not_single to true
+                    AIAgentViewModel.SessionImportResult.BUSY ->
+                        R.string.chat_import_session_busy to true
+                    AIAgentViewModel.SessionImportResult.FAILED ->
+                        R.string.chat_import_session_failed to true
+                }
+                Toast.makeText(context, context.getString(msgRes), if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 同标题冲突：用户选「覆盖/另存副本」；点击外部或返回 = 取消导入
+    val sessionImportConflict by agentViewModel.sessionImportConflict.collectAsStateWithLifecycle()
+    sessionImportConflict?.let { conflictTitle ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { agentViewModel.cancelSessionImport() },
+            title = { Text(stringResource(R.string.chat_import_session_conflict_title)) },
+            text = { Text(stringResource(R.string.chat_import_session_conflict_message, conflictTitle)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    agentViewModel.confirmSessionImport(overwrite = true) { result ->
+                        val msgRes = if (result == AIAgentViewModel.SessionImportResult.SUCCESS) R.string.chat_import_session_done
+                        else R.string.chat_import_session_failed
+                        Toast.makeText(context, context.getString(msgRes),
+                            if (result == AIAgentViewModel.SessionImportResult.SUCCESS) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                    }
+                }) { Text(stringResource(R.string.chat_import_session_overwrite)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    agentViewModel.confirmSessionImport(overwrite = false) { result ->
+                        val msgRes = if (result == AIAgentViewModel.SessionImportResult.SUCCESS) R.string.chat_import_session_done
+                        else R.string.chat_import_session_failed
+                        Toast.makeText(context, context.getString(msgRes),
+                            if (result == AIAgentViewModel.SessionImportResult.SUCCESS) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                    }
+                }) { Text(stringResource(R.string.chat_import_session_copy)) }
+            }
+        )
+    }
+
     // ── 大屏（平板横屏及以上）布局 ──
     val expanded = isExpandedWidth()
     // 常驻侧栏只在聊天页开：终端 / 编辑器 / 设置都是全屏页，被侧栏挤窄反而难用。
@@ -453,12 +652,33 @@ fun AppNavigation(
     LaunchedEffect(sidebarVisible) {
         if (sidebarVisible) agentViewModel.refreshBrowse()
     }
+    // 侧栏打开时收起输入框焦点：文本光标与选择手柄是独立 Popup 窗口，会浮在抽屉之上
+    // 出现「蓝色块/光标跑出来」的错位（中文输入法候选栏同理）。收起焦点后一并消失。
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(sidebarVisible) {
+        if (sidebarVisible) focusManager.clearFocus()
+    }
+
+    // 插件驱动的侧栏入口：顾问团 / 分析台只有「插件已装且已启用」才露出。
+    // 全新安装不带任何插件，因此这两项默认不存在；用户从插件页安装并开启后，
+    // 下次侧栏出现时重新扫描即可看到入口（无需重启）。
+    val pluginViewModel: com.aicode.feature.plugin.presentation.PluginViewModel = hiltViewModel()
+    val pluginUiState by pluginViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(sidebarVisible) {
+        if (sidebarVisible) pluginViewModel.refresh()
+    }
+    val enabledPluginIds = pluginUiState.plugins.filter { it.enabled }.map { it.id }.toSet()
 
     // 右栏工作台：大屏下编辑器 / 终端 / Git 与聊天并排，窄窗仍走全屏路由。
     var paneKind by rememberSaveable { mutableStateOf(WorkbenchPaneKind.NONE) }
     var paneEditorPath by rememberSaveable { mutableStateOf("") }
     var paneEditorLine by rememberSaveable { mutableIntStateOf(0) }
     var paneSplit by rememberSaveable { mutableFloatStateOf(DEFAULT_PANE_SPLIT) }
+    // 分割线拖动中右栏宽度直接 snap 跟手，只在开/关门沿切换时补间（顶层声明供两处作用域共用）
+    var paneDragging by remember { mutableStateOf(false) }
+    // AI 智能体（终端 CLI）管理弹层：顶栏入口打开，启动后自动切到终端看会话。
+    // 右栏编辑器有未保存修改时，换文件前先弹保存提示（窄窗全屏编辑器由返回键拦截，不经过这里）。
+    val editorLeaveGuard = remember { EditorLeaveGuard() }
 
     // 右栏打开时返回键先收起它。限定聊天页：其他页面右栏不渲染，不能在那里吞掉返回事件。
     BackHandler(
@@ -468,12 +688,39 @@ fun AppNavigation(
         paneKind = WorkbenchPaneKind.NONE
     }
 
+    // 聊天页返回键守护：有 agent/命令任务在跑时不结束 Activity——finish 会销毁 Activity 级
+    // ViewModel，运行中的代理协程（含子代理）全部被取消，前台保活服务只保进程不保协程。
+    // 此时代替为退到后台（与 Home 键等价），任务与运行态原样保留；无任务时行为不变。
+    BackHandler(
+        // paneKind 为窄屏残留（大屏开右栏后旋转/调窗到窄屏）时，pane 处理器需 expanded 才接、
+        // 这里不能再用 paneKind==NONE 限定，否则返回键会穿透 finish 杀掉运行中的任务。
+        enabled = currentRoute == "chat" && !drawerState.isOpen &&
+            (!expanded || paneKind == WorkbenchPaneKind.NONE)
+    ) {
+        val activity = context as? Activity
+        if (agentViewModel.hasActiveAgentWork()) {
+            activity?.moveTaskToBack(true)
+        } else {
+            activity?.finish()
+        }
+    }
+
     // 打开文件：大屏进右栏，窄窗跳全屏编辑器页。
     val openFile: (String, Int, Boolean) -> Unit = { filePath, line, fromDrawer ->
         if (expanded) {
-            paneEditorPath = filePath
-            paneEditorLine = line
-            paneKind = WorkbenchPaneKind.EDITOR
+            val apply = {
+                paneEditorPath = filePath
+                paneEditorLine = line
+                paneKind = WorkbenchPaneKind.EDITOR
+            }
+            // 重复点同一个文件：内容不换，只是重新走到目标行（交给编辑器的行定位 effect），
+            // 不必问「要不要保存」——保存与否都不影响结果。
+            if (paneKind == WorkbenchPaneKind.EDITOR && paneEditorPath == filePath) {
+                apply()
+            } else {
+                // 编辑器里有未保存修改时，由编辑器先弹保存提示，确认后再换。
+                editorLeaveGuard.requestLeave(apply)
+            }
             // 常驻侧栏不需要关；平板竖屏等仍用 modal 抽屉的情况下选完文件要收起。
             if (!permanentDrawer) scope.launch { drawerState.close() }
         } else {
@@ -504,7 +751,7 @@ fun AppNavigation(
                         fileName = name,
                         containerPath = path,
                         localPath = "",
-                        mimeType = APK_MIME_TYPE,
+                        mimeType = ApkInstaller.APK_MIME_TYPE,
                         sizeBytes = 0L,
                         isImage = false
                     ),
@@ -518,17 +765,28 @@ fun AppNavigation(
     // 终端 / Git：大屏在右栏内开合切换，窄窗跳全屏页。
     val openWorkbench: (WorkbenchPaneKind) -> Unit = { target ->
         if (expanded) {
-            paneKind = if (paneKind == target) WorkbenchPaneKind.NONE else target
+            val next = if (paneKind == target) WorkbenchPaneKind.NONE else target
+            // 从编辑器切走（含再点一次图标收起）同样会丢掉未保存的修改，走同一套确认。
+            if (paneKind == WorkbenchPaneKind.EDITOR && next != WorkbenchPaneKind.EDITOR) {
+                editorLeaveGuard.requestLeave { paneKind = next }
+            } else {
+                paneKind = next
+            }
         } else {
             val route = when (target) {
                 WorkbenchPaneKind.TERMINAL -> "terminal"
                 WorkbenchPaneKind.GIT -> "git"
                 WorkbenchPaneKind.BROWSER -> "browser"
+                WorkbenchPaneKind.PREVIEW -> "preview"
                 else -> "chat"
             }
             navController.navigate(route)
         }
     }
+
+    // ── 标注中心统一画布：账本 VM（Activity 级）+ 全局画布宿主开关 ──
+    val annotationViewModel: AnnotationViewModel = hiltViewModel()
+    var annotationCanvasActive by remember { mutableStateOf(false) }
 
     // 侧栏内容：modal 抽屉与大屏常驻栏共用同一份，不在两处重复几十行参数。
     val drawerBody: @Composable () -> Unit = {
@@ -538,7 +796,20 @@ fun AppNavigation(
             agentStates = agentStates,
             awaitingPermissionSessionIds = awaitingPermissionSessionIds,
             subSessionsByParent = subSessionsByParent,
+            runningSubSessionIds = runningSubSessionIds,
             browseState = browseState,
+            deliverables = deliverables,
+            deliverablesScanning = deliverablesScanning,
+            onRefreshDeliverables = { agentViewModel.refreshDeliverables() },
+            onRemoveDeliverable = { agentViewModel.removeDeliverableFromList(it) },
+            onDeleteDeliverableCompletely = { item, cb -> agentViewModel.deleteDeliverableCompletely(item, cb) },
+            deliverableFileAccess = agentViewModel.fileAccess,
+            trashedSessions = trashedSessions,
+            onRestoreSession = { agentViewModel.restoreSession(it) },
+            onPurgeSession = { agentViewModel.purgeSession(it) },
+            onEmptyTrash = { agentViewModel.emptyTrash() },
+            // 侧栏子代理行按成员标识查显示名（与输入栏横幅同源，见 teamMemberNames）。
+            memberNameOf = { id -> teamMemberNames[id] ?: id },
             expandedPaths = expandedPaths,
             expandingPath = expandingPath,
             fileOpPaths = fileOpPaths,
@@ -547,6 +818,8 @@ fun AppNavigation(
             onToggleExpand = { agentViewModel.toggleExpand(it) },
             onOpenFile = openTreeEntry,
             onRefreshBrowse = { agentViewModel.refreshBrowse() },
+            revealRequest = drawerRevealRequest,
+            onRevealConsumed = { drawerRevealRequest = null },
             onCreateFile = { parent, name ->
                 agentViewModel.createBrowseFile(parent, name) { ok ->
                     if (!ok) toastFileOpFailed(context, R.string.file_browser_create_failed)
@@ -592,9 +865,42 @@ fun AppNavigation(
                 val safeTitle = session.title.replace(Regex("[^\\w\\u4e00-\\u9fa5\\-]"), "_")
                 sessionExportLauncher.launch("aicode-session-$safeTitle-${System.currentTimeMillis()}.tar.gz")
             },
+            onImport = {
+                sessionImportLauncher.launch(
+                    arrayOf(
+                        "application/octet-stream",
+                        "application/gzip",
+                        "application/x-gzip",
+                        "application/x-tar",
+                        "application/x-compressed"
+                    )
+                )
+            },
             onNavigateToBrowser = {
                 openWorkbench(WorkbenchPaneKind.BROWSER)
                 if (!permanentDrawer) scope.launch { drawerState.close() }
+            },
+            onNavigateToAnnotations = {
+                // 标注中心 = 统一画布（全局宿主），不再跳路由；先收抽屉再铺画布
+                annotationCanvasActive = true
+                if (!permanentDrawer) scope.launch { drawerState.close() }
+            },
+            // 入口跟随插件：未装或未启用时传 null，ChatDrawer 便不渲染该行。
+            onNavigateToRea = if (com.aicode.feature.plugin.domain.PluginIds.REA in enabledPluginIds) ({
+                navController.navigate("rea")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            }) else null,
+            onNavigateToMultillm = if (com.aicode.feature.plugin.domain.PluginIds.MULTILLM in enabledPluginIds) ({
+                navController.navigate("multillm")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            }) else null,
+            onNavigateToPreview = {
+                openWorkbench(WorkbenchPaneKind.PREVIEW)
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
+            },
+            onNavigateToRemoteManager = {
+                navController.navigate("remote")
+                if (!permanentDrawer) scope.launch { drawerState.snapTo(DrawerValue.Closed) }
             },
             onNavigateToSettings = {
                 navController.navigate("settings")
@@ -613,15 +919,17 @@ fun AppNavigation(
 
     // 页面主体（NavHost）：大屏放进 Row 的右侧，窄窗放进 modal 抽屉容器里。
     val navBody: @Composable () -> Unit = {
+        val rtl = isRtlLayout()
+        val animate = !isAnimationDisabled()
         NavHost(
             navController = navController,
             startDestination = "chat",
             // 过渡期间退场页会向左移出自身区域，大屏下不夹住会画到左侧常驻会话侧栏上。
             modifier = Modifier.fillMaxSize().clipToBounds(),
-            enterTransition = { pageEnter(forward = true) },
-            exitTransition = { pageExit(forward = true) },
-            popEnterTransition = { pageEnter(forward = false) },
-            popExitTransition = { pageExit(forward = false) }
+            enterTransition = { pageEnter(forward = true, rtl = rtl, animate = animate) },
+            exitTransition = { pageExit(forward = true, rtl = rtl, animate = animate) },
+            popEnterTransition = { pageEnter(forward = false, rtl = rtl, animate = animate) },
+            popExitTransition = { pageExit(forward = false, rtl = rtl, animate = animate) }
         ) {
             composable("chat") {
                 // 聊天区内覆盖 LocalUriHandler：Markdown 链接点击默认经此 handler 派发。
@@ -633,62 +941,140 @@ fun AppNavigation(
                     }
                 }
                 val paneOpen = expanded && paneKind != WorkbenchPaneKind.NONE
-                // 拖动把手时要把位移像素换算成分栏比例，所以记下容器实测宽度。
+                // 拖动把手时要把位移像素换算成分栏比例，所以记下容器实测宽度与左栏宽度。
                 var rowWidthPx by remember { mutableIntStateOf(0) }
-                Row(
+                var leftPaneWidthPx by remember { mutableIntStateOf(0) }
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
                         .onSizeChanged { rowWidthPx = it.width }
                 ) {
-                    Box(modifier = Modifier.weight(if (paneOpen) paneSplit else 1f)) {
-                        CompositionLocalProvider(
-                            androidx.compose.ui.platform.LocalUriHandler provides fileUriHandler
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(if (paneOpen) paneSplit else 1f)
+                                .onSizeChanged { leftPaneWidthPx = it.width }
                         ) {
-                            AIChatPanel(
-                                viewModel = agentViewModel,
-                                settingsViewModel = settingsViewModel,
-                                workspaceViewModel = workspaceViewModel,
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                                showMenuButton = !permanentDrawer,
-                                onNavigateToTerminal = { openWorkbench(WorkbenchPaneKind.TERMINAL) },
-                                onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
-                                onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
-                                terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
-                                gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
-                                browserActive = paneOpen && paneKind == WorkbenchPaneKind.BROWSER,
-                                onboardingStep = if (onboardingUiState.active) onboardingUiState.step else null,
-                                onSelectModelInOnboarding = {
-                                    if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
-                                        onboardingCoordinator.nextStep()
+                            CompositionLocalProvider(
+                                androidx.compose.ui.platform.LocalUriHandler provides fileUriHandler
+                            ) {
+                                AIChatPanel(
+                                    viewModel = agentViewModel,
+                                    settingsViewModel = settingsViewModel,
+                                    workspaceViewModel = workspaceViewModel,
+                                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                                    showMenuButton = !permanentDrawer,
+                                    onNavigateToTerminal = { openWorkbench(WorkbenchPaneKind.TERMINAL) },
+                                    onNavigateToGit = { openWorkbench(WorkbenchPaneKind.GIT) },
+                                    onNavigateToBrowser = { openWorkbench(WorkbenchPaneKind.BROWSER) },
+                                    onNavigateToMemoryGraph = { navController.navigate("memorygraph") },
+                                    onOpenFile = { path -> openFile(path, 0, false) },
+                                    terminalActive = paneOpen && paneKind == WorkbenchPaneKind.TERMINAL,
+                                    gitActive = paneOpen && paneKind == WorkbenchPaneKind.GIT,
+                                    browserActive = paneOpen && paneKind == WorkbenchPaneKind.BROWSER,
+                                    onboardingStep = if (onboardingUiState.active) onboardingUiState.step else null,
+                                    onSelectModelInOnboarding = {
+                                        if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
+                                            onboardingCoordinator.nextStep()
+                                        }
+                                    },
+                                    onDismissModelSheetInOnboarding = {
+                                        if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
+                                            onboardingCoordinator.goToStep(OnboardingStep.OPEN_MODEL_PICKER)
+                                        }
                                     }
-                                },
-                                onDismissModelSheetInOnboarding = {
-                                    if (onboardingUiState.active && onboardingUiState.step == OnboardingStep.SIMULATE_CHOOSE_MODEL) {
-                                        onboardingCoordinator.goToStep(OnboardingStep.OPEN_MODEL_PICKER)
-                                    }
-                                }
+                                )
+                            }
+                        }
+                        // 右栏开合走补间而不是直接增删，否则内容区宽度突变（与左侧栏同一节奏）；
+                        // 分割线拖动进行中直接 snap 跟手，只在开/关门沿切换时补间过渡
+                        val paneWidthFraction by animateFloatAsState(
+                            targetValue = if (paneOpen) 1f - paneSplit else 0f,
+                            animationSpec = if (paneDragging) snap() else tween(durationMillis = PAGE_MOTION_MS),
+                            label = "workbench-pane-width"
+                        )
+                        if (paneWidthFraction > 0f) {
+                            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            WorkbenchPaneContent(
+                                kind = paneKind,
+                                editorPath = paneEditorPath,
+                                editorLine = paneEditorLine,
+                                onClose = { paneKind = WorkbenchPaneKind.NONE },
+                                onOpenFile = { path -> openFile(path, 0, false) },
+                                // rc5 的平板右栏脏状态确认：主分支把调用重构进了 if (paneOpen)，
+                                // 故把该参数落在这里，而不是保留旧位置那份重复调用
+                                editorLeaveGuard = editorLeaveGuard,
+                                modifier = Modifier.weight(paneWidthFraction, fill = false)
                             )
                         }
                     }
-                    if (paneOpen) {
+                    // VNC 浮窗已提到根层（全屏时需要盖住侧栏），见 navBody 之后的调用点。
+
+                    if (paneOpen && leftPaneWidthPx > 0) {
                         VerticalSplitHandle(
+                            anchorX = leftPaneWidthPx,
                             onDragDelta = { dx ->
                                 if (rowWidthPx > 0) {
                                     paneSplit = (paneSplit + dx / rowWidthPx)
                                         .coerceIn(MIN_PANE_SPLIT, MAX_PANE_SPLIT)
                                 }
-                            }
-                        )
-                        WorkbenchPaneContent(
-                            kind = paneKind,
-                            editorPath = paneEditorPath,
-                            editorLine = paneEditorLine,
-                            onClose = { paneKind = WorkbenchPaneKind.NONE },
-                            onOpenFile = { path -> openFile(path, 0, false) },
-                            modifier = Modifier.weight(1f - paneSplit)
+                            },
+                            onDragStateChanged = { paneDragging = it }
                         )
                     }
                 }
+            }
+            composable("memorygraph") {
+                // 改动账本页由 composition root 注入（memorygraph 不认识 changelog，守住 feature 边界基线）。
+                val ledgerViewModel: com.aicode.feature.changelog.presentation.ChangeLedgerViewModel = hiltViewModel()
+                val ledgerWorkspace = currentWorkspace?.path.orEmpty()
+                androidx.compose.runtime.LaunchedEffect(ledgerWorkspace) {
+                    ledgerViewModel.bindWorkspace(ledgerWorkspace)
+                }
+                MemoryGraphScreen(
+                    workspacePath = ledgerWorkspace,
+                    sessions = sessions,
+                    subSessionsByParent = subSessionsByParent,
+                    agentStates = agentStates,
+                    currentSessionId = currentSessionId,
+                    onOpenSession = { id ->
+                        agentViewModel.selectSession(id)
+                        navController.popBackStack()
+                    },
+                    onBack = { navController.popBackStack() },
+                    ledgerContent = {
+                        com.aicode.feature.changelog.presentation.component.ChangeLedgerSection(
+                            viewModel = ledgerViewModel
+                        )
+                    }
+                )
+            }
+            composable("rea") {
+                ReaWorkbenchScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenTerminal = {
+                        navController.navigate("terminal")
+                    },
+                    onSendToChat = { prompt ->
+                        // 复用外部文本队列链路：预填进当前会话输入框并跳回聊天页
+                        agentViewModel.queueExternalText(prompt)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = false }
+                        }
+                    }
+                )
+            }
+            composable("multillm") {
+                MultiLlmWorkbenchScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenTerminal = {
+                        navController.navigate("terminal")
+                    },
+                    onOpenVnc = {
+                        vncOverlayViewModel.show()
+                    }
+                )
             }
             composable("settings") {
                 // 复用 Activity 级 settingsViewModel（MainActivity 顶部已创建并 init），
@@ -702,6 +1088,50 @@ fun AppNavigation(
                         if (!expanded) scope.launch { drawerState.open() }
                     },
                     onStopAllAndCloseTerminal = { agentViewModel.stopAllAndCloseTerminal() },
+                    onOpenTerminal = {
+                        navController.popBackStack()
+                        openWorkbench(WorkbenchPaneKind.TERMINAL)
+                    },
+                    agentViewModel = agentViewModel,
+                    onRevealInTree = { relPath ->
+                        // relPath = 「<项目名>/<相对路径>」；仅当前工作区的项目可转容器路径后定位。
+                        val currentProjectName = currentWorkspace?.path
+                            ?.trimEnd('/')?.substringAfterLast('/')
+                        val containerPath = if (!currentProjectName.isNullOrBlank() && relPath.startsWith("$currentProjectName/")) {
+                            "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/${relPath.removePrefix("$currentProjectName/")}"
+                        } else {
+                            null
+                        }
+                        if (containerPath != null) {
+                            agentViewModel.revealPathInTree(containerPath)
+                            drawerRevealRequest = containerPath
+                            navController.popBackStack()
+                            if (!expanded) scope.launch { drawerState.open() }
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.storage_artifact_other_project), Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onOpenSession = { sessionId ->
+                        if (sessions.any { it.id == sessionId }) {
+                            agentViewModel.selectSession(sessionId)
+                            navController.popBackStack()
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.perm_audit_session_gone), Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onLaunchDevEnv = { title, prompt ->
+                        // 开发环境一键搭建：新建会话（标题用场景名）并直接发入搭建任务，回聊天页看 AI 干活
+                        agentViewModel.startSessionWithRequest(prompt, title) { accepted ->
+                            if (!accepted) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.dev_env_launch_rejected),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                        navController.popBackStack()
+                    },
                     onRerunOnboarding = {
                         // 从设置页「重新运行引导」：清状态回 in_progress、激活引导并回聊天页。
                         scope.launch {
@@ -742,6 +1172,17 @@ fun AppNavigation(
                 val browserViewModel: com.aicode.feature.browser.presentation.BrowserViewModel = hiltViewModel()
                 BrowserScreen(
                     browserManager = browserViewModel.browserManager,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable("preview") {
+                PreviewScreen(
+                    embedded = false,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable("remote") {
+                RemoteManagerScreen(
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
@@ -805,27 +1246,57 @@ fun AppNavigation(
         // 侧栏只在聊天页展开：设置页自己就是「菜单 + 详情」两栏，外面再套一层会话侧栏就成了三栏。
         // 宽度走补间而不是直接增删，否则右侧区域宽度突变，切页时会明显闪一下；
         // 时长与页面过渡取同一个值，两段动画同时收尾。
+        val vncWindowState by vncOverlayViewModel.window.collectAsStateWithLifecycle()
+        val vncFullscreen = vncWindowState.visible && vncWindowState.fullscreen
+        // 全屏时侧栏让位：否则横屏下侧栏吃掉一大块横向空间，画面只剩一条竖带。
+        val sidebarTarget = if (currentRoute == "chat" && !vncFullscreen) drawerWidth() else 0.dp
         val sidebarWidth by animateDpAsState(
-            targetValue = if (currentRoute == "chat") drawerWidth() else 0.dp,
-            animationSpec = tween(durationMillis = PAGE_MOTION_MS),
+            targetValue = sidebarTarget,
+            animationSpec = spring(
+                dampingRatio = 0.82f,
+                stiffness = 380f,
+                visibilityThreshold = 0.5.dp
+            ),
             label = "sidebar-width"
         )
+        // 展开进度 0..1：宽度与内容位移/透明度共用同一个进度，三者同步收尾，
+        // 不会出现「宽度停住了内容还在飘」。
+        val sidebarFullWidth = drawerWidth()
+        val sidebarProgress = if (sidebarFullWidth.value > 0f) {
+            (sidebarWidth / sidebarFullWidth).coerceIn(0f, 1f)
+        } else 0f
+        // 标签悬出宽度随动画比例缩放：收起/展开末帧不出现 16dp 跳变。
+        val sidebarTabOverhang = ContentWidth.drawerTabOverhang * sidebarProgress
         // 侧栏完全收起后整棵子树离开组合，要拿 SaveableStateHolder 接住内部状态，
         // 否则每次从设置页回来 tab 都跳回「会话」、文件树滚动位置也丢。
         val sidebarStateHolder = rememberSaveableStateHolder()
         Row(modifier = Modifier.fillMaxSize()) {
-            if (sidebarWidth > 0.dp) {
+            // 按**目标值**决定是否保留子树：若按当前宽度判断，收起动画最后一帧宽度归零时子树
+            // 会立刻离开组合，位移与淡出被截断，观感变成「突然消失」。
+            if (sidebarTarget > 0.dp) {
                 Box(
                     modifier = Modifier
-                        .width(sidebarWidth)
+                        // 多出「标签骑线悬出」的半宽：标签中心对齐面板右缘线，右半落在主内容侧（图2 定稿）
+                        .width(sidebarWidth + sidebarTabOverhang)
                         .fillMaxHeight()
                         .clipToBounds()
                 ) {
                     // 内容按完整宽度渲染再裁剪：收起过程中不去重排侧栏内部布局。
+                    // 宽度含「标签骑线悬出」的半宽，与 sheet 路径保持一致。
+                    // 同时让内容随展开进度向左位移并淡出：只裁剪不位移时收起像「被刀切」，
+                    // 有了位移与透明度，才看得出「面板从左侧抽出/收回」。
                     Box(
                         modifier = Modifier
-                            .width(drawerWidth())
+                            .width(drawerWidth() + sidebarTabOverhang)
                             .fillMaxHeight()
+                            // 只在展开/收起动画进行中挂层：常驻 graphicsLayer 的离屏缓存
+                            // 不随主题切换刷新，会让侧栏文字停在旧配色（反复复现的老问题）。
+                            .then(
+                                if (sidebarProgress < 1f) Modifier.graphicsLayer {
+                                    translationX = -(1f - sidebarProgress) * size.width * 0.18f
+                                    alpha = 0.35f + 0.65f * sidebarProgress
+                                } else Modifier
+                            )
                     ) {
                         sidebarStateHolder.SaveableStateProvider("chat-sidebar") {
                             drawerBody()
@@ -846,9 +1317,15 @@ fun AppNavigation(
             drawerContent = {
                 ModalDrawerSheet(
                     drawerShape = RectangleShape,
-                    drawerContainerColor = settingsPageBackground(),
+                    // 面板底色改由 ChatDrawerContent 自绘（宽度 = 面板宽）；sheet 多出的右缘悬出区保持透明，
+                    // 让「会话/文件」标签能骑在面板右缘线上而不被 Surface 裁剪。
+                    drawerContainerColor = Color.Transparent,
+                    drawerContentColor = MaterialTheme.colorScheme.onBackground,
                     drawerTonalElevation = 0.dp,
-                    modifier = Modifier.width(drawerWidth())
+                    // 默认 windowInsets 会把 sheet 内容区压到状态栏以下，面板自绘背景盖不到状态栏后面，
+                    // 顶部透出遮罩底色形成割裂带；置零让内容全高渲染，沉浸交给 ChatDrawer 自身的 systemBars inset。
+                    windowInsets = WindowInsets(0, 0, 0, 0),
+                    modifier = Modifier.width(drawerWidth() + ContentWidth.drawerTabOverhang)
                 ) {
                     drawerBody()
                 }
@@ -858,9 +1335,62 @@ fun AppNavigation(
         }
     }
 
+    // VNC 浮窗：挂在根 Box 而不是 navBody 内。全屏态要盖住侧栏和底部输入框，
+    // 留在 navBody 里就只能铺满内容区，侧栏依然占着横向空间（横屏下画面被挤成竖条）。
+    // 非全屏时它仍是一个跟随拖动的小窗，行为与之前一致。
+    VncOverlayWindow(viewModel = vncOverlayViewModel)
+
+    // 随记浮窗：与 VNC 同层挂载，盖住导航内容与侧栏；不会打断会话可见性。
+    // 润色与发送由 Activity 级 agentViewModel 提供，浮窗本身不跨 feature 引用 AI 能力。
+    if (notebookOpen) {
+        NotebookOverlay(
+            viewModel = notebookViewModel,
+            onClose = appOverlayViewModel::closeNotebook,
+            onPolish = { text -> agentViewModel.polishTextExternal(text) },
+            onTransform = { instruction, text -> agentViewModel.transformNoteText(text, instruction) },
+            // 没有当前会话时直接判失败：enqueueAgentRequest 在 sid 为空时会走新建流程，
+            // 用户预期是「交给当前会话」，不应静默开一个新会话。
+            onSend = { text ->
+                agentViewModel.currentSessionId.value != null && agentViewModel.enqueueAgentRequest(text)
+            }
+        )
+    }
+
+    // 标注中心统一画布（全局宿主）：一块画布 + 一条工具架，未定格时透明穿透可圈画真实界面，
+    // 定格后底图精画，保存入账本；不再有「跳旧界面」的第二套标注编辑器。
+    if (annotationCanvasActive) {
+        AnnotationCanvasScreen(
+            annotationViewModel = annotationViewModel,
+            onSummaryReady = { text, items ->
+                // 汇总注入：文本进草稿，图片作待发附件（聊天面板读文件转 base64）；发出即推进状态机
+                agentViewModel.queueExternalText(text)
+                agentViewModel.queueExternalAttachments(
+                    items.map { item ->
+                        AgentAttachment(
+                            fileName = item.imagePath.substringAfterLast('/'),
+                            containerPath = item.imagePath,
+                            localPath = "",
+                            mimeType = "image/png",
+                            sizeBytes = 0L,
+                            isImage = true
+                        )
+                    }
+                )
+                Toast.makeText(context, context.getString(R.string.annotation_summary_queued), Toast.LENGTH_SHORT).show()
+                annotationViewModel.markSent(items)
+                annotationCanvasActive = false
+                navController.navigate("chat") {
+                    popUpTo("chat") { inclusive = false }
+                }
+            },
+            onExit = { annotationCanvasActive = false }
+        )
+    }
+
     // 检查更新弹窗（全局宿主：自动检测与关于页手动检查共用，覆盖所有页面）
     val updateCheckState by settingsViewModel.updateCheckState.collectAsStateWithLifecycle()
-    if (updateCheckState != UpdateCheckUiState.Idle) {
+    val updateCheckVisible by settingsViewModel.updateCheckVisible.collectAsStateWithLifecycle()
+    if (updateCheckVisible && updateCheckState != UpdateCheckUiState.Idle) {
         val version = remember {
             runCatching {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
@@ -869,11 +1399,13 @@ fun AppNavigation(
         UpdateCheckDialog(
             state = updateCheckState,
             currentVersion = version,
+            canInstallInApp = settingsViewModel.inAppInstallSupported,
             onDismiss = { settingsViewModel.dismissUpdateCheck() },
             onOpenRelease = { tag ->
                 openUrl(context, githubReleaseUrl(tag))
                 settingsViewModel.dismissUpdateCheck()
-            }
+            },
+            onDownload = { settingsViewModel.downloadAndInstall() }
         )
     }
 
@@ -989,6 +1521,24 @@ private fun toastFileOpFailed(context: android.content.Context, messageRes: Int)
 }
 
 /**
+ * 系统分享进（ACTION_SEND text/plain）：把外部分享的文本暂存到会话 ViewModel，
+ * 聊天面板在会话就绪后合并进输入框草稿。冷启动在 onCreate 投递，热启动在 onNewIntent 投递。
+ */
+private fun handleSendTextIntent(activity: MainActivity, intent: Intent?) {
+    // 崩溃页「一键修复」：带完整报告冷/热启动，转入会话由 AI 诊断修复。
+    intent?.getStringExtra(CrashActivity.EXTRA_FIX_REPORT)?.takeIf { it.isNotBlank() }?.let { report ->
+        ViewModelProvider(activity)[AIAgentViewModel::class.java].queueExternalText(report)
+        return
+    }
+    if (intent?.action != Intent.ACTION_SEND) return
+    if (intent.type != null && intent.type != "text/plain") return
+    val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: return
+    val viewModel = ViewModelProvider(activity)[AIAgentViewModel::class.java]
+    viewModel.queueExternalText(text)
+    Toast.makeText(activity, activity.getString(R.string.chat_shared_text_queued), Toast.LENGTH_SHORT).show()
+}
+
+/**
  * 聊天区 Markdown 链接处理：把「容器文件路径」链接拦下来交给 [onOpenFile] 打开编辑器，
  * 其余（http/https/mailto 等网址）委托给系统默认 [delegate]（浏览器）。
  *
@@ -1030,8 +1580,6 @@ private val PREVIEWABLE_IMAGE_EXTS = setOf("png", "jpg", "jpeg", "gif", "webp", 
 /** 文件树里点击即调系统安装器的安装包格式。 */
 private val INSTALLABLE_APK_EXTS = setOf("apk", "apks", "xapk")
 
-private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
-
 /** 聊天区链接目标 → 归一化后的文件路径；判定为网址（非 `file` scheme）时返回 null。 */
 internal fun asChatFilePath(uri: String): String? {
     val hierarchical = HIERARCHICAL_SCHEME.find(uri)?.groupValues?.get(1)?.lowercase()
@@ -1048,4 +1596,11 @@ internal fun splitPathAndLine(path: String): Pair<String, Int> {
     val cleaned = path.substringBefore('#').trim()
     val m = TRAILING_LINE.find(cleaned) ?: return cleaned to 0
     return m.groupValues[1] to (m.groupValues[2].toIntOrNull() ?: 0)
+}
+
+/** 模型能力探测的 Hilt 入口（AppNavigation 是独立 Composable，取 Activity 注入字段拿不到）。 */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface ModelProbeEntryPoint {
+    fun modelProbeService(): com.aicode.feature.settings.domain.model.ModelProbeService
 }

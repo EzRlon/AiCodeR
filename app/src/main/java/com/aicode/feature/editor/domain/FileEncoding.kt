@@ -1,6 +1,7 @@
 package com.aicode.feature.editor.domain
 
 import java.nio.ByteBuffer
+import java.nio.CharBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
@@ -37,11 +38,26 @@ enum class FileEncoding(val charset: Charset, val bom: ByteArray?) {
          * 检测字节流编码并解码为字符串。空输入返回 UTF-8 空串。
          */
         fun decode(bytes: ByteArray): DecodedText {
-            if (bytes.isEmpty()) return DecodedText("", UTF_8)
-            val withBom = bytes.mapBom()?.let { (enc, rest) -> enc to rest }
+            if (bytes.isEmpty()) return DecodedText("", UTF_8, null)
+            val withBom = bytes.mapBom()
             val (enc, body) = withBom ?: (detectBomless(bytes) to bytes)
             val text = String(body, enc.charset)
-            return DecodedText(text, enc)
+            // BOM 拷贝一份再交出：枚举常量里的数组是共享的可变引用，直接暴露会被调用方改坏全局状态。
+            return DecodedText(text, enc, withBom?.first?.bom?.copyOf())
+        }
+
+        /**
+         * 严格编码：字符串中只要有一个字符无法用该编码表示就抛异常。
+         *
+         * 供写侧用：`String.toByteArray(GBK)` 会把不可表示的字符静默变成 `?`，
+         * 等于保存一次就丢掉用户输入的字，必须在落盘前拦住。
+         */
+        fun Charset.strictEncode(text: String): ByteArray {
+            val buffer = newEncoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .encode(CharBuffer.wrap(text))
+            return ByteArray(buffer.remaining()).also { buffer.get(it) }
         }
 
         private fun ByteArray.mapBom(): Pair<FileEncoding, ByteArray>? {
@@ -69,5 +85,5 @@ enum class FileEncoding(val charset: Charset, val bom: ByteArray?) {
     }
 }
 
-/** 解码结果：字符串 + 检测到的编码（写回时用）。 */
-data class DecodedText(val text: String, val encoding: FileEncoding)
+/** 解码结果：字符串 + 检测到的编码（写回时用）+ 原文件 BOM（无则 null）。 */
+data class DecodedText(val text: String, val encoding: FileEncoding, val bom: ByteArray? = null)

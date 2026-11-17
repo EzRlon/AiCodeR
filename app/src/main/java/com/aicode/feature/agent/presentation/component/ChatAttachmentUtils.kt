@@ -135,9 +135,6 @@ internal fun hasAttachmentSlots(currentCount: Int): Boolean =
 private fun imageLimitError(context: Context): String =
     context.getString(R.string.chat_image_too_large, formatBytes(MAX_IMAGE_UPLOAD_BYTES))
 
-private fun pickedFileToastPath(context: Context, path: String): String =
-    context.getString(R.string.chat_uploaded_to, path)
-
 internal fun emptyWorkspaceMessage(context: Context): String =
     context.getString(R.string.chat_select_workspace_first)
 
@@ -292,4 +289,34 @@ internal fun formatBytes(bytes: Long): String {
         bytes >= kb -> String.format(java.util.Locale.US, "%.0f KB", bytes / kb)
         else -> "$bytes B"
     }
+}
+
+/**
+ * 外部注入的附件（以工作区容器路径引用，如截图标注汇总）：读文件字节并转为待发附件，
+ * 图片补出 base64（[PendingUploadAttachment.isImage] 依赖 image 非空）。文件不可读返回 null。
+ */
+internal suspend fun externalAttachmentToPending(
+    attachment: AgentAttachment,
+    fileAccess: FileAccessProvider
+): PendingUploadAttachment? = withContext(Dispatchers.IO) {
+    runCatching {
+        val bytes = fileAccess.readBytes(attachment.containerPath)
+        if (bytes.isEmpty()) return@runCatching null
+        if (attachment.isImage && bytes.size > MAX_IMAGE_UPLOAD_BYTES) return@runCatching null
+        val image = if (attachment.isImage) {
+            AgentImage(
+                mimeType = attachment.mimeType.ifBlank { "image/png" },
+                base64Data = Base64.getEncoder().encodeToString(bytes),
+                path = attachment.containerPath
+            )
+        } else null
+        PendingUploadAttachment(
+            fileName = attachment.fileName,
+            containerPath = attachment.containerPath,
+            localPath = "",
+            mimeType = attachment.mimeType.ifBlank { if (attachment.isImage) "image/png" else "application/octet-stream" },
+            sizeBytes = bytes.size.toLong(),
+            image = image
+        )
+    }.getOrNull()
 }

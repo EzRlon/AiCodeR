@@ -1,15 +1,21 @@
 package com.aicode.feature.agent.domain.tool.editor
 
+import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.tool.AgentTool
+import com.aicode.feature.agent.domain.tool.FileVersionRegistry
 import com.aicode.feature.agent.domain.tool.ParameterType
 import com.aicode.feature.agent.domain.tool.PendingToolPermission
+import com.aicode.feature.agent.domain.tool.STALE_FILE_CODE
 import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
+import com.aicode.feature.agent.domain.tool.WorkspaceFileLock
+import com.aicode.feature.agent.domain.tool.staleFileMessage
 import com.aicode.core.util.FileLogger
 import com.aicode.core.util.LineDiff
 import com.aicode.feature.workspace.domain.FileAccessProvider
+import com.aicode.feature.workspace.domain.sha256Fingerprint
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -38,9 +44,22 @@ private const val TAG = "EditFileTool"
  *
  * 为保证安全，默认要求每个 old_string 在当前内容中唯一；若有多处匹配，需提供更长的
  * 上下文，或对该编辑显式设置 replace_all=true 才会全部替换。
+ *
+ * ### 并发保护
+ *
+ * 本工具是典型的「读-改-写」，因此在两个层次上防护：
+ *
+ * 1. **路径互斥锁** [WorkspaceFileLock]：同一逻辑文件在同一时刻只有一个会话在改。
+ * 2. **写前版本校验** [FileVersionRegistry]：比对模型上次读到的内容指纹与磁盘当前指纹，
+ *    不一致就拒绝并提示重新读取。锁拦不住「读发生在很久以前」的过期写，这一步才能拦住。
+ *
+ * 校验在**锁内**执行，且以锁内重读到的内容为准（而非锁外那次读），否则"校验通过 → 拿到锁"
+ * 之间仍存在被插入的窗口。
  */
 class EditFileTool @Inject constructor(
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val fileLock: WorkspaceFileLock,
+    private val versions: FileVersionRegistry
 ) : AgentTool() {
     override val name = "editFile"
     override val description =
@@ -54,11 +73,11 @@ class EditFileTool @Inject constructor(
         "properties" to mapOf(
             "old_string" to mapOf(
                 "type" to "string",
-                "description" to "要被替换的原文，需与文件当前内容精确匹配（含缩进和换行）。带足够上下文以保证唯一。"
+                "description" to "要被替换的原文，除 LF/CRLF 换行差异外需与文件当前内容精确匹配（含缩进）。带足够上下文以保证唯一。"
             ),
             "new_string" to mapOf(
                 "type" to "string",
-                "description" to "替换后的新内容。传空字符串表示删除匹配到的内容。"
+                "description" to "替换后的新内容，换行沿用匹配区域或文件的换行格式。传空字符串表示删除匹配到的内容。"
             ),
             "replace_all" to mapOf(
                 "type" to "boolean",
@@ -103,11 +122,87 @@ class EditFileTool @Inject constructor(
         )
     }
 
-    override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
-        return try {
-            val path = args["path"]?.jsonPrimitive?.contentOrNull
-                ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
+    /**
+     * 有会话上下文的执行路径（`StatefulAgentWorkflow` 走这条）。版本校验与路径锁都在这里，
+     * 因为两者都需要 [AgentContext.sessionId] 才能把"谁读到的版本"关联起来。
+     */
+    override suspend fun executeWithContext(
+        args: Map<String, JsonElement>,
+        context: AgentContext
+    ): ToolResult {
+        val path = args["path"]?.jsonPrimitive?.contentOrNull
+            ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
+        return withEditGuards(path, context.sessionId) { performEdit(path, args) }
+    }
 
+    /**
+     * 无上下文的执行路径。正常流程不会走到这里（`StatefulAgentWorkflow` 一律走
+     * [executeWithContext]），保留它是为了兼容直接调用工具的测试与内部调用方。
+     *
+     * 这里**没有**并发保护：没有 sessionId 就无从判断"你读到的版本"。为不改变旧行为，
+     * 此路径直接执行；需要并发安全的调用方必须走 [executeWithContext]。
+     */
+    override suspend fun execute(args: Map<String, JsonElement>): ToolResult {
+        val path = args["path"]?.jsonPrimitive?.contentOrNull
+            ?: return ToolResult.Error("缺少必需参数：path", "MISSING_PATH")
+        return performEdit(path, args)
+    }
+
+    /**
+     * 并发保护外壳：版本预检 → 加路径锁 → 锁内复检并执行 → 更新登记。
+     *
+     * 之所以要有**锁外预检 + 锁内复检**两次校验：锁外那次负责给出不带锁的快速失败
+     * （绝大多数冲突在这里就被挡住，不必排队等锁）；锁内那次才是权威判定，因为
+     * "预检通过"与"真正拿到锁"之间可能已被其他会话写入。
+     */
+    private suspend fun withEditGuards(
+        path: String,
+        sessionId: String?,
+        block: suspend () -> ToolResult
+    ): ToolResult {
+        val key = fileAccess.toDisplayPath(path)
+        checkVersion(path, key, sessionId)?.let { return it }
+
+        return fileLock.withLock(key) {
+            checkVersion(path, key, sessionId)?.let { return@withLock it }
+            val result = block()
+            // 写成功后把新版本登记下来，使同一会话的连续编辑不被自己判为冲突。
+            // 用 runCatching 包住：写已经落盘，登记失败不能反过来把成功报成失败
+            // （最坏后果只是该文件退化成"未登记"的放行语义）。
+            if (result is ToolResult.Success) {
+                runCatching { fileAccess.fingerprint(path) }
+                    .onFailure { FileLogger.w(TAG, "edit_file 写后登记版本失败: $key", it) }
+                    .getOrNull()
+                    ?.let { versions.record(sessionId, key, it) }
+            }
+            result
+        }
+    }
+
+    /**
+     * 版本比对。返回 null 表示可以继续，返回 Error 表示内容已过期、拒绝写入。
+     *
+     * [path] 用于访问文件，[key] 用于查登记表——两者必须分开传：key 是给用户看的逻辑路径
+     * （`~/workspace/...`），虽然 [FileAccessProvider] 也能接受它，但显式区分意图更不容易出错。
+     *
+     * **fail-open**：拿不到当前指纹时（远端文件超上限、IO 瞬时失败）放行并记日志。
+     * 版本校验是**辅助保护**，它自己的失败绝不能阻塞正常编辑——宁可漏判一次过期写，
+     * 也不能因为算不出指纹就让用户改不了文件。
+     */
+    private fun checkVersion(path: String, key: String, sessionId: String?): ToolResult? {
+        val recorded = versions.get(sessionId, key) ?: return null
+        val current = runCatching { fileAccess.fingerprint(path) }.getOrElse { e ->
+            FileLogger.w(TAG, "edit_file 无法计算当前指纹，跳过版本校验: $key", e)
+            return null
+        } ?: return null
+        if (recorded == current) return null
+        FileLogger.w(TAG, "edit_file 拒绝过期写: $key（记录版本与当前不一致）")
+        return ToolResult.Error(staleFileMessage(key), STALE_FILE_CODE)
+    }
+
+    /** 真正的编辑逻辑：不涉及锁与版本，纯粹按 [args] 完成一次「读-改-写」。 */
+    private suspend fun performEdit(path: String, args: Map<String, JsonElement>): ToolResult {
+        return try {
             val edits = parseEdits(args)
                 ?: return ToolResult.Error("缺少必需参数：edits", "MISSING_EDITS")
 
@@ -133,11 +228,13 @@ class EditFileTool @Inject constructor(
             var totalReplacements = 0
 
             edits.forEachIndexed { i, e ->
-                val occurrences = content.split(e.oldString).size - 1
+                // readFile 按行返回 LF，匹配时只兼容换行差异，不改写文件的其它区域。
+                val matches = findLineEndingTolerant(content, e.oldString.replace("\r\n", "\n"))
+                val occurrences = matches.size
                 if (occurrences == 0) {
                     FileLogger.w(TAG, "edit_file 第 ${i + 1} 个编辑未匹配: $path")
                     return ToolResult.Error(
-                        "第 ${i + 1} 个编辑未在文件中找到 old_string，请确认内容（含缩进/换行）与当前文件完全一致",
+                        "第 ${i + 1} 个编辑未在文件中找到 old_string，请确认内容（含缩进，LF/CRLF 换行差异除外）与当前文件完全一致",
                         "NO_MATCH"
                     )
                 }
@@ -151,16 +248,27 @@ class EditFileTool @Inject constructor(
 
                 // 变更在「应用本编辑前」内容中的起始行号（1 基）。因为内容已包含此前所有编辑的结果，
                 // 这个行号已经反映了前序编辑造成的行漂移，对自上而下的常规编辑顺序是准确的。
-                val matchIndex = content.indexOf(e.oldString)
-                val startLine = if (matchIndex >= 0) content.substring(0, matchIndex).count { it == '\n' } + 1 else 1
+                val startLine = content.substring(0, matches.first().first).count { it == '\n' } + 1
 
                 val diff = LineDiff.toUnified(e.oldString, e.newString)
                 val added = diff.lines().count { it.startsWith("+") }
                 val removed = diff.lines().count { it.startsWith("-") }
                 hunks.add(Hunk(startLine = startLine, added = added, removed = removed, diff = diff))
 
-                content = if (e.replaceAll) content.replace(e.oldString, e.newString)
-                else content.replaceFirst(e.oldString, e.newString)
+                val fileLineEnding = firstLineEnding(content) ?: "\n"
+                val normalizedNew = e.newString.replace("\r\n", "\n")
+                val sb = StringBuilder(content.length)
+                var cursor = 0
+                val targets = if (e.replaceAll) matches else matches.take(1)
+                for ((start, endExclusive) in targets) {
+                    sb.append(content, cursor, start)
+                    // 替换文本的换行沿用匹配区域首个换行的格式，匹配区域无换行时沿用文件格式。
+                    val lineEnding = firstLineEnding(content, start, endExclusive) ?: fileLineEnding
+                    sb.append(normalizedNew.replace("\n", lineEnding))
+                    cursor = endExclusive
+                }
+                sb.append(content, cursor, content.length)
+                content = sb.toString()
                 totalReplacements += if (e.replaceAll) occurrences else 1
             }
 
@@ -209,5 +317,66 @@ class EditFileTool @Inject constructor(
             val all = obj["replace_all"]?.jsonPrimitive?.booleanOrNull ?: false
             Edit(old, new, all)
         }.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * 在 [content] 中查找 [pattern]（字面文本，换行需先归一为 LF）的全部出现位置，容忍换行差异：
+     * pattern 里的 \n 可匹配 content 的 \r\n 或单个 \n，其余字符逐字相等。
+     * 返回非重叠的 [start, endExclusive) 区间，按出现顺序排列。
+     *
+     * 特意不用正则：把多行 old_string 拼成单条正则时，正则引擎的匹配递归深度随行数增长，
+     * 模型整段替换上千行会抛 StackOverflowError——它是 Error，catch(Exception) 拦不住，
+     * 会穿透协程作用域直接崩进程。逐字符迭代扫描没有栈深问题。
+     */
+    private fun findLineEndingTolerant(content: String, pattern: String): List<Pair<Int, Int>> {
+        val matches = ArrayList<Pair<Int, Int>>()
+        val n = content.length
+        val m = pattern.length
+        // 每个模式字符至少消耗一个内容字符，起点超过 n-m 不可能完整匹配。
+        if (m == 0 || m > n) return matches
+        var i = 0
+        outer@ while (i <= n - m) {
+            // 首字符快判：每个起点都先判首字符，不匹配立即右移一格。
+            // 缺这一步时大文件 + 长 old_string 且不匹配会退化为 n×m 次比较。
+            if (content[i] != pattern[0] && pattern[0] != '\n') {
+                i++
+                continue@outer
+            }
+            var ci = i
+            var pj = 0
+            while (pj < m) {
+                val pc = pattern[pj]
+                if (pc == '\n') {
+                    if (ci + 1 < n && content[ci] == '\r' && content[ci + 1] == '\n') {
+                        ci += 2
+                    } else if (ci < n && content[ci] == '\n') {
+                        ci += 1
+                    } else {
+                        i++
+                        continue@outer
+                    }
+                } else if (ci < n && content[ci] == pc) {
+                    ci += 1
+                } else {
+                    i++
+                    continue@outer
+                }
+                pj++
+            }
+            matches.add(i to ci)
+            i = ci
+        }
+        return matches
+    }
+
+    /**
+     * [text] 的 [fromIndex, toIndex) 区间内首个换行的形态（"\r\n" 或 "\n"），无换行返回 null。
+     * 判断 \r 是否成对只在区间内进行：能进入匹配区间的 \n，其配对 \r（若有）必在区间内。
+     */
+    private fun firstLineEnding(text: String, fromIndex: Int = 0, toIndex: Int = text.length): String? {
+        for (k in fromIndex until toIndex) {
+            if (text[k] == '\n') return if (k > fromIndex && text[k - 1] == '\r') "\r\n" else "\n"
+        }
+        return null
     }
 }

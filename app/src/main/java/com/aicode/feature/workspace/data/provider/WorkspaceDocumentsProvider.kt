@@ -9,6 +9,7 @@ import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
 import android.webkit.MimeTypeMap
 import com.aicode.R
+import com.aicode.core.util.SafeDelete
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import java.io.File
 import java.io.FileNotFoundException
@@ -156,7 +157,10 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
 
     override fun deleteDocument(documentId: String) {
         val file = fileForDocId(documentId)
-        if (!file.deleteRecursively()) {
+        // NOFOLLOW 删除：工作区内容由 AI 全权写入且支持符号链接，File.deleteRecursively 会跟链接下钻。
+        if (!file.exists()) throw FileNotFoundException("Failed to delete document: $documentId")
+        SafeDelete.deleteTree(file)
+        if (file.exists()) {
             throw FileNotFoundException("Failed to delete document: $documentId")
         }
     }

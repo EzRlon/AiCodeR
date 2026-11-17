@@ -1,0 +1,10 @@
+name = "aicode-feedback-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 通过 `wrangler secret put` 设置，不要写进仓库：
+#   GITHUB_TOKEN  仅 issues:write 权限的细粒度令牌
+#   FEEDBACK_KEY  可选，与 data/feedback-endpoint.json 的 key 一致
+# 普通变量：
+#   REPO_OWNER=EzRlon
+#   REPO_NAME=AiCodeR

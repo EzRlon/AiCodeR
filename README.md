@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="docs/icon.webp" width="112" alt="AiCode" />
-  <h1 align="center">AiCode</h1>
+  <img src="docs/icon-aicoder.png" width="112" alt="AiCodeR" />
+  <h1 align="center">许愿码 AiCodeR</h1>
   <p align="center">
-    Android 上的通用 AI Coding Agent · Linux 开发环境 · 支持本地与远程 SSH
+    基于 <a href="https://github.com/jieapi/AiCode">AiCode</a> 的社区增强分支 · Android 上的 AI 编程 Agent
+    <br />
+    不重造底座，只把底座改到能长期干活：多引擎、可无人值守、真机可验证
     <br />
     <a href="README.md">中文</a> · <a href="README.en.md">English</a>
   </p>
@@ -11,122 +13,154 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="License GPL-3.0" /></a>
   <img src="https://img.shields.io/badge/Platform-Android-green.svg" alt="Android Platform" />
-  <a href="https://github.com/jieapi/aicode/releases"><img src="https://img.shields.io/github/v/release/jieapi/aicode?display_name=tag&include_prereleases" alt="Latest Release" /></a>
-</p>
-
-<p align="center">
-  <table>
-    <tr>
-      <td align="center"><img src="docs/screenshots/home.png" alt="AiCode 主页 - AI 对话界面，支持代码生成与 Markdown 渲染" width="270"/></td>
-      <td align="center"><img src="docs/screenshots/git.png" alt="AiCode Git 集成 - 可视化提交记录与分支管理" width="270"/></td>
-    </tr>
-    <tr>
-      <td align="center">主页 · AI 对话</td>
-      <td align="center">Git · 提交历史</td>
-    </tr>
-    <tr>
-      <td align="center"><img src="docs/screenshots/container.png" alt="AiCode 容器设置 - 容器镜像管理" width="270"/></td>
-      <td align="center"><img src="docs/screenshots/models.png" alt="AiCode 模型列表 - 多供应商模型管理" width="270"/></td>
-    </tr>
-    <tr>
-      <td align="center">容器 · 镜像管理</td>
-      <td align="center">模型 · 列表配置</td>
-    </tr>
-  </table>
+  <img src="https://img.shields.io/badge/base-AiCode%20(GPL--3.0)-orange.svg" alt="Upstream AiCode" />
 </p>
 
 ---
 
-## 简介
+## 这是什么
 
-AiCode 是运行在 Android 上的通用 AI Coding Agent，把一套完整的 Linux 开发环境装进手机：内置 Alpine Linux 容器与终端，AI Agent 能读写文件、执行 Shell 命令、运行构建工具，写代码、调试到构建都在手机本地完成；也可改用远程 SSH 服务器作为执行后端，把手机变成远程项目的移动工作站。
+许愿码（AiCodeR）是 [AiCode](https://github.com/jieapi/AiCode) 的社区增强分支。上游已经把一套完整的 AI 编程底座装进手机——Linux 容器、终端与编辑器、文件与 Git、模型供应商、MCP、检查点、远程 SSH。**这些不再重复介绍**，本文只讲一件事：在同一个底座上，我们改了什么、加了什么、底层动了哪些地方。
 
-上手无需任何准备：装上 App、在「AI 供应商」配好模型即可直接开发，不用电脑，也不用自己搭建环境。AiCode 不内置模型、不绑定供应商，支持 OpenAI / Anthropic / Gemini 三类协议与自定义供应商，模型、密钥与端点都由你自行配置。
+**代码基线**：2026-10-11 导入上游 main 快照，此后独立演进，2026-10-27 合并上游 v1.13。到 2026-11-02（v2.2.1）为止，自有提交 235 个。
 
-## 赞助商
+## 与上游的差异一览
 
-| 图标 | 描述 |
-|------|------|
-| <img src="https://www.rainyun.com/favicon.ico" width="24" alt="RainYun" /> | **[雨云](https://www.rainyun.com/logins_)** — 本项目服务器赞助商，国产云服务商，主营云服务器与游戏云（Minecraft 等预装服务端一键开服），兼有裸金属物理机与对象存储，新用户优惠 |
-| <img src="https://ai.onyxaxis.org/api/site/logo" width="24" alt="Axis AI" /> | **[Axis AI](https://ai.onyxaxis.org/register?invite=FOAICODE)** — 汇聚前沿大模型能力的免费公益 AI 平台，使用邀请码 `FOAICODE` 注册可享 7 天 Go 权益 |
+| 维度 | 上游 | 本分支 |
+| --- | --- | --- |
+| 执行引擎 | 内置 Agent 一套 | 内置 Agent + Claude Code / Codex / OpenCode 三种 CLI 引擎，会话级切换，能力经 MCP 桥回流 |
+| 上下文 | 自动压缩 | 压缩 + 语义锚点微压缩 + 九段式摘要 + 失败熔断 + 压缩后工作集恢复 + 归档原文全文召回 |
+| 权限 | 工具审批 | 每工具三档权限 + 授权档案 + 审计记录 + 守夜守护 + 定时任务预授权清单 |
+| AI 协作 | 对话 + 子代理 | 专家团（可启停/删除）、模型顾问团工作台、工作流门禁与 MCP 编排、消息类型、项目任务账本、记忆图谱结论沉淀 |
+| 移动化 | 聊天界面 | 悬浮球 mini 会话、标注中心统一画布、交付物页、Web 预览、VNC 悬浮窗（画面铺满、特殊键条、横屏适配） |
+| 自动化 | 无 | 定时任务 / 定时 Plan、用户脚本、守夜守护 |
+| 数据层 | schema 62 | schema 73，迁移脚本 55 → 66 个 |
+| 交付形态 | `com.aicode`，上游版本线 | `com.aicoder` 独立包名与独立版本线，可与官方版共存 |
 
-## 广告
+## 底层架构改造
 
-| 图标 | 描述 |
-|------|------|
-| <img src="https://www.qiniu.com/favicon.ico" width="24" alt="Qiniu" /> | **[七牛云 AI](https://s.qiniu.com/vUryau)** — 新用户注册赠 300 万 Token（2 年有效），支持 50+ 热门大模型 |
+以下七处是真正的"改底座"，用户不一定直接看见，但决定了上层能力能不能成立。
 
-## 功能特性
+### 1. 执行引擎抽象层
 
-### AI Agent
+CLI 从"终端里跑的一条命令"提升为一等执行后端：Claude Code 的 stream-json、Codex 的 `exec --json`、OpenCode 的 `run --format json` 各自翻译成统一的 AgentEvent 流，消息渲染、子代理、检查点、审批全链路不分引擎；引擎侧会话 id 做持久映射，切引擎后历史自动接续。引擎目录约 2,600 行。
 
-- **AI Agent** — 内置文件读写与编辑、Shell 执行、后台终端、代码与网页搜索、图片识别、待办清单等工具；流式输出并实时渲染 Markdown，长对话自动压缩上下文
-- **子代理并行** — 主会话可派生独立上下文的子代理在后台并行调研、审查或对比方案，不阻塞当前对话；内置只读的 Explore 子代理，也可自定义模型、工具集与提示词
-- **三种运行模式** — BUILD 正常开发、PLAN 只读规划（工具层拦截写操作）、AUTO 免授权全放行，按信任程度切换 AI 权限
-- **检查点与撤销** — Agent 改代码前自动记录文件快照，对话中可一键回滚代码、对话或两者
-- **技能与自动记忆** — 支持全局/项目级技能（Skills）与长期记忆，AI 可跨会话复用经验与项目约定
-- **MCP 协议** — 支持连接本地（stdio）与远程（HTTP）MCP 服务器，动态扩展 AI 工具能力
-- **工具授权与自定义提示词** — 逐工具配置授权规则，系统提示词支持用户覆盖且 App 升级不丢失
+### 2. 能力桥（aicode_bridge）
 
-### 模型与供应商
+引擎跑在容器里，看不见 App 的数据。桥把方向反过来：以 MCP 工具形式向三个引擎提供记忆读写、项目与全局规则、技能清单与正文、标注与修复账本流转、跨会话档案检索。App 侧已启用的子代理按回合映射为引擎 agent，用户自装 MCP 自动映射进引擎配置——生成式配置，不改用户的 CLI 配置文件。
 
-- **模型无关** — 不内置模型、不绑定供应商，模型、密钥与端点自行配置
-- **协议兼容** — 兼容 OpenAI / Anthropic / Gemini 三类协议，内置多家官方预设，也支持自定义供应商，模型列表与单价可自定义
-- **多 Key 轮换** — 同一供应商可配多个 Key，按顺序或轮询自动轮换，思考强度可调
+### 3. 审批与权限下沉
 
-### 开发环境
+CLI 的工具调用不经过 App 的工具层，所以授权下沉为"三处入口、一套账"：弹窗、通知栏、悬浮球都能批；Claude Code 侧用回环 TCP + 随机 token 的权限桥，把每次工具请求路由回授权中心，拒绝即回写 deny。权限桥 token 与会话 id 分离，避免本机任意进程读到会话 id 就能读全部历史。
 
-- **内置终端与容器** — 基于 Termux 与 PRoot 的本地 Linux 容器，内置 Alpine 镜像，支持导入自定义 rootfs、挂载宿主目录；终端多标签、可后台常驻
-- **远程 SSH 模式** — 把远程服务器作为执行后端，命令、文件与终端都作用于远端项目
-- **文件树与代码编辑器** — 缩进式文件树点开即进全屏编辑器，支持主流语言语法高亮与 Markdown 预览；AI 回复里的 `文件:行号` 链接可直接跳转到对应行，本地与远程 SSH 工作区都支持
-- **Git 集成** — 可视化管理状态、分支、提交历史、差异与标签，支持暂存与回退改动、署名与凭据配置
-- **工作区同步** — 支持 SFTP / FTP 同步，内置 FTP 服务端方便电脑端管理文件
+### 4. 上下文管线
 
-### 使用体验
+微压缩从纯截断改为保留语义锚点（退出码、构建成功/失败、错误原文、测试计数），压缩后仍能判错；九段式摘要 + 压缩失败熔断 + 压缩后工作集恢复；70% 自动压缩、93% 兜底交接，均可调。归档原文进 FTS4 外部内容表，AI 用 `recall` 按关键词取回，中文子串自动降级模糊匹配。
 
-- **平板与大屏适配** — 按窗口宽度自适应：宽屏常驻侧边栏，聊天旁并排显示代码或终端；变窄时退回单栏
-- **Token 统计** — 按渠道与模型统计用量、估算费用，可下钻查看调用明细
-- **外观与语言** — 主题明暗、预设配色、莫奈取色、自定义背景图，中英双语界面
-- **网络代理** — 支持全局代理与供应商级代理分别配置
-- **备份与还原** — 加密导出/导入供应商配置、凭据、聊天历史与工作区文件
+### 5. 数据层
 
-## 快速开始
+迁移链从 62 扩到 73，重编号后保持幂等（兼容开发中途的旧库）；会话删除进回收站软删 30 天；失败事件单独埋点（60 秒去重、90 天清理，失败不影响主流程）；记忆图谱建节点/边两层并带时间失效。
 
-| 项目 | 说明 |
-|------|------|
-| 系统要求 | Android 8.0+（API 26），arm64-v8a / x86_64 |
-| 下载地址 | [GitHub Releases](https://github.com/jieapi/aicode/releases/latest)：真机选 `armsolo`、模拟器选 `x86solo`、通用选 `universal` 包 |
-| 快速上手 | 「设置 → AI 供应商」配模型 →「容器与镜像」选本地或 SSH → 新建会话开始对话 |
-| 更新记录 | [Releases](https://github.com/jieapi/aicode/releases)（历史版本与更新说明） |
-| 使用指南 | [在线文档](https://aicode.murk.top)：快速上手、使用手册与进阶教程（与 App 内置文档同源） |
+### 6. 容器与宿主打通
 
-## Star
+针对 musl/PRoot 环境做构建与删除补丁；目录删除走 NOFOLLOW 安全删除，不跟随符号链接；场景化 provision 覆盖 10 类开发环境、代码智能四件套与本地模型；VNC 与悬浮球使用独立窗口，不占用聊天页。
 
-如果 AiCode 对你有帮助，欢迎 [Star](https://github.com/jieapi/aicode) 支持，让更多开发者看到这个项目。
+### 7. 工程化
 
-## Star History
+1,459 个测试方法；detekt 前置扫描 + 独立 QA / 性能优化审查子代理的固定流程；构建锁避免多会话并行污染 KSP 缓存；版本号由提交数生成，不会被漏改；发布签名独立密钥库。
 
-<a href="https://www.star-history.com/?repos=jieapi%2Faicode&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jieapi/aicode&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jieapi/aicode&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jieapi/aicode&type=date&legend=top-left" />
- </picture>
-</a>
+## 新增能力
 
-## 反馈与贡献
+按使用场景分组，只列本分支新增的部分。
 
-- **交流群**：加入 [AiCode QQ 交流群](https://qm.qq.com/q/ByvqODJdIs)（群号：1107110698），交流使用心得、反馈问题
-- **Bug 反馈**：到 [Issues](https://github.com/jieapi/aicode/issues) 提交，附上复现步骤、设备型号与系统版本，便于定位
-- **功能建议**：想加新功能或改进，欢迎先在 [Issues](https://github.com/jieapi/aicode/issues) 讨论
-- **贡献代码**：欢迎提交 [Pull Request](https://github.com/jieapi/aicode/pulls)
+### AI 协作
+
+- **专家团** — 给会话挂一组成套角色（产品 / 架构 / 前端 / 质检等），团长按生命周期自动派人；内置团队包与在线市场，每个角色可独立选模型
+- **消息类型** — 发送前打意图标签（缺陷修复 / 方案计划 / 调研研究等 13 类），AI 据此调整处理策略
+- **项目任务账本** — 跨会话记录任务状态（排队 / 进行中 / 待验收 / 已验收），新会话开工先接续，不重做
+- **记忆图谱** — 图上看项目、会话与子代理的关系；压缩时自动把「关键决定 / 教训 / 未完成」抽成结论，可检索、可标过时
+- **子代理派发配套** — 任务书模板、任务期工具收敛、报告自动归档（子会话删了也能取回）
+
+### 移动化工作流
+
+- **悬浮球** — 待机是贴边小胶囊（颜色即状态），点开是圆球 + mini 会话：看消息流、发消息、批审批、看待办，切到别的 App 也能用
+- **标注中心** — 一块画布 + 一条工具架：未定格时直接圈真实界面（弹窗照弹），定格后精画；汇总给 AI 时每条附结构化坐标
+- **交付物页** — 跨会话聚合 AI 交付的安装包与文件，可安装、用外部工具打开、保存到手机、分享
+- **Web 预览 / VNC 悬浮窗** — 容器里的前端服务与图形画面直接看，改完即刷
+- **文件外送** — 聊天文件、交付物、存储产物统一长按菜单：保存到手机、用 MT 管理器打开、分享、复制容器路径
+
+### 自动化与无人值守
+
+- **定时任务 / 定时 Plan** — 到点跑容器命令、跑用户脚本，或让 AI 无人值守自主施工（预授权范围内放行，超范围等授权，10 分钟无人应答自动拒绝）
+- **守夜守护** — 离开时让 AI 继续推进：危险操作自动拒绝并给改写引导，弹窗超时自动拒绝
+- **工具授权中心** — 每工具三档 + 三套预置档案（日常 / 离开模式 / 只读演示）+ 授权记录回看
+- **用户脚本** — 把验证过的自动化固化成命名脚本，AI 用 `run_script` 调用，也在设置页管理与运行
+
+### 数据与迁移
+
+- **会话回收站** — 删除先入回收站，30 天内可恢复
+- **备份范围扩充** — 会话、AI 资产、密钥库、定时任务、授权档位、守夜与容器设置整体打包
+- **密钥管理** — 发布签名、SSH 与工作区密钥集中查看、导入导出（附指纹清单），并纳入备份范围
+- **存储清理 2.0** — 按类扫描可重建数据（聊天、容器镜像、工作区、AI 配置、检查点、日志、缓存、APK），会话级删除后 VACUUM 真正收缩数据库文件
+- **在线商店** — 技能、MCP、专家团一键安装（安装 ≠ 启用），安装前过本地安全规则扫描
+
+### 体验与工程质量
+
+- **深色模式全局跟随、极黑（OLED）主题** — 首帧底色同步，冷启动不闪色
+- **统一动效与侧栏重设计** — 动效只存在于交互与忙碌态
+- **性能与功耗纪律** — 零常驻轮询、后台任务克制可取消，作为交付硬标准
+- **离线语音输入** — 系统识别不可用时自动引导下载离线中文模型（多源、断点续传、完整性校验）
+
+> 另有一批面向外部服务与成品软件分析的能力，涉及合规边界，不在此展开——更多请自行体验。
+
+## 代码量
+
+统计口径：起点 2026-10-11 的上游快照，终点 2026-10-28 的 HEAD（v2.2.0）；已扣除同期上游自身演进带来的增量，只算本分支的净贡献。仅「提交」行已更新至 2026-11-02（v2.2.1），其余行仍为 v2.2.0 统计口径。
+
+| 项目 | 本分支净增 | 备注 |
+| --- | --- | --- |
+| 应用代码（Kotlin） | +42,230 / −2,645 行，净约 3.96 万行 | 扣除上游同期 +10,698 / −986；新增文件 198 个，其中 40 个来自上游同期 |
+| 单元测试 | +3,640 行 | 测试文件 127 → 154，测试方法 1,459 个 |
+| 内置资产 | 约 4.4 万行 | 当前规模：17 个技能包、8 个角色、4 个团队包、13 段提示词 |
+| 文档站 | +683 行 | 能力地图与各功能指南 |
+| 数据库迁移 | 55 → 66 个脚本（schema 62 → 73） | 本分支新增 11 个 |
+| 提交 | 235 个自有提交（截至 2026-11-02） | 期间合并上游 v1.13 |
+
+主数字：**约 4 万行应用代码 + 3,600 行测试 + 4.4 万行内置资产**。全仓差异 1,249 个文件、+132,346 / −4,024 行，含文档与协作笔记。
+
+## 兼容与合并
+
+- **持续合并上游** — 上游更新按批次并入，冲突在自有改动侧解决；上游原有功能、设置与文档保持可用
+- **可与官方共存** — 独立包名 `com.aicoder` 与独立版本号，不覆盖官方版数据
+- **迁移幂等** — 数据库迁移重编号后仍兼容开发中途版本，升级不丢数据
+
+## 免责声明
+
+1. 本项目是社区增强分支，与上游 [jieapi/AiCode](https://github.com/jieapi/AiCode) 及其作者无隶属关系；上游功能与稳定性请参考其官方仓库
+2. 本软件仅供学习、研究与合法的软件开发用途。**严禁**用于任何违法或侵权用途，包括未经授权入侵、破解、窃取或泄露他人数据、传播恶意代码等
+3. AI 生成的代码与操作仅供参考，**采纳前请自行审查**；对代码的改动请确保有版本控制或备份
+4. 涉及他人软件分析的功能仅限用于**你拥有所有权或已获合法授权**的软件；由此产生的法律责任由使用者自行承担
+5. 「守夜守护」「定时任务」等无人值守功能请在授权范围内使用，长时间无人值守建议先在受控环境测试
+6. 本项目不内置任何大模型服务，模型、密钥与端点均由使用者自行配置；第三方模型服务的费用与合规性由使用者自负
+7. 本软件按「现状」提供，不附带任何明示或默示担保；使用风险与责任由使用者自行承担。若不同意上述声明，请立即停止使用并卸载
 
 ## 致谢
 
-- [OpenCode](https://github.com/anomalyco/opencode) — 终端 AI 编码工具，本项目的核心灵感来源
-- [Termux](https://github.com/termux/termux-app) — Android 终端模拟器，提供了终端组件与 PRoot 方案
-- [Kelivo](https://github.com/Chevey339/kelivo) — 跨平台 LLM 聊天客户端，AI 对话界面设计参考
+本项目站在巨人的肩膀上。
 
-## 开源协议
+### 上游项目
 
-本项目基于 [GPL-3.0](LICENSE) 协议开源。
+- **[AiCode](https://github.com/jieapi/AiCode)**（GPL-3.0）— 本项目的直接底座：AI Agent 框架、Alpine 容器与终端、模型供应商管理、Git 集成、工作区同步、平板适配等基础能力全部来自上游
+- **[Termux](https://github.com/termux/termux-app)** 与 **[PRoot](https://github.com/proot-me/proot)** — 经上游引入的 Android 容器技术底座
+
+### 相关开源项目
+
+- **[Jetpack Compose](https://developer.android.com/compose) / [Hilt](https://dagger.dev/hilt/) / [Room](https://developer.android.com/training/data-storage/room)** — Android 现代开发技术栈
+- **[Vosk](https://github.com/alphacep/vosk-api)** — 离线语音识别引擎
+- **[nanohttpd](https://github.com/NanoHttpd/nanohttpd)** — 远程管理的局域网 HTTP 服务
+- **[anthropics/skills](https://github.com/anthropics/skills)** 与 **[obra/superpowers](https://github.com/obra/superpowers)** — 内置技能包来源
+- 同时致谢上游鸣谢过的灵感与组件来源：[OpenCode](https://github.com/anomalyco/opencode)、[Termux](https://github.com/termux/termux-app)、[Kelivo](https://github.com/Chevey339/kelivo)，以及 [NOTICE](NOTICE) 中列出的全部第三方组件
+
+### 开源协议
+
+本项目沿用上游的 **[GPL-3.0](LICENSE)** 协议开源，第三方组件的版权与许可声明见 [NOTICE](NOTICE)。使用本项目代码时请同样遵循 GPL-3.0，并保留对上游作者的署名与致谢。

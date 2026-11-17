@@ -64,6 +64,10 @@ class OpenAIAdapter @Inject constructor(
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认。
     override var temperature: Float? = null
 
+    // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
+    override var reasoningLevels: List<String>? = null
+    override var reasoningWireUsed: String? = null
+
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
 
@@ -104,11 +108,13 @@ class OpenAIAdapter @Inject constructor(
         }
 
         val url = resolveApiUrl()
+        val effectiveEffort = normalizeReasoningEffort(reasoningEffort)
+        reasoningWireUsed = effectiveEffort
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = effectiveEffort,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = false,
@@ -128,6 +134,7 @@ class OpenAIAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
             throw enriched
         }
@@ -159,16 +166,51 @@ class OpenAIAdapter @Inject constructor(
 
     /**
      * 思考强度 → OpenAI reasoning_effort。
+     *
+     * **元数据（[reasoningLevels]）为准**：支持 max/xhigh 的模型（gpt-5.6、gpt-6 等）如实透传，
+     * 不再被压成 high；模型确实不支持的低档位向下取最近档，未知模型按保守集合发送。
+     * 400 文案学到的「被拒档位」（[ReasoningLearning]）只在其允许范围内**进一步收窄**，
+     * 永不反过来覆盖元数据——一条异常 400 不该让模型永久失去元数据已声明的档位。
+     *
      * OpenAI 官方 Chat Completions 的 reasoning_effort 仅接受 low/medium/high（gpt-5 系额外支持
      * none/minimal，但 o 系列不接受），"none"/"minimal" 原样透传会在多数推理模型上 400。
-     * 这里把 "none"/"minimal" 明确跳过（不发该字段，交由服务端默认），"xhigh"/"max" 归一到 high
-     * （OpenAI 无更高档），low/medium/high 原样透传。与 Anthropic/Gemini 对齐「不可表达即跳过」的策略。
+     * 无声明档位时退回原保守策略："none"/"minimal" 跳过（不发该字段），"xhigh"/"max" 归一到 high。
      */
-    private fun normalizeReasoningEffort(effort: String?): String? = when (effort) {
-        null -> null
-        "none", "minimal" -> null
-        "xhigh", "max" -> "high"
-        else -> effort
+    private fun normalizeReasoningEffort(effort: String?): String? {
+        if (effort == null) return null
+        val denied = ReasoningLearning.rejectedLevels(providerId, model)
+        val declared = reasoningLevels?.takeIf { it.isNotEmpty() }
+            ?.filter { it !in denied }
+            ?.takeIf { it.isNotEmpty() }
+        if (declared != null) {
+            if (effort in declared) return effort
+            // 档位高于最高档：向下取最近档；低于最低档：向上取最近档。
+            val index = REASONING_ORDER.indexOf(effort)
+            if (index >= 0) {
+                for (i in index downTo 0) {
+                    if (REASONING_ORDER[i] in declared) return REASONING_ORDER[i]
+                }
+                for (i in index until REASONING_ORDER.size) {
+                    if (REASONING_ORDER[i] in declared) return REASONING_ORDER[i]
+                }
+            }
+            return null
+        }
+        // 无元数据（或元数据档位全被证伪）：按协议保守集合发送，并避开已证伪的档位。
+        val conservative = when (effort) {
+            "none", "minimal" -> return null
+            "xhigh", "max" -> "high"
+            else -> effort
+        }
+        return if (conservative in denied) ReasoningLearning.clamp(conservative, ALL_EFFORTS - denied) else conservative
+    }
+
+    private companion object {
+        /** 档位由弱到强的顺序，用于在模型声明档位内找最近档。 */
+        val REASONING_ORDER = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+        /** 全部档位：无元数据时从中剔除已证伪档位，得到可用的保守集合。 */
+        val ALL_EFFORTS = REASONING_ORDER.toSet()
     }
 
     /**
@@ -201,7 +243,9 @@ class OpenAIAdapter @Inject constructor(
             request["tool_choice"] = "auto"
         }
         if (stream) request["stream"] = true
-        normalizeReasoningEffort(reasoningEffort)?.let { effort ->
+        val effectiveEffort = normalizeReasoningEffort(reasoningEffort)
+        reasoningWireUsed = effectiveEffort
+        effectiveEffort?.let { effort ->
             if (isDeepSeek) {
                 request["reasoning"] = mapOf("effort" to effort)
             } else {
@@ -244,6 +288,7 @@ class OpenAIAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
             throw enriched
         }
@@ -297,11 +342,13 @@ class OpenAIAdapter @Inject constructor(
 
         val url = resolveApiUrl()
 
+        val effectiveEffort = normalizeReasoningEffort(reasoningEffort)
+        reasoningWireUsed = effectiveEffort
         val request = ChatCompletionRequest(
             model = model,
             messages = openAIMessages,
             temperature = temperature,
-            reasoning_effort = normalizeReasoningEffort(reasoningEffort),
+            reasoning_effort = effectiveEffort,
             tools = toolDefs,
             tool_choice = if (toolDefs != null) "auto" else null,
             stream = true,
@@ -479,6 +526,7 @@ class OpenAIAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
             throw enriched
         } finally {
@@ -605,6 +653,7 @@ class OpenAIAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "OpenAI", enriched, seq)
             throw enriched
         } finally {

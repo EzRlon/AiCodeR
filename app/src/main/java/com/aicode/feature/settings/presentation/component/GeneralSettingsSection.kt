@@ -1,5 +1,9 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,12 +35,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
+import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.settings.data.repository.StartupSessionMode
+import com.aicode.feature.settings.data.repository.VoiceEngine
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 
@@ -58,17 +66,47 @@ internal fun GeneralSettingsSection(
     onToggleEnterToSend: (Boolean) -> Unit,
     compactionThresholdPercent: Int,
     onSetCompactionThresholdPercent: (Int) -> Unit,
+    tokenBudget: Int,
+    onSetTokenBudget: (Int) -> Unit,
     sendFileMaxSizeMb: Int,
     onSetSendFileMaxSizeMb: (Int) -> Unit,
+    goalMaxTurns: Int,
+    onSetGoalMaxTurns: (Int) -> Unit,
+    goalMaxTokens: Int,
+    onSetGoalMaxTokens: (Int) -> Unit,
     deleteExternalWorkspaceSessions: Boolean,
-    onToggleDeleteExternalWorkspaceSessions: (Boolean) -> Unit
+    onToggleDeleteExternalWorkspaceSessions: (Boolean) -> Unit,
+    selfImproveMode: Boolean,
+    onToggleSelfImproveMode: (Boolean) -> Unit,
+    handoffPromptEnabled: Boolean,
+    onToggleHandoffPromptEnabled: (Boolean) -> Unit,
+    handoffPromptPercent: Int,
+    onSetHandoffPromptPercent: (Int) -> Unit,
+    handoffAutoEnabled: Boolean,
+    onToggleHandoffAutoEnabled: (Boolean) -> Unit,
+    handoffAutoPercent: Int,
+    onSetHandoffAutoPercent: (Int) -> Unit,
+    floatBallEnabled: Boolean,
+    onToggleFloatBallEnabled: (Boolean) -> Unit,
+    vncAutoPopupEnabled: Boolean,
+    onToggleVncAutoPopup: (Boolean) -> Unit,
+    voiceEngine: VoiceEngine,
+    voiceModelState: VoskModelManager.ModelState,
+    onSelectVoiceEngine: (VoiceEngine) -> Unit,
+    onDownloadVoiceModel: () -> Unit
 ) {
     var showStartupSessionSheet by remember { mutableStateOf(false) }
+    var showVoiceEngineSheet by remember { mutableStateOf(false) }
     var editingFirstByteTimeout by remember { mutableStateOf(false) }
     var editingStreamIdleTimeout by remember { mutableStateOf(false) }
     var editingMaxNetworkRetries by remember { mutableStateOf(false) }
     var editingCompactionThreshold by remember { mutableStateOf(false) }
+    var editingHandoffPercent by remember { mutableStateOf(false) }
+    var editingHandoffAutoPercent by remember { mutableStateOf(false) }
+    var editingTokenBudget by remember { mutableStateOf(false) }
     var editingSendFileMaxSize by remember { mutableStateOf(false) }
+    var editingGoalMaxTurns by remember { mutableStateOf(false) }
+    var editingGoalMaxTokens by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -102,6 +140,138 @@ internal fun GeneralSettingsSection(
                         text = stringResource(R.string.settings_percent_value, compactionThresholdPercent),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_prompt),
+                subtitle = stringResource(R.string.settings_handoff_prompt_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = handoffPromptEnabled,
+                        onCheckedChange = onToggleHandoffPromptEnabled
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_prompt_percent),
+                subtitle = stringResource(R.string.settings_handoff_prompt_percent_desc),
+                onClick = { editingHandoffPercent = true },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_percent_value, handoffPromptPercent),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_auto),
+                subtitle = stringResource(R.string.settings_handoff_auto_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = handoffAutoEnabled,
+                        onCheckedChange = onToggleHandoffAutoEnabled
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_handoff_auto_percent),
+                subtitle = stringResource(R.string.settings_handoff_auto_percent_desc),
+                onClick = { editingHandoffAutoPercent = true },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_percent_value, handoffAutoPercent),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            val overlayContext = androidx.compose.ui.platform.LocalContext.current
+            var overlayGranted by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(overlayContext)) }
+            // 用户为开启悬浮球去过授权页：授权成功后返回自动置开，避免「以为开了其实没开」。
+            var awaitingOverlayGrant by rememberSaveable { mutableStateOf(false) }
+            // 从系统授权页返回时刷新；若之前点了开启且现已授权，自动写开关并拉起服务。
+            LifecycleResumeEffect(Unit) {
+                val nowGranted = android.provider.Settings.canDrawOverlays(overlayContext)
+                if (!overlayGranted && nowGranted && awaitingOverlayGrant) {
+                    awaitingOverlayGrant = false
+                    onToggleFloatBallEnabled(true)
+                }
+                overlayGranted = nowGranted
+                onPauseOrDispose { }
+            }
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_float_ball),
+                subtitle = if (overlayGranted) stringResource(R.string.settings_float_ball_desc)
+                else stringResource(R.string.settings_float_ball_no_permission),
+                onClick = if (overlayGranted) null else ({
+                    awaitingOverlayGrant = true
+                    openOverlayPermission(overlayContext)
+                }),
+                trailing = {
+                    AppSwitch(
+                        checked = floatBallEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && !overlayGranted) {
+                                awaitingOverlayGrant = true
+                                openOverlayPermission(overlayContext)
+                            } else {
+                                onToggleFloatBallEnabled(enabled)
+                            }
+                        }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_vnc_auto_popup),
+                subtitle = stringResource(R.string.settings_vnc_auto_popup_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = vncAutoPopupEnabled,
+                        onCheckedChange = { onToggleVncAutoPopup(it) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_token_budget),
+                subtitle = stringResource(R.string.settings_token_budget_desc),
+                onClick = { editingTokenBudget = true },
+                trailing = {
+                    Text(
+                        text = if (tokenBudget <= 0) {
+                            stringResource(R.string.settings_token_budget_unlimited)
+                        } else {
+                            stringResource(R.string.settings_token_budget_value, tokenBudget)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_self_improve_mode),
+                subtitle = stringResource(R.string.settings_self_improve_mode_desc),
+                trailing = {
+                    AppSwitch(
+                        checked = selfImproveMode,
+                        onCheckedChange = onToggleSelfImproveMode
                     )
                 }
             )
@@ -211,6 +381,58 @@ internal fun GeneralSettingsSection(
                 }
             )
         }
+
+        SettingsGroupHeader(text = stringResource(R.string.settings_voice_group))
+        SettingsGroup {
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_voice_engine),
+                subtitle = stringResource(voiceEngineLabelRes(voiceEngine)),
+                onClick = { showVoiceEngineSheet = true }
+            )
+            if (voiceEngine == VoiceEngine.OFFLINE) {
+                SettingsDivider()
+                val downloadable = voiceModelState is VoskModelManager.ModelState.Missing ||
+                    voiceModelState is VoskModelManager.ModelState.Failed
+                SettingsRow(
+                    icon = null,
+                    title = stringResource(R.string.settings_voice_model),
+                    subtitle = voiceModelSubtitle(voiceModelState),
+                    enabled = downloadable,
+                    onClick = { onDownloadVoiceModel() }
+                )
+            }
+        }
+        SettingsGroupHeader(text = stringResource(R.string.settings_general_goal))
+        SettingsGroup {
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_goal_max_turns),
+                subtitle = stringResource(R.string.settings_goal_max_turns_desc),
+                onClick = { editingGoalMaxTurns = true },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_turns_value, goalMaxTurns),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = null,
+                title = stringResource(R.string.settings_goal_max_tokens),
+                subtitle = stringResource(R.string.settings_goal_max_tokens_desc),
+                onClick = { editingGoalMaxTokens = true },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_tokens_value, goalMaxTokens),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.semanticColors.subtleText
+                    )
+                }
+            )
+        }
     }
 
     if (showStartupSessionSheet) {
@@ -221,6 +443,17 @@ internal fun GeneralSettingsSection(
                 showStartupSessionSheet = false
             },
             onDismiss = { showStartupSessionSheet = false }
+        )
+    }
+
+    if (showVoiceEngineSheet) {
+        VoiceEngineSheet(
+            selected = voiceEngine,
+            onSelect = {
+                onSelectVoiceEngine(it)
+                showVoiceEngineSheet = false
+            },
+            onDismiss = { showVoiceEngineSheet = false }
         )
     }
 
@@ -278,6 +511,50 @@ internal fun GeneralSettingsSection(
         )
     }
 
+    if (editingHandoffPercent) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_handoff_prompt_percent),
+            initialValue = handoffPromptPercent,
+            hint = stringResource(R.string.settings_compaction_threshold_input_hint),
+            minValue = 1,
+            maxValue = 100,
+            onConfirm = {
+                onSetHandoffPromptPercent(it)
+                editingHandoffPercent = false
+            },
+            onDismiss = { editingHandoffPercent = false }
+        )
+    }
+
+    if (editingHandoffAutoPercent) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_handoff_auto_percent),
+            initialValue = handoffAutoPercent,
+            hint = stringResource(R.string.settings_compaction_threshold_input_hint),
+            minValue = 1,
+            maxValue = 100,
+            onConfirm = {
+                onSetHandoffAutoPercent(it)
+                editingHandoffAutoPercent = false
+            },
+            onDismiss = { editingHandoffAutoPercent = false }
+        )
+    }
+
+    if (editingTokenBudget) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_token_budget),
+            initialValue = tokenBudget,
+            hint = stringResource(R.string.settings_token_budget_input_hint),
+            minValue = 0,
+            onConfirm = {
+                onSetTokenBudget(it)
+                editingTokenBudget = false
+            },
+            onDismiss = { editingTokenBudget = false }
+        )
+    }
+
     if (editingSendFileMaxSize) {
         NumberInputDialog(
             title = stringResource(R.string.settings_sendfile_max_size),
@@ -289,6 +566,34 @@ internal fun GeneralSettingsSection(
                 editingSendFileMaxSize = false
             },
             onDismiss = { editingSendFileMaxSize = false }
+        )
+    }
+
+    if (editingGoalMaxTurns) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_goal_max_turns),
+            initialValue = goalMaxTurns,
+            hint = stringResource(R.string.settings_goal_max_turns_input_hint),
+            minValue = 1,
+            onConfirm = {
+                onSetGoalMaxTurns(it)
+                editingGoalMaxTurns = false
+            },
+            onDismiss = { editingGoalMaxTurns = false }
+        )
+    }
+
+    if (editingGoalMaxTokens) {
+        NumberInputDialog(
+            title = stringResource(R.string.settings_goal_max_tokens),
+            initialValue = goalMaxTokens,
+            hint = stringResource(R.string.settings_goal_max_tokens_input_hint),
+            minValue = 1000,
+            onConfirm = {
+                onSetGoalMaxTokens(it)
+                editingGoalMaxTokens = false
+            },
+            onDismiss = { editingGoalMaxTokens = false }
         )
     }
 }
@@ -416,4 +721,102 @@ private fun StartupSessionMode.labelRes(): Int = when (this) {
 private fun StartupSessionMode.descRes(): Int = when (this) {
     StartupSessionMode.NEW_SESSION -> R.string.settings_startup_session_new_desc
     StartupSessionMode.RECENT_SESSION -> R.string.settings_startup_session_recent_desc
+}
+
+/** 语音引擎选择弹层（系统 / 离线）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VoiceEngineSheet(
+    selected: VoiceEngine,
+    onSelect: (VoiceEngine) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.settings_voice_engine),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .padding(horizontal = Spacing.lg)
+                    .padding(bottom = Spacing.md)
+            )
+
+            VoiceEngine.entries.forEach { engine ->
+                val isSelected = engine == selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(engine) }
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(voiceEngineLabelRes(engine)),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = stringResource(voiceEngineDescRes(engine)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (isSelected) {
+                        Icon(
+                            imageVector = FeatherIcons.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun voiceEngineLabelRes(engine: VoiceEngine): Int = when (engine) {
+    VoiceEngine.SYSTEM -> R.string.voice_engine_system
+    VoiceEngine.OFFLINE -> R.string.voice_engine_offline
+}
+
+private fun voiceEngineDescRes(engine: VoiceEngine): Int = when (engine) {
+    VoiceEngine.SYSTEM -> R.string.voice_engine_system_desc
+    VoiceEngine.OFFLINE -> R.string.voice_engine_offline_desc
+}
+
+/** 离线语音模型行的状态副标题。 */
+@Composable
+private fun voiceModelSubtitle(state: VoskModelManager.ModelState): String = when (state) {
+    VoskModelManager.ModelState.Missing ->
+        stringResource(R.string.voice_model_missing, VoskModelManager.MODEL_SIZE_MB)
+    is VoskModelManager.ModelState.Downloading ->
+        if (state.percent >= 0) stringResource(R.string.voice_model_downloading, state.percent)
+        else stringResource(R.string.voice_model_downloading_unknown)
+    VoskModelManager.ModelState.Installing -> stringResource(R.string.voice_model_installing)
+    is VoskModelManager.ModelState.Ready -> stringResource(R.string.voice_model_ready)
+    VoskModelManager.ModelState.Failed -> stringResource(R.string.voice_model_failed)
+}
+
+/** 引导用户授予悬浮窗权限（跳系统「显示在其他应用上层」设置页）。 */
+private fun openOverlayPermission(context: android.content.Context) {
+    runCatching {
+        context.startActivity(
+            android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}")
+            ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+        )
+    }
 }

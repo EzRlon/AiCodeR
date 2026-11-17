@@ -23,4 +23,15 @@ class ExecutionModeHolder @Inject constructor() {
     }
 
     fun currentMode(): ExecutionMode = _mode.value
+
+    private val _selfImprove = MutableStateFlow(false)
+
+    /** 自我改进模式开关（设置页控制）：开启后 SystemPromptProvider 注入自我改进指令。 */
+    val selfImproveMode: StateFlow<Boolean> = _selfImprove.asStateFlow()
+
+    fun setSelfImproveMode(enabled: Boolean) {
+        _selfImprove.value = enabled
+    }
+
+    fun isSelfImproveMode(): Boolean = _selfImprove.value
 }

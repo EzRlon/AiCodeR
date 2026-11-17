@@ -51,7 +51,11 @@ interface BackupManager {
 
 /** 导入预览结果：备份中的工作区列表（供勾选）。 */
 data class ImportPreview(
-    val workspaces: List<WorkspaceBackupMeta>
+    val workspaces: List<WorkspaceBackupMeta>,
+    /** 单会话包（metadata.sessionExport=true）内的会话 id；非单会话包为 null。 */
+    val sessionId: String? = null,
+    /** 单会话包内的会话标题（供导入前的同标题冲突判断）；非单会话包为 null。 */
+    val sessionTitle: String? = null
 ) {
     val hasWorkspaceData: Boolean get() = workspaces.isNotEmpty()
 }
@@ -64,7 +68,29 @@ data class BackupOptions(
     val mcpServers: Boolean = true,
     val permissionRules: Boolean = true,
     val appSettings: Boolean = true,
-    val workspaceFiles: Boolean = false
+    val workspaceFiles: Boolean = false,
+    /** 容器开发环境（用户层）：已装的工具链、引擎 CLI、home 配置。不含系统镜像本体。 */
+    val containerEnv: Boolean = false,
+    /** 全局 ~/.aicode 下的自定义资产：技能 / 子代理 / 专家团 / 自定义提示词 / 记忆 / 笔记 + 根级配置（git 凭据、hooks 等）。 */
+    val aiAssets: Boolean = true,
+    /** 统一密钥库（~/.aicode/keys，含发布签名与 SSH 私钥）；默认关，勾选时 UI 给出警示。 */
+    val keys: Boolean = false
+)
+
+/**
+ * 导出选项是否包含明文凭据/私钥（providers 的 API Key、远端连接密码、git 凭据、密钥库）。
+ * 命中时导出必须设置口令：UI 禁用空口令确认，VM 侧再兜底拒绝。
+ */
+fun BackupOptions.containsSecrets(): Boolean =
+    providers || remoteConnections || aiAssets || keys
+
+/** 导入时文件段已写入磁盘、但后续步骤失败：磁盘上留下部分导入内容，异常文案必须告知用户。 */
+class PartialRestoreException(
+    val writtenFiles: Int,
+    cause: Throwable
+) : IllegalStateException(
+    "导入未完成：已有 $writtenFiles 个文件写入磁盘。请检查磁盘空间后重新导入，重复导入会覆盖同名文件",
+    cause
 )
 
 data class RestoreStats(
@@ -76,7 +102,11 @@ data class RestoreStats(
     val todoItems: Int = 0,
     val mcpServers: Int = 0,
     val globalPermissionRules: Int = 0,
-    val workspaceFiles: Int = 0
+    val workspaceFiles: Int = 0,
+    val aiAssetFiles: Int = 0,
+    val keyFiles: Int = 0,
+    val scheduledTasks: Int = 0,
+    val containerFiles: Int = 0
 ) {
     operator fun plus(other: RestoreStats) = RestoreStats(
         providers = providers + other.providers,
@@ -87,6 +117,10 @@ data class RestoreStats(
         todoItems = todoItems + other.todoItems,
         mcpServers = mcpServers + other.mcpServers,
         globalPermissionRules = globalPermissionRules + other.globalPermissionRules,
-        workspaceFiles = workspaceFiles + other.workspaceFiles
+        workspaceFiles = workspaceFiles + other.workspaceFiles,
+        aiAssetFiles = aiAssetFiles + other.aiAssetFiles,
+        keyFiles = keyFiles + other.keyFiles,
+        scheduledTasks = scheduledTasks + other.scheduledTasks,
+        containerFiles = containerFiles + other.containerFiles
     )
 }

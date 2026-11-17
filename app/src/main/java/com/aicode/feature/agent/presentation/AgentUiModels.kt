@@ -2,26 +2,53 @@ package com.aicode.feature.agent.presentation
 
 import androidx.compose.runtime.Immutable
 import com.aicode.feature.agent.domain.model.AgentImage
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.provider.RetryErrorInfo
 import com.aicode.feature.workspace.domain.FileEntry
 import kotlinx.serialization.Serializable
 
 /**
+ * 侧边栏文件树的根节点：工作区根与当前容器根各一个。
+ * 根节点不可重命名/删除，只能在其下新建。
+ */
+@Immutable
+sealed interface FileTreeRoot {
+    /** 根节点显示名。 */
+    val label: String
+
+    /** 工作区根：显示名固定为 `workspace`，对应容器路径 `~/workspace`。 */
+    data object Workspace : FileTreeRoot {
+        override val label: String = "workspace"
+    }
+
+    /**
+     * 当前容器根，对应容器内 `/`。
+     * 图标与「容器与镜像」列表一致：[osId] 识别到系统时用该系统 logo，
+     * 未识别时 [remote] 为真用服务器图标、为假用硬盘图标。
+     */
+    data class Container(
+        override val label: String,
+        val osId: String?,
+        val remote: Boolean
+    ) : FileTreeRoot
+}
+
+/**
  * 侧边栏文件树的一个可见节点（已按展开状态扁平化，携带 [depth] 供 UI 缩进）。
- * 从工作区根就地展开：只有 [FileBrowseState.Success] 里出现的节点才是当前可见的。
+ * 从工作区根与当前容器根就地展开：只有 [FileBrowseState.Success] 里出现的节点才是当前可见的。
  */
 @Immutable
 data class FileTreeNode(
     val entry: FileEntry,
-    /** 容器绝对路径（如 `~/workspace/app/src`）；[isRoot] 时为工作区根。 */
+    /** 容器绝对路径（如 `~/workspace/app/src`、`/etc/apk`）；根节点为其根路径（`~/workspace`、`/`）。 */
     val path: String,
     /** 缩进层级：根为 0，其直接子项为 1，依此类推。 */
     val depth: Int,
-    /** 工作区根节点：不可重命名/删除，只能在其下新建。 */
-    val isRoot: Boolean,
+    /** 根节点信息；非根节点为 null。 */
+    val root: FileTreeRoot? = null,
     /** 目录是否已展开；非目录恒为 false。 */
     val isExpanded: Boolean,
-    /** 展开该目录时读取子项失败（如权限不足）；根读取失败走 [FileBrowseState.Error]。 */
+    /** 展开该目录时读取子项失败（如权限不足）；工作区根读取失败走 [FileBrowseState.Error]。 */
     val hasError: Boolean = false,
     /** 被工作区根 .gitignore 命中：UI 以橙色弱化显示（类 VSCode）。 */
     val ignored: Boolean = false
@@ -126,10 +153,14 @@ data class AgentUIMessage(
     val isCompactionFailure: Boolean = false,
     // 后台任务完成通知：参与模型上下文但不显示为普通用户气泡，渲染为轻量提示条。
     val isBackgroundNotification: Boolean = false,
+    // 收尾独立验收报告（TOOL 消息）：渲染为可展开的验收卡片，回放不进模型上下文。
+    val isVerificationReport: Boolean = false,
     val inputTokens: Int = 0,
     val outputTokens: Int = 0,
     // 仅 ASSISTANT 消息：本次调用输入中命中服务端缓存的 token 数，气泡下方据此算缓存命中率。
-    val cachedInputTokens: Int = 0
+    val cachedInputTokens: Int = 0,
+    // 仅 USER 消息：消息类型标签键（如 "bug_fix"）；null=未分类。渲染为气泡小徽章。
+    val intentType: String? = null
 )
 
 @Immutable
@@ -159,6 +190,12 @@ const val BACKGROUND_NOTIFICATION_PREFIX = "[系统通知 - 非用户输入]"
  * 该消息无配对 toolCallId，[MessagePersistenceUseCase.buildHistory] 回放时会自动丢弃，不进入模型上下文。
  */
 const val COMPACTION_FAILURE_TOOL_NAME = "上下文压缩"
+
+/**
+ * 独立验收报告的 TOOL 消息 toolName。既是落库时的标记，也是 UI 识别验收卡片的依据；
+ * 该消息无配对 toolCallId，[MessagePersistenceUseCase.buildHistory] 回放时会自动丢弃，不进入模型上下文。
+ */
+const val VERIFICATION_REPORT_TOOL_NAME = "独立验收"
 
 /**
  * 一次会话消息查询的结果快照。
@@ -230,5 +267,83 @@ data class QueuedRequest(
     val projectRoot: String,
     val inputImages: List<AgentImage> = emptyList(),
     val inputAttachments: List<AgentAttachment> = emptyList(),
-    val isAutoTrigger: Boolean = false
+    val isAutoTrigger: Boolean = false,
+    /** 消息类型标签键（仅 USER 行）：入队时保留，执行前随清草稿后仍能随请求落库。 */
+    val intentType: String? = null,
+    /** 是否把本轮用户消息落库；goal 续跑等内部轮次置 false，避免污染会话历史。 */
+    val persistUserMessage: Boolean = true
 )
+
+/** 会话级持续目标（goal）的 UI 快照：文本、状态与已续跑轮数。 */
+@Immutable
+data class SessionGoalUi(
+    val text: String,
+    val status: GoalStatus,
+    val turnCount: Int
+)
+
+/**
+ * 当前会话已召唤专家团的 UI 快照：供输入栏横幅展示「用的是哪个团、有谁」。
+ *
+ * [displayName] 优先取商店译文名，[memberNames] 是各成员的显示名（见 TeamMemberNaming），
+ * 一处解析、多处复用，保证横幅、选择面板、消息流显示同一个名字。
+ */
+@Immutable
+data class TeamBannerUi(
+    /** 团标识（db 里的 teamName）。 */
+    val name: String,
+    /** 展示名（译文优先，缺省退回标识）。 */
+    val displayName: String,
+    /** 成员显示名列表（顺序与定义一致）。 */
+    val memberNames: List<String>,
+    /**
+     * 成员标识列表（`TeamDefinition.members` 原样，顺序一致）——实时状态匹配用。
+     * 与 [memberNames] 一一对应，但保真：显示名可能重名，标识不会。
+     */
+    val memberIds: List<String> = emptyList(),
+    /**
+     * 成员标识 → 子代理定义名（`AgentDefinition.name`）。
+     *
+     * 为什么两个都留：团队定义按**文件名**引用成员（`members: [product-manager]`），
+     * 而派发时落库的 `subagentType` 是**定义名**（`PM`）——两侧名字不同，必须先把标识
+     * 解析成定义名才能与子代理会话对上号。解析在构造横幅时一次算好（那里本就要查定义），
+     * 组合流里零 IO。
+     */
+    val memberDefNames: Map<String, String> = emptyMap()
+)
+
+/** 专家团成员的实时运转状态（横幅人员状态表用）。 */
+enum class TeamMemberStatus {
+    /** 有子代理会话正在运行（Loading/Streaming）。 */
+    WORKING,
+
+    /** 有子代理会话且已结束（本轮已完成）。 */
+    DONE,
+
+    /** 尚未派活。 */
+    IDLE
+}
+
+/** 横幅里单个成员的实时状态行。 */
+data class TeamMemberRuntimeUi(
+    /** 成员显示名（与横幅、侧栏同源）。 */
+    val name: String,
+    val status: TeamMemberStatus,
+    /** 正在干的活（子代理会话标题）；未派活为 null。 */
+    val activity: String?
+)
+
+/**
+ * 专家团横幅的实时运转快照：团 + 各成员状态。
+ * 与会话内容正交——会话是过程流水，这里是人员状态表。
+ */
+data class TeamRuntimeUi(
+    val team: TeamBannerUi,
+    val members: List<TeamMemberRuntimeUi>
+) {
+    /** 正在干活的成员数。 */
+    val workingCount: Int get() = members.count { it.status == TeamMemberStatus.WORKING }
+
+    /** 已完成（本轮有产出且已结束）的成员数。 */
+    val doneCount: Int get() = members.count { it.status == TeamMemberStatus.DONE }
+}

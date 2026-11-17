@@ -20,10 +20,13 @@ if (keystorePropertiesFile.exists()) {
 }
 
 // gitVersionName 从 git tag 动态解析，彻底解决“发版时手改 build.gradle.kts 与 tag 双向不同步”问题。
+// 本仓库是「许愿码 / AiCodeR」独立分支（dev）：版本号采用**独立命名空间**，不与上游官方
+// AiCode 的 1.x 版本线重叠——基线固定 2.0.0，并带 -aicoder 段标识分支身份；官方 v* tag
+// 解析逻辑保留，自打 tag 也支持 v2.0.0-aicoder 这类带标识的命名。
 // 规则：
-//   1. 若当前 commit 刚好有 tag（如 v1.7.0 或 v1.7.0-rc1），直接提取为 "1.7.0" 或 "1.7.0-rc1"；
-//   2. 若当前 commit 比上个 tag 多了 N 个提交（如 v1.7.0-2-g04bc2fa），提取为 "1.7.0-dev.2+g04bc2fa"；
-//   3. 若无 git 环境或报错，fallback 到默认版本号 "1.7.0-dev"。
+//   1. 若当前 commit 刚好有 tag（如 v2.0.0-aicoder 或 v2.0.0-aicoder-rc1），直接提取；
+//   2. 若当前 commit 比上个 tag 多了 N 个提交（如 v2.0.0-aicoder-2-g04bc2fa），转为 "2.0.0-aicoder-dev.2+g04bc2fa"；
+//   3. 无 v 前缀 tag（当前常态）或报错，fallback 到 "2.0.0-aicoder.dev[+<git describe>]"。
 // providers.exec 而非 Runtime.exec：配置缓存要求配置阶段的外部进程调用登记为 provider 输入，
 // 直接 fork 会让缓存条目被丢弃（external process started）。
 val gitDescribeOutput = providers.exec {
@@ -36,8 +39,8 @@ fun gitVersionName(): String = try {
     val raw = gitDescribeOutput.get().trim()
     if (raw.startsWith("v")) {
         val version = raw.substring(1) // 去掉开头的 'v'
-        // 如 "1.7.0"、"1.7.0-rc1" 或 "1.7.0-2-g04bc2fa"
-        // 将 git describe 格式 "1.7.0-2-g04bc2fa" 转为规范语义化版本 "1.7.0-dev.2+g04bc2fa"
+        // 如 "2.0.0-aicoder"、"2.0.0-aicoder-rc1" 或 "2.0.0-aicoder-2-g04bc2fa"
+        // 将 git describe 格式 "2.0.0-aicoder-2-g04bc2fa" 转为规范语义化版本 "2.0.0-aicoder-dev.2+g04bc2fa"
         val devRegex = Regex("""^(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+)?)-(\d+)-g([0-9a-f]+)(.*)$""")
         val match = devRegex.matchEntire(version)
         if (match != null) {
@@ -47,12 +50,12 @@ fun gitVersionName(): String = try {
             version
         }
     } else if (raw.isNotEmpty()) {
-        "1.7.0-dev+$raw"
+        "2.0.0-aicoder.dev+$raw"
     } else {
-        "1.7.0-dev"
+        "2.0.0-aicoder.dev"
     }
 } catch (e: Exception) {
-    "1.7.0-dev"
+    "2.0.0-aicoder.dev"
 }
 
 // versionCode 从 git 提交数自动生成：随每次提交单调递增，无需手动维护，
@@ -102,7 +105,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.aicode"
+        // 独立分支标识：不复用官方 AiCode 的包名（com.aicode），避免与官方版互相干扰
+        //（同包名不同签名时无法覆盖安装、升级判定互相冲突）。debug/beta 后缀自动跟随。
+        applicationId = "com.aicoder"
         minSdk = 26
         // 仍锁 targetSdk 28，但阻塞项已不是 PRoot：proot 全套改由 jniLibs 装到 nativeLibraryDir
         // （见 sourceSets 与 packaging.jniLibs 注释），W^X 不再挡容器启动。升级前待解决：
@@ -112,7 +117,9 @@ android {
         //      保活需换 specialUse。
         // 代价：不能上 Google Play。
         targetSdk = 28
-        versionCode = gitCommitCount()
+        // +1 偏移：正式包常在提交前构建交付（提交等用户测试后补），若直接用提交数会与上一发版同号。
+        // 偏移使交付包 versionCode 恒领先提交数 1，单调且不撞号。
+        versionCode = gitCommitCount() + 1
         versionName = gitVersionName()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -168,12 +175,16 @@ android {
     }
 
     buildTypes {
-        // debug 加包名后缀 .debug → applicationId 变 com.aicode.debug，与 release（com.aicode）
-        // 可同机共存、互不覆盖。IDE 跑 debug 不再因签名不同卸载已装的正式版。
-        // 注意：因 applicationId 不同，debug 变体私有目录为 /data/data/com.aicode.debug/，
-        // release 已解压的容器 rootfs 与工作区项目在 debug 下不可见（需重新解压/clone），属预期隔离行为。
+        // debug 双槽策略：稳定槽（默认）包名后缀 .debug，开发槽（-Pchannel=dev）后缀 .dev。
+        // 两个包名可同机共存、数据互相隔离——大改建滚动开发期的新版崩坏不影响已验收的稳定槽。
+        // 滚动规则：验收通过的版本装/归档到稳定槽；开发期构建一律 -Pchannel=dev 装 .dev 槽。
+        // 注意：因 applicationId 不同，变体私有目录隔离，容器 rootfs 与工作区项目互不可见（需重新解压/clone），属预期行为。
         debug {
-            applicationIdSuffix = ".debug"
+            val devChannel = providers.gradleProperty("channel").orElse("stable").get() == "dev"
+            applicationIdSuffix = if (devChannel) ".dev" else ".debug"
+            if (devChannel) {
+                versionNameSuffix = "-dev"
+            }
         }
         release {
             isMinifyEnabled = true
@@ -190,7 +201,7 @@ android {
             }
         }
         // beta 测试版：继承 release 的全部配置（签名/R8/资源压缩/proguard），仅包名后缀 .beta
-        // → applicationId 变 com.aicode.beta，可与正式版同机共存、互不覆盖。
+        // → applicationId 变 com.aicoder.beta，可与正式版同机共存、互不覆盖。
         // 由 .github/workflows/beta.yml 在 push main 时构建并上传 Artifacts，供测机验证。
         create("beta") {
             initWith(getByName("release"))
@@ -348,6 +359,8 @@ dependencies {
     implementation("commons-net:commons-net:3.10.0")
     implementation("org.apache.ftpserver:ftpserver-core:1.2.0")
     implementation("org.slf4j:slf4j-simple:2.0.9")
+    // 远程管理：局域网 HTTP 文件服务（网页端 assets/remote/）
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // 容器：解压 Alpine rootfs tar.gz（正确处理 symlink/hardlink/权限位）
     implementation("org.apache.commons:commons-compress:1.26.2")
@@ -393,13 +406,16 @@ dependencies {
     // Android WebKit 扩展（提供现代深色模式 WebSettingsCompat / ForceDark 支持）
     implementation("androidx.webkit:webkit:1.12.1")
 
+    // 离线语音识别（Vosk；中文模型按需下载，不随 APK 分发）
+    implementation("com.alphacephei:vosk-android:0.3.75")
+
     // Shizuku：以 adb shell（uid 2000）身份执行命令。api 提供 Shizuku 类与 UserService 绑定，
     // provider 注册 ShizukuProvider（见 AndroidManifest）以跨进程获取 binder。
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
-    // Core Android
-    implementation("androidx.core:core:1.16.0")
+    // Core Android（1.17.0 起提供 NotificationCompat 的实时通知推广接口 setRequestPromotedOngoing）
+    implementation("androidx.core:core:1.17.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
@@ -408,6 +424,11 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.test:core-ktx:1.6.1")
     testImplementation("androidx.test.ext:junit:1.1.5")
+    // Compose UI 自动化（Robolectric 载体）：createComposeRule 在 JVM 上渲染真实 Compose 树，
+    // 断言布局结构（同行/不重叠/控件存在）。与 implementation 同 BOM，版本自动对齐。
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     // 协程测试：runTest 虚拟时间（替代 runBlocking）+ Dispatchers.setMain（ViewModel 测试基建）
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     // MockK：Kotlin 原生 mock（coEvery/coVerify 协程支持），用于 ViewModel/Repository 依赖打桩

@@ -66,7 +66,8 @@ internal fun SourceSelectionSheet(
                         onDismiss()
                         onSelected(sourceId)
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier

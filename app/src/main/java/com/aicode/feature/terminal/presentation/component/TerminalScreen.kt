@@ -51,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -72,6 +73,7 @@ import com.aicode.feature.terminal.data.repository.TerminalSettings
 import com.aicode.feature.terminal.domain.RunState
 import com.aicode.feature.terminal.domain.TerminalTab
 import com.aicode.feature.terminal.domain.font.TerminalFontManager
+import com.aicode.feature.terminal.domain.model.TerminalThemePreset
 import com.aicode.feature.terminal.presentation.TerminalViewModel
 import com.termux.terminal.TerminalColors
 import com.termux.terminal.TextStyle
@@ -79,7 +81,6 @@ import com.termux.view.TerminalView
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Settings
 import compose.icons.feathericons.X
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
@@ -100,7 +101,20 @@ fun TerminalScreen(
     val revision by viewModel.revision.collectAsStateWithLifecycle()
     val creatingTab by viewModel.creatingTab.collectAsStateWithLifecycle()
     val terminalSettings by viewModel.terminalSettings.collectAsStateWithLifecycle()
-    var showToolsSheet by remember { mutableStateOf(false) }
+
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val bgArgb = MaterialTheme.colorScheme.background.toArgb()
+    val fgArgb = MaterialTheme.colorScheme.onBackground.toArgb()
+    val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
+    val effectiveTheme = remember(terminalSettings.theme, isDark, bgArgb, fgArgb, primaryArgb) {
+        TerminalThemePreset.resolve(
+            preset = terminalSettings.theme,
+            isDark = isDark,
+            backgroundArgb = bgArgb,
+            foregroundArgb = fgArgb,
+            cursorArgb = primaryArgb
+        )
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -120,11 +134,6 @@ fun TerminalScreen(
                                 if (embedded) R.string.common_close else R.string.common_back
                             )
                         )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showToolsSheet = true }) {
-                        Icon(FeatherIcons.Settings, contentDescription = stringResource(R.string.terminal_settings_title))
                     }
                 }
             )
@@ -175,7 +184,8 @@ fun TerminalScreen(
                                 TerminalSurface(
                                     tab = active,
                                     viewModel = viewModel,
-                                    settings = terminalSettings
+                                    settings = terminalSettings,
+                                    effectiveTheme = effectiveTheme
                                 )
                             }
                         }
@@ -186,17 +196,6 @@ fun TerminalScreen(
                     }
                 }
             }
-        }
-
-        if (showToolsSheet) {
-            TerminalSettingsSheet(
-                settings = terminalSettings,
-                onDismiss = { showToolsSheet = false },
-                onSelectTheme = { viewModel.setTheme(it) },
-                onChangeFontSize = { viewModel.setFontSize(it) },
-                onChangeCursorStyle = { viewModel.setCursorStyle(it) },
-                onChangeFontPath = { viewModel.setFontPath(it) }
-            )
         }
     }
 }
@@ -359,9 +358,10 @@ private fun TabChip(
 private fun applyTerminalColors(
     view: TerminalView,
     tab: TerminalTab,
-    settings: TerminalSettings
+    settings: TerminalSettings,
+    effectiveTheme: TerminalThemePreset = settings.theme
 ) {
-    val preset = settings.theme
+    val preset = effectiveTheme
     TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_BACKGROUND] = preset.background
     TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_FOREGROUND] = preset.foreground
     TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_CURSOR] = preset.cursor
@@ -390,9 +390,10 @@ private fun applyTerminalColors(
 private fun TerminalSurface(
     tab: TerminalTab,
     viewModel: TerminalViewModel,
-    settings: TerminalSettings
+    settings: TerminalSettings,
+    effectiveTheme: TerminalThemePreset = settings.theme
 ) {
-    val preset = settings.theme
+    val preset = effectiveTheme
     val bgColor = Color(preset.background)
     // 字号单一事实源：捏合缩放只改这里（预览），手势结束才落盘；设置面板的改动反向同步进来。
     var liveFontSizeSp by remember { mutableIntStateOf(settings.fontSizeSp) }
@@ -401,7 +402,8 @@ private fun TerminalSurface(
     AndroidView(
         modifier = Modifier
             .fillMaxSize()
-            .background(bgColor),
+            .background(bgColor)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         factory = { ctx ->
             val view = TerminalView(ctx, null)
             view.setBackgroundColor(preset.background)
@@ -426,7 +428,7 @@ private fun TerminalSurface(
             tab.view = view
             view.attachSession(tab.session)
 
-            applyTerminalColors(view, tab, settings)
+            applyTerminalColors(view, tab, settings, effectiveTheme)
             view.requestFocus()
             view
         },
@@ -441,7 +443,7 @@ private fun TerminalSurface(
                 view.tag = targetFontKey
             }
 
-            applyTerminalColors(view, tab, settings)
+            applyTerminalColors(view, tab, settings, effectiveTheme)
         },
         onRelease = { view ->
             if (tab.view === view) tab.view = null

@@ -137,6 +137,9 @@ object FileLogger {
         write("ERROR", tag, message, throwable)
     }
 
+    /** 日志目录（未初始化时为 null）。供崩溃 tombstone 等附属文件与主日志放在一起。 */
+    fun logDirectory(): File? = logDir
+
     /** 返回当前所有日志文件，按文件名（即日期）排序，供"查看日志"等界面使用。 */
     fun listLogFiles(): List<File> {
         val dir = logDir ?: return emptyList()
@@ -166,6 +169,33 @@ object FileLogger {
                     if (file.delete()) freed.addAndGet(size)
                 }
             }.onFailure { Log.e(TAG, "清空日志失败", it) }
+            latch.countDown()
+        }
+        runCatching { latch.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+        return freed.get()
+    }
+
+    /**
+     * 删除单个日志文件，返回释放的字节数（反馈 8：逐条清除）。
+     * 若目标正是当天正被写入的文件，先关 writer 并清日期标记（与 clearLogs 同理，避免写进已删 inode）。
+     */
+    fun deleteLogFile(file: File): Long {
+        val dir = logDir ?: return 0L
+        if (file.parentFile?.canonicalPath != dir.canonicalPath) return 0L
+        if (!file.name.startsWith("log-")) return 0L
+        val freed = java.util.concurrent.atomic.AtomicLong(0)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        ioExecutor.execute {
+            runCatching {
+                if (file.name == "log-${fileNameFormat.format(java.time.Instant.now())}") {
+                    writer?.close()
+                    writer = null
+                    writerDate = null
+                    flushScheduled = false
+                }
+                val size = file.length()
+                if (file.delete()) freed.addAndGet(size)
+            }.onFailure { Log.e(TAG, "删除日志文件失败", it) }
             latch.countDown()
         }
         runCatching { latch.await(5, java.util.concurrent.TimeUnit.SECONDS) }

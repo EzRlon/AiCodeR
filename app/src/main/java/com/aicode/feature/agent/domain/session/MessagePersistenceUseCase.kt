@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.MessageRole
+import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
@@ -28,7 +29,16 @@ class MessagePersistenceUseCase @Inject constructor(
     /** agent_messages 表变更版本号：任何写路径（含 rewind 删除、压缩标记、冷启动清理）触发递增，
      *  作为 [buildHistory] 缓存的失效信号。InvalidationTracker 监听表级变更，覆盖所有 DAO 写入。 */
     private val dbVersion = java.util.concurrent.atomic.AtomicLong(0)
-    private val historyCache = HashMap<String, HistoryEntry>()
+
+    /**
+     * 上下文历史缓存（sessionId → 重建结果）。按访问顺序的 LRU：长期使用会访问很多会话，
+     * 每个条目是该会话可用于回放的完整消息列表（可能几 MB），不设上限会随会话数无界增长。
+     * 当前会话必在最近访问之列，淘汰只会冲击游离会话，下次访问重建即可。
+     */
+    private val historyCache = object : LinkedHashMap<String, HistoryEntry>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, HistoryEntry>?): Boolean =
+            size > MAX_HISTORY_CACHE_SESSIONS
+    }
 
     private class HistoryEntry(
         val version: Long,
@@ -99,7 +109,11 @@ class MessagePersistenceUseCase @Inject constructor(
         outputTokens: Int = 0,
         cachedInputTokens: Int = 0,
         isCompacted: Boolean = false,
-        isContextExcluded: Boolean = false
+        isContextExcluded: Boolean = false,
+        intentType: String? = null,
+        /** 交接新会话写入的 marker/摘要行：标记后 UI 渲染为压缩分隔线/摘要卡，不当作普通气泡。 */
+        isCompactionMarker: Boolean = false,
+        isContextSummary: Boolean = false
     ) {
         agentMessageDao.insert(
             AgentMessageEntity(
@@ -121,7 +135,10 @@ class MessagePersistenceUseCase @Inject constructor(
                 outputTokens = outputTokens,
                 cachedInputTokens = cachedInputTokens,
                 isCompacted = isCompacted,
-                isContextExcluded = isContextExcluded
+                isContextExcluded = isContextExcluded,
+                isCompactionMarker = isCompactionMarker,
+                isContextSummary = isContextSummary,
+                intentType = intentType
             )
         )
     }
@@ -140,6 +157,28 @@ class MessagePersistenceUseCase @Inject constructor(
 
     suspend fun updateContent(messageId: String, newContent: String) {
         agentMessageDao.updateMessageContent(messageId, sanitizeContent(newContent))
+        // 不等 InvalidationTracker 的异步回调：回调到达前的 buildHistory 会命中旧缓存，
+        // 把刚改的内容当旧值回放给模型。缓存按版本号比对，递增即全局失效。
+        dbVersion.incrementAndGet()
+    }
+
+    /**
+     * 删除单条消息。用户消息会连带删除其后的全部对话（timestamp 大于它的消息）：
+     * 其后内容都是基于这条输入产生的回答与工具结果，留下会成为无源头的孤儿。
+     *
+     * 级联与单条删除必须在同一事务里：否则中途失败会留下「后半段已删、本条还在」的破环历史。
+     */
+    suspend fun deleteMessage(messageId: String) {
+        val sessionId = agentDatabase.withTransaction {
+            // 读与删同事务：读到角色后、删除前消息被改写角色（如工具占位行收尾）会删错范围。
+            val msg = agentMessageDao.getMessageById(messageId) ?: return@withTransaction null
+            if (msg.role == MessageRole.USER.name) {
+                agentMessageDao.deleteMessagesAfterTimestamp(msg.sessionId, msg.timestamp)
+            }
+            agentMessageDao.deleteMessageById(messageId)
+            msg.sessionId
+        } ?: return
+        invalidateHistory(sessionId)
     }
 
     companion object {
@@ -163,6 +202,9 @@ class MessagePersistenceUseCase @Inject constructor(
         private const val MAX_IMAGE_CACHE_ENTRIES = 12
         /** 图片 base64 缓存总字节上限（base64 为原始大小的 ~4/3，48MB 约可存 36MB 原始图片）。 */
         private const val MAX_IMAGE_CACHE_BYTES = 48L * 1024 * 1024
+
+        /** 上下文历史缓存最多保留的会话数（LRU）。 */
+        private const val MAX_HISTORY_CACHE_SESSIONS = 6
 
         /** 内嵌 base64 图片 data URL（`data:image/...;base64,...`）。 */
         private val INLINE_BASE64_IMAGE = Regex("""data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+""")

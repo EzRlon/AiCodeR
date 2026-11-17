@@ -63,15 +63,16 @@ import com.aicode.core.ui.FloatingTabItem
 import com.aicode.core.ui.SwipeToDeleteRow
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.feature.backup.domain.BackupOptions
+import com.aicode.feature.backup.domain.containsSecrets
 import com.aicode.feature.backup.domain.RestoreStats
 import com.aicode.feature.backup.domain.WorkspaceBackupMeta
 import com.aicode.feature.backup.domain.remote.BackupTarget
 import com.aicode.feature.backup.domain.remote.BackupTargetType
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
-import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ArrowLeft
@@ -160,6 +161,7 @@ internal fun BackupScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -237,11 +239,17 @@ internal fun BackupScreen(
         }
     }
 
-    // 导出：输口令（可留空）
+    // 导出：输口令。勾选了任一敏感段（providers / remoteConnections / aiAssets / keys）时
+    // 必须设置口令（这些段含明文 API Key、git token、SSH 凭据，不允许明文落盘）。
     if (pendingAction == PendingAction.ExportPassword) {
+        val sensitiveSelected = exportOptions.containsSecrets()
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = if (sensitiveSelected) {
+                stringResource(R.string.backup_sensitive_needs_password)
+            } else {
+                stringResource(R.string.backup_password_hint)
+            },
             confirmText = stringResource(R.string.backup_export_btn),
             password = password,
             onPasswordChange = { password = it },
@@ -255,7 +263,8 @@ internal fun BackupScreen(
             onDismiss = {
                 password = ""
                 pendingAction = null
-            }
+            },
+            requirePassword = sensitiveSelected
         )
     }
 
@@ -311,11 +320,11 @@ internal fun BackupScreen(
         )
     }
 
-    // 上传口令
+    // 上传口令：云上传一律强制口令（明文备份不允许上传远端，见 uploadToTarget 的兜底校验）。
     uploadTarget?.let { target ->
         PasswordDialog(
             title = stringResource(R.string.backup_set_password),
-            subtitle = stringResource(R.string.backup_password_hint),
+            subtitle = stringResource(R.string.backup_net_upload_password_required),
             confirmText = stringResource(R.string.backup_net_upload),
             password = uploadPassword,
             onPasswordChange = { uploadPassword = it },
@@ -329,7 +338,8 @@ internal fun BackupScreen(
                     viewModel.uploadToTarget(t, pw)
                 }
             },
-            onDismiss = { uploadTarget = null; uploadPassword = "" }
+            onDismiss = { uploadTarget = null; uploadPassword = "" },
+            requirePassword = true
         )
     }
 
@@ -517,6 +527,39 @@ private fun LocalBackupTab(
                     AppSwitch(
                         checked = exportOptions.appSettings,
                         onCheckedChange = { onUpdateOptions(exportOptions.copy(appSettings = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_ai_assets),
+                subtitle = stringResource(R.string.backup_data_ai_assets_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.aiAssets,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(aiAssets = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_container_env),
+                subtitle = stringResource(R.string.backup_data_container_env_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.containerEnv,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(containerEnv = it)) }
+                    )
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                title = stringResource(R.string.backup_data_keys),
+                subtitle = stringResource(R.string.backup_data_keys_hint),
+                trailing = {
+                    AppSwitch(
+                        checked = exportOptions.keys,
+                        onCheckedChange = { onUpdateOptions(exportOptions.copy(keys = it)) }
                     )
                 }
             )
@@ -822,7 +865,9 @@ private fun PasswordDialog(
     password: String,
     onPasswordChange: (String) -> Unit,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** true 时口令不允许留空：确认按钮禁用直到输入非空（导出含凭据/私钥时必须加密）。 */
+    requirePassword: Boolean = false
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -846,7 +891,12 @@ private fun PasswordDialog(
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = !requirePassword || password.isNotEmpty()
+            ) { Text(confirmText) }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } }
     )
 }
@@ -914,6 +964,9 @@ private fun buildImportSummary(context: android.content.Context, stats: RestoreS
     if (stats.todoItems > 0) appendLine(context.getString(R.string.backup_stat_todo_items, stats.todoItems))
     if (stats.mcpServers > 0) appendLine(context.getString(R.string.backup_stat_mcp_servers, stats.mcpServers))
     if (stats.globalPermissionRules > 0) appendLine(context.getString(R.string.backup_stat_permission_rules, stats.globalPermissionRules))
+    if (stats.scheduledTasks > 0) appendLine(context.getString(R.string.backup_stat_scheduled_tasks, stats.scheduledTasks))
     if (stats.workspaceFiles > 0) appendLine(context.getString(R.string.backup_stat_workspace_files, stats.workspaceFiles))
+    if (stats.aiAssetFiles > 0) appendLine(context.getString(R.string.backup_stat_ai_assets, stats.aiAssetFiles))
+    if (stats.keyFiles > 0) appendLine(context.getString(R.string.backup_stat_keys, stats.keyFiles))
     append(context.getString(R.string.backup_settings_covered))
 }

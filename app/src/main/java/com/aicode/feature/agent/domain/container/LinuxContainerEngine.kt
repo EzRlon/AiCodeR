@@ -164,7 +164,7 @@ class LinuxContainerEngine @Inject constructor(
          * 标记文件由脚本自身写入（内容为下方版本号，或自定义镜像用户选择手动安装时的跳过标记
          * provision-script-skipped），App 端仅读它判断是否完成。
          */
-        private const val PROVISION_VERSION = "provision-script-v9"
+        private const val PROVISION_VERSION = "provision-script-v12"
     }
 
     /** 标记基础包已按 [PROVISION_VERSION] 配置完成（内容为版本号，或用户手动安装的跳过标记），按当前 profile 的 rootfs 目录存放（内置/自定义各自独立）。 */
@@ -784,7 +784,9 @@ class LinuxContainerEngine @Inject constructor(
             // **刻意不设 PROOT_NO_SECCOMP**——这正是 Termux 自己用 proot 的方式；强制全量 ptrace
             // (PROOT_NO_SECCOMP=1) 反而在本设备触发过 ptrace(PEEKDATA) I/O error。
             // 前缀 /root/.aicode/bin：容器内 aicode 环境工具（见 ContainerInstaller.extractEnvTool）。
-            "PATH" to "/root/.aicode/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            // /usr/local/bin 供 skills.sh CLI 等自装工具使用：容器内 shell 以非登录方式启动（bash -c），
+            // 不加载 /etc/profile，不在此处列出则这些命令名不可达。
+            "PATH" to "/root/.aicode/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME" to "/root",
             // 宿主进程环境的 TMPDIR 指向 App 缓存目录（/data/user/0/<pkg>/cache），容器内 /data 未挂载、
             // 该路径不存在——mktemp/dpkg 等会因找不到临时目录失败，故显式覆盖为容器内 /tmp。
@@ -803,13 +805,23 @@ class LinuxContainerEngine @Inject constructor(
             "GIT_CONFIG_KEY_0" to "safe.directory",
             "GIT_CONFIG_VALUE_0" to "*",
             "TERM" to "xterm-256color",
-            "LANG" to "C.UTF-8",
+            "LANG" to containerLang(),
             // 时区跟随手机：容器镜像默认写死 UTC（/etc/localtime → Etc/UTC），注入 TZ 后
             // date/Python/Node/Go/JVM 等按手机当前时区显示；改手机时区后新起的命令即生效。
             "TZ" to containerTimeZone(profile)
             // 全局 HTTP 代理：开启时注入 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY，
             // 容器内 curl/git/npm/pip 等一律走代理；关闭或配置不完整时为空 map 不影响直连。
         ) + com.aicode.core.net.AppProxy.proxyEnv(context)
+    }
+
+    /**
+     * 容器内 locale：跟随手机系统语言。CLI 引擎（Claude Code / Codex / OpenCode）与终端内的
+     * 本地化文案都读 LANG/LC_ALL；固定 C.UTF-8 会让中文系统里的引擎界面全是英文。
+     * 取到 zh 时用 C.UTF-8 前缀的 zh_CN.UTF-8；镜像未带该 locale 时 glibc/musl 会回退 C，不报错。
+     */
+    private fun containerLang(): String {
+        val tag = java.util.Locale.getDefault().toLanguageTag() // 如 zh-CN / en-US
+        return if (tag.startsWith("zh")) "zh_CN.UTF-8" else "C.UTF-8"
     }
 
     /**

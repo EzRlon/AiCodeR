@@ -9,6 +9,7 @@ import com.aicode.feature.agent.domain.prompt.SystemPromptProvider
 import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.session.MessagePersistenceUseCase
+import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
@@ -29,8 +30,12 @@ class ContextCompactorTest {
     private val prompts = mockk<SystemPromptProvider>()
     private val settings = mockk<GeneralSettingsRepository>()
     private val persistence = mockk<MessagePersistenceUseCase>(relaxed = true)
+    private val sessionUseCase = mockk<SessionUseCase>(relaxed = true)
+    private val graphRepository = mockk<com.aicode.feature.memorygraph.data.GraphRepository>(relaxed = true)
     private val provider = mockk<AIProvider>(relaxed = true)
-    private val compactor = ContextCompactor(dao, metadata, prompts, records, settings, persistence)
+    private val compactor = ContextCompactor(
+        dao, metadata, prompts, records, settings, persistence, sessionUseCase, graphRepository
+    )
 
     private fun prepare(context: Int = 16_000) {
         every { provider.providerId } returns "provider"
@@ -145,23 +150,52 @@ class ContextCompactorTest {
         val original = history(100)
         assertFalse(compactor.compactIfNeeded(original, provider).compacted)
         coVerify(exactly = 0) { provider.complete(any(), any(), any(), any()) }
+        // 高 usage 越过阈值、但历史本身无料可压（尾部预算覆盖全部消息）：静默跳过不发事件
+        // ——批次 A 修复的新契约（新会话首条消息不再误报「上下文压缩失败」），force 时同样适用
         val events = mutableListOf<AgentEvent>()
-        compactor.compactIfNeeded(original, provider, currentInputTokens = 99_999, onEvent = { events.add(it) })
+        val result = compactor.compactIfNeeded(original, provider, currentInputTokens = 99_999, onEvent = { events.add(it) })
+        assertFalse(result.compacted)
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun highUsageWithMaterialEmitsCompactionStarted() = runTest {
+        prepare()
+        val big = history(100_000)
+        coEvery { provider.complete(any(), any(), any(), any()) } returns AIResponse("Summary", stopReason = "stop")
+        val events = mutableListOf<AgentEvent>()
+        val result = compactor.compactIfNeeded(big, provider, currentInputTokens = 99_999, onEvent = { events.add(it) })
         assertTrue(events.any { it is AgentEvent.CompactionStarted })
+        assertTrue(result.compacted)
     }
 
     @Test
     fun invalidResponsesDoNotCommitAndCountFailedCalls() = runTest {
         prepare()
-        for (response in listOf(AIResponse(""), AIResponse("partial", stopReason = "length"), AIResponse("blocked", stopReason = "refusal"))) {
+        // 空内容与策略拒答仍算失败；截断响应（stopReason=length）不再算失败——见下一用例。
+        for (response in listOf(AIResponse(""), AIResponse("blocked", stopReason = "refusal"))) {
             coEvery { provider.complete(any(), any(), any(), any()) } returns response
             val original = history()
             val result = compactor.compactIfNeeded(original, provider, force = true)
             assertFalse(result.compacted)
             assertSame(original, result.messages)
         }
-        coVerify(exactly = 3) { records.insert(match { it.status == "error" }) }
+        coVerify(exactly = 2) { records.insert(match { it.status == "error" }) }
         coVerify(exactly = 0) { dao.commitCompaction(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun truncatedSummaryCommitsInsteadOfFailing() = runTest {
+        prepare()
+        // 历史越长越容易撞到输出上限，恰在最需要压缩时：截断的摘要远好于压缩整体失败。
+        // sessionId 未传（不落库），只验证压缩结果本身生效；record 落一条成功记录。
+        coEvery { provider.complete(any(), any(), any(), any()) } returns AIResponse("partial", stopReason = "length")
+        val original = history()
+        val result = compactor.compactIfNeeded(original, provider, force = true)
+        assertTrue(result.compacted)
+        assertNotSame(original, result.messages)
+        coVerify(exactly = 0) { dao.commitCompaction(any(), any(), any(), any()) }
+        coVerify(atLeast = 1) { records.insert(match { it.status != "error" }) }
     }
 
     @Test

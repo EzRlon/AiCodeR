@@ -4,6 +4,7 @@ import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.model.AgentContext
 import com.aicode.feature.agent.domain.session.SessionUseCase
 import com.aicode.feature.agent.domain.subagent.SubAgentEvent
+import com.aicode.feature.agent.domain.subagent.SubAgentDeliveryTracker
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.tool.AbstractContextualTool
@@ -25,7 +26,8 @@ import javax.inject.Inject
  */
 class MessageParentTool @Inject constructor(
     private val sessionUseCase: SessionUseCase,
-    private val eventBus: SubAgentEventBus
+    private val eventBus: SubAgentEventBus,
+    private val deliveryTracker: SubAgentDeliveryTracker
 ) : AbstractContextualTool() {
 
     private companion object {
@@ -58,12 +60,22 @@ class MessageParentTool @Inject constructor(
             return ToolResult.Error("消息过长（上限 $MESSAGE_MAX 字）", "INVALID_ARGS")
         }
 
+        // 编队投递语义：子代理汇报必须回复（requireReply），父会话来话即结清
+        val messageId = java.util.UUID.randomUUID().toString()
+        deliveryTracker.track(
+            messageId = messageId,
+            fromSessionId = sessionId,
+            toSessionId = parentSessionId,
+            requireReply = true,
+            content = message
+        )
         eventBus.emit(
             SubAgentEvent(
                 subSessionId = sessionId,
                 parentSessionId = parentSessionId,
                 type = SubAgentEventType.MESSAGE_FROM_SUB,
-                detail = message
+                detail = message,
+                messageId = messageId
             )
         )
         FileLogger.i(TAG, "子代理向主会话发消息: session=$sessionId parent=$parentSessionId")

@@ -99,14 +99,19 @@ internal fun ProvidersSection(
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.semanticColors.cardSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     shadowElevation = dragElevation,
                     modifier = Modifier
                         .fillMaxWidth()
                         .zIndex(if (isDragging) 1f else 0f)
-                        .graphicsLayer {
-                            scaleX = dragScale
-                            scaleY = dragScale
-                        }
+                        .then(
+                            // 只在拖拽缩放进行中挂层：常驻 graphicsLayer 的离屏缓存在主题切换后不刷新，
+                            // 设置页会停在旧配色
+                            if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                scaleX = dragScale
+                                scaleY = dragScale
+                            }
+                        )
                 ) {
                     ProviderItem(
                         provider = provider,

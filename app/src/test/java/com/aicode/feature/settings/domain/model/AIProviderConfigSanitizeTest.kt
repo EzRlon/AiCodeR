@@ -1,6 +1,7 @@
 package com.aicode.feature.settings.domain.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AIProviderConfigSanitizeTest {
@@ -38,6 +39,49 @@ class AIProviderConfigSanitizeTest {
         val sanitized = config(apiKey = " sk-abc\ndef \tghi\r\n").sanitized()
 
         assertEquals("sk-abcdefghi", sanitized.apiKey)
+    }
+
+    @Test
+    fun apiKey_dropsNonAsciiPastedText() {
+        val sanitized = config(apiKey = "我的密钥：sk-abc\u3000").sanitized()
+
+        assertEquals("sk-abc", sanitized.apiKey)
+    }
+
+    @Test
+    fun multiKey_dropsNonAsciiAndEmptyEntries() {
+        val sanitized = config().copy(
+            multiKeyEnabled = true,
+            apiKeys = listOf(ProviderKey("sk-中def", 2), ProviderKey("你的密钥", 1))
+        ).sanitized()
+
+        assertEquals(listOf(ProviderKey("sk-def", 2)), sanitized.apiKeys)
+    }
+
+    @Test
+    fun apiKey_allNonAsciiBecomesEmptyAndUnusable() {
+        val sanitized = config(apiKey = "做密钥\u3000").sanitized()
+
+        assertEquals("", sanitized.apiKey)
+        assertFalse(sanitized.hasUsableApiKey)
+    }
+
+    @Test
+    fun multiKey_allInvalidFallsBackToSingleKey() {
+        val sanitized = config().copy(
+            multiKeyEnabled = true,
+            apiKeys = listOf(ProviderKey("密钥一"), ProviderKey("密钥二"))
+        ).sanitized()
+
+        assertEquals(emptyList<ProviderKey>(), sanitized.apiKeys)
+        assertEquals(listOf("sk-abc"), sanitized.effectiveApiKeys.map { it.value })
+    }
+
+    @Test
+    fun apiKey_sanitizeIsIdempotent() {
+        val once = config(apiKey = "我的密钥：sk-abc").sanitized()
+
+        assertEquals(once, once.sanitized())
     }
 
     @Test

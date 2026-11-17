@@ -26,12 +26,14 @@ class ToolRegistry {
     }
 
     /**
-     * 返回可用工具列表。PLAN 模式下仍返回全部工具定义（让 AI 知道这些工具存在，可在计划中引用），
-     * 写操作工具由 [com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine] 在运行时拦截并返回 PLAN_MODE_REJECTED。
+     * 返回可用工具列表（按名称排序，与注册顺序无关）：MCP reload 重连后顺序也稳定，
+     * 避免 tools 数组变化击穿 Anthropic/OpenAI 的前缀缓存。PLAN 模式下仍返回全部工具定义
+     * （让 AI 知道这些工具存在，可在计划中引用），写操作工具由
+     * [com.aicode.feature.agent.domain.permission.ToolPermissionPolicyEngine] 在运行时拦截并返回 PLAN_MODE_REJECTED。
      */
     fun getAvailableTools(): List<AgentTool> {
         synchronized(tools) {
-            return tools.values.toList()
+            return tools.values.toList().sortedBy { it.name }
         }
     }
 

@@ -1,9 +1,6 @@
 package com.aicode.feature.settings.data.local
 
 import android.content.Context
-import com.aicode.core.net.RepoDataFetcher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -29,79 +26,23 @@ data class ProviderPreset(
 )
 
 /**
- * 官方及自定义 provider 预设库：
- * 采用双轨机制：
- * 1. 启动时由后台异步预热拉取（[refreshFromNetworkIfStale]），写磁盘并更新内存 [cached]；
- * 2. 任何 UI 读取（[loadOfficial]）均同步从「内存 -> 磁盘已下载文件 -> 内置 assets」读取，
- *    绝对不发起网络请求，毫秒级直接返回。
+ * 官方及自定义 provider 预设库。
+ *
+ * 自建分支：数据源已内置化——只读 assets 内置 providers.json，不再从官方仓库动态拉取
+ * （官方源的预设没有自建分支的 models 预填字段，联网拉取会把它盖掉）。如需恢复远端
+ * 动态源，参照官方版补回 RepoDataFetcher 双轨逻辑（远端优先 + 磁盘缓存 + assets 兜底）。
  */
 object ProviderPresetLibrary {
     const val PROVIDERS_ASSET_FILE_NAME = "providers.json"
-    const val REMOTE_PROVIDERS_PATH = "data/providers.json"
 
     private val json = Json { ignoreUnknownKeys = true }
 
     @Volatile
     private var cached: List<ProviderPreset>? = null
 
-    @Volatile
-    private var refreshAttemptedThisProcess = false
-
-    /**
-     * 仅供 App 启动阶段（AIEditorApp）在后台协程异步调用：
-     * 走 RepoDataFetcher 测活拉取最新配置并持久化，失败完全静默。
-     */
-    suspend fun refreshFromNetworkIfStale(context: Context) = withContext(Dispatchers.IO) {
-        if (refreshAttemptedThisProcess) return@withContext
-        refreshAttemptedThisProcess = true
-
-        val fetcher = RepoDataFetcher(context)
-        val remoteResult = runCatching { fetcher.fetch(REMOTE_PROVIDERS_PATH) }.getOrNull()
-        val remoteContent = when (remoteResult) {
-            is RepoDataFetcher.FetchResult.Success -> remoteResult.content
-            is RepoDataFetcher.FetchResult.FallbackDiskCache -> remoteResult.content
-            else -> null
-        }
-
-        if (!remoteContent.isNullOrBlank()) {
-            val parsedRemote = runCatching {
-                json.decodeFromString<List<ProviderPreset>>(remoteContent)
-            }.getOrNull()
-            if (!parsedRemote.isNullOrEmpty()) {
-                val sorted = parsedRemote.sortedWith(
-                    compareByDescending<ProviderPreset> { it.isRecommended }
-                        .thenBy { it.name.lowercase() }
-                )
-                cached = sorted
-            }
-        }
-    }
-
-    /**
-     * UI 专用快速同步读取：
-     * 顺序：内存缓存 -> 磁盘下载文件 -> assets 内置文件。
-     * 纯本地 IO，绝对不发任何网络请求，秒级返回。
-     */
+    /** UI 专用快速同步读取：内存缓存 -> assets 内置文件。纯本地 IO，秒级返回。 */
     fun loadOfficial(context: Context): List<ProviderPreset> {
         cached?.let { return it }
-
-        // 1. 尝试直接读取本地磁盘缓存文件（由 RepoDataFetcher 写入）
-        val diskContent = RepoDataFetcher(context).readLocalCache(REMOTE_PROVIDERS_PATH)
-        if (!diskContent.isNullOrBlank()) {
-            val parsed = runCatching {
-                json.decodeFromString<List<ProviderPreset>>(diskContent)
-            }.getOrNull()
-            if (!parsed.isNullOrEmpty()) {
-                val sorted = parsed.sortedWith(
-                    compareByDescending<ProviderPreset> { it.isRecommended }
-                        .thenBy { it.name.lowercase() }
-                )
-                cached = sorted
-                return sorted
-            }
-        }
-
-        // 2. 兜底读取内置 assets（必定存在，必定瞬间返回）
         val fallback = loadFromAssets(context)
         cached = fallback
         return fallback

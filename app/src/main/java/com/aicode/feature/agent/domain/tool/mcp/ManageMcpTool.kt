@@ -150,8 +150,13 @@ class ManageMcpTool @Inject constructor(
                     )
                     
                     val servers = readServers().toMutableList()
+                    // 覆盖同名条目时保留既有工具裁剪集合（防 REA 等预设白名单被重建条目时丢失）
+                    val prev = servers.firstOrNull { it.name == name }
                     servers.removeIf { it.name == name }
-                    servers.add(newServer)
+                    servers.add(newServer.copy(
+                        disabledTools = prev?.disabledTools ?: emptySet(),
+                        enabledTools = prev?.enabledTools ?: emptySet()
+                    ))
                     writeServers(servers)
                     
                     ToolResult.Success(JsonPrimitive("已添加 $scopeLabel 本地 MCP server：$name，配置将在下一次会话生效。若命令依赖 Node/Python 等运行时，请通过命令工具在用户确认后安装。"))
@@ -169,8 +174,13 @@ class ManageMcpTool @Inject constructor(
                     )
                     
                     val servers = readServers().toMutableList()
+                    // 覆盖同名条目时保留既有工具裁剪集合（防预设白名单被重建条目时丢失）
+                    val prev = servers.firstOrNull { it.name == name }
                     servers.removeIf { it.name == name }
-                    servers.add(newServer)
+                    servers.add(newServer.copy(
+                        disabledTools = prev?.disabledTools ?: emptySet(),
+                        enabledTools = prev?.enabledTools ?: emptySet()
+                    ))
                     writeServers(servers)
                     
                     ToolResult.Success(JsonPrimitive("已添加 $scopeLabel HTTP MCP server：$name，配置将在下一次会话生效。"))

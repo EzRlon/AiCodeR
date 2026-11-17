@@ -2,6 +2,8 @@ package com.aicode.feature.backup.domain
 
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
 import com.aicode.feature.agent.domain.permission.PermissionRule
+import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.settings.data.repository.ContainerSettingsSnapshot
 import com.aicode.feature.settings.data.repository.SyncSettingsSnapshot
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -29,8 +31,10 @@ data class BackupSnapshot(
     val themePresetId: String? = null,
     val dynamicColorEnabled: Boolean = false,
     val keepaliveEnabled: Boolean = false,
+    val liveNotificationEnabled: Boolean = false,
     val screenOnEnabled: Boolean = false,
     val agentSoundEnabled: Boolean = false,
+    val approvalNotificationEnabled: Boolean = false,
     val autoRemoveStaleModels: Boolean = true,
     val startupSessionMode: String? = null,
     val firstByteTimeoutSec: Int = 300,
@@ -40,6 +44,11 @@ data class BackupSnapshot(
     val compactionThresholdPercent: Int = 90,
     val sendFileMaxSizeMb: Int = 100,
     val deleteExternalWorkspaceSessions: Boolean = false,
+    val handoffPromptEnabled: Boolean = true,
+    val handoffPromptPercent: Int = 50,
+    val handoffAutoEnabled: Boolean = true,
+    val handoffAutoPercent: Int = 75,
+    val floatBallEnabled: Boolean = false,
     val logLevel: String? = null,
     val visionProviderId: String = "",
     val visionModel: String = "",
@@ -66,8 +75,10 @@ data class BackupMetadata(
     val themePresetId: String? = null,
     val dynamicColorEnabled: Boolean = false,
     val keepaliveEnabled: Boolean = false,
+    val liveNotificationEnabled: Boolean = false,
     val screenOnEnabled: Boolean = false,
     val agentSoundEnabled: Boolean = false,
+    val approvalNotificationEnabled: Boolean = false,
     val autoRemoveStaleModels: Boolean = true,
     val startupSessionMode: String? = null,
     val firstByteTimeoutSec: Int = 300,
@@ -77,13 +88,28 @@ data class BackupMetadata(
     val compactionThresholdPercent: Int = 90,
     val sendFileMaxSizeMb: Int = 100,
     val deleteExternalWorkspaceSessions: Boolean = false,
+    val handoffPromptEnabled: Boolean = true,
+    val handoffPromptPercent: Int = 50,
+    val handoffAutoEnabled: Boolean = true,
+    val handoffAutoPercent: Int = 75,
+    val floatBallEnabled: Boolean = false,
     val logLevel: String? = null,
     val visionProviderId: String = "",
     val visionModel: String = "",
     val compactionProviderId: String = "",
     val compactionModel: String = "",
     val syncSettings: SyncSettingsSnapshot? = null,
+    /** 定时任务表（含上次执行结果）；空列表 = 备份未包含此段（旧备份或未勾选）。 */
+    val scheduledTasks: List<ScheduledTask> = emptyList(),
+    /** 工具授权档位的显式设置（toolName → tier.key）；空 = 未包含或不含显式档位（恢复侧均为不动作）。 */
+    val toolPermissionTiers: Map<String, String> = emptyMap(),
+    /** 守夜守护开关；null = 未包含（旧备份或未勾选授权规则段）。 */
+    val watchModeArmed: Boolean? = null,
+    /** 容器与镜像设置（当前 profile / 远程默认容器 / 自定义 profile 列表）；null = 未包含。 */
+    val containerSettings: ContainerSettingsSnapshot? = null,
     val workspaces: List<WorkspaceBackupMeta> = emptyList(),
+    /** 单会话导出包标记（exportSession 产物）；聊天侧「导入会话」入口只接受该类包，全量备份走备份页。 */
+    val sessionExport: Boolean = false,
     val includesAppSettings: Boolean = themeMode != null
 )
 
@@ -107,8 +133,10 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     themePresetId = themePresetId,
     dynamicColorEnabled = dynamicColorEnabled,
     keepaliveEnabled = keepaliveEnabled,
+    liveNotificationEnabled = liveNotificationEnabled,
     screenOnEnabled = screenOnEnabled,
     agentSoundEnabled = agentSoundEnabled,
+    approvalNotificationEnabled = approvalNotificationEnabled,
     autoRemoveStaleModels = autoRemoveStaleModels,
     startupSessionMode = startupSessionMode,
     firstByteTimeoutSec = firstByteTimeoutSec,
@@ -118,6 +146,11 @@ fun BackupSnapshot.toMetadata() = BackupMetadata(
     compactionThresholdPercent = compactionThresholdPercent,
     sendFileMaxSizeMb = sendFileMaxSizeMb,
     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
+    handoffPromptEnabled = handoffPromptEnabled,
+    handoffPromptPercent = handoffPromptPercent,
+    handoffAutoEnabled = handoffAutoEnabled,
+    handoffAutoPercent = handoffAutoPercent,
+    floatBallEnabled = floatBallEnabled,
     logLevel = logLevel,
     visionProviderId = visionProviderId,
     visionModel = visionModel,
@@ -172,7 +205,9 @@ data class RemoteConnectionDto(
     val username: String,
     val authType: String = "password",
     val authData: String,
-    val passphrase: String? = null
+    val passphrase: String? = null,
+    /** 连接列表排序序号；null 表示旧备份无此字段，导入时回退默认 0（由创建时间兜底排序）。 */
+    val sortOrder: Int? = null
 )
 
 @Serializable
@@ -200,7 +235,11 @@ data class ChatSessionDto(
     val isPinned: Boolean = false,
     /** 子代理会话的父会话 id；丢了它恢复后子会话会变成一堆根会话。 */
     val parentId: String? = null,
-    val subagentType: String? = null
+    val subagentType: String? = null,
+    /** 回收站软删时间；null=正常会话。旧备份无此字段时回退 null（导入后视为正常会话）。 */
+    val deletedAt: Long? = null,
+    /** 会话级引擎：null=本体工作流；"claude_code"=CLI 桥接。旧备份缺省 null。 */
+    val engine: String? = null
 )
 
 @Serializable
@@ -224,7 +263,9 @@ data class AgentMessageDto(
     /** Anthropic thinking / redacted_thinking 内容块的原样快照（JSON 数组文本）。 */
     val thinkingBlocksJson: String? = null,
     val isContextExcluded: Boolean = false,
-    val compactedBySummaryId: String? = null
+    val compactedBySummaryId: String? = null,
+    /** 仅 USER 行：消息类型标签键；null 表示旧备份无此字段，导入时回退未分类。 */
+    val intentType: String? = null
 )
 
 @Serializable
@@ -236,6 +277,37 @@ data class TodoItemDto(
     val status: String = "PENDING",
     val priority: Int = 0,
     val order: Int = 0,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/** 记忆图谱节点（备份用）：结论与关系是 AI 的长期沉淀，换机/重装不能丢。 */
+@Serializable
+data class GraphNodeDto(
+    val id: String,
+    val workspacePath: String,
+    val name: String,
+    val type: String,
+    val summary: String = "",
+    val sourceRefId: String? = null,
+    val scope: String = "PROJECT",
+    val validFrom: Long = 0,
+    val invalidAt: Long? = null,
+    val sourceSessionId: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/** 记忆图谱边（备份用）。 */
+@Serializable
+data class GraphEdgeDto(
+    val id: String,
+    val workspacePath: String,
+    val fromNodeId: String,
+    val toNodeId: String,
+    val relation: String,
+    val validAt: Long = 0,
+    val invalidAt: Long? = null,
     val createdAt: Long,
     val updatedAt: Long
 )

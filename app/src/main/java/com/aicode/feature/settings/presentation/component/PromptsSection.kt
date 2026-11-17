@@ -1,5 +1,9 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -136,6 +140,16 @@ private fun PromptList(
     }
     val hapticFeedback = LocalHapticFeedback.current
 
+    // 行 key 预计算：原先在 key lambda 里 `take(index).count{}`，每次重组 O(n²)，且同一计算写两遍。
+    val rowKeys = remember(localFragments) {
+        val seen = HashMap<String, Int>()
+        localFragments.map { fragment ->
+            val n = (seen[fragment.stableReorderKey] ?: 0) + 1
+            seen[fragment.stableReorderKey] = n
+            "${fragment.stableReorderKey}:$n"
+        }
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier
@@ -147,11 +161,9 @@ private fun PromptList(
     ) {
         itemsIndexed(
             items = localFragments,
-            key = { index, fragment ->
-                "${fragment.stableReorderKey}:${localFragments.take(index).count { it.stableReorderKey == fragment.stableReorderKey }}"
-            }
+            key = { index, _ -> rowKeys[index] }
         ) { index, fragment ->
-            val rowKey = "${fragment.stableReorderKey}:${localFragments.take(index).count { it.stableReorderKey == fragment.stableReorderKey }}"
+            val rowKey = rowKeys[index]
             ReorderableItem(state = reorderableState, key = rowKey) { isDragging ->
                 val dragScale by animateFloatAsState(
                     targetValue = if (isDragging) 0.97f else 1f,
@@ -166,14 +178,19 @@ private fun PromptList(
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.semanticColors.cardSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     shadowElevation = dragElevation,
                     modifier = Modifier
                         .fillMaxWidth()
                         .zIndex(if (isDragging) 1f else 0f)
-                        .graphicsLayer {
-                            scaleX = dragScale
-                            scaleY = dragScale
-                        }
+                        .then(
+                            // 只在拖拽缩放进行中挂层：常驻 graphicsLayer 的离屏缓存在主题切换后不刷新，
+                            // 设置页会停在旧配色
+                            if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                scaleX = dragScale
+                                scaleY = dragScale
+                            }
+                        )
                 ) {
                     PromptRow(
                         fragment = fragment,

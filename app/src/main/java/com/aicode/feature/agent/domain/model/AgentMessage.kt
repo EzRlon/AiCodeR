@@ -75,11 +75,35 @@ data class AgentContext(
     val mode: AgentMode = AgentMode.BUILD,
     /** 进入 PLAN 前的模式（如 AUTO）：退出 PLAN 时恢复到它，null 视为 BUILD。 */
     val modeBeforePlan: AgentMode? = null,
+    /** 当前会话的持续目标文本；null 表示未设定目标。 */
+    val goal: String? = null,
+    /** 当前会话的 goal 生命周期状态；ACTIVE 表示自主循环进行中。 */
+    val goalStatus: GoalStatus? = null,
     /** 思考强度（"low"/"medium"/"high"），随每次 LLM 请求传给支持的 provider。 */
     val reasoningEffort: String? = null,
     /**
      * 本会话绑定的自定义子代理定义；非空表示这是一个按定义运行的子代理会话，
      * 系统提示词与工具集都按其配置组装（见 [com.aicode.feature.agent.domain.prompt.SystemPromptProvider]）。
      */
-    val agentDefinition: AgentDefinition? = null
-)
+    val agentDefinition: AgentDefinition? = null,
+    /** 会话级召唤的专家团名：非空时系统提示词注入团长指令（见 SystemPromptProvider）。 */
+    val teamName: String? = null,
+    /** 当前模型名（注入运行时上下文，供 AI 知晓自己所用模型）。 */
+    val modelName: String? = null,
+    /** 当前模型最大上下文窗口（tokens）；0 = 未知。注入后保持会话内稳定，不破坏 KV Cache。 */
+    val modelContextTokens: Int = 0,
+    /**
+     * 本轮用户输入原文。
+     *
+     * 系统提示词在本轮消息拼进 [history] 之前构建，按输入召回的内容（世界书）不能只看
+     * history 最后一条 UserMessage——那会是上一轮输入（首轮则为空），导致永不命中/滞后一轮。
+     */
+    val currentUserRequest: String = ""
+) {
+    /**
+     * 工具授权判定用的有效模式：goal 自主循环激活期间按 AUTO 放行（保留灾难性安全防护），
+     * 与用户可见的 [mode] 解耦——goal 不改变会话显示的模式，只改变授权强度。
+     */
+    val permissionMode: AgentMode
+        get() = if (goalStatus == GoalStatus.ACTIVE) AgentMode.AUTO else mode
+}

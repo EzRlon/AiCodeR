@@ -1,5 +1,10 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.settingsPageBackground
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -48,8 +53,10 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +64,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -64,20 +72,32 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aicode.core.theme.AppThemePreset
 import com.aicode.core.theme.Spacing
-import com.aicode.core.theme.isDynamicColorSupported
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.ListSelectionState
+import com.aicode.core.ui.SelectionToggleAction
+import com.aicode.core.ui.isAnimationDisabled
+import com.aicode.core.ui.isRtlLayout
 import com.aicode.core.ui.pageEnter
 import com.aicode.core.ui.pageExit
 import com.aicode.core.util.LogLevel
 import com.aicode.R
+import com.aicode.feature.agent.domain.mcp.McpScope
 import com.aicode.feature.agent.domain.mcp.McpServerEntry
 import com.aicode.feature.agent.domain.mcp.McpServerConfig
+import com.aicode.feature.agent.domain.memory.Memory
+import com.aicode.feature.agent.domain.memory.MemoryScope
 import com.aicode.feature.agent.domain.prompt.PromptFragment
 import com.aicode.feature.agent.domain.prompt.PromptFragmentSource
 import com.aicode.feature.agent.domain.mcp.McpServerStatus
-import com.aicode.feature.agent.presentation.component.MarkdownContent
-import com.aicode.feature.agent.presentation.component.MarkdownRenderCache
+import com.aicode.core.ui.markdown.MarkdownContent
+import com.aicode.feature.agent.presentation.AIAgentViewModel
+import com.aicode.core.ui.markdown.MarkdownRenderCache
 import com.aicode.feature.backup.presentation.BackupScreen
+import com.aicode.feature.editor.presentation.CodeEditorScreen
+import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.schedule.domain.TaskSchedule
+import com.aicode.feature.schedule.presentation.component.ScheduledTaskEditorScreen
+import com.aicode.feature.schedule.presentation.component.ScheduledTasksSection
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.BackgroundSettingsRepository
 import com.aicode.feature.settings.domain.model.AIProviderConfig
@@ -93,16 +113,21 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.BarChart2
 import compose.icons.feathericons.Book
+import compose.icons.feathericons.Command
 import compose.icons.feathericons.BookOpen
+import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
+import compose.icons.feathericons.Code
 import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Globe
 import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Info
+import compose.icons.feathericons.Key
 import compose.icons.feathericons.Lock
 import compose.icons.feathericons.Moon
 import compose.icons.feathericons.MessageSquare
@@ -115,11 +140,13 @@ import compose.icons.feathericons.Server
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Terminal
+import compose.icons.feathericons.Tool
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Users
+import compose.icons.feathericons.Layers
 import compose.icons.feathericons.Zap
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.onboardingTarget
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.settings.data.local.ProviderPreset
 import com.aicode.feature.terminal.data.repository.TerminalSettings
 import com.aicode.feature.terminal.presentation.component.TerminalSettingsSheet
@@ -150,13 +177,31 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Prompts(R.string.prompts_title),
     PromptDetail(R.string.prompts_title),
     PromptEditor(R.string.prompts_title),
+    Memory(R.string.settings_memory),
+    MemoryEditor(R.string.settings_memory),
+    Lorebook(R.string.lorebook_title),
+    KnowledgeBase(R.string.kb_title),
+    Scripts(R.string.settings_scripts),
+    ScriptEditor(R.string.settings_scripts),
     SkillDetail(R.string.settings_skills),
     SkillEditor(R.string.settings_skills),
     SubAgents(R.string.settings_subagents),
     SubAgentDetail(R.string.settings_subagents),
     SubAgentEditor(R.string.settings_subagents),
+    Teams(R.string.settings_teams),
+    Store(R.string.store_title),
+    /** 「插件」分组首页：原生插件（本 App 内）+ 引擎插件（装进外部引擎的）两个入口。 */
+    Plugins(R.string.settings_category_plugins),
+    /** 原生插件（装进本 App）：`~/.aicode/plugins` 下的插件列表。 */
+    NativePlugins(R.string.native_plugins),
+    PluginDetail(R.string.native_plugins),
+    /** 引擎插件（装进 Claude Code / Codex 等外部引擎）。 */
+    EnginePlugins(R.string.settings_engine_plugins),
+    ScheduledTasks(R.string.schedule_title),
+    ScheduledTaskEditor(R.string.schedule_title),
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
+    DevEnvironments(R.string.settings_dev_env),
     Proxy(R.string.proxy_title),
     Log(R.string.settings_log),
     Permissions(R.string.settings_permissions),
@@ -165,8 +210,10 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     RemoteServers(R.string.settings_remote_servers),
     Storage(R.string.settings_storage),
     TokenStats(R.string.settings_token_stats_title),
+    DevKeys(R.string.settings_dev_keys),
     Backup(R.string.settings_backup),
-    About(R.string.settings_about)
+    Feedback(R.string.settings_feedback_title),
+    About(R.string.settings_about_ack)
 }
 
 /**
@@ -181,10 +228,17 @@ private fun SettingsSection.depth(): Int = when (this) {
     // 同深度会让「编辑 → 详情」也被当成前进，返回时页面从右侧滑入，方向是反的。
     SettingsSection.SkillEditor,
     SettingsSection.SubAgentEditor,
+    SettingsSection.ScriptEditor,
     SettingsSection.PromptEditor -> 3
     SettingsSection.ProviderEditor,
+    SettingsSection.MemoryEditor,
+    SettingsSection.Lorebook,
+    SettingsSection.KnowledgeBase,
+    SettingsSection.ScheduledTaskEditor,
     SettingsSection.PromptDetail,
     SettingsSection.SkillDetail,
+    SettingsSection.PluginDetail,
+    SettingsSection.NativePlugins,
     SettingsSection.SubAgentDetail,
     SettingsSection.ContainerDownloads,
     SettingsSection.Log -> 2
@@ -197,14 +251,26 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     onNavigateBack: () -> Unit,
     onStopAllAndCloseTerminal: () -> Unit = {},
+    /** 引擎卡「去登录/启动」后切到终端页（CLI 登录与安装进度在终端标签里）。 */
+    onOpenTerminal: () -> Unit = {},
+    /** 会话引擎切换入口（设置 → 模型与引擎的点卡选中）。 */
+    agentViewModel: AIAgentViewModel? = null,
     onRerunOnboarding: () -> Unit = {},
     onboardingStep: OnboardingStep? = null,
     onOnboardingModelAdded: (() -> Unit)? = null,
-    onOnboardingDismissFetchDialog: (() -> Unit)? = null
+    onOnboardingDismissFetchDialog: (() -> Unit)? = null,
+    /** 存储空间「在文件树中查看」：把目标容器路径交给宿主页导航（null 则隐藏该操作）。 */
+    onRevealInTree: ((String) -> Unit)? = null,
+    /** 授权记录「打开所在会话」：把会话 id 交给宿主页导航（null 则隐藏跳转）。 */
+    onOpenSession: ((String) -> Unit)? = null,
+    /** 开发环境一键搭建：场景确认后把（标题、任务提示词）交给宿主页开新会话执行。 */
+    onLaunchDevEnv: (title: String, prompt: String) -> Unit = { _, _ -> }
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
     val logViewerState by viewModel.logViewerState.collectAsStateWithLifecycle()
+    val mcpAuthState by viewModel.mcpAuthState.collectAsStateWithLifecycle()
+    val mcpImportState by viewModel.mcpImportState.collectAsStateWithLifecycle()
     val mcpEntries by viewModel.mcpEntries.collectAsStateWithLifecycle()
     val mcpStatuses by viewModel.mcpStatuses.collectAsStateWithLifecycle()
     val mcpReloading by viewModel.mcpReloading.collectAsStateWithLifecycle()
@@ -213,15 +279,26 @@ fun SettingsScreen(
     val skillImportState by viewModel.skillImportState.collectAsStateWithLifecycle()
     val skillDeleting by viewModel.skillDeleting.collectAsStateWithLifecycle()
     val subAgents by viewModel.subAgents.collectAsStateWithLifecycle()
+    val teams by viewModel.teams.collectAsStateWithLifecycle()
+    val teamMessage by viewModel.teamMessage.collectAsStateWithLifecycle()
     val subAgentSaveState by viewModel.subAgentSaveState.collectAsStateWithLifecycle()
     val subAgentDeleting by viewModel.subAgentDeleting.collectAsStateWithLifecycle()
+    val defaultModelProviderId by viewModel.defaultModelProviderId.collectAsStateWithLifecycle()
+    val defaultModel by viewModel.defaultModel.collectAsStateWithLifecycle()
+    val defaultEngine by viewModel.defaultEngine.collectAsStateWithLifecycle()
+    val subAgentModelOverrides by viewModel.subAgentModelOverrides.collectAsStateWithLifecycle()
     val globalRules by viewModel.globalRules.collectAsStateWithLifecycle()
     val projectRules by viewModel.projectRules.collectAsStateWithLifecycle()
     val currentProjectName by viewModel.currentProjectName.collectAsStateWithLifecycle()
     val disableSafetyInterception by viewModel.disableSafetyInterception.collectAsStateWithLifecycle()
+    val toolTiers by viewModel.toolTiers.collectAsStateWithLifecycle()
+    val permissionAudit by viewModel.permissionAudit.collectAsStateWithLifecycle()
+    val watchMode by viewModel.watchMode.collectAsStateWithLifecycle()
     val keepaliveEnabled by viewModel.keepaliveEnabled.collectAsStateWithLifecycle()
     val screenOnEnabled by viewModel.screenOnEnabled.collectAsStateWithLifecycle()
     val agentSoundEnabled by viewModel.agentSoundEnabled.collectAsStateWithLifecycle()
+    val liveNotificationEnabled by viewModel.liveNotificationEnabled.collectAsStateWithLifecycle()
+    val approvalNotificationEnabled by viewModel.approvalNotificationEnabled.collectAsStateWithLifecycle()
     val autoRemoveStaleModels by viewModel.autoRemoveStaleModels.collectAsStateWithLifecycle()
     val startupSessionMode by viewModel.startupSessionMode.collectAsStateWithLifecycle()
     val firstByteTimeoutSec by viewModel.firstByteTimeoutSec.collectAsStateWithLifecycle()
@@ -229,8 +306,20 @@ fun SettingsScreen(
     val maxNetworkRetries by viewModel.maxNetworkRetries.collectAsStateWithLifecycle()
     val enterToSend by viewModel.enterToSend.collectAsStateWithLifecycle()
     val compactionThresholdPercent by viewModel.compactionThresholdPercent.collectAsStateWithLifecycle()
+    val tokenBudget by viewModel.tokenBudget.collectAsStateWithLifecycle()
     val sendFileMaxSizeMb by viewModel.sendFileMaxSizeMb.collectAsStateWithLifecycle()
+    val goalMaxTurns by viewModel.goalMaxTurns.collectAsStateWithLifecycle()
+    val goalMaxTokens by viewModel.goalMaxTokens.collectAsStateWithLifecycle()
     val deleteExternalWorkspaceSessions by viewModel.deleteExternalWorkspaceSessions.collectAsStateWithLifecycle()
+    val selfImproveMode by viewModel.selfImproveMode.collectAsStateWithLifecycle()
+    val handoffPromptEnabled by viewModel.handoffPromptEnabled.collectAsStateWithLifecycle()
+    val handoffPromptPercent by viewModel.handoffPromptPercent.collectAsStateWithLifecycle()
+    val handoffAutoEnabled by viewModel.handoffAutoEnabled.collectAsStateWithLifecycle()
+    val handoffAutoPercent by viewModel.handoffAutoPercent.collectAsStateWithLifecycle()
+    val floatBallEnabled by viewModel.floatBallEnabled.collectAsStateWithLifecycle()
+    val vncAutoPopupEnabled by viewModel.vncAutoPopupEnabled.collectAsStateWithLifecycle()
+    val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
+    val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themePresetId by viewModel.themePresetId.collectAsStateWithLifecycle()
     val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsStateWithLifecycle()
@@ -243,6 +332,8 @@ fun SettingsScreen(
     val compactionModel by viewModel.compactionModel.collectAsStateWithLifecycle()
     val titleProviderId by viewModel.titleProviderId.collectAsStateWithLifecycle()
     val titleModel by viewModel.titleModel.collectAsStateWithLifecycle()
+    val verificationProviderId by viewModel.verificationProviderId.collectAsStateWithLifecycle()
+    val verificationModel by viewModel.verificationModel.collectAsStateWithLifecycle()
     val imageGenProviderId by viewModel.imageGenProviderId.collectAsStateWithLifecycle()
     val imageGenModel by viewModel.imageGenModel.collectAsStateWithLifecycle()
     val modelMetadata by viewModel.modelMetadata.collectAsStateWithLifecycle()
@@ -254,11 +345,13 @@ fun SettingsScreen(
     val tokenStats by viewModel.tokenStats.collectAsStateWithLifecycle()
     val updateCheckEnabled by viewModel.updateCheckEnabled.collectAsStateWithLifecycle()
     val updateCheckChannel by viewModel.updateCheckChannel.collectAsStateWithLifecycle()
+    val updateCheckMirror by viewModel.updateCheckMirror.collectAsStateWithLifecycle()
     val containerAnnouncementText by viewModel.containerAnnouncementText.collectAsStateWithLifecycle()
     val containerAnnouncementOutdated by viewModel.containerAnnouncementOutdated.collectAsStateWithLifecycle()
     val promptsAnnouncementText by viewModel.promptsAnnouncementText.collectAsStateWithLifecycle()
     val promptsAnnouncementOutdated by viewModel.promptsAnnouncementOutdated.collectAsStateWithLifecycle()
     val imageCatalog by viewModel.imageCatalog.collectAsStateWithLifecycle()
+    val imageVersions by viewModel.imageVersions.collectAsStateWithLifecycle()
     val imageDownload by viewModel.containerImageDownload.collectAsStateWithLifecycle()
     val containerReset by viewModel.containerReset.collectAsStateWithLifecycle()
     val imageSourceOptions by viewModel.imageSourceOptions.collectAsStateWithLifecycle()
@@ -286,6 +379,11 @@ fun SettingsScreen(
     var providerPresetPrefill by remember { mutableStateOf<ProviderPreset?>(null) }
     var showMcpDialog by remember { mutableStateOf(false) }
     var editingMcp by remember { mutableStateOf<McpServerEntry?>(null) }
+    var showMcpAddSheet by remember { mutableStateOf(false) }
+    var showMcpJsonImport by remember { mutableStateOf(false) }
+    var mcpAddScope by remember { mutableStateOf(McpScope.PROJECT) }
+    // 「推荐」条目预填：进入手动添加弹窗时把 Context7 的 URL 等带入表单（仅新增时生效）。
+    var mcpEditorPrefill by remember { mutableStateOf<McpServerConfig?>(null) }
 
     LaunchedEffect(onboardingStep) {
         when (onboardingStep) {
@@ -335,20 +433,45 @@ fun SettingsScreen(
     }
     var selectedSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     var skillToDelete by remember { mutableStateOf<SkillUiEntry?>(null) }
+    // 三个列表的多选状态各自独立：一个页面的勾选不应带到另一个页面。
+    val skillSelection = remember { ListSelectionState() }
+    val subAgentSelection = remember { ListSelectionState() }
+    val mcpSelection = remember { ListSelectionState() }
+
+    // 离开列表页（进详情 / 编辑 / 其它分区）时退出多选：否则回来会带着上一轮的勾选。
+    LaunchedEffect(section) {
+        if (section != SettingsSection.Skills) skillSelection.exit()
+        if (section != SettingsSection.SubAgents) subAgentSelection.exit()
+        if (section != SettingsSection.Mcp) mcpSelection.exit()
+    }
 
     // 自定义提示词：右上角「+」弹层可见性 + 编辑目标（新建/编辑/固定片段）
     var showPromptsAddSheet by remember { mutableStateOf(false) }
     var promptEditTarget by remember { mutableStateOf<PromptEditTarget?>(null) }
     var selectedPrompt by remember { mutableStateOf<PromptFragment?>(null) }
     var showPromptsAnnouncement by remember { mutableStateOf(false) }
+    // 插件详情目标：存 id 而非对象，插件启用状态变化后详情页要跟着刷新（对象是快照）。
+    var selectedPluginId by remember { mutableStateOf<String?>(null) }
+    var selectedPluginName by remember { mutableStateOf("") }
     // 编辑页返回目标：从详情进就回详情，从列表「+」进就回列表。
     var promptEditorReturn by remember { mutableStateOf(SettingsSection.Prompts) }
+    // 记忆编辑目标：null 表示新建；非 null 时指向被编辑的记忆（含作用域）。
+    var memoryEditTarget by remember { mutableStateOf<Memory?>(null) }
+    // 每次进入记忆编辑页递增：用作 composition key，避免 AnimatedContent 按 section 恢复上一次的初值。
+    var memoryEditorSession by remember { mutableStateOf(0) }
+    // 定时任务编辑目标：null 表示新建；同样用递增 session 隔离初值。
+    var scheduleEditTarget by remember { mutableStateOf<ScheduledTask?>(null) }
+    var scheduleEditorSession by remember { mutableStateOf(0) }
     // 技能编辑目标：null 表示新建一个；编辑现有技能时指向被编辑的条目。
     var editingSkill by remember { mutableStateOf<SkillUiEntry?>(null) }
     // 编辑页的返回目标：从详情页进就回详情页，从列表顶栏「＋」进就回列表。
     var skillEditorReturn by remember { mutableStateOf(SettingsSection.Skills) }
     // 保存后要在详情页展示的技能名：列表刷新是异步的，先记名字等刷新完再换快照。
     var pendingSkillName by remember { mutableStateOf<String?>(null) }
+    // 脚本页：新建弹窗可见性、待删除的脚本名、以及文件编辑器当前打开的脚本名。
+    var showScriptNewDialog by remember { mutableStateOf(false) }
+    var scriptToDeleteName by remember { mutableStateOf<String?>(null) }
+    var scriptEditName by remember { mutableStateOf<String?>(null) }
     // 「添加技能」底部弹层：选择作用域后走手动新建 / 文件导入 / 压缩包导入。
     var showSkillAddSheet by remember { mutableStateOf(false) }
     var skillImportScope by remember { mutableStateOf(SkillScope.GLOBAL) }
@@ -392,9 +515,15 @@ fun SettingsScreen(
         SettingsSection.SkillDetail -> SettingsSection.Skills
         SettingsSection.PromptEditor -> promptEditorReturn
         SettingsSection.PromptDetail -> SettingsSection.Prompts
+        SettingsSection.MemoryEditor -> SettingsSection.Memory
+        SettingsSection.ScheduledTaskEditor -> SettingsSection.ScheduledTasks
         SettingsSection.SkillEditor -> skillEditorReturn
+        SettingsSection.ScriptEditor -> SettingsSection.Scripts
         SettingsSection.SubAgentDetail -> SettingsSection.SubAgents
         SettingsSection.SubAgentEditor -> subAgentEditorReturn
+        SettingsSection.PluginDetail -> SettingsSection.NativePlugins
+        SettingsSection.NativePlugins -> SettingsSection.Plugins
+        SettingsSection.EnginePlugins -> SettingsSection.Plugins
         SettingsSection.ContainerDownloads -> SettingsSection.Container
         else -> if (expanded) null else SettingsSection.Menu
     }
@@ -446,6 +575,10 @@ fun SettingsScreen(
     // 滚动位置必须提到 AnimatedContent 之外持有：菜单页作为分区分支被切走时会被 dispose，
     // 内部 rememberScrollState 一并丢弃，从二级页返回就跳回顶部。
     val menuScrollState = rememberScrollState()
+    // 一级分区页整块内容在 AnimatedContent 里被切走时会 dispose，内部 rememberScrollState
+    // （基于 rememberSaveable）随之丢失，从下一级页面返回就跳回顶部。按分区名接住这些状态；
+    // 编辑类页面不走这一步（它们在 AnimatedContent 里是独立分支），否则每次进编辑器会把上次的输入恢复出来。
+    val sectionStateHolder = rememberSaveableStateHolder()
     val menuBody: @Composable () -> Unit = {
         SettingsMenu(
             scrollState = menuScrollState,
@@ -476,6 +609,8 @@ fun SettingsScreen(
         )
     }
 
+    val rtl = isRtlLayout()
+    val animate = !isAnimationDisabled()
     Row(modifier = Modifier.fillMaxSize()) {
         // 大屏：菜单常驻左栏，右栏只换详情，不再整页来回切。
         if (expanded) {
@@ -515,7 +650,7 @@ fun SettingsScreen(
             transitionSpec = {
                 val forward = targetState.depth() >= initialState.depth()
                 // sizeTransform 必须给 null：新旧内容尺寸本就一样，默认的尺寸补间只会让容器裁剪拖影。
-                ContentTransform(pageEnter(forward), pageExit(forward), sizeTransform = null)
+                ContentTransform(pageEnter(forward, rtl, animate), pageExit(forward, rtl, animate), sizeTransform = null)
             },
             label = "settings-section"
         ) { current ->
@@ -601,10 +736,152 @@ fun SettingsScreen(
                 )
             }
 
+            current == SettingsSection.Lorebook -> {
+                LorebookScreen(
+                    projectRoot = viewModel.currentProjectRoot(),
+                    // 从主设置菜单进来，返回也回主设置菜单，不能写死回记忆（用户反馈）。
+                    onBack = { section = SettingsSection.Menu },
+                )
+            }
+
+            current == SettingsSection.KnowledgeBase -> {
+                KnowledgeBaseScreen(
+                    projectRoot = viewModel.currentProjectRoot(),
+                    onBack = { section = SettingsSection.Menu },
+                )
+            }
+
+            current == SettingsSection.MemoryEditor -> {
+                val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val memoryState by memoryViewModel.state.collectAsStateWithLifecycle()
+                val target = memoryEditTarget
+                // 不同编辑目标用不同 key：否则回到本 section 时 AnimatedContent 会复用上一会话的
+                // rememberSaveable 初值，打开另一条记忆会显示上一条的内容。
+                key(memoryEditorSession) {
+                    MemoryEditorScreen(
+                        isNew = target == null,
+                        initialName = target?.name.orEmpty(),
+                        initialDescription = target?.description.orEmpty(),
+                        initialContent = target?.content.orEmpty(),
+                        initialScope = target?.scope ?: MemoryScope.GLOBAL,
+                        hasWorkspace = memoryState.hasWorkspace,
+                        onSave = { name, description, content, scope ->
+                            memoryViewModel.save(name, description, content, scope)
+                            section = SettingsSection.Memory
+                        },
+                        onNavigateBack = { section = SettingsSection.Memory }
+                    )
+                }
+            }
+
+            // 脚本正文用全局文件编辑器：它自己写盘、自己管未保存提示与返回键。
+            current == SettingsSection.ScriptEditor -> {
+                val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                scriptEditName?.let { name ->
+                    CodeEditorScreen(
+                        path = scriptsViewModel.containerPath(name),
+                        onBack = {
+                            // 编辑器直接写盘，回来重读列表反映描述与「上次运行」。
+                            scriptsViewModel.refresh()
+                            section = SettingsSection.Scripts
+                        }
+                    )
+                }
+            }
+
+            current == SettingsSection.ScheduledTaskEditor -> {
+                val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                // 脚本型任务的候选脚本与「设置 → 脚本」页同一份清单
+                val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val scriptsState by scriptsViewModel.state.collectAsStateWithLifecycle()
+                // 清单不变时保持同一实例，避免编辑器子树因参数变化多余重组
+                val availableScriptNames = remember(scriptsState.scripts) { scriptsState.scripts.map { it.name } }
+                val target = scheduleEditTarget
+                key(scheduleEditorSession) {
+                    ScheduledTaskEditorScreen(
+                        isNew = target == null,
+                        initialName = target?.name.orEmpty(),
+                        initialCommand = target?.command.orEmpty(),
+                        initialSchedule = target?.schedule ?: TaskSchedule(),
+                        initialType = target?.type ?: com.aicode.feature.schedule.domain.ScheduledTaskType.COMMAND,
+                        initialScriptName = target?.scriptName.orEmpty(),
+                        availableScripts = availableScriptNames,
+                        scriptsUnavailableReason = scriptsState.unavailableReason,
+                        initialAiContent = target?.let { t ->
+                            if (t.type == com.aicode.feature.schedule.domain.ScheduledTaskType.AI_PLAN) t.planText else t.prompt
+                        },
+                        onSave = { name, command, scriptName, type, schedule ->
+                            scheduleViewModel.saveFromEditor(target, name, command, scriptName, type, schedule)
+                            section = SettingsSection.ScheduledTasks
+                        },
+                        onNavigateBack = { section = SettingsSection.ScheduledTasks }
+                    )
+                }
+            }
+
             current == SettingsSection.RemoteServers ->
                 com.aicode.feature.workspace.presentation.remote.RemoteServerScreen(
                     onNavigateBack = { section = SettingsSection.Menu }
                 )
+
+            current == SettingsSection.Store -> {
+                // 在线商店：技能（claudemarket.ai）+ MCP（官方 Registry），安装 ≠ 启用
+                val storeViewModel: com.aicode.feature.store.presentation.StoreViewModel =
+                    androidx.hilt.navigation.compose.hiltViewModel()
+                val storeState by storeViewModel.state.collectAsStateWithLifecycle()
+                // 该页独立于下方共享 Scaffold：自带顶栏，内容区避开系统栏，窄窗占整屏、大屏占右栏。
+                Scaffold(
+                    containerColor = settingsPageBackground(),
+                    contentColor = MaterialTheme.colorScheme.onBackground,
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(stringResource(R.string.store_title)) },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = settingsPageBackground(),
+                                titleContentColor = MaterialTheme.colorScheme.onBackground
+                            ),
+                            navigationIcon = {
+                                // 大屏一级分区页不给返回箭头：左栏菜单随时可切，退出设置的入口在左栏顶部。
+                                if (!expanded || parentSection != null) {
+                                    IconButton(onClick = {
+                                        val parent = parentSection
+                                        if (parent != null) section = parent else onNavigateBack()
+                                    }) {
+                                        Icon(FeatherIcons.ArrowLeft, contentDescription = stringResource(R.string.common_back))
+                                    }
+                                }
+                            }
+                        )
+                    }
+                ) { padding ->
+                    Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+                        com.aicode.feature.store.presentation.component.StoreScreen(
+                            state = storeState,
+                            onTab = { storeViewModel.setTab(it) },
+                            onQueryChange = { storeViewModel.updateQuery(it) },
+                            onSearch = { storeViewModel.search() },
+                            onLoadMore = { storeViewModel.loadMore() },
+                            onInstall = { storeViewModel.install(it) },
+                            onInstallTeam = { storeViewModel.installTeam(it) },
+                            onInstallPlugin = { item, target -> storeViewModel.installPlugin(item, target) },
+                            onUninstallPlugin = { item, target -> storeViewModel.uninstallPlugin(item, target) },
+                            onPluginEngineFilter = { storeViewModel.setPluginEngineFilter(it) },
+                            onConsumeMessage = { storeViewModel.consumeMessage() },
+                            onRetryTranslation = { storeViewModel.retryTranslation() },
+                            onConfirmScan = { storeViewModel.confirmPendingScan() },
+                            onDismissScan = { storeViewModel.dismissPendingScan() },
+                            sources = storeViewModel.sources.collectAsStateWithLifecycle().value,
+                            onToggleSource = { id, enabled -> storeViewModel.toggleSource(id, enabled) },
+                            onRemoveSource = { storeViewModel.removeSource(it) },
+                            onAddSource = { storeViewModel.addSource(it) }
+                        )
+                    }
+                }
+            }
 
             current == SettingsSection.Backup ->
                 BackupScreen(
@@ -617,14 +894,29 @@ fun SettingsScreen(
             // 它的构造即触发一次全盘统计，不能提到 SettingsScreen 顶层（那样每次进设置页都会扫盘）。
             val storageViewModel: com.aicode.feature.settings.presentation.StorageViewModel? =
                 if (current == SettingsSection.Storage) androidx.hilt.navigation.compose.hiltViewModel() else null
+            // 密钥管理页同理：独立 ViewModel 仅进入该分区时创建（构造即触发一次扫描）。
+            val keysViewModel: com.aicode.feature.settings.presentation.KeysViewModel? =
+                if (current == SettingsSection.DevKeys) androidx.hilt.navigation.compose.hiltViewModel() else null
+            // 详情页要带上条目身份：换成另一个技能 / 子代理 / 提示词进来，不能继承上一条的滚动位置。
+            val stateKey: String = when (current) {
+                SettingsSection.SkillDetail -> "SkillDetail:${selectedSkill?.name.orEmpty()}"
+                SettingsSection.SubAgentDetail -> "SubAgentDetail:${selectedSubAgent?.name.orEmpty()}"
+                SettingsSection.PromptDetail -> "PromptDetail:${selectedPrompt?.number ?: 0}"
+                SettingsSection.PluginDetail -> "PluginDetail:${selectedPluginId.orEmpty()}"
+                else -> current.name
+            }
+            sectionStateHolder.SaveableStateProvider(stateKey) {
             Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         text = if (current == SettingsSection.SkillDetail) {
                             selectedSkill?.name ?: stringResource(current.titleRes)
+                        } else if (current == SettingsSection.PluginDetail) {
+                            selectedPluginName.ifBlank { stringResource(current.titleRes) }
                         } else if (current == SettingsSection.SubAgentDetail) {
                             selectedSubAgent?.name ?: stringResource(current.titleRes)
                         } else if (expanded && current == SettingsSection.Menu) {
@@ -674,10 +966,7 @@ fun SettingsScreen(
                                     )
                                 }
                             }
-                            IconButton(onClick = {
-                                editingMcp = null
-                                showMcpDialog = true
-                            }) {
+                            IconButton(onClick = { showMcpAddSheet = true }) {
                                 Icon(
                                     FeatherIcons.Plus,
                                     contentDescription = stringResource(R.string.settings_add_mcp_server),
@@ -685,6 +974,8 @@ fun SettingsScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
+                            // 列表为空时不显示多选开关：进去了也无项可勾。
+                            if (mcpEntries.isNotEmpty()) SelectionToggleAction(mcpSelection)
                         }
                         SettingsSection.Container -> {
                             IconButton(onClick = { showContainerAnnouncement = true }) {
@@ -717,15 +1008,18 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.Skills -> IconButton(onClick = {
-                            showSkillAddSheet = true
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.skills_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.Skills -> {
+                            IconButton(onClick = {
+                                showSkillAddSheet = true
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.skills_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            if (skills.isNotEmpty()) SelectionToggleAction(skillSelection)
                         }
                         SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                             IconButton(onClick = {
@@ -741,17 +1035,20 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        SettingsSection.SubAgents -> IconButton(onClick = {
-                            editingSubAgent = null
-                            subAgentEditorReturn = SettingsSection.SubAgents
-                            section = SettingsSection.SubAgentEditor
-                        }) {
-                            Icon(
-                                FeatherIcons.Plus,
-                                contentDescription = stringResource(R.string.subagent_add),
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        SettingsSection.SubAgents -> {
+                            IconButton(onClick = {
+                                editingSubAgent = null
+                                subAgentEditorReturn = SettingsSection.SubAgents
+                                section = SettingsSection.SubAgentEditor
+                            }) {
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.subagent_add),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            if (subAgents.isNotEmpty()) SelectionToggleAction(subAgentSelection)
                         }
                         SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
                             IconButton(onClick = {
@@ -799,6 +1096,38 @@ fun SettingsScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
+                        }
+                        SettingsSection.Memory -> IconButton(onClick = {
+                            memoryEditTarget = null
+                            memoryEditorSession++
+                            section = SettingsSection.MemoryEditor
+                        }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.memory_new),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        SettingsSection.Scripts -> IconButton(onClick = { showScriptNewDialog = true }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.scripts_new_title),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        SettingsSection.ScheduledTasks -> IconButton(onClick = {
+                            scheduleEditTarget = null
+                            scheduleEditorSession++
+                            section = SettingsSection.ScheduledTaskEditor
+                        }) {
+                            Icon(
+                                FeatherIcons.Plus,
+                                contentDescription = stringResource(R.string.schedule_new),
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                         SettingsSection.PromptDetail -> selectedPrompt?.let { fragment ->
                             IconButton(onClick = {
@@ -853,10 +1182,34 @@ fun SettingsScreen(
                     onToggleEnterToSend = { viewModel.setEnterToSend(it) },
                     compactionThresholdPercent = compactionThresholdPercent,
                     onSetCompactionThresholdPercent = { viewModel.setCompactionThresholdPercent(it) },
+                    tokenBudget = tokenBudget,
+                    onSetTokenBudget = { viewModel.setTokenBudget(it) },
                     sendFileMaxSizeMb = sendFileMaxSizeMb,
                     onSetSendFileMaxSizeMb = { viewModel.setSendFileMaxSizeMb(it) },
+                    goalMaxTurns = goalMaxTurns,
+                    onSetGoalMaxTurns = { viewModel.setGoalMaxTurns(it) },
+                    goalMaxTokens = goalMaxTokens,
+                    onSetGoalMaxTokens = { viewModel.setGoalMaxTokens(it) },
                     deleteExternalWorkspaceSessions = deleteExternalWorkspaceSessions,
-                    onToggleDeleteExternalWorkspaceSessions = { viewModel.setDeleteExternalWorkspaceSessions(it) }
+                    onToggleDeleteExternalWorkspaceSessions = { viewModel.setDeleteExternalWorkspaceSessions(it) },
+                    selfImproveMode = selfImproveMode,
+                    onToggleSelfImproveMode = { viewModel.setSelfImproveMode(it) },
+                    handoffPromptEnabled = handoffPromptEnabled,
+                    onToggleHandoffPromptEnabled = { viewModel.setHandoffPromptEnabled(it) },
+                    handoffPromptPercent = handoffPromptPercent,
+                    onSetHandoffPromptPercent = { viewModel.setHandoffPromptPercent(it) },
+                    handoffAutoEnabled = handoffAutoEnabled,
+                    onToggleHandoffAutoEnabled = { viewModel.setHandoffAutoEnabled(it) },
+                    handoffAutoPercent = handoffAutoPercent,
+                    onSetHandoffAutoPercent = { viewModel.setHandoffAutoPercent(it) },
+                    floatBallEnabled = floatBallEnabled,
+                    onToggleFloatBallEnabled = { viewModel.setFloatBallEnabled(it) },
+                    vncAutoPopupEnabled = vncAutoPopupEnabled,
+                    onToggleVncAutoPopup = { viewModel.setVncAutoPopupEnabled(it) },
+                    voiceEngine = voiceEngine,
+                    voiceModelState = voiceModelState,
+                    onSelectVoiceEngine = { viewModel.setVoiceEngine(it) },
+                    onDownloadVoiceModel = { viewModel.downloadVoiceModel() }
                 )
                 SettingsSection.Providers -> ProvidersSection(
                     providers = providers,
@@ -871,44 +1224,118 @@ fun SettingsScreen(
                 )
                 SettingsSection.DefaultModels -> DefaultModelsSection(
                     providers = providers,
+                    defaultEngine = defaultEngine,
+                    onSelectDefaultEngine = { viewModel.setDefaultEngine(it) },
+                    onSwitchEngine = { id ->
+                        val ok = agentViewModel?.setSessionEngine(id?.ifBlank { null }) ?: true
+                        if (!ok) {
+                            // 会话运行中被拒：明确告知只改了默认引擎，当前会话未动
+                            Toast.makeText(context, context.getString(R.string.engine_switch_busy), Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onOpenTerminal = onOpenTerminal,
                     visionProviderId = visionProviderId,
                     visionModel = visionModel,
                     compactionProviderId = compactionProviderId,
                     compactionModel = compactionModel,
                     titleProviderId = titleProviderId,
                     titleModel = titleModel,
+                    verificationProviderId = verificationProviderId,
+                    verificationModel = verificationModel,
                     imageGenProviderId = imageGenProviderId,
                     imageGenModel = imageGenModel,
+                    mainProviderId = defaultModelProviderId,
+                    mainModel = defaultModel,
+                    subAgentModels = subAgentModelOverrides,
+                    subAgents = subAgents.filter { !it.disabled }.map { it.name to it.description },
                     modelMetadata = modelMetadata,
                     onLoadMetadata = { viewModel.loadAllModelMetadata() },
+                    onSelectMainModel = { pid, m -> viewModel.setMainAgentModel(pid, m) },
+                    onClearMainModel = { viewModel.clearMainAgentModel() },
+                    onSelectSubAgentModel = { name, pid, m -> viewModel.setSubAgentModel(name, pid, m) },
+                    onClearSubAgentModel = { name -> viewModel.clearSubAgentModel(name) },
                     onSelectVisionModel = { pid, m -> viewModel.setVisionModel(pid, m) },
                     onClearVisionModel = { viewModel.clearVisionModel() },
                     onSelectCompactionModel = { pid, m -> viewModel.setCompactionModel(pid, m) },
                     onClearCompactionModel = { viewModel.clearCompactionModel() },
                     onSelectTitleModel = { pid, m -> viewModel.setTitleModel(pid, m) },
                     onClearTitleModel = { viewModel.clearTitleModel() },
+                    onSelectVerificationModel = { pid, m -> viewModel.setVerificationModel(pid, m) },
+                    onClearVerificationModel = { viewModel.clearVerificationModel() },
                     onSelectImageGenModel = { pid, m -> viewModel.setImageGenModel(pid, m) },
                     onClearImageGenModel = { viewModel.clearImageGenModel() }
                 )
+                SettingsSection.Plugins -> PluginsOverviewSection(
+                    onOpenNative = { section = SettingsSection.NativePlugins },
+                    onOpenEngine = { section = SettingsSection.EnginePlugins }
+                )
+                SettingsSection.NativePlugins -> {
+                    val pluginViewModel: com.aicode.feature.plugin.presentation.PluginViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    NativePluginsSection(
+                        viewModel = pluginViewModel,
+                        onOpenDetail = { id, name ->
+                            selectedPluginId = id
+                            selectedPluginName = name
+                            section = SettingsSection.PluginDetail
+                        }
+                    )
+                }
+                SettingsSection.PluginDetail -> {
+                    val pluginViewModel: com.aicode.feature.plugin.presentation.PluginViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val pluginState by pluginViewModel.state.collectAsStateWithLifecycle()
+                    // 直接冷启动进到详情（配置变更恢复）时列表还没扫过，这里补一次
+                    LaunchedEffect(Unit) { pluginViewModel.refresh() }
+                    val target = selectedPluginId?.let { id ->
+                        pluginState.plugins.firstOrNull { it.id == id }
+                    }
+                    if (target == null) {
+                        // 插件目录被删/清单变坏：详情页没有主体，退回列表而不是空白
+                        LaunchedEffect(pluginState.loading) {
+                            if (!pluginState.loading) section = SettingsSection.NativePlugins
+                        }
+                    } else {
+                        PluginDetailSection(plugin = target, viewModel = pluginViewModel)
+                    }
+                }
+                SettingsSection.EnginePlugins -> EnginePluginsSection()
                 SettingsSection.Mcp -> McpSection(
                     entries = mcpEntries,
                     statuses = mcpStatuses,
                     reloading = mcpReloading,
+                    selection = mcpSelection,
                     onReload = { viewModel.reloadMcp() },
                     onToggle = { name, enabled, scope -> viewModel.setMcpServerEnabled(name, enabled, scope) },
                     onEdit = {
                         editingMcp = it
                         showMcpDialog = true
                     },
-                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) }
+                    onDelete = { name, scope -> viewModel.deleteMcpServer(name, scope) },
+                    onBatchDelete = { targets ->
+                        targets.forEach { (name, scope) -> viewModel.deleteMcpServer(name, scope) }
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        targets.forEach { (name, scope) -> viewModel.setMcpServerEnabled(name, enabled, scope) }
+                    },
+                    onBatchReconnect = { names -> names.forEach { viewModel.reloadMcpServer(it) } }
                 )
                 SettingsSection.Skills -> SkillsSection(
                     projectName = currentProjectName,
                     entries = skills,
+                    selection = skillSelection,
                     onDelete = { skillToDelete = it },
                     onOpenDetail = {
                         selectedSkill = it
                         section = SettingsSection.SkillDetail
+                    },
+                    onBatchDelete = { targets ->
+                        // 批量删除逐条走同一条仓储删除路径，不新增批量 API：
+                        // 每条都要清自己作用域下的文件与索引，合并反而容易漏。
+                        targets.forEach { viewModel.deleteSkill(it.name, it.scope) }
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        targets.forEach { viewModel.setSkillEnabled(it.name, enabled, it.scope) }
                     }
                 )
                 SettingsSection.Prompts -> {
@@ -953,6 +1380,125 @@ fun SettingsScreen(
                     }
                 }
                 SettingsSection.PromptEditor -> Unit
+                SettingsSection.Memory -> {
+                    val memoryViewModel: com.aicode.feature.settings.presentation.MemoryViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val memoryState by memoryViewModel.state.collectAsStateWithLifecycle()
+                    val memoryError by memoryViewModel.error.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { memoryViewModel.refresh() }
+                    MemorySection(
+                        state = memoryState,
+                        error = memoryError,
+                        onErrorConsumed = memoryViewModel::consumeError,
+                        onOpenMemory = { memory ->
+                            memoryEditTarget = memory
+                            memoryEditorSession++
+                            section = SettingsSection.MemoryEditor
+                        },
+                        onDelete = { memory -> memoryViewModel.delete(memory.name, memory.scope) }
+                    )
+                }
+                SettingsSection.DevEnvironments -> {
+                    val devEnvInstalled by viewModel.devEnvInstalled.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { viewModel.refreshDevEnvInstalled() }
+                    DevEnvironmentsSection(
+                        containerName = containerProfiles.firstOrNull { it.id == activeProfileId }?.name.orEmpty(),
+                        containerOsId = containerOsMap[activeProfileId],
+                        installedIds = devEnvInstalled,
+                        onLaunch = onLaunchDevEnv
+                    )
+                }
+                SettingsSection.Scripts -> {
+                    val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val scriptsState by scriptsViewModel.state.collectAsStateWithLifecycle()
+                    val scriptsError by scriptsViewModel.error.collectAsStateWithLifecycle()
+                    val pendingScriptOpen by scriptsViewModel.pendingOpen.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { scriptsViewModel.refresh() }
+                    // 新建脚本要先把文件写下去再打开编辑器，否则编辑器会读到「文件不存在」。
+                    LaunchedEffect(pendingScriptOpen) {
+                        pendingScriptOpen?.let { created ->
+                            scriptsViewModel.consumePendingOpen()
+                            scriptEditName = created
+                            section = SettingsSection.ScriptEditor
+                        }
+                    }
+                    ScriptsSection(
+                        state = scriptsState,
+                        error = scriptsError,
+                        onErrorConsumed = scriptsViewModel::consumeError,
+                        onOpenScript = { script ->
+                            scriptEditName = script.name
+                            section = SettingsSection.ScriptEditor
+                        },
+                        onRun = { script -> scriptsViewModel.run(script.name) },
+                        onDelete = { script -> scriptToDeleteName = script.name }
+                    )
+                    if (showScriptNewDialog) {
+                        val unavailable = scriptsState.unavailableReason
+                        if (unavailable == null) {
+                            ScriptNewDialog(
+                                onDismiss = { showScriptNewDialog = false },
+                                onConfirm = { name ->
+                                    showScriptNewDialog = false
+                                    scriptsViewModel.create(name)
+                                }
+                            )
+                        } else {
+                            // 当前执行环境不支持脚本：点「+」要给出原因，不能默默无反应
+                            AlertDialog(
+                                onDismissRequest = { showScriptNewDialog = false },
+                                title = { Text(stringResource(R.string.scripts_new_title)) },
+                                text = { Text(unavailable) },
+                                confirmButton = {
+                                    TextButton(onClick = { showScriptNewDialog = false }) {
+                                        Text(stringResource(R.string.common_got_it))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    scriptToDeleteName?.let { deleteTarget ->
+                        AlertDialog(
+                            onDismissRequest = { scriptToDeleteName = null },
+                            title = { Text(stringResource(R.string.scripts_delete_confirm_title)) },
+                            text = {
+                                Text(stringResource(R.string.scripts_delete_confirm_message, deleteTarget))
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    scriptToDeleteName = null
+                                    scriptsViewModel.delete(deleteTarget)
+                                }) { Text(stringResource(R.string.common_delete)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { scriptToDeleteName = null }) {
+                                    Text(stringResource(R.string.common_cancel))
+                                }
+                            }
+                        )
+                    }
+                }
+                SettingsSection.ScriptEditor -> Unit // 已在上方 early return 处理
+                SettingsSection.MemoryEditor -> Unit // 已在上方 early return 处理
+                SettingsSection.Lorebook -> Unit // 已在上方 early return 处理
+                SettingsSection.KnowledgeBase -> Unit // 已在上方 early return 处理
+                SettingsSection.ScheduledTasks -> {
+                    val scheduleViewModel: com.aicode.feature.schedule.presentation.ScheduledTasksViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    val scheduleState by scheduleViewModel.state.collectAsStateWithLifecycle()
+                    ScheduledTasksSection(
+                        state = scheduleState,
+                        onOpenTask = { task ->
+                            scheduleEditTarget = task
+                            scheduleEditorSession++
+                            section = SettingsSection.ScheduledTaskEditor
+                        },
+                        onToggle = { task, enabled -> scheduleViewModel.setEnabled(task, enabled) },
+                        onDelete = { task -> scheduleViewModel.delete(task.id) }
+                    )
+                }
+                SettingsSection.ScheduledTaskEditor -> Unit // 已在上方 early return 处理
                 SettingsSection.SkillDetail -> selectedSkill?.let { entry ->
                     SkillDetailSection(
                         entry = entry,
@@ -964,15 +1510,43 @@ fun SettingsScreen(
                         }
                     )
                 }
-                SettingsSection.SubAgents -> SubAgentsSection(
-                    projectName = currentProjectName,
+                SettingsSection.SubAgents -> {
+                    // 进入分区时重扫：商店刚安装的专家无需退出设置页即可出现。
+                    LaunchedEffect(Unit) { viewModel.refreshSubAgents() }
+                    SubAgentsSection(
+                        projectName = currentProjectName,
                     entries = subAgents,
+                    selection = subAgentSelection,
                     onDelete = { subAgentToDelete = it },
                     onOpenDetail = {
                         selectedSubAgent = it
                         section = SettingsSection.SubAgentDetail
+                    },
+                    onBatchDelete = { targets ->
+                        targets.forEach { viewModel.deleteSubAgent(it.name, it.scope) }
+                    },
+                    onBatchSetEnabled = { targets, enabled ->
+                        targets.forEach { viewModel.setSubAgentEnabled(it.name, enabled, it.scope) }
                     }
-                )
+                    )
+                }
+                SettingsSection.Teams -> {
+                    // 进入分区时重扫：商店刚安装的专家团无需退出设置页即可出现。
+                    LaunchedEffect(Unit) { viewModel.refreshTeams() }
+                    LaunchedEffect(teamMessage) {
+                        teamMessage?.let {
+                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                            viewModel.consumeTeamMessage()
+                        }
+                    }
+                    TeamsSection(
+                        teams = teams,
+                        onToggle = { entry, enabled ->
+                            viewModel.setTeamEnabled(entry.name, enabled, entry.scope)
+                        },
+                        onDelete = { viewModel.deleteTeam(it) }
+                    )
+                }
                 SettingsSection.SubAgentDetail -> selectedSubAgent?.let { entry ->
                     SubAgentDetailSection(
                         entry = entry,
@@ -1005,10 +1579,14 @@ fun SettingsScreen(
                     },
                     resetState = containerReset,
                     onRestoreBuiltin = { viewModel.restoreBuiltinAlpine() },
-                    remoteConnections = remoteConnections
+                    remoteConnections = remoteConnections,
+                    onReorder = { fromIndex, toIndex ->
+                        viewModel.reorderContainerProfiles(fromIndex, toIndex)
+                    }
                 )
                 SettingsSection.ContainerDownloads -> ContainerImageDownloadSection(
                     catalog = imageCatalog,
+                    imageVersions = imageVersions,
                     state = imageDownload,
                     downloadedImages = downloadedImages,
                     sourceUnavailableIds = sourceUnavailableIds,
@@ -1035,6 +1613,8 @@ fun SettingsScreen(
                     onSelect = { viewModel.setLogLevel(it) },
                     state = logViewerState,
                     onSelectFile = { viewModel.selectLogFile(it) },
+                    onDeleteFile = { viewModel.deleteLogFile(it) },
+                    onClearAll = { viewModel.clearAllLogs() },
                     onClearFilter = { viewModel.refreshLogs(filterServerName = null) },
                     onRefresh = { viewModel.refreshLogs(silent = true) }
                 )
@@ -1043,10 +1623,17 @@ fun SettingsScreen(
                     projectRules = projectRules,
                     globalRules = globalRules,
                     disableSafetyInterception = disableSafetyInterception,
+                    watchMode = watchMode,
+                    onToggleWatchMode = { viewModel.setWatchMode(it) },
+                    toolTiers = toolTiers,
+                    auditRecords = permissionAudit,
                     onToggleSafetyInterception = { viewModel.setDisableSafetyInterception(it) },
                     onDeleteProject = { viewModel.deleteProjectRule(it) },
                     onPromote = { viewModel.promoteRuleToGlobal(it) },
-                    onDeleteGlobal = { viewModel.deleteGlobalRule(it) }
+                    onDeleteGlobal = { viewModel.deleteGlobalRule(it) },
+                    onSetToolTier = { tool, tier -> viewModel.setToolTier(tool, tier) },
+                    onApplyProfile = { viewModel.applyPermissionProfile(it) },
+                    onJumpToSession = onOpenSession
                 )
                 SettingsSection.AppPermissions -> {
                     val shizukuViewModel: ShizukuViewModel =
@@ -1065,7 +1652,11 @@ fun SettingsScreen(
                     screenOnEnabled = screenOnEnabled,
                     onToggleScreenOn = { viewModel.setScreenOnEnabled(it) },
                     agentSoundEnabled = agentSoundEnabled,
-                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) }
+                    onToggleAgentSound = { viewModel.setAgentSoundEnabled(it) },
+                    liveNotificationEnabled = liveNotificationEnabled,
+                    onToggleLiveNotification = { viewModel.setLiveNotificationEnabled(it) },
+                    approvalNotificationEnabled = approvalNotificationEnabled,
+                    onToggleApprovalNotification = { viewModel.setApprovalNotificationEnabled(it) }
                 )
                 SettingsSection.TokenStats -> TokenStatsSection(
                     state = tokenStats,
@@ -1077,33 +1668,100 @@ fun SettingsScreen(
                     onSelectFilterModel = { viewModel.setFilterModel(it) },
                     onClearFilters = { viewModel.clearTokenStatsFilters() }
                 )
-                SettingsSection.Storage -> storageViewModel?.let { StorageSectionHost(viewModel = it) }
+                SettingsSection.Storage -> storageViewModel?.let {
+                    StorageSectionHost(viewModel = it, onRevealInTree = onRevealInTree)
+                }
+                SettingsSection.DevKeys -> keysViewModel?.let {
+                    DevKeysSectionHost(viewModel = it)
+                }
                 SettingsSection.ProviderEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SkillEditor -> {} // 已在上方 early return 处理
                 SettingsSection.SubAgentEditor -> {} // 已在上方 early return 处理
                 SettingsSection.RemoteServers -> {} // 已在上方 early return 处理
+                SettingsSection.Store -> {} // 已在上方 early return 处理
                 SettingsSection.Backup -> {} // 已在上方 early return 处理
+                SettingsSection.Feedback -> FeedbackSection()
                 SettingsSection.About -> AboutSection(
                     updateCheckEnabled = updateCheckEnabled,
                     updateCheckChannel = updateCheckChannel,
+                    updateCheckMirror = updateCheckMirror,
                     onToggleUpdateCheck = { viewModel.setUpdateCheckEnabled(it) },
                     onSelectChannel = { viewModel.setUpdateCheckChannel(it) },
+                    onSelectMirror = { viewModel.setUpdateCheckMirror(it) },
                     onCheckUpdate = { viewModel.checkUpdate(manual = true) }
                 )
             }
         }
     }
         } // else 分支结束（storageViewModel 作用域）
+        } // SaveableStateProvider 结束
         } // 详情区 when 结束
         } // AnimatedContent 结束
         } // 右栏结束
     } // Row 结束
 
+    if (showMcpAddSheet) {
+        McpAddSheet(
+            scope = mcpAddScope,
+            onScopeChange = { mcpAddScope = it },
+            onManual = {
+                showMcpAddSheet = false
+                editingMcp = null
+                mcpEditorPrefill = null
+                showMcpDialog = true
+            },
+            onImportJson = {
+                showMcpAddSheet = false
+                showMcpJsonImport = true
+            },
+            onSelectRea = {
+                // 推荐条目：走手动添加流程并预填；预填 enabled=true（保存即可用）。
+                showMcpAddSheet = false
+                editingMcp = null
+                mcpEditorPrefill = RecommendedReaConfig
+                showMcpDialog = true
+            },
+            onSelectContext7 = {
+                // 推荐条目：走手动添加流程并预填；默认不启用，与商店「安装 ≠ 启用」语义一致。
+                showMcpAddSheet = false
+                editingMcp = null
+                mcpEditorPrefill = RecommendedContext7Config
+                showMcpDialog = true
+            },
+            onDismiss = { showMcpAddSheet = false }
+        )
+    }
+
+    if (showMcpJsonImport) {
+        LaunchedEffect(mcpImportState.importedCount) {
+            if (mcpImportState.importedCount != null) {
+                showMcpJsonImport = false
+                viewModel.clearMcpImportState()
+            }
+        }
+        McpJsonImportDialog(
+            inProgress = mcpImportState.inProgress,
+            error = mcpImportState.error,
+            onDismiss = {
+                showMcpJsonImport = false
+                viewModel.clearMcpImportState()
+            },
+            onConfirm = { json -> viewModel.importMcpServersFromJson(json, mcpAddScope) }
+        )
+    }
+
     if (showMcpDialog) {
         McpServerEditDialog(
             initial = editingMcp?.server,
-            initialScope = editingMcp?.scope,
+            // 新增时沿用添加面板已选的作用域（推荐 / 手动入口一致）；编辑时保持原作用域。
+            initialScope = editingMcp?.scope ?: mcpAddScope,
+            prefill = mcpEditorPrefill,
             tools = viewModel.getMcpServerTools(editingMcp?.server?.name),
+            authState = mcpAuthState,
+            needsAuth = mcpStatuses.firstOrNull { it.name == editingMcp?.server?.name }
+                ?.state == McpServerStatus.State.NEEDS_AUTH,
+            connected = mcpStatuses.firstOrNull { it.name == editingMcp?.server?.name }
+                ?.state == McpServerStatus.State.CONNECTED,
             onRefreshTools = { editingMcp?.let { viewModel.reloadMcpServer(it.server.name) } },
             onOpenLogs = editingMcp?.let { existing ->
                 {
@@ -1113,10 +1771,20 @@ fun SettingsScreen(
                     section = SettingsSection.Log
                 }
             },
-            onDismiss = { showMcpDialog = false },
+            onAuthorize = { config, scope ->
+                viewModel.saveAndAuthorizeMcpServer(editingMcp?.server?.name, editingMcp?.scope, config, scope)
+            },
+            onLogout = { viewModel.logoutMcpServer(it) },
+            onCancel = { viewModel.cancelMcpAuthorize(it) },
+            onDismiss = {
+                showMcpDialog = false
+                mcpEditorPrefill = null
+                viewModel.clearMcpAuthState()
+            },
             onSave = { config, scope ->
                 viewModel.upsertMcpServer(editingMcp?.server?.name, editingMcp?.scope, config, scope)
                 showMcpDialog = false
+                mcpEditorPrefill = null
             }
         )
     }
@@ -1486,13 +2154,16 @@ internal fun SettingsMenu(
                 title = stringResource(R.string.settings_theme_title),
                 onClick = onOpenThemeSheet,
                 trailing = {
-                    val colorLabel = if (dynamicColorEnabled && isDynamicColorSupported) {
+                    val modeLabel = stringResource(themeMode.labelRes)
+                    // 极黑模式下配色预设/莫奈被忽略，摘要只显示模式避免误导
+                    val text = if (themeMode == AppThemeMode.BLACK) modeLabel
+                    else "$modeLabel · " + if (dynamicColorEnabled) {
                         stringResource(R.string.theme_dynamic_color)
                     } else {
                         stringResource(AppThemePreset.findById(themePresetId).nameRes)
                     }
                     Text(
-                        text = "${stringResource(themeMode.labelRes)} · $colorLabel",
+                        text = text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.semanticColors.subtleText
                     )
@@ -1569,6 +2240,24 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
+                icon = FeatherIcons.Layers,
+                title = stringResource(SettingsSection.Teams.titleRes),
+                onClick = { onOpen(SettingsSection.Teams) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Package,
+                title = stringResource(SettingsSection.Store.titleRes),
+                onClick = { onOpen(SettingsSection.Store) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Command,
+                title = stringResource(SettingsSection.Plugins.titleRes),
+                onClick = { onOpen(SettingsSection.Plugins) }
+            )
+            SettingsDivider()
+            SettingsRow(
                 icon = FeatherIcons.Users,
                 title = stringResource(SettingsSection.SubAgents.titleRes),
                 onClick = { onOpen(SettingsSection.SubAgents) }
@@ -1579,6 +2268,30 @@ internal fun SettingsMenu(
                 title = stringResource(SettingsSection.Prompts.titleRes),
                 onClick = { onOpen(SettingsSection.Prompts) }
             )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.BookOpen,
+                title = stringResource(SettingsSection.Memory.titleRes),
+                onClick = { onOpen(SettingsSection.Memory) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Book,
+                title = stringResource(SettingsSection.Lorebook.titleRes),
+                onClick = { onOpen(SettingsSection.Lorebook) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.FileText,
+                title = stringResource(SettingsSection.KnowledgeBase.titleRes),
+                onClick = { onOpen(SettingsSection.KnowledgeBase) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Code,
+                title = stringResource(SettingsSection.Scripts.titleRes),
+                onClick = { onOpen(SettingsSection.Scripts) }
+            )
         }
 
         // ── 运行环境 ──
@@ -1588,6 +2301,18 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.HardDrive,
                 title = stringResource(SettingsSection.Container.titleRes),
                 onClick = { onOpen(SettingsSection.Container) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Tool,
+                title = stringResource(SettingsSection.DevEnvironments.titleRes),
+                onClick = { onOpen(SettingsSection.DevEnvironments) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Clock,
+                title = stringResource(SettingsSection.ScheduledTasks.titleRes),
+                onClick = { onOpen(SettingsSection.ScheduledTasks) }
             )
             SettingsDivider()
             SettingsRow(
@@ -1641,6 +2366,12 @@ internal fun SettingsMenu(
             )
             SettingsDivider()
             SettingsRow(
+                icon = FeatherIcons.Key,
+                title = stringResource(SettingsSection.DevKeys.titleRes),
+                onClick = { onOpen(SettingsSection.DevKeys) }
+            )
+            SettingsDivider()
+            SettingsRow(
                 icon = FeatherIcons.Save,
                 title = stringResource(SettingsSection.Backup.titleRes),
                 onClick = { onOpen(SettingsSection.Backup) }
@@ -1664,8 +2395,24 @@ internal fun SettingsMenu(
             SettingsDivider()
             SettingsRow(
                 icon = FeatherIcons.Zap,
-                title = stringResource(R.string.settings_rerun_onboarding),
-                onClick = onRerunOnboarding
+                title = stringResource(R.string.settings_onboarding),
+                trailing = {
+                    // 重跑动作收进行尾刷新按钮：整行不再「点击即重跑」，避免误触（用户 2026-10-15 反馈）。
+                    IconButton(onClick = onRerunOnboarding, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            FeatherIcons.RefreshCw,
+                            contentDescription = stringResource(R.string.settings_rerun_onboarding),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.MessageSquare,
+                title = stringResource(SettingsSection.Feedback.titleRes),
+                onClick = { onOpen(SettingsSection.Feedback) }
             )
             SettingsDivider()
             SettingsRow(

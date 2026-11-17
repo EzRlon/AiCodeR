@@ -98,8 +98,11 @@ class McpConfigRepository @Inject constructor(
      * 才由 [FileChangeHub] 监听两个配置文件所在目录，无人订阅时零开销。
      */
     val externalChanges: SharedFlow<Unit> = merge(
-        fileChangeHub.watchAicode(),
-        fileChangeHub.watchWorkspace("${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME")
+        fileChangeHub.watchAicode(pollIntervalMs = FileChangeHub.CONFIG_POLL_INTERVAL_MS),
+        fileChangeHub.watchWorkspace(
+            "${FileChangeHub.CONTAINER_ROOT}/$AICODE_DIR_NAME",
+            pollIntervalMs = FileChangeHub.CONFIG_POLL_INTERVAL_MS
+        )
     ).mapNotNull { batch ->
         val globalPath = globalFile.absolutePath
         val projectPath = projectFileForPath(workspaceRepository.currentPath()).absolutePath
@@ -233,6 +236,28 @@ class McpConfigRepository @Inject constructor(
         )
     }
 
+    fun serialize(servers: List<McpServerConfig>): String = McpJsonCodec.serialize(servers)
+
+    fun parse(raw: String): List<McpServerConfig> = McpJsonCodec.parse(raw)
+
+    /** 合并全局与项目配置：全局按序在前，项目项覆盖同名，顺序 = 全局序 + 项目新增项。 */
+    private fun merge(
+        global: List<McpServerConfig>,
+        project: List<McpServerConfig>
+    ): List<McpServerEntry> {
+        val byName = LinkedHashMap<String, McpServerEntry>()
+        global.forEach { byName[it.name] = McpServerEntry(it, McpScope.GLOBAL) }
+        project.forEach { byName[it.name] = McpServerEntry(it, McpScope.PROJECT) }
+        return byName.values.toList()
+    }
+}
+
+/** MCP 配置 JSON 的序列化/解析（纯函数，无实例依赖；从仓库类提取以便独立单测）。 */
+internal object McpJsonCodec {
+    private const val TAG = "McpJsonCodec"
+    private val JSON = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val PRETTY_JSON = Json { prettyPrint = true }
+
     fun serialize(servers: List<McpServerConfig>): String {
         val serversObj = buildJsonObject {
             servers.forEach { server ->
@@ -254,10 +279,23 @@ class McpConfigRepository @Inject constructor(
                                 server.headers.forEach { (key, value) -> put(key, value) }
                             }
                         }
+                        server.auth?.let { auth ->
+                            putJsonObject("auth") {
+                                put("type", auth.type)
+                                auth.clientId?.takeIf { it.isNotBlank() }?.let { put("clientId", it) }
+                                auth.authServer?.takeIf { it.isNotBlank() }?.let { put("authServer", it) }
+                                auth.scopes?.takeIf { it.isNotEmpty() }?.let { scopes ->
+                                    putJsonArray("scopes") { scopes.forEach { add(it) } }
+                                }
+                            }
+                        }
                     }
                     put("enabled", server.enabled)
                     if (server.disabledTools.isNotEmpty()) {
                         putJsonArray("disabledTools") { server.disabledTools.forEach { add(it) } }
+                    }
+                    if (server.enabledTools.isNotEmpty()) {
+                        putJsonArray("enabledTools") { server.enabledTools.forEach { add(it) } }
                     }
                 }
             }
@@ -284,6 +322,10 @@ class McpConfigRepository @Inject constructor(
                 (it as? JsonPrimitive)?.contentOrNull
             }?.toSet() ?: emptySet()
 
+            val enabledTools = (obj["enabledTools"] as? JsonArray)?.mapNotNull {
+                (it as? JsonPrimitive)?.contentOrNull
+            }?.toSet() ?: emptySet()
+
             when {
                 !command.isNullOrBlank() -> {
                     val args = (obj["args"] as? JsonArray)?.mapNotNull {
@@ -298,19 +340,30 @@ class McpConfigRepository @Inject constructor(
                         args = args,
                         env = env,
                         enabled = enabled,
-                        disabledTools = disabledTools
+                        disabledTools = disabledTools,
+                        enabledTools = enabledTools
                     )
                 }
                 !url.isNullOrBlank() -> {
                     val headers = (obj["headers"] as? JsonObject)?.mapNotNull { (k, v) ->
                         (v as? JsonPrimitive)?.contentOrNull?.let { k to it }
                     }?.toMap() ?: emptyMap()
+                    val auth = (obj["auth"] as? JsonObject)?.let { authObj ->
+                        McpAuthConfig(
+                            type = (authObj["type"] as? JsonPrimitive)?.contentOrNull ?: McpAuthConfig.TYPE_OAUTH,
+                            clientId = (authObj["clientId"] as? JsonPrimitive)?.contentOrNull,
+                            authServer = (authObj["authServer"] as? JsonPrimitive)?.contentOrNull,
+                            scopes = (authObj["scopes"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        )
+                    }
                     McpServerConfig(
                         name = name,
                         url = url,
                         headers = headers,
                         enabled = enabled,
-                        disabledTools = disabledTools
+                        disabledTools = disabledTools,
+                        enabledTools = enabledTools,
+                        auth = auth
                     )
                 }
                 else -> {
@@ -320,16 +373,5 @@ class McpConfigRepository @Inject constructor(
                 }
             }
         }
-    }
-
-    /** 合并全局与项目配置：全局按序在前，项目项覆盖同名，顺序 = 全局序 + 项目新增项。 */
-    private fun merge(
-        global: List<McpServerConfig>,
-        project: List<McpServerConfig>
-    ): List<McpServerEntry> {
-        val byName = LinkedHashMap<String, McpServerEntry>()
-        global.forEach { byName[it.name] = McpServerEntry(it, McpScope.GLOBAL) }
-        project.forEach { byName[it.name] = McpServerEntry(it, McpScope.PROJECT) }
-        return byName.values.toList()
     }
 }

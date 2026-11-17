@@ -1,0 +1,372 @@
+package com.aicode.feature.settings.presentation.component
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.aicode.R
+import com.aicode.core.theme.Radius
+import com.aicode.core.theme.Spacing
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.Box
+import compose.icons.feathericons.Code
+import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.Globe
+import compose.icons.feathericons.HardDrive
+import compose.icons.feathericons.PieChart
+import compose.icons.feathericons.Server
+import compose.icons.feathericons.Smartphone
+import compose.icons.feathericons.Terminal
+import compose.icons.feathericons.Tool
+import compose.icons.feathericons.Zap
+
+/**
+ * 开发环境一键搭建（场景目录）：用户选「想开发什么」，确认后新建会话并自动发入
+ * 搭建任务，由 AI 在当前执行环境（本地容器 apk / 远程发行版包管理器）安装工具链并验证。
+ *
+ * 目录是静态数据：新增场景只需加一条 [DevEnvScenario] 与对应字符串资源，无需改逻辑。
+ */
+internal data class DevEnvScenario(
+    val id: String,
+    val icon: ImageVector,
+    val nameRes: Int,
+    val descRes: Int,
+    /** 发给 AI 的完整搭建任务提示词。 */
+    val promptRes: Int,
+    /** 判断该环境是否已装好的探测命令（在容器内 sh 里执行，退出码 0 = 已装）；null = 无法探测。 */
+    val probeCmd: String? = null
+)
+
+/**
+ * 已安装探测：把各场景的探测命令拼成一段 sh 一次跑完（每场景一行 `id=0/1`），
+ * 避免逐个起进程。只有场景目录自己知道怎么判断「装好了」，所以探测命令定义在目录条目上。
+ */
+internal object DevEnvProbe {
+    fun buildScript(): String = devEnvGroups
+        .flatMap { it.scenarios }
+        .filter { it.probeCmd != null }
+        .joinToString("\n") { s ->
+            "if ${s.probeCmd} 2>/dev/null; then echo ${s.id}=1; else echo ${s.id}=0; fi"
+        }
+
+    fun parse(output: String): Set<String> = output
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.endsWith("=1") }
+        .map { it.removeSuffix("=1") }
+        .toSet()
+}
+
+/** 场景目录。顺序即展示顺序，按开发形态分组（group 是组标题资源）。 */
+private data class DevEnvGroup(val titleRes: Int, val scenarios: List<DevEnvScenario>)
+
+private val devEnvGroups: List<DevEnvGroup> = listOf(
+    DevEnvGroup(
+        R.string.dev_env_group_web,
+        listOf(
+            DevEnvScenario(
+                id = "static-web",
+                icon = FeatherIcons.Globe,
+                nameRes = R.string.dev_env_static_web,
+                descRes = R.string.dev_env_static_web_desc,
+                promptRes = R.string.dev_env_static_web_prompt,
+                // 静态网页不需要任何工具链：此前用 python3 代判，装了 Python 就会误标「已安装」。
+                probeCmd = null
+            ),
+            DevEnvScenario(
+                id = "frontend",
+                icon = FeatherIcons.Code,
+                nameRes = R.string.dev_env_frontend,
+                descRes = R.string.dev_env_frontend_desc,
+                promptRes = R.string.dev_env_frontend_prompt,
+                // 前端场景安装的是 Node + npm，且 Vite 等脚手架依赖 npx：三者齐全才算装好。
+                probeCmd = "command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && command -v npx >/dev/null 2>&1"
+            ),
+            DevEnvScenario(
+                id = "android",
+                icon = FeatherIcons.Smartphone,
+                nameRes = R.string.dev_env_android,
+                descRes = R.string.dev_env_android_desc,
+                promptRes = R.string.dev_env_android_prompt,
+                // 场景要求 JDK + Gradle + Android SDK 三者齐全：只装了 JDK，或只设了 ANDROID_HOME
+                // 变量（SDK 并未下载）都不算可用，不能误标「已安装」。
+                probeCmd = "command -v javac >/dev/null 2>&1 && " +
+                    "(command -v gradle >/dev/null 2>&1 || ls -d /opt/gradle-* >/dev/null 2>&1) && " +
+                    "([ -d \"\$ANDROID_HOME/platform-tools\" ] || [ -d \"\$HOME/Android/Sdk/platform-tools\" ] || " +
+                    "[ -d /opt/android-sdk/platform-tools ])"
+            )
+        )
+    ),
+    DevEnvGroup(
+        R.string.dev_env_group_backend,
+        listOf(
+            DevEnvScenario(
+                id = "python",
+                icon = FeatherIcons.Terminal,
+                nameRes = R.string.dev_env_python,
+                descRes = R.string.dev_env_python_desc,
+                promptRes = R.string.dev_env_python_prompt,
+                // 场景会一并安装 pip 与 venv；只有 python3 不够。
+                probeCmd = "command -v python3 >/dev/null 2>&1 && command -v pip3 >/dev/null 2>&1 && python3 -c \"import venv\" >/dev/null 2>&1"
+            ),
+            DevEnvScenario(
+                id = "node",
+                icon = FeatherIcons.Server,
+                nameRes = R.string.dev_env_node,
+                descRes = R.string.dev_env_node_desc,
+                promptRes = R.string.dev_env_node_prompt,
+                probeCmd = "command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1"
+            ),
+            DevEnvScenario(
+                id = "java",
+                icon = FeatherIcons.Box,
+                nameRes = R.string.dev_env_java,
+                descRes = R.string.dev_env_java_desc,
+                promptRes = R.string.dev_env_java_prompt,
+                probeCmd = "command -v javac >/dev/null 2>&1 && command -v java >/dev/null 2>&1"
+            ),
+            DevEnvScenario(
+                id = "go",
+                icon = FeatherIcons.Zap,
+                nameRes = R.string.dev_env_go,
+                descRes = R.string.dev_env_go_desc,
+                promptRes = R.string.dev_env_go_prompt,
+                probeCmd = "command -v go >/dev/null 2>&1 || [ -x /usr/local/go/bin/go ]"
+            ),
+            DevEnvScenario(
+                id = "rust",
+                icon = FeatherIcons.Cpu,
+                nameRes = R.string.dev_env_rust,
+                descRes = R.string.dev_env_rust_desc,
+                promptRes = R.string.dev_env_rust_prompt,
+                probeCmd = "command -v cargo >/dev/null 2>&1 || [ -x /root/.cargo/bin/cargo ]"
+            ),
+            DevEnvScenario(
+                id = "cpp",
+                icon = FeatherIcons.HardDrive,
+                nameRes = R.string.dev_env_cpp,
+                descRes = R.string.dev_env_cpp_desc,
+                promptRes = R.string.dev_env_cpp_prompt,
+                probeCmd = "command -v g++ >/dev/null 2>&1"
+            )
+        )
+    ),
+    DevEnvGroup(
+        R.string.dev_env_group_data,
+        listOf(
+            DevEnvScenario(
+                id = "datasci",
+                icon = FeatherIcons.PieChart,
+                nameRes = R.string.dev_env_datasci,
+                descRes = R.string.dev_env_datasci_desc,
+                promptRes = R.string.dev_env_datasci_prompt,
+                probeCmd = "python3 -c \"import numpy, pandas\" >/dev/null 2>&1"
+            )
+        )
+    )
+)
+
+@Composable
+internal fun DevEnvironmentsSection(
+    /** 当前活动容器的显示名（如「内置 Alpine」「Debian 12」），仅用于提示词上下文。 */
+    containerName: String = "",
+    /** 已检测到的容器系统类型（`/etc/os-release` 的 ID，如 alpine/debian/ubuntu）；null = 尚未检测。 */
+    containerOsId: String? = null,
+    /** 已安装的场景 id 集合（容器内探测 toolchain 得出），空集合 = 尚未探测或都未安装。 */
+    installedIds: Set<String> = emptySet(),
+    onLaunch: (title: String, prompt: String) -> Unit
+) {
+    var pendingScenario by remember { mutableStateOf<DevEnvScenario?>(null) }
+
+    // 把「当前实际容器」作为已知信息附在任务前面，避免 AI 沿用默认假设（如一律当 Alpine 用 apk）；
+    // 仍然要求它自己复核 /etc/os-release，因为用户可能在任务开始前切换了容器。
+    // 容器从未运行过时 osId 为空，此时不说「未检测」这种吓人的话，只交代容器名并让 AI 自己探测。
+    val environmentPrefix = remember(containerName, containerOsId) {
+        buildString {
+            append("【当前执行环境】")
+            if (containerName.isNotBlank()) append("容器：").append(containerName).append("；")
+            if (containerOsId != null) append("已探测系统类型：").append(containerOsId).append("；")
+            append("请先执行 cat /etc/os-release 与 command -v apk apt-get dnf yum pacman 确认发行版与包管理器，")
+            append("再按实际情况安装，不要凭默认假设（例如假定一定是 Alpine）。\n\n")
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            item(key = "intro") {
+                Surface(
+                    shape = RoundedCornerShape(Radius.mdLarge),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(Spacing.md),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            FeatherIcons.Tool,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = stringResource(R.string.dev_env_intro),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            devEnvGroups.forEach { group ->
+                item(key = "group-${group.titleRes}") {
+                    Text(
+                        text = stringResource(group.titleRes),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = Spacing.sm)
+                    )
+                }
+                items(group.scenarios, key = { it.id }) { scenario ->
+                    DevEnvCard(
+                        scenario = scenario,
+                        installed = scenario.id in installedIds,
+                        onClick = { pendingScenario = scenario }
+                    )
+                }
+            }
+        }
+    }
+
+    pendingScenario?.let { scenario ->
+        val scenarioTitle = stringResource(scenario.nameRes)
+        val scenarioPrompt = stringResource(scenario.promptRes)
+        AlertDialog(
+            onDismissRequest = { pendingScenario = null },
+            title = { Text(stringResource(scenario.nameRes)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.dev_env_confirm_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                    Text(
+                        text = stringResource(scenario.descRes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingScenario = null
+                    onLaunch(scenarioTitle, environmentPrefix + scenarioPrompt)
+                }) {
+                    Text(stringResource(R.string.dev_env_confirm_action))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingScenario = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun DevEnvCard(
+    scenario: DevEnvScenario,
+    installed: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(Radius.mdLarge),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = RoundedCornerShape(Radius.md),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            ) {
+                Icon(
+                    scenario.icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .size(20.dp)
+                )
+            }
+            Spacer(Modifier.width(Spacing.md))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(scenario.nameRes),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (installed) {
+                    Spacer(Modifier.height(4.dp))
+                    Surface(shape = RoundedCornerShape(Radius.pill), color = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(
+                            text = stringResource(R.string.dev_env_installed),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = stringResource(scenario.descRes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}

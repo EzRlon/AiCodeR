@@ -8,9 +8,10 @@
 # 由 App 启动时提取到 ~/.aicode/provision.sh（容器内 /root/.aicode/provision.sh，经 -b 绑定可见）；
 # 公共能力（包管理器探测/包名映射/版本探测/换源/场景）在 lib/env-common.sh，与本脚本一并提取。
 # 修改包清单/安装逻辑/镜像源后，需同步在 LinuxContainerEngine.PROVISION_VERSION 上 +1 触发存量设备重跑。
-# 注意：apk 源分支 v3.21 需与 assets 内 alpine-rootfs 版本（ContainerInstaller.INSTALL_VERSION）保持一致。
+# 注意：apk 源分支 v3.21 需与 assets 内 alpine-rootfs 的 Alpine 分支一致（见 ContainerInstaller.ROOTFS_ASSET_VERSION）。
+# 不用 ContainerInstaller.INSTALL_VERSION 对照：那是「是否需要重装」的标记，刻意与 assets 的 Alpine 版本解耦。
 
-PROVISION_VERSION="provision-script-v9"
+PROVISION_VERSION="provision-script-v12"
 PROVISION_SKIPPED="provision-script-skipped"
 MARKER="/.provisioned"
 
@@ -27,6 +28,8 @@ if [ ! -f "$LIB_FILE" ]; then
 fi
 if [ ! -f "$LIB_FILE" ]; then
     echo "环境工具未就绪，请重启 App 后重新进入终端" >&2
+    # --install 是 App 工作台入口，需以非零码显式失败（否则 App 误判安装成功）
+    [ "$1" = "--install" ] && exit 3
     exit 0
 fi
 . "$LIB_FILE"
@@ -116,6 +119,26 @@ env_install_menu() {
         fi
     done
 }
+
+# ══ App 工作台调用入口：provision.sh --install <场景id> → 非交互直接安装单个场景（如 App「程序分析」工作台一键安装）══
+#    仅适用于安装流程本身无交互输入的场景；进度打印到 stdout（供终端/日志排查；App 侧当前仅取退出码）；失败返回非零。
+if [ "$1" = "--install" ]; then
+    scenario_id="$2"
+    if [ -z "$scenario_id" ]; then
+        echo "用法：provision.sh --install <场景id>" >&2
+        exit 2
+    fi
+    plog "App 调用：非交互安装场景 $scenario_id"
+    install_scenario "$scenario_id"
+    rc=$?
+    if [ "$rc" = "0" ]; then
+        echo ""
+        echo "${C_GREEN}✓ 场景安装完成：$(scenario_name "$scenario_id")${C_RESET}"
+    else
+        echo "${C_RED}场景安装未完成（exit=$rc），可在终端手动重试：aicode${C_RESET}"
+    fi
+    exit $rc
+fi
 
 # ══ 入口 2：`aicode`（provision.sh --env）→ 直接打开环境安装菜单，不受初始化标记影响 ══
 if [ "$1" = "--env" ]; then

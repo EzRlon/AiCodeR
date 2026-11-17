@@ -3,8 +3,11 @@ package com.aicode.feature.agent.domain.session
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.local.dao.AgentMessageDao
 import com.aicode.feature.agent.data.local.dao.ChatSessionDao
+import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
+import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
+import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.model.ReasoningEffort
 import com.aicode.feature.agent.presentation.MessageRole
 import java.util.UUID
@@ -14,7 +17,9 @@ import javax.inject.Singleton
 @Singleton
 class SessionUseCase @Inject constructor(
     private val chatSessionDao: ChatSessionDao,
-    private val agentMessageDao: AgentMessageDao
+    private val agentMessageDao: AgentMessageDao,
+    private val todoItemDao: TodoItemDao,
+    private val llmCallRecordDao: LlmCallRecordDao
 ) {
     companion object {
         private const val TAG = "SessionUseCase"
@@ -26,6 +31,8 @@ class SessionUseCase @Inject constructor(
         /** 历史版本停止 emoji 前缀；UI 剥离结果文本时兼容。 */
         const val LEGACY_STOPPED_TOOL_MARKER = "\u23F9"
         const val INTERRUPTED_TOOL_TEXT = "执行被中断（应用已关闭）"
+        /** LLM 用量记录的保留天数（仅用于统计，过期即删）。 */
+        const val LLM_RECORD_RETENTION_DAYS = 90L
     }
 
     /** 冷启动收尾：上次进程被杀时若有工具正在执行，其占位行会永久显示「执行中」。 */
@@ -40,13 +47,20 @@ class SessionUseCase @Inject constructor(
             }
             if (n > 0) FileLogger.i(TAG, "冷启动收尾 $n 条残留「执行中」工具行为已中断")
         }.onFailure { FileLogger.e(TAG, "回收残留执行中工具行失败", it) }
+        // 用量记录只保留近 [LLM_RECORD_RETENTION_DAYS] 天：该表只增不删，长用下去会持续膨胀
+        // （单行小，但每次 LLM 调用都一行）。历史统计窗口取 90 天已足够看趋势。
+        runCatching {
+            val cutoff = System.currentTimeMillis() - LLM_RECORD_RETENTION_DAYS * 24L * 60 * 60 * 1000
+            llmCallRecordDao.deleteBefore(cutoff)
+        }.onFailure { FileLogger.w(TAG, "清理过期用量记录失败", it) }
     }
 
     fun newSessionEntity(
         workspacePath: String,
         providerId: String? = null,
         model: String? = null,
-        reasoningEffort: String = ReasoningEffort.MEDIUM.name
+        reasoningEffort: String = ReasoningEffort.MEDIUM.name,
+        engine: String? = null
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         return ChatSessionEntity(
@@ -57,7 +71,8 @@ class SessionUseCase @Inject constructor(
             updatedAt = now,
             providerId = providerId,
             model = model,
-            reasoningEffort = reasoningEffort
+            reasoningEffort = reasoningEffort,
+            engine = engine
         )
     }
 
@@ -67,25 +82,78 @@ class SessionUseCase @Inject constructor(
         else clean.take(TITLE_MAX) + "…"
     }
 
-    /** 删除会话及其全部子代理会话（消息 + 会话记录一并删除）。返回被删除的会话 id 列表。 */
-    suspend fun deleteSession(id: String): List<String> {
-        val deleted = mutableListOf(id)
-        // 递归收集子会话（v1 仅一层，循环即可）
-        chatSessionDao.getSubSessionsByParentOnce(id).forEach { child ->
-            agentMessageDao.deleteBySession(child.id)
-            chatSessionDao.delete(child.id)
-            deleted.add(child.id)
+    /**
+     * 收集会话及其全部子代理会话 id（含自身）。
+     *
+     * 逐层下钻：工具层已禁止子代理嵌套，正常只有一层，这里防御性下钻，保证历史/异常数据里
+     * 更深的层级也不会残留成孤儿。用「含回收站」的子会话查询——整组一起软删/恢复/清除，
+     * 若按可见性过滤就会漏掉已软删的子会话。
+     */
+    private suspend fun collectSessionGroup(id: String): List<String> {
+        val ids = mutableListOf(id)
+        val queue = ArrayDeque(listOf(id))
+        while (queue.isNotEmpty()) {
+            chatSessionDao.getSubSessionsByParentOnceIncludingTrashed(queue.removeFirst()).forEach { child ->
+                ids.add(child.id)
+                queue.addLast(child.id)
+            }
         }
-        agentMessageDao.deleteBySession(id)
-        chatSessionDao.delete(id)
-        return deleted
+        return ids
+    }
+
+    /**
+     * 删除会话 = 入回收站（软删整组）：只给会话行打 `deletedAt`，消息、检查点、日志全部保留，
+     * 供恢复期内完整恢复。返回该组会话 id（调用方据此清内存态；**不要**清检查点，否则恢复不完整）。
+     */
+    suspend fun deleteSession(id: String): List<String> {
+        val ids = collectSessionGroup(id)
+        chatSessionDao.markDeleted(ids, System.currentTimeMillis())
+        return ids
+    }
+
+    /** 从回收站恢复整组会话（父会话与子代理会话一起回到列表）。 */
+    suspend fun restoreSession(id: String): List<String> {
+        val ids = collectSessionGroup(id)
+        chatSessionDao.restoreFromTrash(ids)
+        return ids
+    }
+
+    /**
+     * 彻底删除整组会话：会话行 + 消息 + 待办。检查点由调用方清理（`CheckpointManager` 同时删库与快照文件）。
+     * 不动 `llm_call_records` / `permission_audit`：二者是用量与授权审计记录，按会话删会破坏历史统计，且本身有界。
+     */
+    suspend fun purgeSession(id: String): List<String> {
+        val ids = collectSessionGroup(id)
+        ids.forEach { sessionId ->
+            agentMessageDao.deleteBySession(sessionId)
+            todoItemDao.deleteBySession(sessionId)
+        }
+        chatSessionDao.deleteByIds(ids)
+        return ids
+    }
+
+    /** 清理逾期的回收站会话（`deletedAt <= threshold`）；返回被彻底删除的会话 id 列表。 */
+    suspend fun purgeExpiredTrash(threshold: Long): List<String> {
+        val expired = chatSessionDao.getExpiredTrashed(threshold)
+        return expired.flatMap { purgeSession(it.id) }
+    }
+
+    /** 清空某工作区的回收站；返回被彻底删除的会话 id 列表。 */
+    suspend fun purgeTrashOfWorkspace(workspacePath: String): List<String> {
+        val trashed = chatSessionDao.getTrashedSessionsByWorkspaceOnce(workspacePath)
+        return trashed.flatMap { purgeSession(it.id) }
     }
 
     /** 删除某工作区下的全部会话（含子代理会话）及其消息，返回删除的会话数。 */
     suspend fun deleteSessionsByWorkspace(workspacePath: String): Int {
-        val sessions = chatSessionDao.getAllSessionsByWorkspaceOnce(workspacePath)
+        // 必须含回收站：deleteByWorkspace 是不带过滤的整表删，若只遍历可见会话，
+        // 软删会话的消息会变成永远无人清理的孤儿。
+        val sessions = chatSessionDao.getAllSessionsByWorkspaceOnceIncludingTrashed(workspacePath)
         if (sessions.isEmpty()) return 0
-        sessions.forEach { session -> agentMessageDao.deleteBySession(session.id) }
+        sessions.forEach { session ->
+            agentMessageDao.deleteBySession(session.id)
+            todoItemDao.deleteBySession(session.id)
+        }
         chatSessionDao.deleteByWorkspace(workspacePath)
         return sessions.size
     }
@@ -99,12 +167,18 @@ class SessionUseCase @Inject constructor(
         return chatSessionDao.getLatestRootSessionByWorkspace(workspacePath)
     }
 
+    /** 工作区下可复用的空会话（从未发送过消息的根会话，取最近更新的一个），供「新建会话」直接切过去。 */
+    suspend fun getEmptySessionOfWorkspace(workspacePath: String): ChatSessionEntity? {
+        return chatSessionDao.getEmptyRootSessionByWorkspace(workspacePath)
+    }
+
     /** 回收工作区下多余的空会话（从未发送过消息），保留 [keepId]；保证列表最多一个空会话。 */
     suspend fun recycleEmptySessions(workspacePath: String, keepId: String? = null): Int {
         var count = 0
         chatSessionDao.getRootSessionsByWorkspaceOnce(workspacePath).forEach { session ->
             if (session.id != keepId && !agentMessageDao.hasMessages(session.id)) {
-                deleteSession(session.id)
+                // 空会话直接彻底删除：进回收站只会堆一堆没有内容的条目
+                purgeSession(session.id)
                 count++
             }
         }
@@ -115,11 +189,12 @@ class SessionUseCase @Inject constructor(
      * 创建子代理会话，继承父会话的 provider/model/reasoningEffort/workspacePath。
      * @param title 子会话标题（由 task 描述派生）
      * @param parentId 父会话 id
+     * @param id 子会话 id；外部引擎桥接在派发时先生成，保证「派发/结束」两个事件能对上，默认随机生成
      * @param subagentType 子代理类型 id（自定义 agent 名，或默认通用子代理标识）
      * @param providerId 覆盖 provider；null 表示继承父会话
      * @param model 覆盖模型；null 表示继承父会话
      * @param reasoningEffort 覆盖思考强度；null 表示继承父会话
-     * @param mode 覆盖运行模式；null 表示继承父会话
+     * @param mode 覆盖运行模式；null 表示继承父会话（只能往更严的方向收，不能放大，见 [resolveChildMode]）
      */
     fun newSubSessionEntity(
         title: String,
@@ -129,25 +204,37 @@ class SessionUseCase @Inject constructor(
         providerId: String? = null,
         model: String? = null,
         reasoningEffort: String? = null,
-        mode: AgentMode? = null
+        mode: AgentMode? = null,
+        id: String = UUID.randomUUID().toString()
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         return ChatSessionEntity(
-            id = UUID.randomUUID().toString(),
+            id = id,
             title = title,
             workspacePath = parent.workspacePath,
             createdAt = now,
             updatedAt = now,
             // 默认继承父会话 mode：权限引擎按会话 mode 判定写拦截，默认 BUILD 会让 PLAN
             // 模式下派出的子代理绕过只读限制，反过来 AUTO 模式的子代理又会弹授权窗打扰用户。
-            // 自定义子代理可用定义的 mode 覆盖该默认值。
-            mode = mode?.name ?: parent.mode,
+            // 自定义子代理定义的 mode 只能往更严的方向收，不能放大（见 [resolveChildMode]）。
+            mode = resolveChildMode(mode, parent.mode),
             providerId = providerId ?: parent.providerId,
             model = model ?: parent.model,
             reasoningEffort = reasoningEffort ?: parent.reasoningEffort,
             parentId = parentId,
             subagentType = subagentType
         )
+    }
+
+    /**
+     * 子会话实际生效的模式：默认继承父会话；自定义子代理定义可覆盖，但只能更严、不能更宽。
+     *
+     * 若允许放大，PLAN 下派一个 `mode: build` 的子代理就能直接改文件——这正是把「子代理不继承父权限」
+     * 列为安全漏洞的原因。父会话 mode 值异常时按原值处理，不静默提权。
+     */
+    internal fun resolveChildMode(requested: AgentMode?, parentMode: String): String {
+        val parent = runCatching { AgentMode.valueOf(parentMode) }.getOrNull() ?: return parentMode
+        return (requested ?: parent).limitedBy(parent).name
     }
 
     suspend fun upsertSession(entity: ChatSessionEntity) {
@@ -187,8 +274,40 @@ class SessionUseCase @Inject constructor(
         chatSessionDao.updateProviderModel(sessionId, providerId, model)
     }
 
+    suspend fun updateEngine(sessionId: String, engine: String?) {
+        chatSessionDao.updateEngine(sessionId, engine)
+    }
+
+    suspend fun updateEngineMode(sessionId: String, engineMode: String?) {
+        chatSessionDao.updateEngineMode(sessionId, engineMode)
+    }
+
     suspend fun updateReasoningEffort(sessionId: String, effort: String) {
         chatSessionDao.updateReasoningEffort(sessionId, effort)
+    }
+
+    suspend fun updateTeamName(sessionId: String, teamName: String?) {
+        chatSessionDao.updateTeamName(sessionId, teamName)
+    }
+    /**
+     * 设定/覆盖会话 goal：重置轮次计数，并记录当前累计 token 作为消耗基线，状态置 ACTIVE。
+     * [goal] 为 null/空白则清除目标。
+     */
+    suspend fun setGoal(sessionId: String, goal: String?, startInputTokens: Int, startOutputTokens: Int) {
+        val trimmed = goal?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed == null) {
+            chatSessionDao.updateGoal(sessionId, null, null, 0, 0)
+        } else {
+            chatSessionDao.updateGoal(sessionId, trimmed, GoalStatus.ACTIVE.name, startInputTokens, startOutputTokens)
+        }
+    }
+
+    suspend fun updateGoalStatus(sessionId: String, status: GoalStatus?) {
+        chatSessionDao.updateGoalStatus(sessionId, status?.name)
+    }
+
+    suspend fun incrementGoalTurn(sessionId: String) {
+        chatSessionDao.incrementGoalTurn(sessionId)
     }
 
     suspend fun isSessionEmpty(sessionId: String): Boolean {

@@ -1,14 +1,20 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsDivider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,7 +65,8 @@ import com.aicode.feature.agent.data.local.dao.ModelCallStats
 import com.aicode.feature.agent.data.local.dao.ProviderCallStats
 import com.aicode.feature.agent.data.local.dao.RecentCallRecord
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
-import com.aicode.feature.agent.presentation.component.formatTokenCount
+import com.aicode.feature.agent.domain.engine.AgentEngines
+import com.aicode.core.ui.markdown.formatTokenCount
 import com.aicode.feature.settings.presentation.TokenStatsPeriod
 import com.aicode.feature.settings.presentation.TokenStatsUiState
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
@@ -77,6 +85,7 @@ import com.patrykandpatrick.vico.core.common.Fill
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
+import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.X
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -86,10 +95,10 @@ import kotlin.math.min
 private val INPUT_COLOR = TokenStatsPalette.Input
 private val OUTPUT_COLOR = TokenStatsPalette.Output
 private val CACHE_COLOR = TokenStatsPalette.Cache
+private val CACHE_WRITE_COLOR = TokenStatsPalette.CacheWrite
 private val ERROR_COLOR = TokenStatsPalette.Error
 private val CANCELLED_COLOR = TokenStatsPalette.Cancelled
-private val SUCCESS_COLOR = Color(0xFF2E7D32)
-private val WARNING_COLOR = Color(0xFFE65100)
+// 成功率色改走语义 token（深浅主题各自变体；原先固定 700 系在深色下偏暗难辨）
 
 private const val STATS_PAGE_SIZE = 5
 private const val CALLS_PAGE_SIZE = 10
@@ -160,43 +169,12 @@ internal fun TokenStatsSection(
             )
         }
 
-        // ── 概览卡片（无数据时保留占位，值显示 -）──
+        // ── 概览卡：总量 + 费用 + token 构成（新增/缓存/输出）+ 关键指标标签 ──
         item(key = "summary_cards") {
-            val summary = state.summary
-            val hasData = summary != null && summary.calls > 0
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    SummaryCard(
-                        label = stringResource(R.string.settings_token_stats_total),
-                        value = if (hasData) formatTokenCount(summary.inputTokens + summary.outputTokens) else "-",
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryCard(
-                        label = stringResource(R.string.settings_token_stats_requests),
-                        value = if (hasData) summary.calls.toString() else "-",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    SummaryCard(
-                        label = stringResource(R.string.settings_token_stats_cost),
-                        value = formatCostUsd(state.totalCostUsd),
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryCard(
-                        label = stringResource(R.string.settings_token_stats_cache_hit_rate),
-                        value = if (hasData) formatCacheHitRate(summary) else "-",
-                        sub = if (hasData) formatCache(context, summary.cachedInputTokens, summary.cacheCreationTokens) else null,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
+            TokenOverviewCard(
+                summary = state.summary,
+                costUsd = state.totalCostUsd
+            )
         }
 
         // ── 趋势图（无数据或仅单点时整块不渲染，避免 Vico 空 series / 单点 xStep 异常）──
@@ -215,11 +193,11 @@ internal fun TokenStatsSection(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = Spacing.lg, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.md)
                         ) {
-                            LegendDot(INPUT_COLOR, stringResource(R.string.settings_token_stats_legend_input))
+                            LegendDot(INPUT_COLOR, stringResource(R.string.settings_token_stats_fresh_input))
+                            LegendDot(CACHE_COLOR, stringResource(R.string.settings_token_stats_col_cached_read))
                             LegendDot(OUTPUT_COLOR, stringResource(R.string.settings_token_stats_legend_output))
-                            LegendDot(CACHE_COLOR, stringResource(R.string.settings_token_stats_legend_cached))
                         }
                     }
                 }
@@ -509,39 +487,166 @@ private fun TokenStatsFilterBar(
     }
 }
 
+/**
+ * 概览卡：把「总量/费用/构成/关键指标」压进一张卡，而不是四张并列小卡。
+ *
+ * 手机上四宫格每格只有两三个字，越看越像仪表盘噪声；改为一张卡后，
+ * 用户先看到总量与费用，再顺着构成条理解「钱花在哪」——缓存命中占比通常最大。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SummaryCard(label: String, value: String, sub: String? = null, modifier: Modifier = Modifier) {
+private fun TokenOverviewCard(summary: CallSummary?, costUsd: Double?) {
+    val hasData = summary != null && summary.calls > 0
     Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.semanticColors.cardSurface
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.semanticColors.cardSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 12.dp)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (sub != null) {
-                Spacer(Modifier.height(2.dp))
+        Column(modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.settings_token_stats_total),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = if (hasData) formatTokenCount(summary.inputTokens + summary.outputTokens) else "-",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = stringResource(R.string.settings_token_stats_cost),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = formatCostUsd(costUsd ?: 0.0),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(Spacing.md))
+            if (!hasData) {
                 Text(
-                    text = sub,
-                    style = MaterialTheme.typography.bodySmall,
+                    text = stringResource(R.string.settings_token_stats_no_data),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    modifier = Modifier.padding(vertical = Spacing.sm)
                 )
-            } else {
-                // 无副文本时占位，保持四张卡片等高
-                Spacer(Modifier.height(2.dp + 16.dp))
+                return@Column
+            }
+
+            val fresh = (summary.inputTokens - summary.cachedInputTokens - summary.cacheCreationTokens).coerceAtLeast(0)
+            TokenCompositionBar(
+                fresh = fresh,
+                cached = summary.cachedInputTokens,
+                creation = summary.cacheCreationTokens,
+                output = summary.outputTokens
+            )
+            Spacer(Modifier.height(Spacing.sm))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                CompositionLegend(INPUT_COLOR, stringResource(R.string.settings_token_stats_fresh_input), fresh)
+                CompositionLegend(CACHE_COLOR, stringResource(R.string.settings_token_stats_col_cached_read), summary.cachedInputTokens)
+                if (summary.cacheCreationTokens > 0) {
+                    CompositionLegend(CACHE_WRITE_COLOR, stringResource(R.string.settings_token_stats_col_cached_write), summary.cacheCreationTokens)
+                }
+                CompositionLegend(OUTPUT_COLOR, stringResource(R.string.settings_token_stats_legend_output), summary.outputTokens)
+            }
+            Spacer(Modifier.height(Spacing.sm))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                InfoTag(stringResource(R.string.settings_token_stats_calls_suffix2, summary.calls))
+                InfoTag(stringResource(R.string.settings_token_stats_success_rate, formatSuccessRate(summary)))
+                InfoTag(
+                    stringResource(
+                        R.string.settings_token_stats_cache_hit_tag,
+                        formatCacheHitRate(summary)
+                    )
+                )
             }
         }
+    }
+}
+
+/** 堆叠条：新增输入 / 缓存读取 / 缓存写入 / 输出。宽度按占比分配。 */
+@Composable
+private fun TokenCompositionBar(
+    fresh: Long,
+    cached: Long,
+    creation: Long,
+    output: Long,
+    height: Dp = 8.dp
+) {
+    val segments = listOf(
+        fresh to INPUT_COLOR,
+        cached to CACHE_COLOR,
+        creation to CACHE_WRITE_COLOR,
+        output to OUTPUT_COLOR
+    ).filter { it.first > 0 }
+    if (segments.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .clip(RoundedCornerShape(999.dp))
+    ) {
+        segments.forEach { (value, color) ->
+            Box(
+                modifier = Modifier
+                    .weight(value.toFloat())
+                    .fillMaxHeight()
+                    .background(color)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompositionLegend(color: Color, label: String, value: Long) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = "$label ${formatTokenCount(value)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 轻量标签：比纯文字更易扫读，又不像按钮那样抢注意力。 */
+@Composable
+private fun InfoTag(text: String) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+        )
     }
 }
 
@@ -573,10 +678,12 @@ private fun TokenTrendChart(trend: List<DayCallStats>, isHourly: Boolean) {
     LaunchedEffect(trend) {
         modelProducer.runTransaction {
             val x = trend.map { it.day.toDouble() }
+            // 三条线互斥：缓存是输入的子集，若直接画「输入总量 + 缓存」会重叠误导。
+            val fresh = trend.map { (it.inputTokens - it.cachedInputTokens - it.cacheCreationTokens).coerceAtLeast(0) }
             lineSeries {
-                series(x = x, y = trend.map { it.inputTokens })
-                series(x = x, y = trend.map { it.outputTokens })
+                series(x = x, y = fresh)
                 series(x = x, y = trend.map { it.cachedInputTokens })
+                series(x = x, y = trend.map { it.outputTokens })
             }
         }
     }
@@ -585,8 +692,8 @@ private fun TokenTrendChart(trend: List<DayCallStats>, isHourly: Boolean) {
             rememberLineCartesianLayer(
                 lineProvider = LineCartesianLayer.LineProvider.series(
                     trendLine(INPUT_COLOR),
-                    trendLine(OUTPUT_COLOR),
-                    trendLine(CACHE_COLOR)
+                    trendLine(CACHE_COLOR),
+                    trendLine(OUTPUT_COLOR)
                 )
             ),
             startAxis = VerticalAxis.rememberStart(
@@ -655,6 +762,7 @@ private fun LegendDot(color: Color, label: String) {
  * 整合参考图的请求量、成功率、凭证数量与进度条视觉层级，
  * 隐藏重试展示，支持点击直接联动筛选该渠道。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ProviderStatsRow(
     p: ProviderCallStats,
@@ -664,7 +772,6 @@ private fun ProviderStatsRow(
 ) {
     val successRateFloat = if (p.calls > 0) (p.calls - p.errors).toFloat() / p.calls else 0f
     val successRatePercent = String.format(Locale.getDefault(), "%.1f%%", successRateFloat * 100f)
-    val successColor = if (successRateFloat >= 0.95f) SUCCESS_COLOR else WARNING_COLOR
 
     val backgroundColor = if (isSelected) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
@@ -685,7 +792,8 @@ private fun ProviderStatsRow(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = p.providerName ?: p.providerId ?: stringResource(R.string.settings_token_stats_unknown),
+                text = p.providerName ?: AgentEngines.displayName(p.providerId) ?: p.providerId
+                    ?: stringResource(R.string.settings_token_stats_unknown),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -708,53 +816,53 @@ private fun ProviderStatsRow(
             }
         }
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
 
-        // 第二行：凭证数量 + 成功率百分比 + Token 消耗
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        // 第二行：分类标签（内置/引擎桥接）+ 凭证数 + 成功率 + 缓存命中率
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            if (keyCount != null && keyCount > 0) {
-                Text(
-                    text = stringResource(R.string.settings_token_stats_provider_keys, keyCount),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            InfoTag(
+                stringResource(
+                    if (AgentEngines.displayName(p.providerId) != null) {
+                        R.string.settings_token_stats_source_engine
+                    } else {
+                        R.string.settings_token_stats_source_builtin
+                    }
                 )
-                Spacer(Modifier.width(Spacing.sm))
+            )
+            if (keyCount != null && keyCount > 0) {
+                InfoTag(stringResource(R.string.settings_token_stats_provider_keys, keyCount))
             }
-            Text(
-                text = successRatePercent,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = successColor
-            )
-
-            Spacer(Modifier.weight(1f))
-
-            Text(
-                text = "↑${formatTokenCount(p.inputTokens)} ↓${formatTokenCount(p.outputTokens)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            InfoTag(stringResource(R.string.settings_token_stats_success_tag, successRatePercent))
+            if (p.inputTokens > 0) {
+                InfoTag(
+                    stringResource(
+                        R.string.settings_token_stats_cache_hit_tag,
+                        String.format(Locale.getDefault(), "%.0f%%", (p.cachedInputTokens * 100.0 / p.inputTokens).coerceAtMost(100.0))
+                    )
+                )
+            }
         }
 
         Spacer(Modifier.height(8.dp))
 
-        // 第三行：成功率细条进度条
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.semanticColors.subtleBorder)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(fraction = successRateFloat.coerceIn(0f, 1f))
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(successColor)
+        // 第三行：token 构成条（新增 / 缓存 / 输出），比单一成功率条更能解释消耗
+        TokenCompositionBar(
+            fresh = (p.inputTokens - p.cachedInputTokens - p.cacheCreationTokens).coerceAtLeast(0),
+            cached = p.cachedInputTokens,
+            creation = p.cacheCreationTokens,
+            output = p.outputTokens,
+            height = 6.dp
+        )
+        if (p.errors > 0) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.settings_token_stats_errors_tag, p.errors),
+                style = MaterialTheme.typography.labelSmall,
+                color = ERROR_COLOR
             )
         }
     }
@@ -764,6 +872,7 @@ private fun ProviderStatsRow(
  * 模型统计行：
  * 隐藏重试芯片，展示调用次数与成功率，支持点击直接联动筛选该模型。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ModelStatsRow(
     m: ModelCallStats,
@@ -806,38 +915,32 @@ private fun ModelStatsRow(
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-            StatChip(stringResource(R.string.settings_token_stats_calls_suffix2, m.calls))
-            StatChip(stringResource(R.string.settings_token_stats_success_rate, successRate))
+        Spacer(Modifier.height(6.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            InfoTag(stringResource(R.string.settings_token_stats_calls_suffix2, m.calls))
+            InfoTag(stringResource(R.string.settings_token_stats_success_tag, successRate))
+            if (m.inputTokens > 0) {
+                InfoTag(
+                    stringResource(
+                        R.string.settings_token_stats_cache_hit_tag,
+                        String.format(Locale.getDefault(), "%.0f%%", (m.cachedInputTokens * 100.0 / m.inputTokens).coerceAtMost(100.0))
+                    )
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
-        // 消耗占比进度条（输入 + 输出两段）
-        Row(modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .weight((m.inputTokens + 1f).toFloat())
-                    .height(6.dp)
-                    .background(INPUT_COLOR, RoundedCornerShape(3.dp))
-            )
-            Spacer(Modifier.width(2.dp))
-            Box(
-                modifier = Modifier
-                    .weight((m.outputTokens + 1f).toFloat())
-                    .height(6.dp)
-                    .background(OUTPUT_COLOR, RoundedCornerShape(3.dp))
-            )
-        }
+        // token 构成条（新增输入 / 缓存读取 / 缓存写入 / 输出）
+        TokenCompositionBar(
+            fresh = (m.inputTokens - m.cachedInputTokens - m.cacheCreationTokens).coerceAtLeast(0),
+            cached = m.cachedInputTokens,
+            creation = m.cacheCreationTokens,
+            output = m.outputTokens,
+            height = 6.dp
+        )
     }
-}
-
-@Composable
-private fun StatChip(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
 }
 
 @Composable
@@ -870,15 +973,12 @@ private fun StatsPaginationBar(
     }
 }
 
-private val COL_MODEL_W = 150.dp
-private val COL_PROVIDER_W = 100.dp
-private val COL_TIME_W = 120.dp
-private val COL_STATUS_W = 70.dp
-private val COL_TOKENS_W = 60.dp
-private val COL_DURATION_W = 62.dp
-private val COL_EFFORT_W = 72.dp
-private val COL_COST_W = 80.dp
-
+/**
+ * 调用明细：手机竖屏放不下 13 列表格，改成「一行一次调用」的可展开卡片。
+ *
+ * 第一屏只给最常看的四件事：什么时候、哪个渠道、花了多少 token、多少钱；
+ * 缓存读/写、首字节、耗时、重试、思考强度收进展开态，避免默认视图被数字淹没。
+ */
 @Composable
 private fun CallRecordsTable(
     calls: List<RecentCallRecord>,
@@ -887,31 +987,20 @@ private fun CallRecordsTable(
     total: Int,
     onSelectPage: (Int) -> Unit
 ) {
-    val textColor = MaterialTheme.colorScheme.onSurface
-    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+    var expandedIds by rememberSaveable { mutableStateOf(listOf<Long>()) }
     Column {
-        // 表头与数据行共用一个横向滚动容器，滑动时保持列对齐
-        Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
-            Column {
-                Row(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 8.dp)) {
-                    TableCell(stringResource(R.string.settings_token_stats_col_time), mutedColor, COL_TIME_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_provider), mutedColor, COL_PROVIDER_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_model), mutedColor, COL_MODEL_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_reasoning_effort), mutedColor, COL_EFFORT_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_status), mutedColor, COL_STATUS_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_input), mutedColor, COL_TOKENS_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_output), mutedColor, COL_TOKENS_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_cached_read), mutedColor, COL_TOKENS_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_cached_write), mutedColor, COL_TOKENS_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_cache_hit_rate), mutedColor, COL_TOKENS_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_ttfb), mutedColor, COL_DURATION_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_duration), mutedColor, COL_DURATION_W, FontWeight.Medium)
-                    TableCell(stringResource(R.string.settings_token_stats_col_cost), mutedColor, COL_COST_W, FontWeight.Medium)
+        calls.forEachIndexed { index, call ->
+            if (index > 0) SettingsDivider()
+            val id = call.record.id
+            val expanded = id in expandedIds
+            CallRecordCard(
+                call = call,
+                cost = costs[id],
+                expanded = expanded,
+                onToggle = {
+                    expandedIds = if (expanded) expandedIds - id else expandedIds + id
                 }
-                calls.forEach { call ->
-                    CallRecordRow(call, costs[call.record.id], textColor, mutedColor)
-                }
-            }
+            )
         }
         StatsPaginationBar(
             page = page,
@@ -922,41 +1011,155 @@ private fun CallRecordsTable(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CallRecordRow(call: RecentCallRecord, cost: Double?, textColor: Color, mutedColor: Color) {
-    val statusColor = when (call.record.status) {
-        "error" -> ERROR_COLOR
-        "cancelled" -> CANCELLED_COLOR
-        else -> TokenStatsPalette.Progress
-    }
-    Row(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 6.dp)) {
-        TableCell(formatCallTime(call.record.createdAt), mutedColor, COL_TIME_W)
-        TableCell(call.providerName ?: call.record.providerId ?: stringResource(R.string.settings_token_stats_unknown), textColor, COL_PROVIDER_W)
-        TableCell(call.record.model ?: stringResource(R.string.settings_token_stats_unknown), textColor, COL_MODEL_W)
-        TableCell(call.record.reasoningEffort ?: "-", mutedColor, COL_EFFORT_W)
-        TableCell(call.record.status, statusColor, COL_STATUS_W, FontWeight.Medium)
-        TableCell(call.record.inputTokens.toString(), textColor, COL_TOKENS_W)
-        TableCell(call.record.outputTokens.toString(), textColor, COL_TOKENS_W)
-        TableCell(call.record.cachedInputTokens.toString(), textColor, COL_TOKENS_W)
-        TableCell(call.record.cacheCreationTokens.toString(), textColor, COL_TOKENS_W)
-        TableCell(formatRecordCacheHitRate(call.record), textColor, COL_TOKENS_W)
-        TableCell(formatDuration(call.record.ttfbMillis?.toDouble()), mutedColor, COL_DURATION_W)
-        TableCell(formatDuration(call.record.durationMillis?.toDouble()), mutedColor, COL_DURATION_W)
-        TableCell(if (cost == null) "-" else formatCostUsd(cost), textColor, COL_COST_W)
+private fun CallRecordCard(
+    call: RecentCallRecord,
+    cost: Double?,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    val r = call.record
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val fresh = (r.inputTokens - r.cachedInputTokens - r.cacheCreationTokens).coerceAtLeast(0)
+    val provider = call.providerName ?: AgentEngines.displayName(r.providerId) ?: r.providerId
+        ?: stringResource(R.string.settings_token_stats_unknown)
+    val isError = r.status == "error"
+    val isCancelled = r.status == "cancelled"
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = Spacing.lg, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            isError -> ERROR_COLOR
+                            isCancelled -> CANCELLED_COLOR
+                            else -> TokenStatsPalette.Progress
+                        }
+                    )
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = formatCallTime(r.createdAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = muted
+            )
+            Spacer(Modifier.width(6.dp))
+            InfoTag(provider)
+            if (isError || isCancelled) {
+                Spacer(Modifier.width(4.dp))
+                InfoTag(
+                    stringResource(
+                        if (isError) R.string.settings_token_stats_status_error
+                        else R.string.settings_token_stats_status_cancelled
+                    )
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (cost == null) "-" else formatCostUsd(cost),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Spacer(Modifier.height(3.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = r.model ?: stringResource(R.string.settings_token_stats_unknown),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                contentDescription = null,
+                tint = muted,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text("↑${formatTokenCount(fresh.toLong())}", style = MaterialTheme.typography.labelSmall, color = INPUT_COLOR)
+            if (r.cachedInputTokens > 0 && r.inputTokens > 0) {
+                Text(
+                    "⚡${String.format(Locale.getDefault(), "%.0f%%", (r.cachedInputTokens * 100.0 / r.inputTokens).coerceAtMost(100.0))}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CACHE_COLOR
+                )
+            }
+            Text("↓${formatTokenCount(r.outputTokens.toLong())}", style = MaterialTheme.typography.labelSmall, color = OUTPUT_COLOR)
+            r.durationMillis?.let {
+                Text(formatDuration(it.toDouble()), style = MaterialTheme.typography.labelSmall, color = muted)
+            }
+        }
+        if (expanded) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+                DetailCell(stringResource(R.string.settings_token_stats_col_cached_read), r.cachedInputTokens.toString())
+                DetailCell(stringResource(R.string.settings_token_stats_col_cached_write), r.cacheCreationTokens.toString())
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+                DetailCell(stringResource(R.string.settings_token_stats_col_ttfb), formatDuration(r.ttfbMillis?.toDouble()))
+                DetailCell(stringResource(R.string.settings_token_stats_col_duration), formatDuration(r.durationMillis?.toDouble()))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+                DetailCell(
+                    stringResource(R.string.settings_token_stats_col_reasoning_effort),
+                    formatReasoningEffort(r.reasoningEffort, r.reasoningWire)
+                )
+                DetailCell(stringResource(R.string.settings_token_stats_retries_short), r.retryCount.toString())
+            }
+            // 仅在实际发出的档位与所选不一致时给出「已降级」提示：把静默降级显式化。
+            r.reasoningClampedFrom?.takeIf { it.isNotBlank() }?.let { from ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_token_stats_reasoning_clamped, from, r.reasoningWire ?: "-"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.semanticColors.warning
+                )
+            }
+            r.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ERROR_COLOR,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun TableCell(text: String, color: Color, width: Dp, fontWeight: FontWeight = FontWeight.Normal) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = color,
-        fontWeight = fontWeight,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.width(width)
-    )
+private fun DetailCell(label: String, value: String) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
 /** 与对话页头部一致的 token 缩写格式（见 MarkdownContent.formatTokenCount）：1234 -> 1.2k。 */
@@ -974,6 +1177,16 @@ private fun formatCache(context: android.content.Context, cachedRead: Long, cach
 private fun formatCallTime(epochMillis: Long): String =
     SimpleDateFormat("yyyy/M/d HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
+/**
+ * 「思考强度」单元格：所选与实际一致时只显示一档（如 `high`）；不一致时显示 `所选→实发`
+ * （如 `max→high`），让降级一眼可见。实际档位缺失（旧记录 / 未发思考字段）时退回只显示所选。
+ */
+private fun formatReasoningEffort(requested: String?, wire: String?): String {
+    if (requested == null) return wire ?: "-"
+    if (wire == null || wire == requested) return requested
+    return "$requested→$wire"
+}
+
 /** 单次调用缓存命中率：缓存输入 / 总输入（inputTokens 含缓存命中部分，各 provider 适配器已统一该口径）。 */
 private fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {
     if (call.inputTokens <= 0) return "-"
@@ -985,6 +1198,13 @@ private fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {
 private fun formatCacheHitRate(s: CallSummary): String {
     if (s.inputTokens <= 0) return "-"
     val rate = min(s.cachedInputTokens * 100.0 / s.inputTokens, 100.0)
+    return String.format(Locale.getDefault(), "%.1f%%", rate)
+}
+
+/** 概览成功率：成功调用 / 总调用。 */
+private fun formatSuccessRate(s: CallSummary): String {
+    if (s.calls <= 0) return "-"
+    val rate = (s.calls - s.errors) * 100.0 / s.calls
     return String.format(Locale.getDefault(), "%.1f%%", rate)
 }
 

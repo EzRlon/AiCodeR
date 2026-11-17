@@ -1,0 +1,710 @@
+{
+  "plugins": [
+    {
+      "id": "opencode-magic-context",
+      "name": "@cortexkit/opencode-magic-context",
+      "description": "Cross-session memory and context management",
+      "version": "0.49.41",
+      "engines": [
+        "opencode"
+      ],
+      "installRef": "@cortexkit/opencode-magic-context"
+    },
+    {
+      "id": "opencode-observability",
+      "name": "@langfuse/opencode-observability-plugin",
+      "description": "Session telemetry export to Langfuse",
+      "version": "0.7.0",
+      "engines": [
+        "opencode"
+      ],
+      "installRef": "@langfuse/opencode-observability-plugin"
+    },
+    {
+      "id": "opencode-dcp",
+      "name": "@tarquinen/opencode-dcp",
+      "description": "Prunes obsolete context to reduce token usage",
+      "version": "3.2.0",
+      "engines": [
+        "opencode"
+      ],
+      "installRef": "@tarquinen/opencode-dcp"
+    },
+    {
+      "id": "accessibility-compliance",
+      "name": "accessibility-compliance",
+      "description": "WCAG accessibility auditing, compliance validation, UI testing for screen readers, keyboard navigation, and inclusive design",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "accessibility-compliance@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "agent-orchestration",
+      "name": "agent-orchestration",
+      "description": "Multi-agent system optimization, agent improvement workflows, and context management",
+      "version": "1.2.3",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "agent-orchestration@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "agent-teams",
+      "name": "agent-teams",
+      "description": "Orchestrate multi-agent teams for parallel code review, hypothesis-driven debugging, and coordinated feature development using Claude Code's Agent Teams",
+      "version": "1.0.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "agent-teams@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "api-scaffolding",
+      "name": "api-scaffolding",
+      "description": "REST and GraphQL API scaffolding, framework selection, backend architecture, and API generation",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "api-scaffolding@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "api-testing-observability",
+      "name": "api-testing-observability",
+      "description": "API testing automation, request mocking, OpenAPI documentation generation, observability setup, and monitoring",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "api-testing-observability@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "application-performance",
+      "name": "application-performance",
+      "description": "Application profiling, performance optimization, and observability for frontend and backend systems",
+      "version": "1.3.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "application-performance@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "backend-api-security",
+      "name": "backend-api-security",
+      "description": "API security hardening, authentication implementation, authorization patterns, rate limiting, and input validation",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "backend-api-security@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "backend-development",
+      "name": "backend-development",
+      "description": "Backend API design, GraphQL architecture, workflow orchestration with Temporal, and test-driven backend development",
+      "version": "1.3.3",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "backend-development@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "before-you-build",
+      "name": "before-you-build",
+      "description": "Pre-build product risk review for founders, product teams, and AI-assisted builders before implementation starts",
+      "version": "0.1.1",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "before-you-build@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "c4-architecture",
+      "name": "c4-architecture",
+      "description": "Comprehensive C4 architecture documentation workflow with bottom-up code analysis, component synthesis, container mapping, and context diagram generation",
+      "version": "1.0.1",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "c4-architecture@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "cicd-automation",
+      "name": "cicd-automation",
+      "description": "CI/CD pipeline configuration, GitHub Actions/GitLab CI workflow setup, and automated deployment pipeline orchestration",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "cicd-automation@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "cloud-infrastructure",
+      "name": "cloud-infrastructure",
+      "description": "Cloud architecture design for AWS/Azure/GCP/OCI, Kubernetes cluster configuration, Terraform infrastructure-as-code, hybrid cloud networking, and multi-cloud co",
+      "version": "1.3.3",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "cloud-infrastructure@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "code-documentation",
+      "name": "code-documentation",
+      "description": "Documentation generation, code explanation, and technical writing with automated doc generation and tutorial creation",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "code-documentation@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "code-refactoring",
+      "name": "code-refactoring",
+      "description": "Code cleanup, refactoring automation, and technical debt management with context restoration",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "code-refactoring@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "codebase-cleanup",
+      "name": "codebase-cleanup",
+      "description": "Technical debt reduction, dependency updates, and code refactoring automation",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "codebase-cleanup@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "comprehensive-review",
+      "name": "comprehensive-review",
+      "description": "Multi-perspective code analysis covering architecture, security, and best practices",
+      "version": "1.3.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "comprehensive-review@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "context-management",
+      "name": "context-management",
+      "description": "Context persistence, restoration, and long-running conversation management",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "context-management@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "data-validation-suite",
+      "name": "data-validation-suite",
+      "description": "Schema validation, data quality monitoring, streaming validation pipelines, and input validation for backend APIs",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "data-validation-suite@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "database-cloud-optimization",
+      "name": "database-cloud-optimization",
+      "description": "Database query optimization, cloud cost optimization, and scalability improvements",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "database-cloud-optimization@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "database-design",
+      "name": "database-design",
+      "description": "Database architecture, schema design, and SQL optimization for production systems",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "database-design@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "database-migrations",
+      "name": "database-migrations",
+      "description": "Database migration automation, observability, and cross-database migration strategies",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "database-migrations@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "debugging-toolkit",
+      "name": "debugging-toolkit",
+      "description": "Interactive debugging, developer experience optimization, and smart debugging workflows",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "debugging-toolkit@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "dependency-management",
+      "name": "dependency-management",
+      "description": "Dependency auditing, version management, and security vulnerability scanning",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "dependency-management@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "deployment-strategies",
+      "name": "deployment-strategies",
+      "description": "Deployment patterns, rollback automation, and infrastructure templates",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "deployment-strategies@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "developer-essentials",
+      "name": "developer-essentials",
+      "description": "Essential developer skills including Git workflows, SQL optimization, error handling, code review, E2E testing, authentication, debugging, and monorepo manageme",
+      "version": "1.0.5",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "developer-essentials@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "distributed-debugging",
+      "name": "distributed-debugging",
+      "description": "Distributed system tracing and debugging across microservices",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "distributed-debugging@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "documentation-generation",
+      "name": "documentation-generation",
+      "description": "OpenAPI specification generation, Mermaid diagram creation, tutorial writing, API reference documentation",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "documentation-generation@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "error-debugging",
+      "name": "error-debugging",
+      "description": "Error analysis, trace debugging, and multi-agent problem diagnosis",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "error-debugging@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "error-diagnostics",
+      "name": "error-diagnostics",
+      "description": "Error tracing, root cause analysis, and smart debugging for production systems",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "error-diagnostics@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "framework-migration",
+      "name": "framework-migration",
+      "description": "Framework updates, migration planning, and architectural transformation workflows",
+      "version": "1.3.3",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "framework-migration@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "frontend-mobile-development",
+      "name": "frontend-mobile-development",
+      "description": "Frontend UI development and mobile application implementation across platforms",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "frontend-mobile-development@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "frontend-mobile-security",
+      "name": "frontend-mobile-security",
+      "description": "XSS prevention, CSRF protection, content security policies, mobile app security, and secure storage patterns",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "frontend-mobile-security@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "full-stack-orchestration",
+      "name": "full-stack-orchestration",
+      "description": "End-to-end feature orchestration with testing, security, performance, and deployment",
+      "version": "1.3.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "full-stack-orchestration@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "functional-programming",
+      "name": "functional-programming",
+      "description": "Functional programming with Elixir, OTP patterns, Phoenix framework, and distributed systems",
+      "version": "1.2.1",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "functional-programming@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "git-pr-workflows",
+      "name": "git-pr-workflows",
+      "description": "Git workflow automation, pull request enhancement, and team onboarding processes",
+      "version": "1.3.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "git-pr-workflows@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "incident-response",
+      "name": "incident-response",
+      "description": "Production incident management, triage workflows, and automated incident resolution",
+      "version": "1.4.1",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "incident-response@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "javascript-typescript",
+      "name": "javascript-typescript",
+      "description": "JavaScript and TypeScript development with ES6+, Node.js, React, and modern web frameworks",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "javascript-typescript@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "jvm-languages",
+      "name": "jvm-languages",
+      "description": "JVM language development including Java, Scala, and C# with enterprise patterns and frameworks",
+      "version": "1.2.1",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "jvm-languages@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "kubernetes-operations",
+      "name": "kubernetes-operations",
+      "description": "Kubernetes manifest generation, networking configuration, security policies, observability setup, GitOps workflows, and auto-scaling",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "kubernetes-operations@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "llm-application-dev",
+      "name": "llm-application-dev",
+      "description": "LLM application development with LangGraph, RAG systems, vector search, and AI agent architectures for Claude 4.6 and GPT-5.4",
+      "version": "2.0.8",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "llm-application-dev@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "multi-platform-apps",
+      "name": "multi-platform-apps",
+      "description": "Cross-platform application development coordinating web, iOS, Android, and desktop implementations",
+      "version": "1.3.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "multi-platform-apps@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "observability-monitoring",
+      "name": "observability-monitoring",
+      "description": "Metrics collection, logging infrastructure, distributed tracing, SLO implementation, and monitoring dashboards",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "observability-monitoring@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "opencode-auto-resume",
+      "name": "opencode-auto-resume",
+      "description": "Automatically resumes stalled LLM sessions",
+      "version": "1.2.5",
+      "engines": [
+        "opencode"
+      ],
+      "installRef": "opencode-auto-resume"
+    },
+    {
+      "id": "opencode-subagent-statusline",
+      "name": "opencode-subagent-statusline",
+      "description": "Statusline showing subagent session state",
+      "version": "2.1.1",
+      "engines": [
+        "opencode"
+      ],
+      "installRef": "opencode-subagent-statusline"
+    },
+    {
+      "id": "opencode-supermemory",
+      "name": "opencode-supermemory",
+      "description": "Persistent cross-session memory for coding agents",
+      "version": "2.1.2",
+      "engines": [
+        "opencode"
+      ],
+      "installRef": "opencode-supermemory"
+    },
+    {
+      "id": "performance-testing-review",
+      "name": "performance-testing-review",
+      "description": "Performance analysis, test coverage review, and AI-powered code quality assessment",
+      "version": "1.2.3",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "performance-testing-review@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "python-development",
+      "name": "python-development",
+      "description": "Modern Python development with Python 3.12+, Django, FastAPI, async patterns, and production best practices",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "python-development@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "security-compliance",
+      "name": "security-compliance",
+      "description": "SOC2, HIPAA, and GDPR compliance validation, secrets scanning, compliance checklists, and regulatory documentation",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "security-compliance@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "security-scanning",
+      "name": "security-scanning",
+      "description": "SAST analysis, dependency vulnerability scanning, OWASP Top 10 compliance, container security scanning, and automated security hardening",
+      "version": "1.3.3",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "security-scanning@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "shell-scripting",
+      "name": "shell-scripting",
+      "description": "Production-grade Bash scripting with defensive programming, POSIX compliance, and comprehensive testing",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "shell-scripting@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "systems-programming",
+      "name": "systems-programming",
+      "description": "Systems programming with Rust, Go, C, and C++ for performance-critical and low-level development",
+      "version": "1.2.4",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "systems-programming@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "tdd-workflows",
+      "name": "tdd-workflows",
+      "description": "Test-driven development methodology with red-green-refactor cycles and code review",
+      "version": "1.3.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "tdd-workflows@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "team-collaboration",
+      "name": "team-collaboration",
+      "description": "Team workflows, issue management, standup automation, and developer experience optimization",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "team-collaboration@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "ui-design",
+      "name": "ui-design",
+      "description": "Comprehensive UI/UX design plugin for mobile (iOS, Android, React Native) and web applications with design systems, accessibility, and modern patterns",
+      "version": "1.0.5",
+      "engines": [
+        "claude_code",
+        "codex"
+      ],
+      "installRef": "ui-design@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "unit-testing",
+      "name": "unit-testing",
+      "description": "Unit and integration test automation for Python and JavaScript with debugging support",
+      "version": "1.2.2",
+      "engines": [
+        "claude_code"
+      ],
+      "installRef": "unit-testing@claude-code-workflows",
+      "marketplaceSource": "wshobson/agents",
+      "marketplaceName": "claude-code-workflows"
+    }
+  ]
+}

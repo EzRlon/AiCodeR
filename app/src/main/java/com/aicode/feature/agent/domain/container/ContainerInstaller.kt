@@ -3,19 +3,23 @@ package com.aicode.feature.agent.domain.container
 import android.content.Context
 import android.system.Os
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.SafeDelete
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.zip.GZIPInputStream
 import javax.inject.Inject
@@ -35,6 +39,13 @@ class ContainerInstaller @Inject constructor(
         private const val TAG = "ContainerInstaller"
         @Volatile private var docsExtractedSession = false
 
+        /** 内置技能已释放到的 App versionCode 标记文件（与 skills 同级，不随技能目录被备份带走）。 */
+        private const val SKILLS_VERSION_STAMP = ".builtin_skills_version"
+
+        /** 内置技能指纹清单（与 skills 同级）：记录上次释放内容，用于识别用户改动、避免升级覆盖。 */
+        private const val SKILLS_MANIFEST_FILE = ".builtin_skills_manifest.json"
+
+
         /**
          * 从 assets 提取文档到 ~/.aicode/docs (内置使用指导)，支持 guide/ advanced/ 等分类子目录。
          *
@@ -45,7 +56,8 @@ class ContainerInstaller @Inject constructor(
             if (docsExtractedSession) return
             val destDir = File(File(context.filesDir, "aicode"), "docs")
             runCatching {
-                destDir.deleteRecursively()
+                // 与 multi-llm / skills 同理：docs 目录容器内对 AI 可写，符号链接只删链接、不下钻。
+                SafeDelete.deleteTree(destDir)
                 destDir.mkdirs()
                 extractAssetsRecursive(context, "docs", destDir)
                 docsExtractedSession = true
@@ -70,6 +82,90 @@ class ContainerInstaller @Inject constructor(
             }
         }
 
+        /**
+         * 从 assets 提取内置技能到 ~/.aicode/skills/，每个技能按目录整体重写（先删同名目录再释放），
+         * 使内置技能随 App 升级自动更新。
+         *
+         * 与用户自装技能共存：只处理 assets 中存在的技能名，其余目录不触碰。**同名**目录用
+         * [SkillReleaseGuard] 按内容指纹判定——用户改过的跳过、不覆盖（保住用户数据），
+         * 没改过的内置版才整体重释放（随版本更新）。冲突清单写入日志。
+         * 技能列表由 [com.aicode.feature.agent.domain.skill.SkillDirectoryScanner] 实时扫描本目录得到，
+         * 释放后无需额外注册。
+         */
+        fun extractBuiltinSkills(context: Context) {
+            val aicodeDir = File(context.filesDir, "aicode")
+            val destDir = File(aicodeDir, "skills")
+            // 版本戳放 skills 同级而非目录内：skills/ 会被备份整体打包（AI_ASSET_DIRS），
+            // 戳若在里面就会随备份一起被带走，从同版本备份恢复时戳匹配 → 跳过释放，
+            // 结果用的是备份里的旧技能内容而非内置内容。清单同理放同级。
+            val stamp = File(aicodeDir, SKILLS_VERSION_STAMP)
+            // 内置技能共 2.4MB（含 ui-ux-pro-max 的 1.8MB data/），全量重释放要删 12 棵目录树再写一遍。
+            // 内容随 App 版本变化，版本号相同就没必要重做：冷启动不再重复写闪存（性能功耗纪律）。
+            val version = appVersionCode(context)
+            if (version != null && stamp.isFile && runCatching { stamp.readText().trim() }.getOrNull() == version) {
+                return
+            }
+            runCatching {
+                destDir.mkdirs()
+                val entries = context.assets.list("skills") ?: return@runCatching
+                val manifestFile = File(aicodeDir, SKILLS_MANIFEST_FILE)
+                val manifest = readSkillsManifest(manifestFile).toMutableMap()
+                val skipped = mutableListOf<String>()
+                for (entry in entries) {
+                    val dest = File(destDir, entry)
+                    when (SkillReleaseGuard.decide(dest, manifest[entry])) {
+                        SkillReleaseGuard.Decision.SKIP_USER_MODIFIED -> {
+                            // 用户在改过的内置技能上做过修改：不覆盖，也不写新指纹（下次仍按「用户改动」跳过）。
+                            skipped += entry
+                            continue
+                        }
+                        else -> {
+                            // 先删再释放：内置技能随版本可能删减/移动文件，只覆盖不清理会残留旧文件。
+                            // 用 SafeDelete 而非 File.deleteRecursively：skills 与用户内容共享，符号链接只删链接、不下钻。
+                            SafeDelete.deleteTree(dest)
+                            extractAssetsRecursive(context, "skills/$entry", dest)
+                            manifest[entry] = SkillReleaseGuard.directoryFingerprint(dest)
+                        }
+                    }
+                }
+                writeSkillsManifest(manifestFile, manifest)
+                if (skipped.isNotEmpty()) {
+                    FileLogger.i(TAG, "内置技能跳过释放（用户已改动，未覆盖）：$skipped")
+                }
+                if (version != null) stamp.writeText(version)
+            }.onFailure {
+                FileLogger.w(TAG, "提取内置技能失败: ${it.message}", it)
+            }
+        }
+
+        /** 读内置技能指纹清单；文件缺失 / 损坏（非 JSON）时退回空表（下一轮按「无记录」保守处理）。 */
+        private fun readSkillsManifest(file: File): Map<String, String> = runCatching {
+            if (!file.isFile) return emptyMap()
+            val root = Json.parseToJsonElement(file.readText()) as? JsonObject ?: return emptyMap()
+            root.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }.toMap()
+        }.getOrDefault(emptyMap())
+
+        /** 写内置技能指纹清单；失败只记日志（下轮会按「无记录」保守处理，不会误删）。 */
+        private fun writeSkillsManifest(file: File, manifest: Map<String, String>) {
+            runCatching {
+                val obj = buildJsonObject {
+                    manifest.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+                }
+                file.writeText(obj.toString())
+            }.onFailure { FileLogger.w(TAG, "写入内置技能清单失败: ${it.message}", it) }
+        }
+
+        /** 当前 App 的 versionCode；取不到时返回 null（调用方退回「每次都释放」）。 */
+        private fun appVersionCode(context: Context): String? = runCatching {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0).versionCode.toString()
+        }.getOrNull()
+
+        /**
+         * 递归删除已改用 [com.aicode.core.util.SafeDelete.deleteTree]（符号链接安全，NOFOLLOW），
+         * rootfs 清理与内置技能目录清理共用；本类不再保留私有实现。
+         */
+
         /** 递归复制 assets 下的目录到目标目录，支持子目录（如 prompts/agent/、docs/guide/）。 */
         private fun extractAssetsRecursive(context: Context, assetDir: String, destDir: File) {
             val entries = context.assets.list(assetDir) ?: return
@@ -81,6 +177,9 @@ class ContainerInstaller @Inject constructor(
                     context.assets.open(assetPath).use { input ->
                         destFile.outputStream().use { output -> input.copyTo(output) }
                     }
+                    // APK 的 assets 不保留文件权限：技能正文里直接调用的 .sh 脚本
+                    // （如 executing-plans/scripts/task-start）必须补执行位，否则 Permission denied。
+                    if (entry.endsWith(".sh")) destFile.setExecutable(true, false)
                 } catch (e: IOException) {
                     // 目录项：assets.open 对目录抛 IOException，递归处理
                     extractAssetsRecursive(context, assetPath, destFile)
@@ -89,8 +188,43 @@ class ContainerInstaller @Inject constructor(
         }
 
         /**
-         * 从 assets 提取内置子代理定义（如 Explore）到 ~/.aicode/agents/。
+         * 从 assets 提取内置专家团定义（专家团）到 ~/.aicode/teams/。
          * 若文件已存在则不覆盖，以保留用户的修改与删除后的重建选择。
+         */
+        fun extractTeams(context: Context) {
+            val destDir = File(File(context.filesDir, "aicode"), "teams")
+            destDir.mkdirs()
+            runCatching {
+                val entries = context.assets.list("teams") ?: return@runCatching
+                for (entry in entries) {
+                    val destFile = File(destDir, entry)
+                    if (!destFile.exists()) {
+                        context.assets.open("teams/$entry").use { input ->
+                            destFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+            }.onFailure {
+                FileLogger.w(TAG, "提取内置专家团定义失败: ${it.message}", it)
+            }
+        }
+
+        /**
+         * 默认随版本释放的专家（其余 assets/agents 资产作为专家团成员，由在线商店按需安装）。
+         *
+         * frontend / backend 同时分别是 dev-squad 与 design-squad 的成员：先在这里释放，
+         * 商店安装专家团时 `commitTeam` 只写不存在的文件，同名定义不会互相覆盖；
+         * 独立释放后它们也能被主代理直接派发，并出现在「设置 → 智能体模型」里单独选模型。
+         */
+        private val DEFAULT_RELEASED_AGENTS = setOf(
+            "explore.md", "qa.md", "optimizer.md", "frontend.md", "backend.md"
+        )
+
+        /**
+         * 从 assets 提取默认内置子代理（Explore / qa / optimizer / Frontend / Backend）到 `~/.aicode/agents/`。
+         * 若文件已存在则不覆盖（保留用户修改）；其余专家资产不自动释放，由商店按需安装。
+         *
+         * optimizer 不属于任何内置专家团的成员，只能靠这里释放；发版前的优化审查流程依赖它。
          */
         fun extractAgents(context: Context) {
             val destDir = File(File(context.filesDir, "aicode"), "agents")
@@ -98,6 +232,7 @@ class ContainerInstaller @Inject constructor(
             runCatching {
                 val entries = context.assets.list("agents") ?: return@runCatching
                 for (entry in entries) {
+                    if (entry !in DEFAULT_RELEASED_AGENTS) continue
                     val destFile = File(destDir, entry)
                     if (!destFile.exists()) {
                         context.assets.open("agents/$entry").use { input ->
@@ -223,17 +358,29 @@ class ContainerInstaller @Inject constructor(
         }
 
         /**
-         * 与 assets 里 alpine-rootfs 版本对应的 apk 分支，用于拼镜像源地址。
-         * 固定 v3.21：与 [INSTALL_VERSION]（alpine-3.21.3）一致；该版本 apk-tools 2.14 在 proot 下可靠。
-         */
-        /**
-         * 安装版本。换 rootfs / proot 或改安装逻辑时 +1，触发重新解压。
-         * 与 assets 里实际放的 Alpine 版本保持一致以便排查。
+         * **重装触发器**——它的值是「已安装」标记（`.installed`）的唯一判据，**刻意与 assets 里放的
+         * Alpine 版本解耦**。
+         *
+         * 值一变，所有已装用户下次进容器就会被整体清空重装：容器里 `apk add` 装的包、初始化菜单装的
+         * Android SDK / Flutter SDK / JDK 全都没了（几百 MB 重新下载），而且清理前没有任何预警。
+         * 所以：
+         * - **只有安装逻辑本身变化才递增**：换 proot、改解压流程、换 apk 源分支；
+         * - **assets 里换成新的 Alpine 补丁版时不要动它**。新装用户自然解压到新基线，已装用户保持
+         *   原样不受影响，想换新基线由用户主动「重置容器」触发（重置确认框已写明会删除容器内已装工具）。
+         *
+         * 与 assets 实际版本的对应关系见 [ROOTFS_ASSET_VERSION]；容器内真实版本以 `/etc/alpine-release`
+         * 为准，不要靠本标记推断。
+         *
+         * 内置 rootfs 固定在 3.21 分支：该分支的 apk-tools 2.14 在 proot 下可靠，apk 源分支也据此固定
+         * （见 assets/aicode/lib/env-common.sh 的兜底 v3.21）。
          */
         private const val INSTALL_VERSION = "alpine-3.21.3-v6"
 
-        /** 删 rootfs 时每删这么多条目回调一次进度（太密会刷爆 UI 状态流）。 */
-        private const val DELETE_PROGRESS_STEP = 2000
+        /**
+         * assets 里实际打包的 Alpine 版本，**仅用于日志与排查**，不参与是否需要重装的判定。
+         * 换 assets 时同步更新这里，让「装了哪一版」在日志里有据可查。
+         */
+        private const val ROOTFS_ASSET_VERSION = "3.21.8"
     }
 
     /** assets 内的架构特定目录 */
@@ -338,7 +485,8 @@ class ContainerInstaller @Inject constructor(
         val startedAt = System.currentTimeMillis()
         FileLogger.i(
             TAG,
-            "开始安装容器 rootfs（版本 $INSTALL_VERSION，asset=$ASSET_ROOTFS，目标=${rootfsDir.absolutePath}，" +
+            "开始安装容器 rootfs（标记版本 $INSTALL_VERSION，asset 内 Alpine $ROOTFS_ASSET_VERSION，" +
+                "asset=$ASSET_ROOTFS，目标=${rootfsDir.absolutePath}，" +
                 "父目录可用空间=${usableSpaceMb(rootfsDir.parentFile)}MB）"
         )
         try {
@@ -537,45 +685,9 @@ class ContainerInstaller @Inject constructor(
     private fun purgeRootfs(dir: File, marker: File, onProgress: (Int) -> Unit) {
         if (!dir.exists()) return
         marker.delete()
-        val count = deleteTree(dir, 0, onProgress)
+        val count = SafeDelete.deleteTree(dir, onProgress = onProgress)
         FileLogger.i(TAG, "已删除 rootfs ${dir.name}，共 $count 项")
     }
-
-    /**
-     * 递归删除 [root]，返回从 [startCount] 起算的累计已删条目数，每 [DELETE_PROGRESS_STEP] 项回调一次。
-     *
-     * 不用 [File.deleteRecursively]：它按 `File.isDirectory` 判断，会跟随符号链接下钻——rootfs 的
-     * /bin、/usr/lib 下满是 symlink，跟随不仅白跑一遍链接目标（大容器上慢出好几倍），指向自身祖先时
-     * 还会一路下钻到路径超长才停，更别说链接指向 rootfs 外面时会删掉别处的数据。这里用
-     * NOFOLLOW_LINKS 判定目录，符号链接一律当普通条目 unlink。
-     */
-    private fun deleteTree(root: File, startCount: Int, onProgress: (Int) -> Unit): Int {
-        var count = startCount
-        val pending = ArrayDeque<File>()
-        val dirs = ArrayDeque<File>()
-        pending.addLast(root)
-        while (pending.isNotEmpty()) {
-            val entry = pending.removeLast()
-            if (isRealDirectory(entry)) {
-                dirs.addLast(entry)
-                entry.listFiles()?.forEach { pending.addLast(it) }
-            } else if (entry.delete()) {
-                count++
-                if (count % DELETE_PROGRESS_STEP == 0) onProgress(count)
-            }
-        }
-        // 目录得等自己空了才删得掉：dirs 按自浅入深的发现顺序入队，从队尾往回删即先深后浅。
-        while (dirs.isNotEmpty()) {
-            if (dirs.removeLast().delete()) count++
-        }
-        onProgress(count)
-        return count
-    }
-
-    /** 是否真目录：符号链接即便指向目录也返回 false，防止删除时跟着链接下钻。 */
-    private fun isRealDirectory(file: File): Boolean = runCatching {
-        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory
-    }.getOrDefault(false)
 
     init {
         CoroutineScope(Dispatchers.IO).launch {

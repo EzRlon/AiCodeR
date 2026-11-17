@@ -27,10 +27,10 @@ enum class StartupSessionMode {
 /**
  * 「偏好设置」里的用户偏好。
  *
- * 目前八项：拉取模型成功后是否自动移除远端已不存在的本地模型（默认开启）、
+ * 目前九项：拉取模型成功后是否自动移除远端已不存在的本地模型（默认开启）、
  * 启动时进入新会话还是最近会话（默认新开会话）、首字 / 数据块间隔超时（秒）、
- * 网络请求的最大重试次数（默认 6）、回车发送、自动压缩阈值、
- * sendFile 单个文件大小上限（默认 100MB），
+ * 网络请求的最大重试次数（默认 6）、回车发送、自动压缩阈值、单次任务 token 预算
+ * （默认 0 不限制）、sendFile 单个文件大小上限（默认 100MB），
  * 以及移除外部本地工作区时是否一并删除其聊天记录（默认关闭）。
  * DataStore 用法与 [KeepaliveSettingsRepository] 一致。
  */
@@ -46,25 +46,58 @@ class GeneralSettingsRepository @Inject constructor(
         val MAX_NETWORK_RETRIES_KEY = intPreferencesKey("max_network_retries")
         val ENTER_TO_SEND_KEY = booleanPreferencesKey("enter_to_send")
         val COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("compaction_threshold_percent")
+        val TOKEN_BUDGET_KEY = intPreferencesKey("token_budget")
         val SENDFILE_MAX_SIZE_MB_KEY = intPreferencesKey("sendfile_max_size_mb")
+        val GOAL_MAX_TURNS_KEY = intPreferencesKey("goal_max_turns")
+        val GOAL_MAX_TOKENS_KEY = intPreferencesKey("goal_max_tokens")
         val DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY = booleanPreferencesKey("delete_external_workspace_sessions")
+        val SELF_IMPROVE_MODE_KEY = booleanPreferencesKey("self_improve_mode")
+        /** REA 程序分析工作台的首次知情告知：勾选同意后不再弹出。 */
+        val REA_CONSENT_ACKNOWLEDGED_KEY = booleanPreferencesKey("rea_consent_acknowledged")
+        val HANDOFF_PROMPT_ENABLED_KEY = booleanPreferencesKey("handoff_prompt_enabled")
+        val HANDOFF_PROMPT_PERCENT_KEY = intPreferencesKey("handoff_prompt_percent")
+        val HANDOFF_AUTO_ENABLED_KEY = booleanPreferencesKey("handoff_auto_enabled")
+        val HANDOFF_AUTO_PERCENT_KEY = intPreferencesKey("handoff_auto_percent")
+        val FLOAT_BALL_ENABLED_KEY = booleanPreferencesKey("float_ball_enabled")
+        val VNC_AUTO_POPUP_ENABLED_KEY = booleanPreferencesKey("vnc_auto_popup_enabled")
+        /** 记忆图谱结论抽取开关；默认开启（复用压缩摘要零额外调用，自动沉淀定案与坑），用户可关。 */
+        val GRAPH_EXTRACT_ENABLED_KEY = booleanPreferencesKey("graph_extract_enabled")
+        /** 旧版默认关时代的用户显式关闭标记：仅在用户主动关过时存在，用于识别「真正想关」。 */
+        val GRAPH_EXTRACT_OPTED_OUT_KEY = booleanPreferencesKey("graph_extract_opted_out")
+        /** 记忆图谱页的首次引导是否已展示（默认关时提示用户可开启）。 */
+        val GRAPH_EXTRACT_INTRO_SHOWN_KEY = booleanPreferencesKey("graph_extract_intro_shown")
         /** 「提示词」页使用说明公告已展示内容的哈希；无值或与当前内容哈希不一致时重新弹出。 */
         val PROMPTS_ANNOUNCEMENT_SHOWN_HASH_KEY = stringPreferencesKey("prompts_announcement_shown_hash")
 
-        /** 首字超时默认 5 分钟，与原硬编码值一致。 */
-        const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 300
+        /** 首字超时默认 2 分钟（网络切换有主动打断兜底，此值只防静默挂起；极慢模型可上调）。 */
+        const val DEFAULT_FIRST_BYTE_TIMEOUT_SEC = 120
 
-        /** 数据块间隔超时默认 5 分钟：服务端静默时能自行断开并重试，避免本轮永久停在「执行中」。 */
-        const val DEFAULT_STREAM_IDLE_TIMEOUT_SEC = 300
+        /** 数据块间隔超时默认 2 分钟：服务端静默时能自行断开并重试，避免本轮永久停在「执行中」。 */
+        const val DEFAULT_STREAM_IDLE_TIMEOUT_SEC = 120
 
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
 
-        /** 自动压缩阈值默认 90%，与原硬编码值一致。 */
-        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 90
+        /** 自动压缩阈值默认 70%：先于交接触发，靠「保留最近消息 + 摘要」续命，避免动辄换会话变笨。 */
+        const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 70
+
+        /** 交接提醒阈值默认 50%：上下文占用过半时提示压缩/接手。 */
+        const val DEFAULT_HANDOFF_PROMPT_PERCENT = 50
+
+        /**
+         * 自动交接阈值默认 93%：退化为压缩救不回时的兑底（正常情况下 70% 自动压缩先把占用拉回，
+         * 根本到不了这里）；保留高值避免长任务被过早切断。
+         */
+        const val DEFAULT_HANDOFF_AUTO_PERCENT = 93
 
         /** sendFile 单个文件大小上限默认 100MB，与原硬编码值一致。 */
         const val DEFAULT_SENDFILE_MAX_SIZE_MB = 100
+
+        /** goal 自主循环最大续跑轮数默认 50。 */
+        const val DEFAULT_GOAL_MAX_TURNS = 50
+
+        /** goal 自主循环 token 预算默认 500k（按输入+输出累计）。 */
+        const val DEFAULT_GOAL_MAX_TOKENS = 500_000
     }
 
     /** 拉取模型后自动对齐本地列表的开关流；未设置时回退到 true（默认开启）。 */
@@ -173,6 +206,84 @@ class GeneralSettingsRepository @Inject constructor(
         context.generalDataStore.edit { it[COMPACTION_THRESHOLD_PERCENT_KEY] = percent.coerceIn(1, 100) }
     }
 
+    /** 交接提醒开关；默认开启。开启后上下文占用达到阈值时提示开新会话接手。 */
+    val handoffPromptEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[HANDOFF_PROMPT_ENABLED_KEY] ?: true }
+
+    suspend fun setHandoffPromptEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[HANDOFF_PROMPT_ENABLED_KEY] = enabled }
+    }
+
+    /** 交接提醒触发阈值（上下文窗口的百分比）；默认 50，限定 1..100。 */
+    val handoffPromptPercentFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[HANDOFF_PROMPT_PERCENT_KEY] ?: DEFAULT_HANDOFF_PROMPT_PERCENT).coerceIn(1, 100)
+    }
+
+    suspend fun setHandoffPromptPercent(percent: Int) {
+        context.generalDataStore.edit { it[HANDOFF_PROMPT_PERCENT_KEY] = percent.coerceIn(1, 100) }
+    }
+
+    /** 自动交接开关；默认开启。达到自动阈值后暂停当前会话并自动开新会话接手。 */
+    val handoffAutoEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[HANDOFF_AUTO_ENABLED_KEY] ?: true }
+
+    suspend fun setHandoffAutoEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[HANDOFF_AUTO_ENABLED_KEY] = enabled }
+    }
+
+    /** 自动交接阈值（上下文窗口的百分比）；默认 75，限定 1..100。 */
+    val handoffAutoPercentFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[HANDOFF_AUTO_PERCENT_KEY] ?: DEFAULT_HANDOFF_AUTO_PERCENT).coerceIn(1, 100)
+    }
+
+    suspend fun setHandoffAutoPercent(percent: Int) {
+        context.generalDataStore.edit { it[HANDOFF_AUTO_PERCENT_KEY] = percent.coerceIn(1, 100) }
+    }
+
+    /** 悬浮球开关；默认关闭（需 SYSTEM_ALERT_WINDOW 授权，开启后跨应用显示任务小球）。 */
+    val floatBallEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[FLOAT_BALL_ENABLED_KEY] ?: false }
+
+    suspend fun setFloatBallEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[FLOAT_BALL_ENABLED_KEY] = enabled }
+    }
+
+    /** VNC 浮窗自动弹出开关；默认关闭（用户抱怨未主动开启时浮窗自己跳出来，改为显式启用）。 */
+    val vncAutoPopupEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[VNC_AUTO_POPUP_ENABLED_KEY] ?: false }
+
+    suspend fun setVncAutoPopupEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { it[VNC_AUTO_POPUP_ENABLED_KEY] = enabled }
+    }
+
+    /** 记忆图谱结论抽取开关；默认开启，老用户曾显式关闭的保持关闭（尊重历史选择）。 */
+    val graphExtractEnabledFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { prefs ->
+            when {
+                prefs[GRAPH_EXTRACT_OPTED_OUT_KEY] == true -> false
+                else -> prefs[GRAPH_EXTRACT_ENABLED_KEY] ?: true
+            }
+        }
+
+    suspend fun setGraphExtractEnabled(enabled: Boolean) {
+        context.generalDataStore.edit { prefs ->
+            prefs[GRAPH_EXTRACT_ENABLED_KEY] = enabled
+            // 默认值翻转后的兼容：显式关 = 永久意愿（写 opt-out 标记，升级不会再被默认值带回来）；显式开 = 清标记。
+            if (!enabled) prefs[GRAPH_EXTRACT_OPTED_OUT_KEY] = true else prefs.remove(GRAPH_EXTRACT_OPTED_OUT_KEY)
+        }
+    }
+
+    /** 抽取是否开启（回合结束/压缩前的快路径判断，单次冷读）。 */
+    suspend fun graphExtractEnabled(): Boolean = graphExtractEnabledFlow.first()
+
+    /** 首次引导是否已展示；展示后写 true，不再重复弹。 */
+    suspend fun graphExtractIntroShown(): Boolean =
+        context.generalDataStore.data.first()[GRAPH_EXTRACT_INTRO_SHOWN_KEY] ?: false
+
+    suspend fun setGraphExtractIntroShown() {
+        context.generalDataStore.edit { it[GRAPH_EXTRACT_INTRO_SHOWN_KEY] = true }
+    }
+
     /** 压缩前读取一次触发阈值百分比。 */
     suspend fun compactionThresholdPercent(): Int = compactionThresholdPercentFlow.first()
 
@@ -185,6 +296,18 @@ class GeneralSettingsRepository @Inject constructor(
 
     suspend fun restoreCompactionThresholdPercent(percent: Int) = setCompactionThresholdPercent(percent)
 
+    /** 单次任务 token 预算（输入+输出合计）；0 表示不限制，未设置时默认 0（不限制）。 */
+    val tokenBudgetFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[TOKEN_BUDGET_KEY] ?: 0).coerceAtLeast(0)
+    }
+
+    suspend fun setTokenBudget(tokens: Int) {
+        context.generalDataStore.edit { it[TOKEN_BUDGET_KEY] = tokens.coerceAtLeast(0) }
+    }
+
+    /** 单次任务预算检查前读取一次预算值。 */
+    suspend fun tokenBudget(): Int = tokenBudgetFlow.first()
+
     /** sendFile 单个文件大小上限（MB）；默认 100，下限 1，不设上限。 */
     val sendFileMaxSizeMbFlow: Flow<Int> = context.generalDataStore.data.map {
         (it[SENDFILE_MAX_SIZE_MB_KEY] ?: DEFAULT_SENDFILE_MAX_SIZE_MB).coerceAtLeast(1)
@@ -193,6 +316,30 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun setSendFileMaxSizeMb(mb: Int) {
         context.generalDataStore.edit { it[SENDFILE_MAX_SIZE_MB_KEY] = mb.coerceAtLeast(1) }
     }
+
+    /** goal 自主循环最大续跑轮数；默认 50，下限 1。 */
+    val goalMaxTurnsFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[GOAL_MAX_TURNS_KEY] ?: DEFAULT_GOAL_MAX_TURNS).coerceAtLeast(1)
+    }
+
+    suspend fun setGoalMaxTurns(turns: Int) {
+        context.generalDataStore.edit { it[GOAL_MAX_TURNS_KEY] = turns.coerceAtLeast(1) }
+    }
+
+    /** 启动 goal 循环前读取一次轮次上限。 */
+    suspend fun goalMaxTurns(): Int = goalMaxTurnsFlow.first()
+
+    /** goal 自主循环 token 预算（输入+输出累计）；默认 500000，下限 1000。 */
+    val goalMaxTokensFlow: Flow<Int> = context.generalDataStore.data.map {
+        (it[GOAL_MAX_TOKENS_KEY] ?: DEFAULT_GOAL_MAX_TOKENS).coerceAtLeast(1000)
+    }
+
+    suspend fun setGoalMaxTokens(tokens: Int) {
+        context.generalDataStore.edit { it[GOAL_MAX_TOKENS_KEY] = tokens.coerceAtLeast(1000) }
+    }
+
+    /** 启动 goal 循环前读取一次 token 预算。 */
+    suspend fun goalMaxTokens(): Int = goalMaxTokensFlow.first()
 
     /** 执行 sendFile 前读取一次单个文件大小上限（MB）。 */
     suspend fun sendFileMaxSizeMb(): Int = sendFileMaxSizeMbFlow.first()
@@ -208,6 +355,23 @@ class GeneralSettingsRepository @Inject constructor(
 
     suspend fun setDeleteExternalWorkspaceSessions(enabled: Boolean) {
         context.generalDataStore.edit { it[DELETE_EXTERNAL_WORKSPACE_SESSIONS_KEY] = enabled }
+    }
+
+    /** 自我改进模式开关；默认关闭。开启后系统提示词注入自我改进指令，引导 AI 沉淀技能与提示词。 */
+    val selfImproveModeFlow: Flow<Boolean> =
+        context.generalDataStore.data.map { it[SELF_IMPROVE_MODE_KEY] ?: false }
+
+    suspend fun setSelfImproveMode(enabled: Boolean) {
+        context.generalDataStore.edit { it[SELF_IMPROVE_MODE_KEY] = enabled }
+    }
+
+    /** REA 程序分析知情告知是否已同意；null=尚未加载完成。 */
+    val reaConsentAcknowledgedFlow: Flow<Boolean?> = context.generalDataStore.data.map { prefs ->
+        prefs[REA_CONSENT_ACKNOWLEDGED_KEY]
+    }
+
+    suspend fun setReaConsentAcknowledged() {
+        context.generalDataStore.edit { it[REA_CONSENT_ACKNOWLEDGED_KEY] = true }
     }
 
     /** 移除外部工作区前读取一次该偏好。 */
@@ -226,4 +390,29 @@ class GeneralSettingsRepository @Inject constructor(
     suspend fun deleteExternalWorkspaceSessionsSnapshot(): Boolean = deleteExternalWorkspaceSessionsFlow.first()
 
     suspend fun restoreDeleteExternalWorkspaceSessions(enabled: Boolean) = setDeleteExternalWorkspaceSessions(enabled)
+
+    /** 备份快照：交接提醒开关与阈值。 */
+    suspend fun handoffPromptEnabledSnapshot(): Boolean = handoffPromptEnabledFlow.first()
+
+    suspend fun handoffPromptPercentSnapshot(): Int = handoffPromptPercentFlow.first()
+
+    suspend fun restoreHandoffPromptEnabled(enabled: Boolean) = setHandoffPromptEnabled(enabled)
+
+    /** 备份快照：自动交接开关与阈值。 */
+    suspend fun handoffAutoEnabledSnapshot(): Boolean = handoffAutoEnabledFlow.first()
+
+    suspend fun handoffAutoPercentSnapshot(): Int = handoffAutoPercentFlow.first()
+
+    suspend fun restoreHandoffAutoEnabled(enabled: Boolean) = setHandoffAutoEnabled(enabled)
+
+    suspend fun restoreHandoffAutoPercent(percent: Int) = setHandoffAutoPercent(percent)
+
+    /** 备份快照：悬浮球开关。 */
+    suspend fun floatBallEnabledSnapshot(): Boolean = floatBallEnabledFlow.first()
+
+    suspend fun vncAutoPopupEnabled(): Boolean = vncAutoPopupEnabledFlow.first()
+
+    suspend fun restoreFloatBallEnabled(enabled: Boolean) = setFloatBallEnabled(enabled)
+
+    suspend fun restoreHandoffPromptPercent(percent: Int) = setHandoffPromptPercent(percent)
 }

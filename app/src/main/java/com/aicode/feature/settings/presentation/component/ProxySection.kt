@@ -1,5 +1,9 @@
 package com.aicode.feature.settings.presentation.component
 
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -43,7 +47,7 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppSwitch
 import com.aicode.core.ui.AppTextField
-import com.aicode.feature.settings.data.repository.ProxyConfig
+import com.aicode.core.net.ProxyConfig
 import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.feature.settings.presentation.SettingsViewModel.ProxyTestUiState
 import compose.icons.FeatherIcons
@@ -286,7 +290,8 @@ private fun ProxyTypeSelectionSheet(
                         onDismiss()
                         onSelected(type)
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier

@@ -1,7 +1,15 @@
 package com.aicode.feature.settings.presentation.component
 
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.onboardingTarget
+import com.aicode.core.ui.rememberSheetFlingFix
+import com.aicode.core.ui.settings.ModelSearchField
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.settingsPageBackground
+import com.aicode.core.ui.settings.settingsLightMode
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.onboardingTarget
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -128,7 +136,7 @@ import com.aicode.feature.settings.domain.model.ModelMetadata
 import com.aicode.feature.settings.domain.model.MAX_KEY_WEIGHT
 import com.aicode.feature.settings.domain.model.ProviderKey
 import com.aicode.feature.settings.domain.model.ProviderType
-import com.aicode.feature.settings.data.repository.ProxyConfig
+import com.aicode.core.net.ProxyConfig
 import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.feature.settings.domain.model.mergeModelMetadata
 import com.aicode.feature.settings.domain.model.modelMetadataKey
@@ -269,6 +277,7 @@ fun ProviderEditorScreen(
     val autoRemoveStaleModels by viewModel.autoRemoveStaleModels.collectAsStateWithLifecycle()
     val testResults by viewModel.testResults.collectAsStateWithLifecycle()
     val testing by viewModel.testing.collectAsStateWithLifecycle()
+    val bulkTesting by viewModel.bulkTesting.collectAsStateWithLifecycle()
     val proxyTestState by viewModel.proxyTestState.collectAsStateWithLifecycle()
     val dashboardTestState by viewModel.dashboardTestState.collectAsStateWithLifecycle()
     val dashboardScripts by viewModel.dashboardScripts.collectAsStateWithLifecycle()
@@ -389,11 +398,26 @@ fun ProviderEditorScreen(
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
     val selectedModels = remember { mutableStateListOf<String>() }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    // 「清理不通」流程：先补测（如需）再弹确认框。
+    var showCleanUnreachableConfirm by remember { mutableStateOf(false) }
+    var pendingCleanAfterTest by remember { mutableStateOf(false) }
 
     LaunchedEffect(pagerState.currentPage) {
         if (pagerState.currentPage == 0 && isSelectionMode) {
             isSelectionMode = false
             selectedModels.clear()
+        }
+    }
+
+    // 「清理不通」：补测完成后自动衔接确认框；结果全连通时给轻提示。
+    LaunchedEffect(bulkTesting) {
+        if (bulkTesting || !pendingCleanAfterTest) return@LaunchedEffect
+        pendingCleanAfterTest = false
+        val failed = models.filter { testResults[it]?.success == false }
+        if (failed.isEmpty()) {
+            Toast.makeText(context, context.getString(R.string.provider_models_clean_none), Toast.LENGTH_SHORT).show()
+        } else {
+            showCleanUnreachableConfirm = true
         }
     }
 
@@ -419,6 +443,7 @@ fun ProviderEditorScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(if (initialProvider == null) stringResource(R.string.provider_add) else stringResource(R.string.provider_edit)) },
@@ -796,67 +821,128 @@ fun ProviderEditorScreen(
                                         selectedModels.addAll(models)
                                     }
                                 },
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             ) {
-                                Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
+                                Text(
+                                    stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
                             }
                             TextButton(
                                 onClick = {
                                     selectedModels.forEach { m -> viewModel.testModel(currentConfig(), m) }
                                 },
-                                enabled = selectedModels.isNotEmpty(),
+                                enabled = selectedModels.isNotEmpty() && !bulkTesting,
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.primary
                                 )
                             ) {
                                 Icon(FeatherIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
-                                Text(stringResource(R.string.provider_models_batch_test))
+                                Text(stringResource(R.string.provider_models_batch_test), style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
                                 onClick = { showBatchDeleteConfirm = true },
                                 enabled = selectedModels.isNotEmpty(),
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.error
                                 )
                             ) {
                                 Icon(FeatherIcons.Trash2, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
-                                Text(stringResource(R.string.provider_models_batch_delete))
+                                Text(stringResource(R.string.provider_models_batch_delete), style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
                                 onClick = {
                                     isSelectionMode = false
                                     selectedModels.clear()
                                 },
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             ) {
-                                Text(stringResource(R.string.common_cancel))
+                                Text(stringResource(R.string.common_cancel), style = MaterialTheme.typography.labelMedium)
                             }
                         } else {
                             Text(
-                                stringResource(R.string.provider_models_count, models.size),
+                                text = if (bulkTesting) {
+                                    stringResource(R.string.provider_models_testing_progress, testResults.keys.count { it in models }, models.size)
+                                } else {
+                                    stringResource(R.string.provider_models_count, models.size)
+                                },
                                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (bulkTesting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f)
                             )
+                            TextButton(
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    viewModel.testAllModels(currentConfig(), models.toList())
+                                },
+                                enabled = models.isNotEmpty() && !bulkTesting,
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            ) {
+                                if (bulkTesting) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(FeatherIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                                Spacer(Modifier.width(Spacing.xs))
+                                Text(stringResource(R.string.provider_models_test_all), style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    val allTested = models.all { it in testResults }
+                                    if (!allTested) {
+                                        // 尚未全量测试：先补测，完成后由 LaunchedEffect 衔接确认框。
+                                        pendingCleanAfterTest = true
+                                        if (!viewModel.testAllModels(currentConfig(), models.toList())) {
+                                            // 未能启动（目标为空等）：复位标记，避免残留到下一次批量测试误弹确认框。
+                                            pendingCleanAfterTest = false
+                                        }
+                                    } else {
+                                        val failed = models.filter { testResults[it]?.success == false }
+                                        if (failed.isEmpty()) {
+                                            Toast.makeText(context, context.getString(R.string.provider_models_clean_none), Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            showCleanUnreachableConfirm = true
+                                        }
+                                    }
+                                },
+                                enabled = models.isNotEmpty() && !bulkTesting,
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Icon(FeatherIcons.Trash2, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(Spacing.xs))
+                                Text(stringResource(R.string.provider_models_clean_unreachable), style = MaterialTheme.typography.labelMedium)
+                            }
                             TextButton(
                                 onClick = {
                                     fetchDialogKey++
                                     showFetchDialog = true
                                 },
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp),
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 ),
                                 modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_FETCH_MODELS)
                             ) {
-                                Icon(FeatherIcons.DownloadCloud, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(FeatherIcons.DownloadCloud, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(Spacing.xs))
-                                Text(stringResource(R.string.provider_fetch_models))
+                                Text(stringResource(R.string.provider_fetch_models), style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
@@ -923,20 +1009,26 @@ fun ProviderEditorScreen(
                                     Surface(
                                         shape = shape,
                                         color = MaterialTheme.semanticColors.cardSurface,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
                                         shadowElevation = dragElevation,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .zIndex(if (isDragging) 1f else 0f)
-                                            .graphicsLayer {
-                                                scaleX = dragScale
-                                                scaleY = dragScale
-                                            }
+                                            // 只在拖拽缩放偏离 1f 时挂层：常驻离屏图层不随主题切换刷新，
+                                            // 会让模型行文字停在旧配色。
+                                            .then(
+                                                if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                                    scaleX = dragScale
+                                                    scaleY = dragScale
+                                                }
+                                            )
                                     ) {
                                         ProviderModelRow(
                                             model = model,
                                             metadata = mergeModelMetadata(model, modelMetadata[modelMetadataKey(providerId, model)], customMetadata[modelMetadataKey(providerId, model)]),
                                             testing = model in testing,
                                             result = testResults[model],
+                                            testEnabled = !bulkTesting,
                                             onTest = { viewModel.testModel(currentConfig(), model) },
                                             onEdit = {
                                                 editingModel = model
@@ -1145,6 +1237,42 @@ fun ProviderEditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showBatchDeleteConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
+    // 「清理不通」确认：列出待删模型（前 5 个）供核对，确认后从列表移除并保存。
+    if (showCleanUnreachableConfirm) {
+        val failedModels = models.filter { testResults[it]?.success == false }
+        AlertDialog(
+            onDismissRequest = { showCleanUnreachableConfirm = false },
+            title = { Text(stringResource(R.string.provider_models_clean_title)) },
+            text = {
+                val preview = failedModels.take(5).joinToString("\n") { "· $it" }
+                val more = if (failedModels.size > 5) "\n…" else ""
+                Text(stringResource(R.string.provider_models_clean_confirm, failedModels.size, preview + more))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCleanUnreachableConfirm = false
+                        // 以确认时刻的结果重新取一次，避免删除期间结果变化造成偏差。
+                        val toDelete = models.filter { testResults[it]?.success == false }.toList()
+                        models.removeAll(toDelete.toSet())
+                        scope.launch {
+                            toDelete.forEach { m -> customMetadataStore.remove(providerId, m) }
+                            customMetadata = customMetadataStore.all()
+                        }
+                        saveCurrent()
+                    }
+                ) {
+                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCleanUnreachableConfirm = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             }
@@ -1920,6 +2048,7 @@ private fun ProviderProxyPage(
 ) {
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.proxy_title)) },
@@ -1985,7 +2114,8 @@ private fun ProviderTypeSelectionSheet(
                         onDismiss()
                         onSelected(providerType)
                     },
-                    color = Color.Transparent
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     Row(
                         modifier = Modifier
@@ -2073,6 +2203,7 @@ private fun ProviderKeysPage(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.provider_multi_key_manage)) },
@@ -2133,14 +2264,18 @@ private fun ProviderKeysPage(
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.semanticColors.cardSurface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                             shadowElevation = dragElevation,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .zIndex(if (isDragging) 1f else 0f)
-                                .graphicsLayer {
-                                    scaleX = dragScale
-                                    scaleY = dragScale
-                                }
+                                // 同上：拖拽结束立即摘层，保证 Key 卡片文字跟随主题刷新。
+                                .then(
+                                    if (dragScale == 1f) Modifier else Modifier.graphicsLayer {
+                                        scaleX = dragScale
+                                        scaleY = dragScale
+                                    }
+                                )
                         ) {
                             SwipeToDeleteRow(
                                 onDelete = {
@@ -2436,7 +2571,8 @@ private fun ScriptPickerBottomSheet(
                 scripts.forEach { scriptName ->
                     Surface(
                         onClick = { onSelect(scriptName) },
-                        color = Color.Transparent
+                        color = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                     ) {
                         Row(
                             modifier = Modifier
@@ -2524,6 +2660,7 @@ private fun RawOutputBottomSheet(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.semanticColors.mutedSurface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 420.dp)
@@ -2597,6 +2734,7 @@ private fun DashboardTestResultBox(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.semanticColors.mutedSurface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .alpha(if (isRunning) 0.6f else 1f)

@@ -48,6 +48,10 @@ class GeminiAdapter @Inject constructor(
     // 原生 generateContent 不发 generationConfig.temperature：Gemini 2.0 起服务端默认就是 1.0，与推荐值一致。
     override var temperature: Float? = null
 
+    // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
+    override var reasoningLevels: List<String>? = null
+    override var reasoningWireUsed: String? = null
+
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
 
@@ -98,6 +102,7 @@ class GeminiAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         }
@@ -330,6 +335,7 @@ class GeminiAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         } finally {
@@ -376,12 +382,36 @@ class GeminiAdapter @Inject constructor(
         return request
     }
 
-    /** 思考强度 → `thinking_level`，仅支持 minimal/low/medium/high；none 跳过（不发 thinking），xhigh/max 归一到 high。 */
-    private fun interactionsThinkingLevel(reasoningEffort: String?): String? = when (reasoningEffort) {
-        null, "none" -> null
-        "xhigh", "max" -> "high"
-        else -> reasoningEffort
+    /** 思考强度 → `thinking_level`，仅支持 minimal/low/medium/high；none 见 [gemini3DisableLevel]，xhigh/max 归一到 high。 */
+    private fun interactionsThinkingLevel(reasoningEffort: String?): String? {
+        val level = when (reasoningEffort) {
+            null -> null
+            "none" -> gemini3DisableLevel()?.let { clampLearned(it) }
+            "xhigh", "max" -> clampLearned("high")
+            else -> clampLearned(reasoningEffort)
+        }
+        reasoningWireUsed = level
+        return level
     }
+
+    /**
+     * Gemini 3 系思考不可完全关闭（官方无关闭开关）：请求关闭时退到该模型最低档如实发送，
+     * 而不是裸发（裸发等于服务端默认思考，用户要「关」却全量思考）。其余模型返回 null（不发思考配置）。
+     */
+    private fun gemini3DisableLevel(): String? {
+        if (!model.contains("gemini-3")) return null
+        val noMinimal = model.contains("3.7-flash") || model.contains("3.8-flash")
+        return when {
+            // 图像模型档位只有 minimal/high，退 minimal（退 low 会不在白名单内直接 400）。
+            model.contains("image") -> "minimal"
+            model.contains("flash") && !noMinimal -> "minimal"
+            else -> "low"
+        }
+    }
+
+    /** 按 400 文案学到的「被拒档位」收紧请求档位：被证伪时降到最近可用档，否则原样返回。 */
+    private fun clampLearned(effort: String): String =
+        ReasoningLearning.tighten(effort, providerId, model)
 
     /**
      * Interactions 的非流式请求。结果从 `steps` 时间线解析（见 [parseInteractionSteps]），
@@ -410,6 +440,7 @@ class GeminiAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         }
@@ -548,6 +579,7 @@ class GeminiAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Gemini", enriched, seq)
             throw enriched
         } finally {
@@ -656,25 +688,46 @@ class GeminiAdapter @Inject constructor(
         }.getOrNull()
     }
 
-    /** 思考强度 → Gemini thinkingConfig。模型名含 gemini-3 用 thinkingLevel，否则用 thinkingBudget（2.5 系）。显式带上 includeThoughts 以返回思考内容。 */
+    /**
+     * 思考强度 → Gemini thinkingConfig。模型名含 gemini-3 用 thinkingLevel，否则用 thinkingBudget（2.5 系）。
+     *
+     * 显式带上 `includeThoughts` 以返回思考内容；预算 0 除外——Gemini 拒绝
+     * `thinkingBudget=0` 与 `includeThoughts=true` 同时出现（invalid argument，请求硬失败）。
+     * 关闭语义：gemini-3 系不可关闭，退最低档（见 [gemini3DisableLevel]）；
+     * 2.5 系仅 Flash / Flash-Lite 支持预算 0 关闭，Pro 最低预算 128，发 0 直接 400，退最低预算。
+     */
     private fun buildThinkingConfig(reasoningEffort: String?): Map<String, Any>? {
-        if (reasoningEffort == null) return null
+        if (reasoningEffort == null) {
+            reasoningWireUsed = null
+            return null
+        }
         return if (model.contains("gemini-3")) {
-            // thinkingLevel 仅支持 minimal/low/medium/high；none 跳过（不发 thinking），xhigh/max 归一到 high（元数据未命中时 UI 会给出全部档位）
             val level = when (reasoningEffort) {
-                "none" -> return null
-                "xhigh", "max" -> "high"
-                else -> reasoningEffort
+                "none" -> clampLearned(gemini3DisableLevel() ?: run { reasoningWireUsed = null; return null })
+                "xhigh", "max" -> clampLearned("high")
+                else -> clampLearned(reasoningEffort)
             }
+            reasoningWireUsed = level
             mapOf("thinkingLevel" to level, "includeThoughts" to true)
         } else {
+            val is25Pro = model.contains("gemini-2.5") && model.contains("pro")
             val budget = when (reasoningEffort) {
+                "high", "xhigh", "max" -> 8192
+                // minimal 直发真实档位 512（上游 resolver 会钳到 low/1024，此处以 API 值为准）。
+                "minimal" -> 512
                 "low" -> 1024
                 "medium" -> 4096
-                "high", "xhigh", "max" -> 8192
-                else -> return null
+                "none" -> if (is25Pro) 1024 else 0
+                else -> run { reasoningWireUsed = null; return null }
             }
-            mapOf("thinkingBudget" to budget, "includeThoughts" to true)
+            if (budget == 0) {
+                // 关闭思考：预算 0 不能与 includeThoughts=true 并存。
+                reasoningWireUsed = "none"
+                mapOf("thinkingBudget" to 0)
+            } else {
+                reasoningWireUsed = "budget:$budget"
+                mapOf("thinkingBudget" to budget, "includeThoughts" to true)
+            }
         }
     }
 

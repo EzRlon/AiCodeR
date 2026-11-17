@@ -54,6 +54,61 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import dagger.hilt.android.qualifiers.ApplicationContext
 
+enum class BrowserUserAgentPreset(
+    val id: String,
+    val titleRes: Int,
+    val descRes: Int,
+    val userAgentString: String?
+) {
+    DEFAULT(
+        id = "default",
+        titleRes = R.string.browser_ua_default,
+        descRes = R.string.browser_ua_default_desc,
+        userAgentString = null
+    ),
+    ANDROID_PHONE(
+        id = "android_phone",
+        titleRes = R.string.browser_ua_android_phone,
+        descRes = R.string.browser_ua_android_phone_desc,
+        userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
+    ),
+    ANDROID_TABLET(
+        id = "android_tablet",
+        titleRes = R.string.browser_ua_android_tablet,
+        descRes = R.string.browser_ua_android_tablet_desc,
+        userAgentString = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    ),
+    DESKTOP_PC(
+        id = "desktop_pc",
+        titleRes = R.string.browser_ua_desktop_pc,
+        descRes = R.string.browser_ua_desktop_pc_desc,
+        userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    ),
+    IPHONE(
+        id = "iphone",
+        titleRes = R.string.browser_ua_iphone,
+        descRes = R.string.browser_ua_iphone_desc,
+        userAgentString = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    ),
+    IPAD(
+        id = "ipad",
+        titleRes = R.string.browser_ua_ipad,
+        descRes = R.string.browser_ua_ipad_desc,
+        userAgentString = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    ),
+    CUSTOM(
+        id = "custom",
+        titleRes = R.string.browser_ua_custom,
+        descRes = R.string.browser_ua_custom_desc,
+        userAgentString = null
+    );
+
+    companion object {
+        fun fromId(id: String?): BrowserUserAgentPreset =
+            entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
+
 data class BrowserTabState(
     val id: String,
     val url: String = "",
@@ -68,6 +123,9 @@ data class BrowserState(
     val activeTabId: String = "",
     val attached: Boolean = false,
     val nightMode: Boolean = false,
+    val userAgentPreset: BrowserUserAgentPreset = BrowserUserAgentPreset.DEFAULT,
+    val customUserAgent: String = "",
+    val currentUserAgent: String = "",
     /** 面板可见时等待用户处理的网页对话框（alert/confirm/prompt）。 */
     val pendingDialog: BrowserDialog? = null
 ) {
@@ -94,7 +152,7 @@ data class BrowserConsoleEntry(
 
 @Singleton
 class BrowserManager @Inject constructor(
-    @ApplicationContext private val appContext: Context,
+    @param:ApplicationContext private val appContext: Context,
     private val fileAccess: FileAccessProvider,
     private val pathHomeResolver: PathHomeResolver
 ) {
@@ -118,10 +176,15 @@ class BrowserManager @Inject constructor(
         private const val HEADLESS_HEIGHT_DP = 915
         private const val MAX_CONSOLE_LOGS = 200
         private const val DIALOG_TIMEOUT_MS = 30_000L
+        /** Activity 重建后，把已有离屏 WebView 重新挂回隐藏宿主的延迟（首帧后执行，不抢首屏渲染）。 */
+        private const val HIDDEN_HOST_MOUNT_DELAY_MS = 200L
         const val MAX_TABS = 10
 
         /** 地址栏输入不像网址时，作为关键词交给该搜索引擎（Bing）。 */
         private const val SEARCH_ENGINE_URL = "https://www.bing.com/search?q="
+
+        /** 默认主页：空标签页打开时加载的页面（用户 2026-11-11 指定用必应）。 */
+        const val HOME_URL = "https://www.bing.com/"
 
         private const val NIGHT_STYLE_ID = "__bicode_night_css__"
         private val NIGHT_BG_COLOR = 0xFF121212.toInt()
@@ -143,6 +206,11 @@ class BrowserManager @Inject constructor(
         var title: String = "",
         var loading: Boolean = false,
         var error: String? = null,
+        /**
+         * 无协议头输入的探测中标记：先试 https、失败后回退 http。探测阶段的失败不报错，
+         * 否则用户会在网页真正打开前先看到一条错误（https 被干扰时必现）。
+         */
+        var probing: Boolean = false,
         var devToolsOpen: Boolean = false,
         val consoleLogs: ArrayDeque<BrowserConsoleEntry> = ArrayDeque(),
         var pendingDialog: BrowserDialog? = null,
@@ -166,6 +234,26 @@ class BrowserManager @Inject constructor(
     private var activeTabId: String = ""
     private var tabSeq = 1
     private var containerView: FrameLayout? = null
+
+    // ── 网页全屏视频：WebChromeClient.onShowCustomView 的宿主视图与退出回调。──
+    private var fullscreenVideoView: View? = null
+    private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
+    private val _fullscreenVideo = MutableStateFlow(false)
+
+    /** 网页是否处于全屏视频（供 UI 的返回键优先退出全屏）。 */
+    val fullscreenVideo: StateFlow<Boolean> = _fullscreenVideo.asStateFlow()
+
+    // ── 书签 / 浏览历史：轻量持久化（整表 JSON），供浏览器 UI 与页面回调读写。──
+    private val browserBookmarkStore = BrowserLinkStore(appContext, "browser_bookmarks")
+    private val browserHistoryStore = BrowserLinkStore(appContext, "browser_history")
+    private val _bookmarks = MutableStateFlow(browserBookmarkStore.load())
+
+    /** 书签列表（最新在前）。 */
+    val bookmarks: StateFlow<List<BrowserLink>> = _bookmarks.asStateFlow()
+    private val _browserHistory = MutableStateFlow(browserHistoryStore.load())
+
+    /** 浏览历史（最新在前，写入侧截断）。 */
+    val browserHistory: StateFlow<List<BrowserLink>> = _browserHistory.asStateFlow()
     private var hiddenHost: ViewGroup? = null
 
     /** App 外观是否为深色，由 UI 层通过 [setAppDarkTheme] 推送。 */
@@ -176,8 +264,28 @@ class BrowserManager @Inject constructor(
 
     private val nightMode: Boolean get() = nightModeOverride ?: appDarkTheme
 
+    private val prefs by lazy {
+        appContext.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
+    }
+    private var currentUaPreset: BrowserUserAgentPreset = BrowserUserAgentPreset.DEFAULT
+    private var currentCustomUa: String = ""
+    private var defaultSystemUserAgent: String = ""
+
     private val _state = MutableStateFlow(BrowserState())
     val state: StateFlow<BrowserState> = _state.asStateFlow()
+
+    init {
+        val savedPresetId = prefs.getString("ua_preset", BrowserUserAgentPreset.DEFAULT.id)
+        currentUaPreset = BrowserUserAgentPreset.fromId(savedPresetId)
+        currentCustomUa = prefs.getString("custom_ua", "").orEmpty()
+        _state.update {
+            it.copy(
+                userAgentPreset = currentUaPreset,
+                customUserAgent = currentCustomUa,
+                currentUserAgent = resolveCurrentUserAgent()
+            )
+        }
+    }
 
     /** 选择器辅助函数，prepend 到所有需要选择器的 JS 中。支持 ref= / text= / text*= / role= / xpath= / CSS。 */
     private val selectorHelper = """
@@ -291,6 +399,8 @@ class BrowserManager @Inject constructor(
                 if (view != null && nightMode) applyNightModeTo(view)
                 if (view != null && tab.devToolsOpen) injectEruda(view, autoShow = false)
                 val finish = {
+                    // 记录浏览历史（按 url 去重置顶；仅 http(s) 页面）
+                    recordHistory(tab.title, tab.url)
                     tab.loadDeferred?.complete(Result.success(url.orEmpty()))
                     tab.loadDeferred = null
                     publishState()
@@ -312,8 +422,9 @@ class BrowserManager @Inject constructor(
                 val tab = tabHolderRef() ?: return
                 if (request?.isForMainFrame == true) {
                     val msg = error?.description?.toString() ?: "未知错误"
+                    // 探测阶段（https 未果、即将回退 http）不把错误挂到界面上，但仍结束本次等待以触发回退。
                     tab.loading = false
-                    tab.error = msg
+                    if (!tab.probing) tab.error = msg
                     tab.loadDeferred?.complete(Result.failure(RuntimeException(msg)))
                     tab.loadDeferred = null
                     publishState()
@@ -326,6 +437,30 @@ class BrowserManager @Inject constructor(
                 if (view != null && nightMode && newProgress in 15..30) {
                     applyNightModeTo(view)
                 }
+            }
+
+            /** 网页请求全屏视频：把系统给的视图挂到当前容器最上层（悬于页面与底部栏之上）。 */
+            override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
+                val container = containerView
+                if (container == null || view == null || fullscreenVideoView != null) {
+                    callback?.onCustomViewHidden()
+                    return
+                }
+                fullscreenVideoView = view
+                fullscreenVideoCallback = callback
+                container.addView(
+                    view,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
+                tabHolderRef()?.webView?.visibility = View.INVISIBLE
+                _fullscreenVideo.value = true
+            }
+
+            override fun onHideCustomView() {
+                hideFullscreenVideo()
             }
 
             override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
@@ -381,7 +516,20 @@ class BrowserManager @Inject constructor(
         wv.settings.displayZoomControls = false
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
-        wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        // 混合内容不放行 https 页面加载 http 子资源，避免被 MITM 篡改；allowFileAccess 因浏览器
+        // 工具需直接渲染 file:// 本地文件（本地 HTML/Markdown）而保留。
+        wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        // 允许媒体自动播放：部分视频站在「需用户手势」限制下会静音或拒绝播放，表现为「视频没声音」。
+        // [浏览器功能: 视频声音] 网页自动播放无需先触发用户手势
+        wv.settings.mediaPlaybackRequiresUserGesture = false
+        if (defaultSystemUserAgent.isBlank()) {
+            defaultSystemUserAgent = wv.settings.userAgentString.orEmpty()
+        }
+        applyUserAgentTo(wv)
+        // 网页触发的下载交给系统 DownloadManager（通知栏进度、公共下载目录），无需自建下载管理。
+        wv.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+            enqueueSystemDownload(url, userAgent, contentDisposition, mimetype)
+        }
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.setBackgroundColor(if (nightMode) NIGHT_BG_COLOR else Color.WHITE)
         applyDarkThemeToSettings(wv)
@@ -398,6 +546,7 @@ class BrowserManager @Inject constructor(
         wv.layout(0, 0, width, height)
     }
 
+    // [浏览器功能: 网页对话框]
     private fun holdDialog(tab: TabHolder, type: String, message: String, defaultValue: String?, result: JsResult) {
         tab.dialogTimeout?.let { mainHandler.removeCallbacks(it) }
         tab.pendingDialog = BrowserDialog(type, message, defaultValue)
@@ -452,8 +601,60 @@ class BrowserManager @Inject constructor(
                 activeTabId = activeTabId,
                 attached = containerView != null,
                 nightMode = nightMode,
+                userAgentPreset = currentUaPreset,
+                customUserAgent = currentCustomUa,
+                currentUserAgent = resolveCurrentUserAgent(),
                 pendingDialog = uiDialog
             )
+        }
+    }
+
+    // ================= User-Agent =================
+
+    fun resolveCurrentUserAgent(): String {
+        return when (currentUaPreset) {
+            BrowserUserAgentPreset.DEFAULT -> defaultSystemUserAgent
+            BrowserUserAgentPreset.CUSTOM -> currentCustomUa.ifBlank { defaultSystemUserAgent }
+            else -> currentUaPreset.userAgentString ?: defaultSystemUserAgent
+        }
+    }
+
+    private fun applyUserAgentTo(wv: WebView) {
+        val ua = resolveCurrentUserAgent()
+        if (ua.isNotBlank()) {
+            wv.settings.userAgentString = ua
+        }
+    }
+
+    // [浏览器功能: 浏览器标识 UA]
+    suspend fun setUserAgent(
+        preset: BrowserUserAgentPreset,
+        customUa: String? = null,
+        reloadCurrent: Boolean = true
+    ) = withContext(Dispatchers.Main) {
+        currentUaPreset = preset
+        if (customUa != null) {
+            currentCustomUa = customUa.trim()
+        }
+        prefs.edit()
+            .putString("ua_preset", preset.id)
+            .putString("custom_ua", currentCustomUa)
+            .apply()
+
+        tabs.forEach { tab ->
+            applyUserAgentTo(tab.webView)
+        }
+        publishState()
+
+        if (reloadCurrent) {
+            val active = findTab(activeTabId)
+            if (active != null && active.url.isNotBlank()) {
+                try {
+                    active.webView.reload()
+                } catch (e: Throwable) {
+                    FileLogger.w(TAG, "Failed to reload after User-Agent change", e)
+                }
+            }
         }
     }
 
@@ -467,6 +668,7 @@ class BrowserManager @Inject constructor(
     }
 
     /** 底栏手动切换；切回与 App 外观一致时自动恢复跟随。 */
+    // [浏览器功能: 夜间模式]
     fun toggleNightMode() {
         val next = !nightMode
         nightModeOverride = if (next == appDarkTheme) null else next
@@ -493,6 +695,9 @@ class BrowserManager @Inject constructor(
      * 内核级暗色设置。prefers-color-scheme 实际由 WebView 主题的 isLightTheme 决定（见 [webViewThemeRes]），
      * 这里设置算法调暗并借此触发 WebView 重读偏好——夜间模式切换后需要一次 settings 变更才会下发新偏好。
      */
+    // FORCE_DARK 已被 AndroidX 弃用（推荐 setAlgorithmicDarkeningAllowed），但后者要 API 33+，
+    // 本项目锁 targetSdk 28，旧 WebView 上这条兜底是唯一可用的开关，故保留并抑制告警。
+    @Suppress("DEPRECATION")
     private fun applyDarkThemeToSettings(wv: WebView) {
         try {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
@@ -613,6 +818,7 @@ class BrowserManager @Inject constructor(
         wv.evaluateJavascript(js, null)
     }
 
+    // [浏览器功能: 开发者工具]
     suspend fun toggleDevTools(tabId: String? = null): Boolean = withContext(Dispatchers.Main) {
         val targetId = tabId ?: activeTabId
         val tab = findTab(targetId) ?: return@withContext false
@@ -680,14 +886,22 @@ class BrowserManager @Inject constructor(
         // 面板未打开（离屏）一律用 Application context：WebView 弹不出原生 UI（如下拉列表、对话框），
         // 后台页面就无法把弹窗伪装成 App 自己的界面
         tabs.forEach { it.contextWrapper.baseContext = appContext }
-        val density = appContext.resources.displayMetrics.density
-        val width = (HEADLESS_WIDTH_DP * density).toInt().coerceAtLeast(1)
-        val height = (HEADLESS_HEIGHT_DP * density).toInt().coerceAtLeast(1)
-        tabs.forEach { tab ->
-            if (tab.webView.parent == null) {
-                host.addView(tab.webView, ViewGroup.LayoutParams(width, height))
+        if (tabs.isEmpty()) return
+        // 已有 WebView 的重新挂载延后到首帧之后：Activity 重建（切回前台）时重新 attach WebView
+        // 的代价不小，不能让它抢在首屏渲染之前执行（“从后台切回慢半拍”优化）。
+        // 该窗口期内若新建标签页，走 createTabInternal 的 hiddenHost 分支直接挂载，不受影响；
+        // detach（快速重建）后靠 identity 检查丢弃过期的挂载任务。
+        host.postOnAnimationDelayed({
+            if (hiddenHost !== host) return@postOnAnimationDelayed
+            val density = appContext.resources.displayMetrics.density
+            val width = (HEADLESS_WIDTH_DP * density).toInt().coerceAtLeast(1)
+            val height = (HEADLESS_HEIGHT_DP * density).toInt().coerceAtLeast(1)
+            tabs.forEach { tab ->
+                if (tab.webView.parent == null) {
+                    host.addView(tab.webView, ViewGroup.LayoutParams(width, height))
+                }
             }
-        }
+        }, HIDDEN_HOST_MOUNT_DELAY_MS)
     }
 
     fun detachHiddenHost() {
@@ -708,9 +922,125 @@ class BrowserManager @Inject constructor(
         containerView = container
         // 面板可见时才挂 Activity context，`<select>` 下拉等依赖 Activity 窗口的能力才能生效
         tabs.forEach { it.contextWrapper.baseContext = container.context }
-        ensureActiveTab()
+        val tab = ensureActiveTab()
+        // 默认主页：首次打开面板时，空标签页直接进必应，而不是停在「输入网址」的引导页。
+        // 只在「确实空白且没在加载」时补一次，避免用户已经导航（或 AI 已在后台浏览）后被覆盖。
+        if (tab.url.isBlank() && !tab.loading) {
+            runCatching { tab.webView.loadUrl(HOME_URL) }
+        }
         updateContainerView()
         publishState()
+    }
+
+    // [浏览器功能: 全屏视频]
+    /** 退出网页全屏视频：移除全屏视图、恢复 WebView 显示并回告系统（幂等）。 */
+    private fun hideFullscreenVideo() {
+        val container = containerView
+        val view = fullscreenVideoView
+        val callback = fullscreenVideoCallback
+        fullscreenVideoView = null
+        fullscreenVideoCallback = null
+        if (view != null && container != null) {
+            container.removeView(view)
+        }
+        findTab(activeTabId)?.webView?.visibility = View.VISIBLE
+        _fullscreenVideo.value = false
+        runCatching { callback?.onCustomViewHidden() }
+    }
+
+    /**
+     * 请求退出网页全屏视频（UI 返回键调用）：先让页面自身退出全屏以同步页面状态，
+     * 再兜底清理系统全屏视图（幂等；不依赖页面回调 onHideCustomView）。
+     */
+    fun exitFullscreenVideo() {
+        if (fullscreenVideoView == null) return
+        findTab(activeTabId)?.webView?.evaluateJavascript(
+            "document.exitFullscreen ? document.exitFullscreen() : null",
+            null
+        )
+        hideFullscreenVideo()
+    }
+
+    // [浏览器功能: 书签 / 历史记录] ── 书签 / 浏览历史 ──
+
+    /** 当前页是否已在书签中。 */
+    fun isBookmarked(url: String?): Boolean =
+        url != null && _bookmarks.value.any { it.url == url }
+
+    /** 收藏一页（已存在则更新标题与时间；非 http(s) 忽略）。 */
+    fun addBookmark(title: String?, url: String?) {
+        val u = url?.takeIf { it.startsWith("http") } ?: return
+        val t = title?.takeIf { it.isNotBlank() } ?: u
+        val next = (_bookmarks.value.filterNot { it.url == u } +
+            BrowserLink(t, u, System.currentTimeMillis())).reversed()
+        _bookmarks.value = next
+        browserBookmarkStore.save(next)
+    }
+
+    /** 移除一条书签。 */
+    fun removeBookmark(url: String) {
+        val next = _bookmarks.value.filterNot { it.url == url }
+        _bookmarks.value = next
+        browserBookmarkStore.save(next)
+    }
+
+    /** 清空浏览历史。 */
+    fun clearHistory() {
+        _browserHistory.value = emptyList()
+        browserHistoryStore.save(emptyList())
+    }
+
+    /** 记录一条浏览历史：按 url 去重置顶，最多保留 200 条。 */
+    private fun recordHistory(title: String?, url: String?) {
+        val u = url?.takeIf { it.startsWith("http") } ?: return
+        val t = title?.takeIf { it.isNotBlank() } ?: u
+        val next = (_browserHistory.value.filterNot { it.url == u } +
+            BrowserLink(t, u, System.currentTimeMillis()))
+            .takeLast(200)
+            .reversed()
+        _browserHistory.value = next
+        browserHistoryStore.save(next)
+    }
+
+    // [浏览器功能: 下载] ── 下载 ──
+
+    /** 把网页触发的下载入队到系统 DownloadManager；blob: 等特殊链接给出提示。 */
+    private fun enqueueSystemDownload(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimetype: String?
+    ) {
+        if (!url.startsWith("http")) {
+            toast(appContext.getString(R.string.browser_download_unsupported))
+            return
+        }
+        runCatching {
+            val fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype)
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url)).apply {
+                userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
+                mimetype?.takeIf { it.isNotBlank() && it != "application/octet-stream" }
+                    ?.let { setMimeType(it) }
+                android.webkit.CookieManager.getInstance().getCookie(url)
+                    ?.let { addRequestHeader("Cookie", it) }
+                setTitle(fileName)
+                setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+            }
+            val manager = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+            manager.enqueue(request)
+            toast(appContext.getString(R.string.browser_download_started, fileName))
+        }.onFailure {
+            FileLogger.w(TAG, "下载任务入队失败", it)
+            toast(appContext.getString(R.string.browser_download_unsupported))
+        }
+    }
+
+    /** 主线程弹一条轻提示（页面回调线程不固定，统一切主线程）。 */
+    private fun toast(message: String) {
+        mainHandler.post {
+            android.widget.Toast.makeText(appContext, message, android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     /**
@@ -720,6 +1050,8 @@ class BrowserManager @Inject constructor(
      * 把新页面正在使用的容器误清空。
      */
     fun detachContainerView(container: FrameLayout) {
+        // 全屏视频视图挂在容器上：先退出全屏恢复 WebView 可见，再统一移除（幂等）
+        hideFullscreenVideo()
         container.removeAllViews()
         if (containerView !== container) return
 
@@ -756,6 +1088,7 @@ class BrowserManager @Inject constructor(
             tab.consoleLogs.clear()
         }
         tabs.clear()
+        hideFullscreenVideo()
         containerView?.removeAllViews()
         containerView = null
         publishState()
@@ -777,6 +1110,10 @@ class BrowserManager @Inject constructor(
         val tab = createTabInternal(id, url)
         if (!url.isNullOrBlank()) {
             navigate(url, id)
+        } else if (containerView != null) {
+            // 界面上的「新建标签页」也要落到默认主页；AI 在后台建的空标签页保持空白，
+            // 免得一次 AI 调用就替用户发一次首页请求。
+            runCatching { tab.webView.loadUrl(HOME_URL) }
         }
         id
     }
@@ -842,14 +1179,22 @@ class BrowserManager @Inject constructor(
             if (resolved != null) {
                 loadInto(tab, resolved)
             } else {
-                // 无协议头：优先 https，SSL/连接失败再回退 http（部分站点未配置 SSL）
+                // 无协议头：优先 https，SSL/连接失败再回退 http（部分站点未配置 SSL）。
+                // 探测期（probing）的失败不写到界面上，避免网页真正打开前先闪一条错误。
+                tab.probing = true
+                var httpsLoaded: String? = null
                 try {
-                    loadInto(tab, "https://$target")
+                    httpsLoaded = loadInto(tab, "https://$target")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    loadInto(tab, "http://$target")
+                    null
+                } finally {
+                    tab.probing = false
                 }
+                // https 失败后回退 http；http 也失败时异常上抛，由界面侧展示错误气泡
+                // （若这里静默，用户只会看到一个没有任何提示的空白页）。
+                httpsLoaded ?: loadInto(tab, "http://$target")
             }
         }
     }
@@ -869,6 +1214,7 @@ class BrowserManager @Inject constructor(
     }
 
     /** 输入是否为本地文件路径：`file://`，或以 `/`、`~`、`./`、`../` 开头的裸路径。 */
+    // [浏览器功能: 本地文件预览]
     private fun isLocalPathInput(input: String): Boolean =
         input.startsWith("file://") ||
             input.startsWith("/") ||
@@ -1516,6 +1862,7 @@ class BrowserManager @Inject constructor(
             """{"from":$before,"to":$after}"""
         }
 
+    // [浏览器功能: AI 截图]
     suspend fun screenshot(tabId: String? = null): AgentImage? = withContext(Dispatchers.Main) {
         val tab = resolveTab(tabId)
         val wv = tab.webView

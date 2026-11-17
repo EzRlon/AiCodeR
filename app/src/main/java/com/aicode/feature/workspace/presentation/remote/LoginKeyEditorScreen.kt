@@ -46,9 +46,9 @@ import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.core.ui.AppTextField
 import com.aicode.feature.agent.domain.container.SshLoginKey
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.settingsPageBackground
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowLeft
 import compose.icons.feathericons.Check
@@ -89,6 +89,7 @@ fun LoginKeyEditorScreen(
 
     Scaffold(
         containerColor = settingsPageBackground(),
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -185,6 +186,7 @@ fun LoginKeyEditorScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(Radius.mdLarge),
                         color = MaterialTheme.semanticColors.cardSurface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         // 固定高度 + 内部滚动：切换显示/隐藏时私钥行数变化不会撑开页面。

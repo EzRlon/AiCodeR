@@ -2,6 +2,7 @@ package com.aicode
 
 import android.app.ActivityManager
 import android.app.Application
+import android.app.ApplicationExitInfo
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
@@ -12,9 +13,12 @@ import androidx.hilt.work.HiltWorkerFactory
 import com.aicode.core.net.AppProxy
 import com.aicode.core.util.AILogger
 import com.aicode.core.util.FileLogger
+import com.aicode.core.util.TombstoneParser
 import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpManager
+import com.aicode.feature.agent.domain.provider.ReasoningLearning
+import com.aicode.feature.agent.domain.provider.SharedPrefsReasoningLearningStore
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
 import com.aicode.feature.settings.data.repository.LogSettingsRepository
@@ -29,7 +33,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -45,6 +51,26 @@ class AIEditorApp : Application(), Configuration.Provider {
         private const val KEY_CRASH_UI_SHOWING = "crash_ui_showing"
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
         private const val KEY_CRASH_COUNT = "crash_count"
+        /** ApplicationExitInfo 增量游标：已处理过的最大退出时间戳，避免重复上报历史退出。 */
+        private const val KEY_LAST_EXIT_TIMESTAMP = "last_exit_timestamp"
+        /** ApplicationExitInfo 读取的历史退出记录条数上限。 */
+        private const val MAX_EXIT_RECORDS = 20
+        /** 单条退出 trace 落盘时保留的字节上限（按字节截断，避免超大 trace 撑爆内存）。 */
+        private const val TRACE_HEAD_BYTES = 16 * 1024
+
+        /** 崩溃 tombstone 落盘目录保留的文件数上限（超出则删除最旧的）。 */
+        private const val MAX_CRASH_TRACE_FILES = 20
+        /**
+         * 无 Java 异常、只能靠 ApplicationExitInfo 补记的退出原因（API 30+）。
+         * 不包含 REASON_CRASH（Java 崩溃已由 installCrashHandler + CrashActivity 完整记录）。
+         */
+        private val ABNORMAL_EXIT_REASONS = setOf(
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_LOW_MEMORY,
+            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+            ApplicationExitInfo.REASON_SIGNALED
+        )
         /** 10 秒内的连续崩溃视为密集崩溃。 */
         private const val CRASH_RESET_WINDOW_MS = 10_000L
         /** 密集崩溃达到 3 次触发硬熔断退出，杜绝死循环。 */
@@ -103,6 +129,9 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 会不留任何痕迹，故把日志与全局崩溃处理器提到 attachBaseContext 最前。
         FileLogger.init(base)
         AILogger.init(base)
+        // 思考档位学习结果落盘：避免每次冷启动都重新踩同一个 400。副作用有三重兜底
+        // （元数据优先 + TTL 过期 + 成功即自愈），坏值不可能长期生效。
+        ReasoningLearning.init(SharedPrefsReasoningLearningStore(base))
         installCrashHandler()
         // 全局代理入口：必须在任何 Hilt 注入 / OkHttpClient 构建之前设置，
         // 使 App 侧全部 HTTP 链路（对话、MCP、更新检查等）按需走全局/提供商代理。
@@ -140,6 +169,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var mcpConfigRepository: com.aicode.feature.agent.domain.mcp.McpConfigRepository
 
+    /** 插件清理用的文件访问：与插件页同源（本地落私有目录、远程走 SFTP），保证清的是同一份残留。 */
+    @Inject
+    lateinit var pluginFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider
+
     /** 工具授权规则仓库：启动即监听 permissions.json 外部直接编辑，改动数秒内刷新规则。 */
     @Inject
     lateinit var permissionRulesRepository: com.aicode.feature.agent.domain.permission.PermissionRulesRepository
@@ -147,6 +180,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     /** 技能配置仓库：启动即监听技能目录与 skills.json 外部变更，改动数秒内刷新技能列表。 */
     @Inject
     lateinit var skillConfigRepository: com.aicode.feature.agent.domain.skill.SkillConfigRepository
+
+    /** 会话数据库：启动后用于 FTS 存量回填判定（迁移 67 只建表不回填，避免主线程黑屏）。 */
+    @Inject
+    lateinit var agentDatabase: com.aicode.feature.agent.data.local.database.AgentDatabase
 
     /** 旧 Room git 凭据一次性迁移器：启动即把旧表数据写入 git-credentials 文件后删表（真源已迁到文件）。 */
     @Inject
@@ -165,13 +202,28 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var credentialRequestBridge: com.aicode.feature.credentials.data.CredentialRequestBridge
 
+    /** 默认网络变化监听：构造即注册；切换网络时打断活跃流式请求，触发快速重试（见 NetworkWatcher）。 */
+    @Inject
+    lateinit var networkWatcher: com.aicode.feature.agent.domain.provider.NetworkWatcher
+
+    /** 工具授权请求的通知栏通道：用户离开 App 时可直接从通知批准/拒绝。 */
+    @Inject
+    lateinit var permissionNotificationCenter: com.aicode.feature.agent.domain.notification.PermissionNotificationCenter
+
     /** 执行模式仓库（本地 PRoot / 远程 SSH）。 */
     @Inject
     lateinit var executionModeRepository: com.aicode.feature.settings.data.repository.ExecutionModeRepository
 
+    @Inject
+    lateinit var generalSettingsRepository: com.aicode.feature.settings.data.repository.GeneralSettingsRepository
+
     /** 应用语言偏好仓库：持久化用户选择的语言，供 attachBaseContext 同步读取。 */
     @Inject
     lateinit var languageSettings: LanguageSettingsRepository
+
+    /** 主题设置仓库：承载系统深浅实时镜像（见 systemDark 注释），供 AUTO 模式可靠跟随系统。 */
+    @Inject
+    lateinit var themeSettings: com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 
     /** 执行模式同步缓存：启动时从 DataStore 读首帧注入 DI。 */
     @Inject
@@ -180,6 +232,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     /** 远程 SSH 连接管理器：远程模式下启动即用配置建立连接。 */
     @Inject
     lateinit var remoteSshConnection: com.aicode.feature.agent.domain.container.RemoteSshConnection
+
+    /** 全局网络可用性监听：网络恢复/切换链路时驱动即时重连。 */
+    @Inject
+    lateinit var networkConnectivityObserver: com.aicode.core.net.NetworkConnectivityObserver
 
     /** 当前激活 profile 的连接配置解析器：连接/profile/模式变化时驱动重连。 */
     @Inject
@@ -197,12 +253,31 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var modelMetadataService: ModelMetadataService
 
+    /** 可下载镜像目录：启动即异步从仓库 data 分支拉取最新版本清单（12h 缓存，失败静默，兜底内置 assets）。 */
+    @Inject
+    lateinit var containerImageCatalog: com.aicode.feature.agent.domain.container.ContainerImageCatalog
+
     /** 提供商级代理注册表：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
     @Inject
     lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
 
+    /** 全局代理设置仓库：初始化时把 SharedPreferences 读取源挂到 AppProxy（依赖倒置进 core）。 */
+    @Inject
+    lateinit var proxySettingsRepository: com.aicode.feature.settings.data.repository.ProxySettingsRepository
+
+    /** 外部引擎 CLI 进程登记表：冷启动时回收上次被 LMK 遗留的孤儿 proot/CLI 进程。 */
+    @Inject
+    lateinit var engineProcessRegistry: com.aicode.feature.agent.domain.engine.EngineProcessRegistry
+
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 系统深浅变化在此实时可达：Activity 级 wrapper（createConfigurationContext）会冻结 uiMode，
+        // 不能依赖 Compose isSystemInDarkTheme()，改由此处刷新镜像供 AUTO 模式消费。
+        themeSettings.refreshSystemDark()
+    }
 
     override fun onCreate() {
         if (isCrashProcess(this)) {
@@ -212,10 +287,23 @@ class AIEditorApp : Application(), Configuration.Provider {
             return
         }
         super.onCreate()
+        // 追踪前台 Activity：商店人机校验需要临时挂一个不可见 WebView 到当前窗口。
+        com.aicode.core.util.ActivityTracker.install(this)
         logDeviceInfo()
+        // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
+        appScope.launch { reportAbnormalExits() }
+        // 冷启动回收：上次进程被 LMK 时来不及收尸的 proot + claude/codex/opencode 进程树。
+        // 只按落盘 PID 精确回收（PID + /proc 启动时间 + cmdline 三重校验），不扫无关进程。
+        appScope.launch {
+            runCatching { engineProcessRegistry.reclaimOrphansOnColdStart() }
+                .onFailure { FileLogger.w(TAG, "冷启动回收孤儿引擎进程失败", it) }
+        }
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
+        // 把全局代理配置读取源（SharedPreferences 实现）挂到 AppProxy——core 层只依赖
+        // 读取函数，不感知 feature 的 Repository 实现（依赖倒置，见 core/net/ProxyModels.kt）。
+        AppProxy.registerConfigSource { com.aicode.feature.settings.data.repository.ProxySettingsRepository.readConfig(this) }
         // 注册完整版 BouncyCastle 放后台 IO 协程，避免在主线程加载大量密码学类阻塞首屏；
         // 远程 SSH 连接在 appScope 中执行，使用前完成注册即可。
         appScope.launch(Dispatchers.IO) {
@@ -224,14 +312,44 @@ class AIEditorApp : Application(), Configuration.Provider {
         createNotificationChannels()
         // 启动凭据请求监听：容器内 credential helper 写来的 cred-req-* → 全局弹窗回填 → 回喂 git 续跑。
         credentialRequestBridge.start()
+        // 启动工具授权通知通道：App 在后台时 AI 的授权请求可从通知栏直接批准/拒绝。
+        permissionNotificationCenter.start()
         // 启动即把最新的内置指南手册提取到私有配置目录
         appScope.launch {
             ContainerInstaller.extractDocs(this@AIEditorApp)
+        }
+        // 原生插件不再随包释放：顾问团 / 分析台等一律走「设置 → 插件 → 从文件安装」，
+        // 与主程序解耦（装、卸、启停都由插件体系管理，升级 App 不会凭空塞回来）。
+        // 老版本随包释放过的旧内置插件（清单含 builtinScenario）→ 清目录 + 摘 MCP 残留，
+        // 让升级上来的设备与全新安装表现一致：没有插件就没有入口、报错与 MCP 条目。
+        appScope.launch(Dispatchers.IO) {
+            runCatching {
+                com.aicode.feature.plugin.domain.LegacyPluginCleanup.run(pluginFileAccess, mcpConfigRepository)
+            }.onFailure { FileLogger.w(TAG, "旧内置插件残留清理失败", it) }
         }
         // 启动即把内置提示词全量释放到 ~/.aicode/prompts/（覆盖式，随 App 升级更新）；
         // 用户自定义覆盖放在 ~/.aicode/prompts.custom/，同名即覆盖，不被升级覆盖。
         appScope.launch {
             ContainerInstaller.extractPrompts(this@AIEditorApp)
+        }
+        // FTS 存量回填：迁移 67 只建表+触发器（迁移内 rebuild 会主线程黑屏数秒），存量消息
+        // 在启动后延迟回填；FTS 行数 < 消息行数即执行 rebuild（幂等，新消息由触发器实时入索引）
+        appScope.launch {
+            delay(5_000)
+            runCatching {
+                val db = agentDatabase.openHelper.writableDatabase
+                val ftsCount = db.query("SELECT COUNT(*) FROM agent_messages_fts").use { c -> c.moveToFirst(); c.getInt(0) }
+                val msgCount = db.query("SELECT COUNT(*) FROM agent_messages").use { c -> c.moveToFirst(); c.getInt(0) }
+                if (msgCount > 0 && ftsCount < msgCount) {
+                    db.execSQL("INSERT INTO agent_messages_fts(agent_messages_fts) VALUES('rebuild')")
+                    FileLogger.i("AIEditorApp", "FTS 存量回填完成：$msgCount 条消息")
+                }
+            }.onFailure { FileLogger.w("AIEditorApp", "FTS 存量回填失败（下次启动重试）", it) }
+        }
+        // 启动即把内置技能释放到 ~/.aicode/skills/（覆盖式，随 App 升级自动更新；
+        // 内置技能请勿直接修改，同名用户技能会被内置版覆盖）。
+        appScope.launch {
+            ContainerInstaller.extractBuiltinSkills(this@AIEditorApp)
         }
         // 启动即释放套餐余量示例脚本等内置脚本到 ~/.aicode/scripts/
         appScope.launch {
@@ -240,6 +358,7 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即释放内置子代理定义（Explore）到 ~/.aicode/agents/；已存在不覆盖，用户改过或删掉都不会被升级拉回。
         appScope.launch {
             ContainerInstaller.extractAgents(this@AIEditorApp)
+            ContainerInstaller.extractTeams(this@AIEditorApp)
         }
         // 启动即把旧 Room git 凭据一次性迁移到 git-credentials 文件（真源已迁到文件，删表由迁移器完成）。
         appScope.launch {
@@ -257,10 +376,11 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             modelMetadataService.refreshFromNetworkIfStale()
         }
-        // 启动即异步刷新仓库 providers.json 预设（12h 缓存；失败静默，兜底本地磁盘与内置 assets）。
-        appScope.launch {
-            com.aicode.feature.settings.data.local.ProviderPresetLibrary.refreshFromNetworkIfStale(this@AIEditorApp)
-        }
+        // providers.json 预设已内置化（见 ProviderPresetLibrary）：不从官方仓库拉取，
+        // 自建分支的 models 预填字段只存在于内置数据，网络刷新会覆盖它们。
+        // 镜像目录的网络刷新暂不启用：发布源（data 分支的 container-images.json）随官方 CI
+        // 一起未合入，启动即刷新只会发起注定失败的网络尝试（违性能纪律）。
+        // 待发布源就绪后再恢复 containerImageCatalog.refreshFromNetworkIfStale() 调用。
         // 启动即加载持久化等级，并随设置页改动实时生效（唯一同步点）。
         appScope.launch {
             logSettings.levelFlow.collectLatest { FileLogger.setMinLevel(it) }
@@ -273,6 +393,12 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             val mode = executionModeRepository.executionModeFlow.first()
             executionModeHolder.setMode(mode)
+        }
+        // 启动即常驻订阅自我改进模式开关并同步到 ExecutionModeHolder（设置页改动经同一 DataStore 流即时生效）。
+        appScope.launch {
+            generalSettingsRepository.selfImproveModeFlow.collectLatest {
+                executionModeHolder.setSelfImproveMode(it)
+            }
         }
         // SSH 连接监督常驻（config 为空时空转）：定期探活、断线自动重连，重连成功后重载工作区与同步文档。
         appScope.launch {
@@ -316,6 +442,40 @@ class AIEditorApp : Application(), Configuration.Provider {
                     KeepaliveWorker.cancel(this@AIEditorApp)
                 }
                 last = enabled
+            }
+        }
+        // 悬浮球反应器：监听开关启停悬浮球服务（覆盖设置页实时切换与冷启动恢复）。
+        appScope.launch {
+            var last: Boolean? = null
+            generalSettingsRepository.floatBallEnabledFlow.distinctUntilChanged().collect { enabled ->
+                if (enabled) {
+                    com.aicode.feature.terminal.domain.TerminalKeepaliveService.syncFloatBall(this@AIEditorApp, true)
+                } else if (last == true) {
+                    com.aicode.feature.terminal.domain.TerminalKeepaliveService.syncFloatBall(this@AIEditorApp, false)
+                }
+                last = enabled
+            }
+        }
+        // 网络恢复或切换链路时立即重连 SSH，不等 supervisor 轮询（并带动远端工作区刷新）。
+        appScope.launch {
+            networkConnectivityObserver.recovered.collect {
+                runCatching { remoteSshConnection.tryReconnectIfDisconnected() }
+                    .onFailure { FileLogger.w(TAG, "网络恢复后重连 SSH 失败", it) }
+            }
+        }
+        // 远程 SSH 连接期间维持前台服务：否则远程模式下的空闲会话切后台会被冻结、连接被切断。
+        // 用会话计数（而非用户常驻开关）表达，连接断开即释放，不影响用户对保活开关的选择。
+        appScope.launch {
+            var held = false
+            remoteSshConnection.connectionState.collect { state ->
+                val connected = state == com.aicode.feature.agent.domain.container.ConnectionState.CONNECTED
+                if (connected && !held) {
+                    TerminalKeepaliveService.startSession(this@AIEditorApp)
+                    held = true
+                } else if (!connected && held) {
+                    TerminalKeepaliveService.stopSession(this@AIEditorApp)
+                    held = false
+                }
             }
         }
         // 连接已配置的 MCP server，把其工具注册进 ToolRegistry（内部自有 scope，失败不影响启动）。
@@ -498,6 +658,158 @@ class AIEditorApp : Application(), Configuration.Provider {
     }
 
     /**
+     * 读取历史进程退出原因（ApplicationExitInfo，API 30+），把 Java 未捕获异常处理器覆盖不到的
+     * 异常退出（native 崩溃、ANR、低内存被杀、初始化失败、被信号杀死）补记到日志。
+     *
+     * 用 SharedPreferences 记录已处理的最大时间戳做增量：首次运行只建立基线，不回捞旧记录；
+     * 与最近一次 Java 崩溃时间窗重叠的记录跳过，避免与 CrashActivity 链路重复上报。
+     * 低版本（< API 30）无此 API，静默跳过。
+     */
+    private fun reportAbnormalExits() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        runCatching {
+            val am = getSystemService(ActivityManager::class.java)
+            val records = am.getHistoricalProcessExitReasons(packageName, 0, MAX_EXIT_RECORDS)
+            if (records.isEmpty()) return@runCatching
+            val prefs = getSharedPreferences(CRASH_PREFS, MODE_PRIVATE)
+            val lastSeen = prefs.getLong(KEY_LAST_EXIT_TIMESTAMP, 0L)
+            // 首次运行（尚无游标）只建立基线，不回捞安装前的历史退出，避免一次刷出大量旧记录。
+            if (lastSeen == 0L) {
+                prefs.edit().putLong(KEY_LAST_EXIT_TIMESTAMP, records.maxOf { it.timestamp }).apply()
+                return@runCatching
+            }
+            val lastJavaCrash = prefs.getLong(KEY_LAST_CRASH_TIME, 0L)
+            var maxTimestamp = lastSeen
+            records.sortedBy { it.timestamp }.forEach { info ->
+                if (info.timestamp <= lastSeen) return@forEach
+                maxTimestamp = maxOf(maxTimestamp, info.timestamp)
+                if (info.reason !in ABNORMAL_EXIT_REASONS) return@forEach
+                // 与最近一次 Java 崩溃属同一次退出（时间窗内）时跳过，避免两条链路重复上报。
+                if (lastJavaCrash > 0 &&
+                    kotlin.math.abs(info.timestamp - lastJavaCrash) < CRASH_RESET_WINDOW_MS * 3
+                ) {
+                    return@forEach
+                }
+                FileLogger.e(TAG, "检测到上次异常退出：\n${describeExit(info)}", null)
+            }
+            if (maxTimestamp != lastSeen) {
+                prefs.edit().putLong(KEY_LAST_EXIT_TIMESTAMP, maxTimestamp).apply()
+            }
+        }.onFailure { FileLogger.w(TAG, "读取历史进程退出原因失败", it) }
+    }
+
+    /** 组装单条异常退出的可读描述：原因、时间、状态、重要级、内存、描述与 trace 首部。 */
+    private fun describeExit(info: ApplicationExitInfo): String = buildString {
+        append("原因=").append(exitReasonName(info.reason))
+        append("，时间=").append(
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                .format(java.util.Date(info.timestamp))
+        )
+        append("，status=").append(info.status)
+        append("，importance=").append(info.importance)
+        append("，pss=").append(info.pss / 1024 / 1024).append("MB")
+        append("，rss=").append(info.rss / 1024 / 1024).append("MB")
+        info.description?.let { append("，描述=").append(it) }
+        if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+            append("\n").append(describeNativeTrace(info.traceInputStream, info.timestamp))
+        } else {
+            readTraceHead(info.traceInputStream)?.let { append("\n").append(it) }
+        }
+    }
+
+    /**
+     * native 崩溃的 trace 是 tombstone 的 protobuf（见 [TombstoneParser]）。原样落盘一份（无损，
+     * 便于线下用 protobuf 工具重解析），并解析成可读文本内联——不再走 [readTraceHead] 的可打印过滤，
+     * 那条路径会丢掉线程边界、无法定位到崩溃线程。
+     */
+    private fun describeNativeTrace(stream: java.io.InputStream?, timestamp: Long): String {
+        val bytes = runCatching { stream?.use { it.readBytes() } }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) return "trace: (无)"
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date(timestamp))
+        val dir = FileLogger.logDirectory()?.let { File(it, "crash-traces").apply { mkdirs() } }
+        val rawPath = dir?.let { d ->
+            File(d, "tombstone-$stamp.pb").also { f ->
+                runCatching { f.writeBytes(bytes) }
+                    .onFailure { FileLogger.w(TAG, "落盘原始 tombstone 失败", it) }
+            }.absolutePath
+        }
+        pruneCrashTraces(dir)
+        val body = TombstoneParser.parse(bytes)
+            ?: readTraceHead(bytes.inputStream())
+            ?: "(无可读内容)"
+        val where = rawPath?.let { "\n原始 tombstone: $it" } ?: ""
+        return "trace:\n$body$where"
+    }
+
+    /** 崩溃 tombstone 目录只保留最新的 [MAX_CRASH_TRACE_FILES] 个文件，避免无上限增长。 */
+    private fun pruneCrashTraces(dir: File?) {
+        if (dir == null) return
+        runCatching {
+            val files = dir.listFiles { f -> f.isFile && f.name.startsWith("tombstone-") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: return
+            if (files.size <= MAX_CRASH_TRACE_FILES) return
+            files.drop(MAX_CRASH_TRACE_FILES).forEach { it.delete() }
+        }
+    }
+
+    /**
+     * 读取 trace 前 [TRACE_HEAD_BYTES] 字节（按字节限长，避免超大 trace 撑爆内存），
+     * 并只保留其中的可打印文本片段。用于 ANR 等非 native 退出（trace 可能是压缩流），
+     * 或 tombstone 解析失败时的兜底；直接按 UTF-8 转字符串会变成大量乱码并撑大日志。
+     * 无 trace 或无可见内容时返回 null。
+     */
+    private fun readTraceHead(stream: java.io.InputStream?): String? {
+        if (stream == null) return null
+        return runCatching {
+            stream.use { input ->
+                val buffer = ByteArray(TRACE_HEAD_BYTES)
+                var read = 0
+                while (read < buffer.size) {
+                    val n = input.read(buffer, read, buffer.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read <= 0) return@use null
+                val sb = StringBuilder()
+                val current = StringBuilder()
+                fun flush() {
+                    if (current.length >= 4) {
+                        if (sb.isNotEmpty()) sb.append('\n')
+                        sb.append(current)
+                    }
+                    current.setLength(0)
+                }
+                for (i in 0 until read) {
+                    val b = buffer[i].toInt() and 0xFF
+                    if (b in 0x20..0x7E || b == 0x09) {
+                        current.append(b.toChar())
+                    } else {
+                        flush()
+                    }
+                }
+                flush()
+                sb.toString().trim().takeIf { it.isNotEmpty() }?.let { "trace:\n$it" }
+            }
+        }.getOrNull()
+    }
+
+    /** ApplicationExitInfo 原因码 → 可读名称。 */
+    private fun exitReasonName(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_CRASH -> "Java 崩溃"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native 崩溃"
+        ApplicationExitInfo.REASON_ANR -> "无响应（ANR）"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "低内存被系统杀死"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "初始化失败"
+        ApplicationExitInfo.REASON_SIGNALED -> "被信号杀死"
+        ApplicationExitInfo.REASON_EXIT_SELF -> "主动退出"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "用户主动结束"
+        ApplicationExitInfo.REASON_OTHER -> "其它原因"
+        else -> "未知（$reason）"
+    }
+
+    /**
      * 崩溃进程的内存快照，随报告带出。必须在主进程采集——错误页跑在 :crash 独立进程，
      * 在那里读到的只是汇报进程的堆，对定位 OOM 无意义。
      */
@@ -551,6 +863,39 @@ class AIEditorApp : Application(), Configuration.Provider {
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(agentChannel)
+
+            // 工具授权请求通知：独立渠道，用户可单独控制静音与否（不带声音时授权请求仍可用）。
+            val permissionChannel = NotificationChannel(
+                "agent_permission",
+                getString(R.string.notification_channel_agent_permission),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.notification_channel_agent_permission_desc)
+                setShowBadge(true)
+            }
+            notificationManager.createNotificationChannel(permissionChannel)
+
+            // AI 工作期间的实时通知（Android 16 Live Updates）：静默，由系统决定是否提升到状态栏/锁屏。
+            val liveChannel = NotificationChannel(
+                "agent_live",
+                getString(R.string.notification_channel_agent_live),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.notification_channel_agent_live_desc)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(liveChannel)
+
+            // 授权审批通知：AI 在后台阻塞等待授权/提问/计划审批时弹出，需要弹窗+声音。
+            val approvalChannel = NotificationChannel(
+                "agent_approval",
+                getString(R.string.notification_channel_agent_approval),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.notification_channel_agent_approval_desc)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(approvalChannel)
         }
     }
 }

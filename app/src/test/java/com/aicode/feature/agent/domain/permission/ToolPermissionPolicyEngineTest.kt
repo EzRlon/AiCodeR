@@ -3,6 +3,8 @@ package com.aicode.feature.agent.domain.permission
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCapability
+import com.aicode.feature.schedule.domain.ScheduledAiRunState
+import com.aicode.feature.schedule.domain.ScheduledAuthCategory
 import com.aicode.feature.settings.data.repository.ToolSafetySettingsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -15,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,13 +28,33 @@ import org.junit.Test
  */
 class ToolPermissionPolicyEngineTest {
 
-    private fun engine(vararg rules: PermissionRule, safetyDisabled: Boolean = false): ToolPermissionPolicyEngine {
+    private fun engine(
+        vararg rules: PermissionRule,
+        safetyDisabled: Boolean = false,
+        tier: ToolPermissionTier = ToolPermissionTier.ASK,
+        watchMode: Boolean = false,
+        activeRun: ScheduledAiRunState.ActiveScheduledAiRun? = null
+    ): ToolPermissionPolicyEngine {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         coEvery { repo.loadEffectiveForCurrentProject() } returns rules.toList()
         val safety = mockk<ToolSafetySettingsRepository>(relaxed = true)
         coEvery { safety.isSafetyInterceptionDisabled() } returns safetyDisabled
-        return ToolPermissionPolicyEngine(repo, safety)
+        val tiers = mockk<ToolPermissionTierRepository>(relaxed = true)
+        coEvery { tiers.tierOf(any()) } returns tier
+        val watch = mockk<WatchModeSettingsRepository>(relaxed = true)
+        coEvery { watch.isArmed() } returns watchMode
+        val runState = mockk<ScheduledAiRunState>(relaxed = true)
+        every { runState.current() } returns activeRun
+        return ToolPermissionPolicyEngine(repo, safety, tiers, watch, runState)
     }
+
+    private fun scheduledRun(vararg cats: ScheduledAuthCategory) = ScheduledAiRunState.ActiveScheduledAiRun(
+        taskId = "t1",
+        taskName = "夜间任务",
+        sessionId = "s1",
+        authorizedCategories = cats.toSet(),
+        startedAt = 0L
+    )
 
     private fun tool(vararg caps: ToolCapability): AgentTool {
         val t = mockk<AgentTool>(relaxed = true)
@@ -471,12 +494,238 @@ class ToolPermissionPolicyEngineTest {
     fun remember_dedupesAndAddsEach() = runTest {
         val repo = mockk<PermissionRulesRepository>(relaxed = true)
         coEvery { repo.add(any(), any()) } just runs
-        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true))
+        val e = ToolPermissionPolicyEngine(repo, mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
 
         e.remember("Bash", listOf("git pull", "git pull", "ls"), PermissionScope.PROJECT)
 
         coVerify(exactly = 2) { repo.add(PermissionScope.PROJECT, any()) }
         coVerify { repo.add(PermissionScope.PROJECT, PermissionRule("Bash", "git pull", PermissionDecision.ALLOW)) }
         coVerify { repo.add(PermissionScope.PROJECT, PermissionRule("Bash", "ls", PermissionDecision.ALLOW)) }
+    }
+
+    // ── 工具档位：禁止 / 自动允许 ──────────────────────────────────
+
+    @Test
+    fun denyTier_deniesEvenInAutoMode() = runTest {
+        val e = engine(tier = ToolPermissionTier.DENY)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.AUTO)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+        assertNotNull(r.denyReason)
+    }
+
+    @Test
+    fun autoTier_genericToolIsAllowed() = runTest {
+        val e = engine(tier = ToolPermissionTier.AUTO)
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    @Test
+    fun autoTier_shellUnanalyzableStillAsks() = runTest {
+        val e = engine(tier = ToolPermissionTier.AUTO)
+        // 命令替换 → 不可静态判定：自动允许档不越过系统兜底，仍需询问。
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("cat \$(echo /tmp/x)"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    @Test
+    fun autoTier_shellNormalCommandIsAllowed() = runTest {
+        val e = engine(tier = ToolPermissionTier.AUTO)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git push origin main"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    // ── 守夜守护（无人值守）──────────────────────────────────────
+
+    @Test
+    fun watchMode_shizukuDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Shizuku", bash("ls"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+        assertNotNull(r.denyReason)
+    }
+
+    @Test
+    fun watchMode_planModeAllowed() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(), "planMode", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+    }
+
+    @Test
+    fun watchMode_rmInsideWorkspaceAllowed() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf build"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+        assertNotNull(r.watchAutoAllow)
+    }
+
+    @Test
+    fun watchMode_rmWithUnexpandedVariableDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf \"\$DIR\"/build"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_nestedShellRmOutsideDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("sh -c \"rm -rf /system/x\""), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_unanalyzableBenignAllowed() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("echo \$(date)"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
+        assertNotNull(r.watchAutoAllow)
+    }
+
+    @Test
+    fun watchMode_unanalyzableDestructiveDenied() = runTest {
+        val e = engine(watchMode = true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf \$(pwd)/build"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_unanalyzableBenignNotAutoAllowed() = runTest {
+        // 安全回归：定时任务运行中，不可静态判定的命令不得借守夜分支放行绕过预授权清单；
+        // 预授权仅 READ（不含 EXECUTE），命令替换命令应落 ASK（通知授权/兑底超时）。
+        // 对照：纯守夜（非定时）下同类命令仍放行（上一用例）；EXECUTE 已预授权时则按清单放行。
+        val e = engine(activeRun = scheduledRun(ScheduledAuthCategory.READ))
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("echo \$(date)"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+        assertNull(r.watchAutoAllow)
+    }
+
+    @Test
+    fun watchMode_catastrophicRmElevateStillDenied() = runTest {
+        val e = engine(watchMode = true)
+        val args = bash("rm -rf /").toMutableMap()
+        args["elevate"] = JsonPrimitive(true)
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", args, AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_findMultiExecRmDenied() = runTest {
+        val e = engine(watchMode = true)
+        // 第一个 -exec 是 echo、第二个才是 rm：需遍历全部 -exec（不只看第一个）。
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("find . -exec echo {} \\; -exec rm {} \\;"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun watchMode_nestedSingleQuoteVariableDenied() = runTest {
+        val e = engine(watchMode = true)
+        // 单引号内双引号包裹的变量：嵌套解析后仍应识别未展开变量并拒绝。
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("sh -c 'rm -rf \"\$DIR\"'"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    // ── 定时 AI 任务预授权（无人值守放行与拦截，见 scheduled-ai-task-plan） ──────
+
+    @Test
+    fun scheduledRun_allowsWithinAuthorizedCategories() = runTest {
+        val e = engine(activeRun = scheduledRun(ScheduledAuthCategory.READ, ScheduledAuthCategory.WRITE, ScheduledAuthCategory.EXECUTE))
+        val w = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", mapOf("path" to JsonPrimitive("/root/workspace/a.txt"), "content" to JsonPrimitive("x")), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, w.verdict)
+        assertNotNull(w.watchAutoAllow)
+        val s = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("ls -la"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, s.verdict)
+    }
+
+    @Test
+    fun scheduledRun_missingCategoryFallsThroughToAsk() = runTest {
+        val e = engine(activeRun = scheduledRun(ScheduledAuthCategory.READ))
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.BUILD)
+        // 超档不直接拒绝：落主链 ASK，由守夜兜底超时/通知授权接住
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_deleteCommandRequiresDeleteCategory() = runTest {
+        val withoutDelete = engine(activeRun = scheduledRun(ScheduledAuthCategory.EXECUTE))
+        val r1 = withoutDelete.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm app/build/tmp.txt"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r1.verdict)
+
+        val withDelete = engine(activeRun = scheduledRun(ScheduledAuthCategory.EXECUTE, ScheduledAuthCategory.DELETE))
+        val r2 = withDelete.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm app/build/tmp.txt"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r2.verdict)
+    }
+
+    @Test
+    fun scheduledRun_catastrophicRmStillDeniedEvenWithAllCategories() = runTest {
+        val e = engine(activeRun = scheduledRun(*ScheduledAuthCategory.entries.toTypedArray()))
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("rm -rf /root/workspace"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_protectedConfigWriteNotCovered() = runTest {
+        val e = engine(activeRun = scheduledRun(*ScheduledAuthCategory.entries.toTypedArray()))
+        val r = e.evaluate(
+            tool(ToolCapability.WRITE_WORKSPACE),
+            "writeFile",
+            mapOf("path" to JsonPrimitive("/root/.aicode/hooks.json"), "content" to JsonPrimitive("x")),
+            AgentMode.BUILD
+        )
+        // C 类配置写入属守夜「永不自动放行」：即使勾满全部类别也不放行
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_agentConfigToolNotCovered() = runTest {
+        val e = engine(activeRun = scheduledRun(*ScheduledAuthCategory.entries.toTypedArray()))
+        val r = e.evaluate(tool(ToolCapability.MODIFY_AGENT_CONFIG), "manageMcp", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_plainModeStillBlocksDangerousTools() = runTest {
+        // 定时任务的运行模式为 PLAN 时，预授权不越过只读拦截
+        val e = engine(activeRun = scheduledRun(*ScheduledAuthCategory.entries.toTypedArray()))
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.PLAN)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.DENY, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_rememberedShellRuleNotSilentlyApplied() = runTest {
+        // 交互会话里记忆过 `git pull`；定时任务没勾 EXECUTE → 不被记忆规则静默放行，走 ASK（通知授权）
+        val e = engine(
+            PermissionRule("Bash", "git pull", PermissionDecision.ALLOW),
+            activeRun = scheduledRun(ScheduledAuthCategory.READ)
+        )
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git pull origin main"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_rememberedWholeToolRuleNotSilentlyApplied() = runTest {
+        // 整工具记忆（如「始终允许 writeFile」）在定时任务下同样不静默放行
+        val e = engine(
+            PermissionRule("writeFile", PermissionRule.WHOLE_TOOL, PermissionDecision.ALLOW),
+            activeRun = scheduledRun(ScheduledAuthCategory.READ)
+        )
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    @Test
+    fun scheduledRun_tierAutoNotApplied() = runTest {
+        // 工具档位「自动允许」在定时任务下不兜底（写类操作未勾 WRITE → ASK）
+        val e = engine(tier = ToolPermissionTier.AUTO, activeRun = scheduledRun(ScheduledAuthCategory.READ))
+        val r = e.evaluate(tool(ToolCapability.WRITE_WORKSPACE), "writeFile", emptyMap(), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ASK, r.verdict)
+    }
+
+    @Test
+    fun noScheduledRun_rememberedRuleStillApplies() = runTest {
+        // 回归：非定时任务场景，记忆规则与档位兜底照常生效
+        val e = engine(PermissionRule("Bash", "git pull", PermissionDecision.ALLOW))
+        val r = e.evaluate(tool(ToolCapability.EXECUTE_COMMANDS), "Bash", bash("git pull origin main"), AgentMode.BUILD)
+        assertEquals(ToolPermissionPolicyEngine.Verdict.ALLOW, r.verdict)
     }
 }

@@ -4,6 +4,8 @@ import android.content.ClipData
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,7 +30,9 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -45,6 +50,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.ClipEntry
@@ -53,26 +59,31 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aicode.R
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.GitStatusColors
 import com.aicode.core.theme.semanticColors
+import com.aicode.core.ui.AdaptiveModalBottomSheet
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
 import com.aicode.core.ui.FloatingTabBar
 import com.aicode.core.ui.FloatingTabItem
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.settingsPageBackground
 import com.aicode.feature.git.domain.model.GitStatus
 import com.aicode.feature.git.domain.model.GitTab
 import com.aicode.feature.git.presentation.GitViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Activity
 import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Download
+import compose.icons.feathericons.Folder
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.GitCommit
 import compose.icons.feathericons.Key
@@ -80,6 +91,31 @@ import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.X
 import compose.icons.feathericons.Zap
 import kotlinx.coroutines.launch
+
+/** 悬浮 tab 栏高 68dp + 底部留白 6dp：Snackbar 抬高这个量才不会盖住它。 */
+private val SnackbarBottomInset = 74.dp
+
+/**
+ * 容器未就绪提示条：常驻直到容器就绪，不自动消失、不遮挡底部 tab 栏。
+ *
+ * 配色走 warning 语义色：M3 的 Snackbar 默认用反色 Surface，浅色主题下是白底，内部文字颜色
+ * 一旦没绑主题色就变成白底白字（反馈：底栏那条「白条」看不见任何内容）。
+ */
+@Composable
+private fun ContainerNotReadyBanner(text: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Radius.mdLarge),
+        color = MaterialTheme.semanticColors.warningContainer,
+        contentColor = MaterialTheme.semanticColors.onWarningContainer
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,6 +143,14 @@ fun GitScreen(
     var showCommitDialog by remember { mutableStateOf(false) }
     var showPullConfirm by remember { mutableStateOf(false) }
     var showMasterRenameConfirm by remember { mutableStateOf(false) }
+
+    // 回到本页时重查一次：容器未就绪的提示是常驻状态，用户去终端初始化再返回必须自愈，
+    // 否则横幅会一直挂在那里、比原来的 Snackbar 更难消失。
+    // 走静默刷新：已有数据时不把整页切回 loading 占位（每次回前台闪一次空白太打扰）。
+    LifecycleResumeEffect(Unit) {
+        viewModel.refresh(silent = true)
+        onPauseOrDispose { }
+    }
 
     // 三个 tab 的滚动状态统一提升到页面层，聚合出「是否正在滚动」用于底部 tab 栏滚动弱化。
     val statusListState = rememberLazyListState()
@@ -138,7 +182,32 @@ fun GitScreen(
         containerColor = settingsPageBackground(),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.git_title)) },
+                title = {
+                    Column {
+                        Text(stringResource(R.string.git_title))
+                        val currentRepo = state.currentRepo
+                        if (currentRepo != null) {
+                            Row(
+                                modifier = Modifier.clickable { viewModel.showRepoPicker() },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = repoDisplayName(currentRepo),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(
+                                    FeatherIcons.ChevronDown,
+                                    contentDescription = stringResource(R.string.git_switch_repo),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = settingsPageBackground(),
                     titleContentColor = MaterialTheme.colorScheme.onBackground
@@ -163,18 +232,49 @@ fun GitScreen(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    // 显式绑定主题色：M3 的 Snackbar 默认取 inverseSurface/inverseOnSurface，而本项目
+                    // 自定义配色的 inverseSurface 是 onSurface（近黑），与浅色主题页面拼在一起就成了
+                    // 一条看不到内容的「白条」（反馈 2）。
+                    containerColor = MaterialTheme.semanticColors.mutedSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    actionColor = MaterialTheme.colorScheme.primary,
+                    // 底栏是悬浮 tab 栏，Snackbar 默认贴在 Scaffold 底部会把它整条盖住。
+                    modifier = Modifier.padding(bottom = SnackbarBottomInset)
+                )
+            }
+        }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
-            when {
+            // 容器未就绪常驻横幅：不随 Snackbar 超时消失，也不遮挡底部 tab 栏。
+            // 此时不能进入下面的分支：loading=false 且 notARepo=false 会让 HorizontalPager 渲染空白页。
+            val hint = state.containerHint
+            if (hint != null) {
+                ContainerNotReadyBanner(
+                    text = hint,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+                )
+            } else when {
                 state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.git_loading_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 state.notARepo -> NotARepoState(
                     busy = state.busy,
                     onInit = viewModel::initRepo,
-                    onClone = viewModel::cloneRepo
+                    onClone = viewModel::cloneRepo,
+                    onPickExisting = viewModel::showRepoPicker
                 )
                 else -> HorizontalPager(
                     state = pagerState,
@@ -213,6 +313,7 @@ fun GitScreen(
                                     snackbarHostState.showSnackbar(context.getString(R.string.git_toast_path_copied))
                                 }
                             },
+                            onStashOpen = viewModel::loadStashes,
                             onStashSave = viewModel::stashSave,
                             onStashPop = viewModel::stashPop,
                             onStashApply = viewModel::stashApply,
@@ -259,8 +360,11 @@ fun GitScreen(
         }
 
         // 底部渐变蒙版 + 悬浮 tab 组：内容可滚动到屏幕底部穿过 tab 栏，被渐变遮罩（同主页输入框）。
-        // 仅仓库态显示：加载中/非仓库态时 HorizontalPager 未组合，点击 tab 无内容可切换。
-        if (!state.loading && !state.notARepo) {
+        // 非仓库态不显示；仓库态在快照加载期间也常驻——否则容器冷启动跑 git 命令的几秒里
+        // 底栏整个缺席，页面下部空白（深色下尤其像白屏故障）。pagerState 独立于 Pager 内容，
+        // 加载中点 tab 只改页码，加载完成后直接落在对应页，无崩溃面。
+        // 容器未就绪时不显示 tab 栏：内容区只有提示条，tab 可点却无内容，反而误导为「功能可用」。
+        if (!state.notARepo && state.containerHint == null) {
             FloatingTabBar(
                 pagerState = pagerState,
                 items = listOf(
@@ -274,6 +378,17 @@ fun GitScreen(
             )
         }
     }
+    }
+
+    if (state.repoPickerVisible) {
+        RepoPickerSheet(
+            workspaceRoot = state.workspaceRoot,
+            subdirs = state.subdirs,
+            repos = state.repos,
+            currentRepo = state.currentRepo,
+            onSelect = viewModel::switchRepo,
+            onDismiss = viewModel::hideRepoPicker
+        )
     }
 
     if (showPullConfirm) {
@@ -337,6 +452,7 @@ fun GitScreen(
 internal fun StatusMetric(label: String, count: Int, color: Color, modifier: Modifier = Modifier) {
     Surface(
         color = MaterialTheme.semanticColors.mutedSurface,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = RoundedCornerShape(Radius.md),
         modifier = modifier
     ) {
@@ -422,12 +538,13 @@ internal fun EmptyState(text: String) {
     }
 }
 
-/** 非仓库态：文案 + 「初始化 Git 仓库」/「克隆远程仓库」按钮（成功后自动刷新进仓库态）。 */
+/** 非仓库态：文案 + 「初始化 Git 仓库」/「克隆远程仓库」/「选择已有仓库」按钮（成功后自动刷新进仓库态）。 */
 @Composable
 private fun NotARepoState(
     busy: Boolean,
     onInit: () -> Unit,
-    onClone: (String) -> Unit
+    onClone: (String) -> Unit,
+    onPickExisting: () -> Unit
 ) {
     var showCloneDialog by remember { mutableStateOf(false) }
 
@@ -443,7 +560,12 @@ private fun NotARepoState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                stringResource(R.string.git_init_desc),
+                stringResource(R.string.git_init_desc_primary),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(R.string.git_init_desc_secondary),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -471,6 +593,11 @@ private fun NotARepoState(
                         Text(stringResource(R.string.git_clone_repo))
                     }
                 }
+                OutlinedButton(onClick = onPickExisting) {
+                    Icon(FeatherIcons.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(Spacing.xs))
+                    Text(stringResource(R.string.git_pick_existing_repo))
+                }
             }
         }
     }
@@ -483,6 +610,123 @@ private fun NotARepoState(
                 onClone(url)
             }
         )
+    }
+}
+
+/** 仓库路径 → 显示名（最后一段路径；根目录用完整路径）。 */
+private fun repoDisplayName(path: String): String =
+    path.trimEnd('/').substringAfterLast('/').ifBlank { path }
+
+/** 显示名：工作区名/子目录名（如 default/git1）；工作区根本身只显示工作区名。 */
+private fun repoDisplayPath(path: String, workspaceRoot: String): String {
+    val rootName = workspaceRoot.trimEnd('/').substringAfterLast('/')
+    val relative = path.removePrefix(workspaceRoot.trimEnd('/')).trimStart('/')
+    return if (relative.isBlank()) rootName else "$rootName/$relative"
+}
+
+/**
+ * 仓库选择弹窗：列出工作区根与其一层直接子目录，Git 仓库可点选，非 Git 目录灰显并标注。
+ * 既用于多仓库切换（顶栏入口），也用于非仓库态「选择已有仓库」，能看到实际扫描范围。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RepoPickerSheet(
+    workspaceRoot: String,
+    subdirs: List<String>,
+    repos: List<String>,
+    currentRepo: String?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val entries = remember(workspaceRoot, subdirs) {
+        (if (workspaceRoot.isNotBlank()) listOf(workspaceRoot) else emptyList()) + subdirs
+    }
+    AdaptiveModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg)
+                .padding(bottom = Spacing.xl)
+        ) {
+            Text(
+                text = stringResource(R.string.git_repo_selector_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.md)
+            )
+            if (entries.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.git_pick_repo_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = Spacing.md)
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    items(entries, key = { it }) { path ->
+                        RepoPickerRow(
+                            path = path,
+                            workspaceRoot = workspaceRoot,
+                            isRepo = path in repos,
+                            isSelected = path == currentRepo,
+                            onClick = { onSelect(path) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RepoPickerRow(
+    path: String,
+    workspaceRoot: String,
+    isRepo: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.sm))
+            .then(if (isRepo) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            FeatherIcons.Folder,
+            contentDescription = null,
+            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(Spacing.md))
+        Text(
+            text = repoDisplayPath(path, workspaceRoot),
+            style = MaterialTheme.typography.bodyLarge,
+            color = when {
+                isSelected -> MaterialTheme.colorScheme.primary
+                isRepo -> MaterialTheme.colorScheme.onSurface
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (!isRepo) {
+            Text(
+                text = stringResource(R.string.git_repo_not_repo),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -666,6 +910,7 @@ private fun CommitDialog(
                 // 底部轻量设置栏：amend 开关
                 Surface(
                     color = MaterialTheme.semanticColors.mutedSurface,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     shape = RoundedCornerShape(Radius.md),
                     modifier = Modifier
                         .fillMaxWidth()

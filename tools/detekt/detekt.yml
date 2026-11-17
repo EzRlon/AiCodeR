@@ -1,0 +1,33 @@
+# detekt 配置：面向「审查前置候选发现」，只开找 bug 的规则集，关闭风格/复杂度类
+# （存量代码风格问题海量，属于 qa 主观审查范围；baseline 兜底存量误报）
+config:
+  validation: true
+  warningsAsErrors: false
+
+potential-bugs:
+  active: true
+
+exceptions:
+  active: true
+
+coroutines:
+  active: true
+
+# 以下规则集整体关闭：噪音高、与本项目存量风格冲突，不属于机器前置的定位
+style:
+  active: false
+
+complexity:
+  active: false
+
+naming:
+  active: false
+
+empty-blocks:
+  active: false
+
+comments:
+  active: false
+
+performance:
+  active: false

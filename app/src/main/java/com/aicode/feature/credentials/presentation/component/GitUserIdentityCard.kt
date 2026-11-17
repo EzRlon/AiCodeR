@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.core.theme.Spacing
 import com.aicode.core.ui.AppTextField
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsGroupHeader
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 
@@ -60,6 +60,14 @@ internal fun GitUserIdentityCard(
             label = "user.email",
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
         )
+        // 写明作用域：留空即撤销本仓库覆盖、回落到全局，否则用户无法知道清空会发生什么。
+        if (globalHint.isNotBlank()) {
+            Text(
+                text = stringResource(R.string.git_identity_global_hint, globalHint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
 
         SettingsGroupHeader(stringResource(R.string.git_repo_url_title))
         AppTextField(

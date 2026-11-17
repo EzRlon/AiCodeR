@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -77,7 +78,9 @@ import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Image
 import compose.icons.feathericons.Menu
+import compose.icons.feathericons.Paperclip
 import compose.icons.feathericons.X
+import compose.icons.feathericons.Bell
 import compose.icons.feathericons.Zap
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
@@ -96,10 +99,18 @@ internal fun QueuedRequestPanel(
     onRemoveQueued: (String) -> Unit,
     onMoveQueued: (Int, Int) -> Unit,
     onEditQueued: (QueuedRequest) -> Unit,
-    onInterjectQueued: (String) -> Unit
+    onInterjectQueued: (String) -> Unit,
+    onPassiveForwardQueued: (String) -> Unit = {}
 ) {
-    // 按会话记忆展开状态，默认展开；弹窗/键盘叠加时联动强制收起（同待办面板）。
-    var isExpanded by rememberSaveable(sessionId) { mutableStateOf(true) }
+    // 按会话记忆展开状态；默认展开仅限少量条目：多条队列+仪表盘+输入卡同屏时总高
+    // 超出底栏可用空间，无滚动 Column 溢出会挤压末端控制行（发送按钮被压扁，用户反馈 2026-10-18）。
+    var isExpanded by rememberSaveable(sessionId) {
+        mutableStateOf(queuedRequests.size <= 2)
+    }
+    // 新消息入队使条数超阈值时自动收起一次，防溢出；用户仍可手动展开查看。
+    LaunchedEffect(queuedRequests.size) {
+        if (queuedRequests.size > 2) isExpanded = false
+    }
     val effectiveExpanded = isExpanded && !forceCollapse
     // 拖拽中读取最新队列与回调：pointerInput 只在 key 变化时重启，用 rememberUpdatedState 避免捕获陈旧值。
     val currentQueue by rememberUpdatedState(queuedRequests)
@@ -163,7 +174,10 @@ internal fun QueuedRequestPanel(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .zIndex(if (isDragging) 1f else 0f)
-                                .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
+                                // 拖拽中才挂位移层；静止时摘层，避免行内文字缓存旧主题色。
+                                .then(
+                                    if (isDragging) Modifier.graphicsLayer { translationY = dragOffset } else Modifier
+                                )
                                 .clip(RoundedCornerShape(Radius.sm))
                                 .background(
                                     if (isDragging) MaterialTheme.colorScheme.surfaceVariant
@@ -216,6 +230,21 @@ internal fun QueuedRequestPanel(
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
+                            if (req.inputAttachments.isNotEmpty()) {
+                                Spacer(Modifier.width(Spacing.sm))
+                                Icon(
+                                    FeatherIcons.Paperclip,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = req.inputAttachments.size.toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Spacer(Modifier.width(Spacing.sm))
                             Text(
                                 text = req.request,
@@ -233,6 +262,17 @@ internal fun QueuedRequestPanel(
                                     FeatherIcons.Zap,
                                     contentDescription = stringResource(R.string.chat_queue_interject),
                                     tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onPassiveForwardQueued(req.id) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    FeatherIcons.Bell,
+                                    contentDescription = stringResource(R.string.chat_queue_passive),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(14.dp)
                                 )
                             }

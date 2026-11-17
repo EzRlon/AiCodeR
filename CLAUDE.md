@@ -15,6 +15,16 @@
   - **左滑删除**：一律使用 `core/ui/SwipeToDeleteRow.kt`。
   - **主题与设计规范**：严格遵循 `core/theme/AIEditorTheme.kt` 的 `Spacing`、`Radius`（含 `Radius.mdLarge = 12.dp`）与 `MaterialTheme.semanticColors`，禁止随意硬编码非标魔数与色彩。
 
+## 进度汇报（强制，2026-11-15 用户定）
+
+- **关键节点即时报**：完成 / 失败 / 卡住 / 转向 / 需要用户决策时，先发一句话结果，再做验签、复制、清理、写交接单等后续；不要把「已完成」埋到最后的长总结里。
+- **长构建 / 长测试 / 后台任务**：启动时说明预计；连续执行期间按运行时上下文时间约每 **15 分钟**一条一句话进度（在做什么 / 到哪了 / 还剩什么）。等待用户回复的静默期不需要心跳。
+- **卡住/换方案也要报**：发现 CPU 不涨、锁等待、OOM、aapt2/架构错误等异常，先说「已卡住，正在换 X 方案」，不要静默重试。
+- **成本敏感**：心跳中带上「预计还要多久 / 是否建议继续」，让用户能及时叫停；用户叫停后立即停手并给交接。
+- **交付物主动发送**：构建出 APK/安装包或其它用户需要的产物后，直接通过 `send_file`/文件卡片交付，不等用户索要；`send_file` 失败时立即给出工作区可访问路径与原因。
+- **后台完成必须自动接续（2026-11-16 用户定，强制）**：一旦说了「等构建/测试结果」，后台任务完成或进程退出后必须立即接续后续步骤（验签、复制、交付、汇报），不得沉默等待、不得等用户追问；完成通知不是用户消息，但自动接续是义务。
+- 汇报必须独立可读、不重复已告知内容；面向用户只给结论与下一步，不复述工具日志。
+
 ## 构建与验证
 
 **改完编译型代码（`.kt` / `.gradle.kts` / `AndroidManifest.xml`）→ 提交前必跑冒烟编译；`git push` 前必跑单元测试，并跑 `check_migrations.py` 迁移对账。** 只改文档 / 资源文案 / 纯 `.md` 时这些都跳过。
@@ -23,6 +33,7 @@
 | --- | --- |
 | 冒烟编译（日常默认） | `./gradlew :app:assembleUniversalDebug` |
 | 推送前单测 | `./gradlew :app:testUniversalDebugUnitTest` |
+| 推送前一键验证（真跑单测 + 迁移对账 + detekt） | `sh scripts/verify-all.sh`（`--fast` 放行 Gradle 缓存，日常自查用） |
 | 推送前迁移对账 | `python3 scripts/check_migrations.py`（或 `./gradlew checkMigrations`） |
 | 发版构建 APK / AAB | `./gradlew assembleRelease` / `./gradlew bundleRelease` |
 
@@ -75,6 +86,7 @@ Room（`feature/agent/data/local/database/AgentDatabase.kt` + 各 DAO），迁�
 - **UI 变化（新增页面、改交互、调布局、改文案）→ 必须更新 `docs-site/docs/`**；新增文档页同步加进 `docs-site/.vitepress/config.ts` 侧栏与 `docs-site/docs/guide/overview.md` 索引。
 - **用户可见中文文案 → 必须进双语 strings.xml**：写入 `values/strings.xml`（中文）与 `values-en/strings.xml`（英文），代码用 `stringResource(R.string.xxx)` 引用。**禁止在 `.kt` 中硬编码中文 UI 文案。** 命名用语义化英文小写下划线，跨页面复用的加 `common_` 前缀。
 - **提供商预设只在仓库数据文件维护**：新增或调整内置 AI 供应商，**只改 `data/providers.json`**（App 启动时从仓库动态拉取的源）；**不要**同步改 `app/src/main/assets/providers.json`（内置兜底快照，随发版固化）与 `docs-site/` 文档。
+- **容器镜像目录由脚本生成，禁止手改**：`data/container-images.json` 由 `scripts/sync-container-images.py` 抓上游生成，发布到 `data` 分支的 CI 暂未随自建分支合入；`app/src/main/assets/container-images.json` 是内置兜底快照，**发版前用同一脚本刷新**（`python3 scripts/sync-container-images.py --out app/src/main/assets/container-images.json`）——它承载离线可用的版本号与 SHA-256 校验和。要增删发行版或改镜像源，改脚本里的配置或 `sources` 表，不要改生成结果。
 
 **文档目录约定**：`docs-site/docs/` 是文档唯一事实源，`guide/` 放功能说明、`advanced/` 放环境搭建与进阶教程。构建时由 `syncAiDocs` task 复制到 `assets/docs/`，AI 在容器内看到的是 `~/.aicode/docs/{guide,advanced}/*.md`。**面向用户书写**：讲清怎么做、会看到什么、出错怎么办；变量名、错误码、内部实现路径属于 `prompts/`，别写进用户文档。
 

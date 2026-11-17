@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 夜间模式 + Android 12+：Night 限定符先于平台版本生效，须单独提供本文件，
+         否则解析到 values-night 的旧版主题、透明图标方案在暗色下失效（qa 复审 2026-10-17）。
+         背景色 @color/splash_background_color 自动取夜间值 #121212。 -->
+    <style name="Theme.AICode.Splash" parent="Theme.AICode">
+        <item name="android:windowSplashScreenBackground">@color/splash_background_color</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/splash_background_color</item>
+    </style>
+</resources>

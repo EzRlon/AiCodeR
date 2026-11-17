@@ -1,16 +1,25 @@
 package com.aicode.feature.agent.presentation.component
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -25,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +47,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCut
@@ -45,24 +56,29 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
+import com.aicode.feature.agent.presentation.DeliverableItem
 import com.aicode.core.ui.AdaptiveModalBottomSheet
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.aicode.core.ui.AppTextField
 import com.aicode.core.ui.dialogTextFieldColors
-import com.aicode.feature.onboarding.domain.OnboardingStep
-import com.aicode.feature.onboarding.presentation.onboardingTarget
+import com.aicode.core.ui.onboarding.OnboardingStep
+import com.aicode.core.ui.onboarding.onboardingTarget
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -70,9 +86,16 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -81,43 +104,72 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import com.aicode.core.ui.drawerWidth
+import com.aicode.core.ui.isAnimationDisabled
+import com.aicode.core.ui.isRtlLayout
+import com.aicode.core.ui.pressScale
+import com.aicode.core.ui.tabEnter
+import com.aicode.core.ui.tabExit
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
-import com.aicode.core.ui.SegmentedTabs
 import com.aicode.core.ui.rememberImeBottomInset
-import com.aicode.feature.settings.presentation.component.ModelSearchField
-import com.aicode.feature.settings.presentation.component.SettingsDivider
-import com.aicode.feature.settings.presentation.component.SettingsGroup
-import com.aicode.feature.settings.presentation.component.SettingsGroupHeader
-import com.aicode.feature.settings.presentation.component.SettingsRow
-import com.aicode.feature.settings.presentation.component.settingsPageBackground
+import com.aicode.core.ui.settings.CollapsibleGroupHeader
+import com.aicode.core.ui.settings.ModelSearchField
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.core.ui.settings.SettingsRow
+import com.aicode.core.ui.settings.settingsPageBackground
 import com.aicode.feature.agent.domain.model.ChatSession
 import com.aicode.feature.agent.presentation.AgentUIState
 import com.aicode.feature.agent.presentation.ChatSearchHit
 import com.aicode.feature.agent.presentation.ChatSearchState
+import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.agent.presentation.BrowseClipboard
 import com.aicode.feature.agent.presentation.FileBrowseState
 import com.aicode.feature.agent.presentation.FileTreeNode
+import com.aicode.feature.agent.presentation.FileTreeRoot
 import com.aicode.feature.workspace.domain.isValidFileEntryName
 import com.aicode.core.ui.ChevronRotationStyle
 import com.aicode.core.ui.ExpandableChevronIcon
+import com.aicode.core.ui.containerOsLogo
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
+import compose.icons.feathericons.Camera
 import compose.icons.feathericons.CheckSquare
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Crosshair
+import compose.icons.feathericons.Box
 import compose.icons.feathericons.Download
 import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.MessageSquare
+import compose.icons.feathericons.Monitor
+import compose.icons.feathericons.Search
+import compose.icons.feathericons.Server
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Cpu
+import compose.icons.feathericons.MessageCircle
+import compose.icons.feathericons.HardDrive
 import compose.icons.feathericons.Settings
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import compose.icons.feathericons.Archive
+import compose.icons.feathericons.File
+import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Image
+import compose.icons.feathericons.MoreHorizontal
 import compose.icons.feathericons.Trash2
+import compose.icons.feathericons.Upload
 import compose.icons.feathericons.X
 import androidx.compose.ui.res.stringResource
 import com.aicode.R
@@ -130,10 +182,120 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
+/** 抽屉标签项：图标 + 名称 + 功能说明（说明用于按住时的浮出提示）。 */
+private data class DrawerTab(val icon: ImageVector, val label: String, val desc: String)
+
+/** 索引标签宽度（同时决定浮出提示的横向偏移量）。验收反馈 F5：收窄一档，不占过大空间。 */
+private val drawerTabWidth = 32.dp
+
 /**
- * 侧边栏内容：顶部 Tab 切换「会话」/「文件」，底部「设置」入口卡片。
+ * 标签列顶部下移量：与内容列表「第一条会话标题」水平对齐（验收反馈 2026-10-17）。
+ * 估算（qa 校准）：搜索框 41 + 间距 8 + 分组头 44 + 行内标题中线 19.5 − 按钮半高 17（34dp 高按钮）≈ 95.5 → 96。
+ */
+private val drawerTabsTopPadding = 96.dp
+
+/**
+ * 产品册索引标签风竖排标签列：左直边贴面板右缘、右侧圆角的小标签，**整体位于面板外侧**（图1 定稿）。
+ * **样式规则（勿破，2026-10-17 三次定稿）**：标签左直边贴面板右缘线、右半圆角朝外；
+ * 垂直起点下移对齐会话条目（[drawerTabsTopPadding]）；以后新增的页签按钮只需加入 [tabs] 列表即可自动继承。
+ * 按住时在右侧浮出「名称 + 功能说明」提示，松手即消失（渲染在 Popup 层，不被面板裁剪）。
+ */
+@Composable
+private fun DrawerVerticalTabs(
+    selected: Int,
+    tabs: List<DrawerTab>,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // 沉浸配色（2026-10-17 验收反馈）：未选中与左侧栏底部卡片（SettingsGroup 的 cardSurface）同色，融进面板；
+    // 选中用主题高亮色「亮起」，点击前后一眼可辨。
+    val unselectedColor = MaterialTheme.semanticColors.cardSurface
+    val selectedColor = MaterialTheme.colorScheme.primaryContainer
+    // 提示统一浮在按钮右侧（用户规则：含以后新增的按钮）；宽度自适应到屏幕右缘，窄屏自动折行。
+    val tooltipOffsetPx = with(LocalDensity.current) { (drawerTabWidth + 10.dp).roundToPx() }
+    val tooltipMaxWidth = (LocalConfiguration.current.screenWidthDp - drawerWidth().value - drawerTabWidth.value - 10)
+        .coerceIn(64f, 220f).dp
+    // 形状定稿（图1）：左直边贴面板右缘、圆角只在右侧。
+    val tabShape = RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
+
+    Column(
+        modifier = modifier
+            .width(drawerTabWidth)
+            .padding(top = drawerTabsTopPadding),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        tabs.forEachIndexed { index, tab ->
+            val isSelected = selected == index
+            val interactionSource = remember { MutableInteractionSource() }
+            val pressed by interactionSource.collectIsPressedAsState()
+            Box {
+                Surface(
+                    modifier = Modifier
+                        .pressScale(interactionSource, pressedScale = 0.92f, label = "drawer-tab-press")
+                        .width(drawerTabWidth)
+                        .height(34.dp)
+                        .selectable(
+                            selected = isSelected,
+                            interactionSource = interactionSource,
+                            indication = null,
+                            role = Role.Tab
+                        ) { onSelect(index) },
+                    shape = tabShape,
+                    color = if (isSelected) selectedColor else unselectedColor,
+                    shadowElevation = if (isSelected) 2.dp else 0.dp
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.label,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (pressed) {
+                    Popup(
+                        alignment = Alignment.CenterStart,
+                        offset = IntOffset(tooltipOffsetPx, 0)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 6.dp
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .widthIn(max = tooltipMaxWidth)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = tab.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = tab.desc,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 侧边栏内容：右缘「产品册索引标签」切换「会话」/「文件」（按住浮出功能提示），底部「设置」入口卡片。
  * Tab0 为根会话列表，带子代理的会话行可就地展开；Tab1 为当前工作区的文件树。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatDrawerContent(
     sessions: List<ChatSession>,
@@ -146,7 +308,10 @@ fun ChatDrawerContent(
     onRename: (ChatSession, String) -> Unit,
     onTogglePin: (ChatSession) -> Unit,
     onExport: (ChatSession) -> Unit,
+    onImport: () -> Unit,
     subSessionsByParent: Map<String, List<ChatSession>> = emptyMap(),
+    /** 外部引擎当前真正在跑的子代理会话 id；与累计子会话数区分，用于「运行中/总数」。 */
+    runningSubSessionIds: Set<String> = emptySet(),
     browseState: FileBrowseState,
     expandedPaths: Set<String>,
     expandingPath: String? = null,
@@ -166,8 +331,35 @@ fun ChatDrawerContent(
     onPasteOverwrite: () -> Unit,
     onCancelPasteOverwrite: () -> Unit,
     onClearClipboard: () -> Unit,
+    /** 子代理成员标识 → 显示名（如 backend → 后端）；用于子代理行的成员徽章。 */
+    memberNameOf: (String) -> String = { it },
     onNavigateToBrowser: (() -> Unit)? = null,
+    /** 标注中心入口：活标注/截屏标注/账本统一界面；null 则隐藏该入口。 */
+    onNavigateToAnnotations: (() -> Unit)? = null,
+    /** 交付物列表（左栏第三页）：当前工作区的会话附件（AI 交付的文件与安装包），时间倒序。 */
+    deliverables: List<DeliverableItem> = emptyList(),
+    deliverablesScanning: Boolean = false,
+    onRemoveDeliverable: (DeliverableItem) -> Unit = {},
+    onDeleteDeliverableCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) },
+    onRefreshDeliverables: () -> Unit = {},
+    /** 交付物操作菜单所需的文件访问（保存到手机/MT/分享等）；null 时行点击仅提示。 */
+    deliverableFileAccess: com.aicode.feature.workspace.domain.FileAccessProvider? = null,
+    /** 回收站：已软删的会话（当前工作区），非空时在会话列表顶部显示入口。 */
+    trashedSessions: List<ChatSession> = emptyList(),
+    onRestoreSession: (String) -> Unit = {},
+    onPurgeSession: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {},
+    onNavigateToRea: (() -> Unit)? = null,
+    /** 模型顾问团工作台入口；null 则隐藏该入口。 */
+    onNavigateToMultillm: (() -> Unit)? = null,
+    /** Web 预览入口：打开端口预览页；null 则隐藏该入口。 */
+    onNavigateToPreview: (() -> Unit)? = null,
+    /** 远程管理入口：与 Web 预览同行弹出选择；null 则隐藏该选项。 */
+    onNavigateToRemoteManager: (() -> Unit)? = null,
     onNavigateToSettings: () -> Unit,
+    /** 定位请求（容器路径）：非空时切到「文件」页签；展开由外部先行完成，收到后调 [onRevealConsumed] 消费。 */
+    revealRequest: String? = null,
+    onRevealConsumed: (() -> Unit)? = null,
     searchQuery: String,
     searchState: ChatSearchState,
     onSearchQueryChange: (String) -> Unit,
@@ -178,6 +370,9 @@ fun ChatDrawerContent(
     // tab 与展开状态进 saveable：大屏下侧栏收起后整棵子树会离开组合（见 MainActivity 的
     // SaveableStateProvider），用 remember 存会让每次回到聊天页都重置回「会话」页。
     var selectedTab by rememberSaveable { mutableStateOf(0) }
+    val rtl = isRtlLayout()
+    val animate = !isAnimationDisabled()
+    var showPreviewEntrySheet by remember { mutableStateOf(false) }
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
     val selectedSessionIds = remember { mutableStateListOf<String>() }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
@@ -185,6 +380,14 @@ fun ChatDrawerContent(
     var pendingRename by remember { mutableStateOf<ChatSession?>(null) }
     var menuSession by remember { mutableStateOf<ChatSession?>(null) }
     val listState = rememberLazyListState()
+
+    // 外部定位请求（存储空间「在文件树中查看」）：切到「文件」页签后随即消费。
+    LaunchedEffect(revealRequest) {
+        if (revealRequest != null) {
+            selectedTab = 1
+            onRevealConsumed?.invoke()
+        }
+    }
 
     BackHandler(enabled = isSelectionMode) {
         isSelectionMode = false
@@ -204,164 +407,285 @@ fun ChatDrawerContent(
     }
 
     val imeInset = rememberImeBottomInset()
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(settingsPageBackground())
-            .windowInsetsPadding(
-                WindowInsets.systemBars.only(
-                    WindowInsetsSides.Horizontal + WindowInsetsSides.Top
-                )
-            )
-            .padding(horizontal = Spacing.lg)
-            .padding(bottom = imeInset + Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        // 顶部 Tab 切换
-        SegmentedTabs(
-            selected = selectedTab,
-            labels = listOf(
-                stringResource(R.string.subagent_tab_sessions),
-                stringResource(R.string.drawer_tab_files)
-            ),
-            onSelect = { selectedTab = it }
-        )
-
-        // 聊天记录搜索框放在 Tab 栏正下方，仅「会话」Tab 可见。
-        if (selectedTab == 0 && isSelectionMode) {
-            Surface(
-                color = MaterialTheme.semanticColors.cardSurface,
-                shape = RoundedCornerShape(Radius.mdLarge),
-                modifier = Modifier.fillMaxWidth()
+    val focusManager = LocalFocusManager.current
+    // 根 Box 比面板多出「标签骑线悬出」的半宽：面板只画到 drawerWidth()，
+    // 右侧多出的一条让「会话 / 文件」标签骑在面板右缘线上（中心对齐边线，图2 定稿）。
+    Box(modifier = modifier.fillMaxSize()) {
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+        Column(
+            modifier = Modifier
+                .width(drawerWidth())
+                .fillMaxHeight()
+                .background(settingsPageBackground())
+                // 沉浸：背景铺满全高（含状态栏后面），内容只避开系统栏；底部手势区也留白。
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .padding(start = Spacing.lg, top = Spacing.sm)
+                .padding(bottom = imeInset + Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Row(
+                // 内容区右侧留出标签左半宽：标签骑在面板右缘线上后，左半压在面板内这条边距上，
+                // 不遮列表文字（2026-10-17 二次验收：按钮改为骑线形态，中心对齐面板右缘线）。
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(end = Spacing.lg)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    IconButton(
-                        onClick = {
-                            isSelectionMode = false
-                            selectedSessionIds.clear()
+
+            // 聊天记录搜索框放在 Tab 栏正下方，仅「会话」Tab 可见。
+                    if (selectedTab == 0 && isSelectionMode) {
+                        Surface(
+                            color = MaterialTheme.semanticColors.cardSurface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                            shape = RoundedCornerShape(Radius.mdLarge),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        isSelectionMode = false
+                                        selectedSessionIds.clear()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = FeatherIcons.X,
+                                        contentDescription = stringResource(R.string.common_cancel),
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Spacer(Modifier.width(Spacing.xs))
+                                Text(
+                                    text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
+                                    val ids = mutableListOf<String>()
+                                    sessions.forEach { s ->
+                                        ids.add(s.id)
+                                        subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                                    }
+                                    ids
+                                }
+                                val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
+                                TextButton(onClick = {
+                                    if (allSelected) {
+                                        selectedSessionIds.clear()
+                                    } else {
+                                        selectedSessionIds.clear()
+                                        selectedSessionIds.addAll(allSessionIds)
+                                    }
+                                }) {
+                                    Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
+                                }
+                                IconButton(
+                                    onClick = { showBatchDeleteConfirm = true },
+                                    enabled = selectedSessionIds.isNotEmpty(),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = FeatherIcons.Trash2,
+                                        contentDescription = stringResource(R.string.chat_batch_delete_title),
+                                        modifier = Modifier.size(18.dp),
+                                        tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                    )
+                                }
+                            }
+                        }
+                    } else if (selectedTab == 0) {
+                        ChatSearchField(
+                            query = searchQuery,
+                            onQueryChange = onSearchQueryChange,
+                            onClear = onClearSearch
+                        )
+                    }
+
+                    AnimatedContent(
+                        targetState = selectedTab,
+                        modifier = Modifier
+                            .weight(1f)
+                            // 按压列表/文件树即视为「注意力离开搜索」：清焦点使搜索框自动收起（不消耗事件）。
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        if (awaitPointerEvent().type == PointerEventType.Press) {
+                                            focusManager.clearFocus()
+                                        }
+                                    }
+                                }
+                            },
+                        transitionSpec = {
+                            // 同级 Tab 切换：只做轻量淡入 + 1/12 屏位移，不做整页横滑（那是进入子页的语言）。
+                            // sizeTransform 必须给 null，否则容器裁剪会留下拖影。
+                            val forward = targetState > initialState
+                            ContentTransform(tabEnter(forward, rtl, animate), tabExit(forward, rtl, animate), sizeTransform = null)
                         },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(R.string.common_cancel),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(Modifier.width(Spacing.xs))
-                    Text(
-                        text = stringResource(R.string.chat_sessions_selected_count, selectedSessionIds.size),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
-                    val allSessionIds: List<String> = remember(sessions, subSessionsByParent) {
-                        val ids = mutableListOf<String>()
-                        sessions.forEach { s ->
-                            ids.add(s.id)
-                            subSessionsByParent[s.id]?.forEach { sub -> ids.add(sub.id) }
+                        label = "drawer-tab-content"
+                    ) { tab ->
+                        when (tab) {
+                            0 -> SessionListTab(
+                                sessions = sessions,
+                                currentSessionId = currentSessionId,
+                                agentStates = agentStates,
+                        runningSubSessionIds = runningSubSessionIds,
+                                awaitingPermissionSessionIds = awaitingPermissionSessionIds,
+                                subSessionsByParent = subSessionsByParent,
+                                listState = listState,
+                                searchQuery = searchQuery,
+                                searchState = searchState,
+                                selectionMode = isSelectionMode,
+                                selectedSessionIds = selectedSessionIds,
+                                onToggleSelectSession = { s ->
+                                    if (s.id in selectedSessionIds) {
+                                        selectedSessionIds.remove(s.id)
+                                    } else {
+                                        selectedSessionIds.add(s.id)
+                                    }
+                                },
+                                onSelect = onSelect,
+                                onLongClick = { menuSession = it },
+                                onOpenSearchHit = onOpenSearchHit,
+                                trashedSessions = trashedSessions,
+                                onRestoreSession = onRestoreSession,
+                                onPurgeSession = onPurgeSession,
+                                onEmptyTrash = onEmptyTrash,
+                                memberNameOf = memberNameOf
+                            )
+                            1 -> FileBrowserTab(
+                                state = browseState,
+                                expandedPaths = expandedPaths,
+                                expandingPath = expandingPath,
+                                fileOpPaths = fileOpPaths,
+                                clipboard = clipboard,
+                                onToggleExpand = onToggleExpand,
+                                onOpenFile = onOpenFile,
+                                onRefresh = onRefreshBrowse,
+                                onCreateFile = onCreateFile,
+                                onCreateFolder = onCreateFolder,
+                                onRenameEntry = onRenameEntry,
+                                onDeleteEntry = onDeleteEntry,
+                                onCopyEntry = onCopyEntry,
+                                onCutEntry = onCutEntry,
+                                onPasteEntry = onPasteEntry,
+                                onClearClipboard = onClearClipboard
+                            )
+                            2 -> DeliverablesTab(
+                                deliverables = deliverables,
+                                scanning = deliverablesScanning,
+                                onRefresh = onRefreshDeliverables,
+                                fileAccess = deliverableFileAccess,
+                                onRemoveFromList = onRemoveDeliverable,
+                                onDeleteCompletely = onDeleteDeliverableCompletely
+                            )
                         }
-                        ids
-                    }
-                    val allSelected = allSessionIds.isNotEmpty() && selectedSessionIds.size == allSessionIds.size
-                    TextButton(onClick = {
-                        if (allSelected) {
-                            selectedSessionIds.clear()
-                        } else {
-                            selectedSessionIds.clear()
-                            selectedSessionIds.addAll(allSessionIds)
-                        }
-                    }) {
-                        Text(stringResource(if (allSelected) R.string.provider_models_deselect_all else R.string.provider_models_select_all))
-                    }
-                    IconButton(
-                        onClick = { showBatchDeleteConfirm = true },
-                        enabled = selectedSessionIds.isNotEmpty(),
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Trash2,
-                            contentDescription = stringResource(R.string.chat_batch_delete_title),
-                            modifier = Modifier.size(18.dp),
-                            tint = if (selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                        )
                     }
                 }
             }
-        } else if (selectedTab == 0) {
-            ChatSearchField(
-                query = searchQuery,
-                onQueryChange = onSearchQueryChange,
-                onClear = onClearSearch
-            )
-        }
 
-        Box(modifier = Modifier.weight(1f)) {
-            when (selectedTab) {
-                0 -> SessionListTab(
-                    sessions = sessions,
-                    currentSessionId = currentSessionId,
-                    agentStates = agentStates,
-                    awaitingPermissionSessionIds = awaitingPermissionSessionIds,
-                    subSessionsByParent = subSessionsByParent,
-                    listState = listState,
-                    searchQuery = searchQuery,
-                    searchState = searchState,
-                    selectionMode = isSelectionMode,
-                    selectedSessionIds = selectedSessionIds,
-                    onToggleSelectSession = { s ->
-                        if (s.id in selectedSessionIds) {
-                            selectedSessionIds.remove(s.id)
-                        } else {
-                            selectedSessionIds.add(s.id)
-                        }
-                    },
-                    onSelect = onSelect,
-                    onLongClick = { menuSession = it },
-                    onOpenSearchHit = onOpenSearchHit
-                )
-                1 -> FileBrowserTab(
-                    state = browseState,
-                    expandedPaths = expandedPaths,
-                    expandingPath = expandingPath,
-                    fileOpPaths = fileOpPaths,
-                    clipboard = clipboard,
-                    onToggleExpand = onToggleExpand,
-                    onOpenFile = onOpenFile,
-                    onRefresh = onRefreshBrowse,
-                    onCreateFile = onCreateFile,
-                    onCreateFolder = onCreateFolder,
-                    onRenameEntry = onRenameEntry,
-                    onDeleteEntry = onDeleteEntry,
-                    onCopyEntry = onCopyEntry,
-                    onCutEntry = onCutEntry,
-                    onPasteEntry = onPasteEntry,
-                    onClearClipboard = onClearClipboard
-                )
-            }
-        }
-
-        SettingsGroup {
-            if (onNavigateToBrowser != null) {
+            // 底部卡片与内容列表右缘对齐（同一右边距；功能图标仅随布局移位、不翻转）。
+            SettingsGroup(modifier = Modifier.padding(end = Spacing.lg)) {
+                if (onNavigateToPreview != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Monitor,
+                        title = stringResource(R.string.preview_entry_title),
+                        onClick = { showPreviewEntrySheet = true },
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToBrowser != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Globe,
+                        title = stringResource(R.string.browser_title),
+                        onClick = onNavigateToBrowser,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToRea != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Cpu,
+                        title = stringResource(R.string.rea_entry_title),
+                        onClick = onNavigateToRea,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToMultillm != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.MessageCircle,
+                        title = stringResource(R.string.multillm_entry_title),
+                        onClick = onNavigateToMultillm,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
+                if (onNavigateToAnnotations != null) {
+                    SettingsRow(
+                        icon = FeatherIcons.Crosshair,
+                        title = stringResource(R.string.annotation_hub_entry),
+                        onClick = onNavigateToAnnotations,
+                        compact = true
+                    )
+                    SettingsDivider()
+                }
                 SettingsRow(
-                    icon = FeatherIcons.Globe,
-                    title = stringResource(R.string.browser_title),
-                    onClick = onNavigateToBrowser
+                    icon = FeatherIcons.Settings,
+                    title = stringResource(R.string.chat_settings),
+                    onClick = onNavigateToSettings,
+                    compact = true,
+                    modifier = Modifier.onboardingTarget(OnboardingStep.ENTER_SETTINGS)
                 )
-                SettingsDivider()
             }
-            SettingsRow(
-                icon = FeatherIcons.Settings,
-                title = stringResource(R.string.chat_settings),
-                onClick = onNavigateToSettings,
-                modifier = Modifier.onboardingTarget(OnboardingStep.ENTER_SETTINGS)
+        }
+
+        // 「会话 / 文件」标签列：左直边贴面板右缘、整体位于面板外侧（图1 定稿）。
+        // 显式按「面板宽 + 标签宽」定宽（而非跟随容器宽度），保证按钮左缘永远对齐面板右缘。
+        Box(
+            modifier = Modifier
+                .width(drawerWidth() + drawerTabWidth)
+                .fillMaxHeight()
+                .windowInsetsPadding(WindowInsets.systemBars)
+                // 与面板内容同步下移：顶部沉浸留白（搜索图标与状态栏之间）
+                .padding(top = Spacing.sm)
+        ) {
+            DrawerVerticalTabs(
+                selected = selectedTab,
+                tabs = listOf(
+                    DrawerTab(
+                        FeatherIcons.MessageSquare,
+                        stringResource(R.string.subagent_tab_sessions),
+                        stringResource(R.string.drawer_tab_sessions_desc)
+                    ),
+                    DrawerTab(
+                        FeatherIcons.Folder,
+                        stringResource(R.string.drawer_tab_files),
+                        stringResource(R.string.drawer_tab_files_desc)
+                    ),
+                    DrawerTab(
+                        FeatherIcons.Archive,
+                        stringResource(R.string.drawer_tab_deliverables),
+                        stringResource(R.string.drawer_tab_deliverables_desc)
+                    )
+                ),
+                onSelect = { selectedTab = it },
+                modifier = Modifier.align(Alignment.TopEnd)
             )
+        }
         }
     }
 
@@ -403,6 +727,43 @@ fun ChatDrawerContent(
         )
     }
 
+    if (showPreviewEntrySheet) {
+        val entrySheetState = rememberModalBottomSheetState()
+        AdaptiveModalBottomSheet(
+            onDismissRequest = { showPreviewEntrySheet = false },
+            sheetState = entrySheetState,
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Spacing.sm)
+                    .padding(bottom = Spacing.xl)
+            ) {
+                SheetActionRow(
+                    icon = FeatherIcons.Monitor,
+                    label = stringResource(R.string.preview_title),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    onClick = {
+                        showPreviewEntrySheet = false
+                        onNavigateToPreview?.invoke()
+                    }
+                )
+                if (onNavigateToRemoteManager != null) {
+                    SheetActionRow(
+                        icon = FeatherIcons.Server,
+                        label = stringResource(R.string.remote_mgr_title),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        onClick = {
+                            showPreviewEntrySheet = false
+                            onNavigateToRemoteManager?.invoke()
+                        }
+                    )
+                }
+            }
+        }
+    }
+
     menuSession?.let { session ->
         SessionActionSheet(
             session = session,
@@ -417,6 +778,10 @@ fun ChatDrawerContent(
             onExport = {
                 menuSession = null
                 onExport(session)
+            },
+            onImport = {
+                menuSession = null
+                onImport()
             },
             onBatchSelect = {
                 menuSession = null
@@ -505,6 +870,7 @@ private fun SessionListTab(
     agentStates: Map<String, AgentUIState>,
     awaitingPermissionSessionIds: Set<String>,
     subSessionsByParent: Map<String, List<ChatSession>>,
+    runningSubSessionIds: Set<String> = emptySet(),
     listState: LazyListState,
     searchQuery: String,
     searchState: ChatSearchState,
@@ -513,7 +879,12 @@ private fun SessionListTab(
     onToggleSelectSession: (ChatSession) -> Unit = {},
     onSelect: (ChatSession) -> Unit,
     onLongClick: (ChatSession) -> Unit,
-    onOpenSearchHit: (ChatSearchHit) -> Unit
+    onOpenSearchHit: (ChatSearchHit) -> Unit,
+    trashedSessions: List<ChatSession> = emptyList(),
+    onRestoreSession: (String) -> Unit = {},
+    onPurgeSession: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {},
+    memberNameOf: (String) -> String = { it }
 ) {
     if (searchQuery.isBlank()) {
         SessionListContent(
@@ -522,12 +893,18 @@ private fun SessionListTab(
             agentStates = agentStates,
             awaitingPermissionSessionIds = awaitingPermissionSessionIds,
             subSessionsByParent = subSessionsByParent,
+            runningSubSessionIds = runningSubSessionIds,
             listState = listState,
             selectionMode = selectionMode,
             selectedSessionIds = selectedSessionIds,
             onToggleSelectSession = onToggleSelectSession,
             onSelect = onSelect,
-            onLongClick = onLongClick
+            onLongClick = onLongClick,
+            trashedSessions = trashedSessions,
+            onRestoreSession = onRestoreSession,
+            onPurgeSession = onPurgeSession,
+            onEmptyTrash = onEmptyTrash,
+            memberNameOf = memberNameOf
         )
     } else {
         ChatSearchResults(state = searchState, onOpenHit = onOpenSearchHit)
@@ -542,14 +919,25 @@ private fun SessionListContent(
     agentStates: Map<String, AgentUIState>,
     awaitingPermissionSessionIds: Set<String>,
     subSessionsByParent: Map<String, List<ChatSession>>,
+    runningSubSessionIds: Set<String> = emptySet(),
     listState: LazyListState,
     selectionMode: Boolean = false,
     selectedSessionIds: List<String> = emptyList(),
     onToggleSelectSession: (ChatSession) -> Unit = {},
     onSelect: (ChatSession) -> Unit,
-    onLongClick: (ChatSession) -> Unit
+    onLongClick: (ChatSession) -> Unit,
+    trashedSessions: List<ChatSession> = emptyList(),
+    onRestoreSession: (String) -> Unit = {},
+    onPurgeSession: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {},
+    memberNameOf: (String) -> String = { it }
 ) {
-    if (sessions.isEmpty()) {
+    var trashOpen by remember { mutableStateOf(false) }
+    var purgeTarget by remember { mutableStateOf<ChatSession?>(null) }
+    var emptyTrashConfirm by remember { mutableStateOf(false) }
+
+    // 会话全删光但回收站还有东西时不能走空态：否则入口也跟着消失，回收站就再也进不去了
+    if (sessions.isEmpty() && trashedSessions.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -569,6 +957,13 @@ private fun SessionListContent(
             restore = { it.toSet() }
         )
     ) { mutableStateOf(emptySet<String>()) }
+    // 分组折叠态：按分组 key 记忆，切换会话/切页后保留；默认全部展开。
+    var collapsedGroups by rememberSaveable(
+        stateSaver = listSaver<Set<String>, String>(
+            save = { it.toList() },
+            restore = { it.toSet() }
+        )
+    ) { mutableStateOf(emptySet<String>()) }
     val groups = remember(sessions) {
         val now = System.currentTimeMillis()
         val pinned = sessions.filter { it.isPinned }
@@ -582,14 +977,37 @@ private fun SessionListContent(
         state = listState,
         modifier = Modifier.fillMaxSize()
     ) {
+        // 回收站入口置顶：只在有内容时出现，不给「从不删会话」的用户添噪声；批量选择进行中不显示（与批量操作语义冲突）
+        if (trashedSessions.isNotEmpty() && selectedSessionIds.isEmpty()) {
+            item(key = "trash-entry", contentType = "trash-entry") {
+                SettingsRow(
+                    icon = FeatherIcons.Trash2,
+                    title = stringResource(R.string.trash_entry, trashedSessions.size),
+                    onClick = { trashOpen = true },
+                    compact = true
+                )
+                SettingsDivider()
+            }
+        }
         // 每个分组占一个 item、组内 forEach 全量渲染会让 LazyColumn 失去惰性：
         // 「最近 30 天」这种分组有上百个会话时，一个 item 就要组合上百行。分组头与会话各自成 item。
         groups.forEach { group ->
+            val groupExpanded = group.groupKey !in collapsedGroups
             item(key = "group-${group.groupKey}", contentType = "group-header") {
-                SettingsGroupHeader(
-                    text = sessionGroupLabel(group.groupKey, group.sessions.first())
+                CollapsibleGroupHeader(
+                    text = sessionGroupLabel(group.groupKey, group.sessions.first()),
+                    expanded = groupExpanded,
+                    count = group.sessions.size,
+                    onToggle = {
+                        collapsedGroups = if (groupExpanded) {
+                            collapsedGroups + group.groupKey
+                        } else {
+                            collapsedGroups - group.groupKey
+                        }
+                    }
                 )
             }
+            if (!groupExpanded) return@forEach
             itemsIndexed(
                 items = group.sessions,
                 key = { _, session -> session.id },
@@ -600,8 +1018,12 @@ private fun SessionListContent(
                         if (group.groupKey == "pinned") Spacer(Modifier.height(Spacing.sm)) else SettingsDivider()
                     }
                     val state = agentStates[session.id]
-                    val isExecuting = state is AgentUIState.Loading || state is AgentUIState.Streaming
                     val subSessions = subSessionsByParent[session.id].orEmpty()
+                    val runningSubCount = subSessions.count { it.id in runningSubSessionIds }
+                    // 父回合已结束但子代理仍在跑时，父行也要亮运行态，用户才知道后台还有活。
+                    val isExecuting = state is AgentUIState.Loading ||
+                        state is AgentUIState.Streaming ||
+                        runningSubCount > 0
                     val expanded = session.id in expandedIds
                     ChatSessionRow(
                         session = session,
@@ -631,6 +1053,7 @@ private fun SessionListContent(
                                 SubAgentExpandToggle(
                                     expanded = expanded,
                                     count = subSessions.size,
+                                    runningCount = runningSubCount,
                                     onToggle = {
                                         expandedIds = if (expanded) {
                                             expandedIds - session.id
@@ -655,9 +1078,16 @@ private fun SessionListContent(
                                         session = sub,
                                         selected = if (selectionMode) false else sub.id == currentSessionId,
                                         isExecuting = subState is AgentUIState.Loading ||
-                                            subState is AgentUIState.Streaming,
+                                            subState is AgentUIState.Streaming ||
+                                            sub.id in runningSubSessionIds,
                                         awaitingPermission = sub.id in awaitingPermissionSessionIds,
                                         pinned = false,
+                                        compact = true,
+                                        // 子代理行显示成员名（subagentType 即成员标识），
+                                        // 让用户一眼看出这条子会话属于哪位专家，而非只有任务描述。
+                                        memberName = sub.subagentType
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { memberNameOf(it) },
                                         selectionMode = selectionMode,
                                         checked = sub.id in selectedSessionIds,
                                         onCheckedChange = { onToggleSelectSession(sub) },
@@ -684,33 +1114,228 @@ private fun SessionListContent(
             }
         }
     }
+
+    // ── 回收站弹层（列表顶部入口打开）──
+    if (trashOpen) {
+        TrashDialog(
+            sessions = trashedSessions,
+            onDismiss = { trashOpen = false },
+            onRestore = onRestoreSession,
+            onPurge = { session -> purgeTarget = session },
+            onEmpty = { emptyTrashConfirm = true }
+        )
+    }
+    purgeTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { purgeTarget = null },
+            title = { Text(stringResource(R.string.trash_purge_confirm_title)) },
+            text = { Text(stringResource(R.string.trash_purge_confirm_message, target.title)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onPurgeSession(target.id)
+                    purgeTarget = null
+                }) { Text(stringResource(R.string.trash_purge)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { purgeTarget = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+    if (emptyTrashConfirm) {
+        AlertDialog(
+            onDismissRequest = { emptyTrashConfirm = false },
+            title = { Text(stringResource(R.string.trash_empty_action)) },
+            text = {
+                Text(stringResource(R.string.trash_empty_confirm_message, trashedSessions.size))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onEmptyTrash()
+                    emptyTrashConfirm = false
+                    trashOpen = false
+                }) { Text(stringResource(R.string.trash_empty_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { emptyTrashConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
 }
 
-/** Tab0 底部搜索框：复用设置页的胶囊搜索框，非空时带清除按钮。 */
+/** 回收站保留期（与 AIAgentViewModel.TRASH_RETENTION_MS 一致），仅用于展示剩余天数。 */
+private const val TRASH_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+
+/** 回收站弹层：列出当前工作区已删会话，逐条恢复或彻底删除，可一键清空。 */
+@Composable
+private fun TrashDialog(
+    sessions: List<ChatSession>,
+    onDismiss: () -> Unit,
+    onRestore: (String) -> Unit,
+    onPurge: (ChatSession) -> Unit,
+    onEmpty: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.trash_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.trash_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(Spacing.sm))
+                if (sessions.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.trash_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.height(260.dp)) {
+                        items(sessions, key = { it.id }) { session ->
+                            TrashRow(
+                                session = session,
+                                onRestore = { onRestore(session.id) },
+                                onPurge = { onPurge(session) }
+                            )
+                            SettingsDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (sessions.isNotEmpty()) {
+                TextButton(onClick = onEmpty) { Text(stringResource(R.string.trash_empty_action)) }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
+        }
+    )
+}
+
+/** 回收站行：标题 + 删除时间与剩余天数 + 恢复 / 彻底删除。 */
+@Composable
+private fun TrashRow(session: ChatSession, onRestore: () -> Unit, onPurge: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = session.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = trashRemainingLabel(session.deletedAt),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+        TextButton(onClick = onRestore) { Text(stringResource(R.string.trash_restore)) }
+        TextButton(onClick = onPurge) { Text(stringResource(R.string.trash_purge)) }
+    }
+}
+
+/** 「删除于 X · 剩余 Y 天」；[deletedAt] 为空时返回空串。剩余不足 1 天向上取整为 1，避免「还剩几小时」却显示 0。 */
+@Composable
+private fun trashRemainingLabel(deletedAt: Long?): String {
+    if (deletedAt == null) return ""
+    val deleted = remember(deletedAt) {
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(deletedAt))
+    }
+    val remainingMs = TRASH_RETENTION_MS - (System.currentTimeMillis() - deletedAt)
+    val remainingDays = ((remainingMs + 86_399_999L) / 86_400_000L).coerceAtLeast(0L).toInt()
+    return stringResource(R.string.trash_deleted_at, deleted) +
+        " · " + stringResource(R.string.trash_remaining_days, remainingDays)
+}
+
+/**
+ * Tab0 搜索入口：默认只显示一个搜索图标按钮；点击展开为输入框并自动聚焦，
+ * 焦点离开（点列表、切页或收键盘）时自动收起回图标。
+ * 搜索词非空时图标保持高亮，表示列表仍按关键词过滤。
+ */
 @Composable
 private fun ChatSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit
 ) {
-    ModelSearchField(
-        query = query,
-        onQueryChange = onQueryChange,
-        placeholder = stringResource(R.string.chat_search_hint),
-        modifier = Modifier.fillMaxWidth(),
-        trailing = if (query.isEmpty()) null else {
-            {
-                IconButton(onClick = onClear, modifier = Modifier.size(24.dp)) {
+    var expanded by remember { mutableStateOf(false) }
+    // 忽略展开瞬间的初始「未聚焦」回调，避免搜索框刚出现就立刻收起。
+    var receivedFocus by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val hasQuery = query.isNotEmpty()
+
+    Crossfade(
+        targetState = expanded,
+        animationSpec = tween(durationMillis = 160),
+        label = "drawer-search-fold"
+    ) { open ->
+        if (open) {
+            ModelSearchField(
+                query = query,
+                onQueryChange = onQueryChange,
+                placeholder = stringResource(R.string.chat_search_hint),
+                modifier = Modifier.fillMaxWidth(),
+                focusRequester = focusRequester,
+                onFocusChanged = { state ->
+                    if (state.isFocused) receivedFocus = true
+                    else if (receivedFocus) expanded = false
+                },
+                trailing = if (query.isEmpty()) null else {
+                    {
+                        IconButton(
+                            onClick = {
+                                onClear()
+                                focusRequester.requestFocus()
+                            },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.X,
+                                contentDescription = stringResource(R.string.chat_search_clear),
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            )
+            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        } else {
+            Surface(
+                onClick = {
+                    receivedFocus = false
+                    expanded = true
+                },
+                shape = CircleShape,
+                color = if (hasQuery) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                else MaterialTheme.semanticColors.capsuleSurface,
+                modifier = Modifier.size(41.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(R.string.chat_search_clear),
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        imageVector = FeatherIcons.Search,
+                        contentDescription = stringResource(R.string.chat_search_hint),
+                        modifier = Modifier.size(18.dp),
+                        tint = if (hasQuery) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.semanticColors.subtleText
                     )
                 }
             }
         }
-    )
+    }
 }
 
 /** 搜索结果区：加载中 / 无结果 / 命中列表三态。 */
@@ -812,6 +1437,7 @@ private fun highlightSnippet(snippet: String, query: String, highlight: SpanStyl
 private fun SubAgentExpandToggle(
     expanded: Boolean,
     count: Int,
+    runningCount: Int = 0,
     onToggle: () -> Unit
 ) {
     Row(
@@ -822,9 +1448,15 @@ private fun SubAgentExpandToggle(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = count.toString(),
+            // 有子代理在跑时显示「运行中/总数」，让用户一眼知道后台还有多少活；
+            // 没有运行时仍显示累计总数，与旧行为一致。
+            text = if (runningCount > 0) "$runningCount/${maxOf(count, runningCount)}" else count.toString(),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (runningCount > 0) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
         )
         ExpandableChevronIcon(
             expanded = expanded,
@@ -902,11 +1534,9 @@ private fun FileBrowserTab(
                 val maxContentPx = remember(state.nodes, textStyle) {
                     with(density) {
                         val widest = state.nodes.maxByOrNull { node ->
-                            val label = if (node.isRoot) WORKSPACE_LABEL else node.entry.name
-                            node.depth * 4 + label.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
+                            node.depth * 4 + node.displayName.sumOf { ch -> if (ch.code > 0x2E80) 2 else 1 }
                         } ?: return@with 0
-                        val label = if (widest.isRoot) WORKSPACE_LABEL else widest.entry.name
-                        val textW = textMeasurer.measure(label, textStyle).size.width
+                        val textW = textMeasurer.measure(widest.displayName, textStyle).size.width
                         (FILE_TREE_ROW_OVERHEAD.toPx() + (Spacing.lg * widest.depth).toPx() + textW).toInt()
                     }
                 }
@@ -930,6 +1560,7 @@ private fun FileBrowserTab(
                                     else onOpenFile(node.path)
                                 },
                                 onLongClick = { menuNode = node },
+                                onRefreshRoot = if (node.root != null) onRefresh else null,
                                 modifier = Modifier.animateItem(
                                     fadeInSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
                                     fadeOutSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
@@ -942,11 +1573,13 @@ private fun FileBrowserTab(
             }
         }
 
-        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）+ 刷新按钮。
+        // 右上角操作排：剪贴板指示器（有背景、有边框，与无背景的刷新图标区分）。
+        // 刷新按钮已下放到两个根行右侧（项目空间 / 内置容器各自独立）。
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(Spacing.xs),
+                .offset(x = Spacing.lg + Spacing.xs + 16.dp)
+                .padding(end = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
             clipboard?.let { clip ->
@@ -961,17 +1594,6 @@ private fun FileBrowserTab(
                     modifier = Modifier.padding(end = Spacing.xs).size(16.dp),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary
-                )
-            }
-            IconButton(
-                onClick = onRefresh,
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.RefreshCw,
-                    contentDescription = stringResource(R.string.file_browser_refresh),
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1000,12 +1622,12 @@ private fun FileBrowserTab(
             clipboard = clipboard,
             onNewFile = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FILE)
             },
             onNewFolder = {
                 menuNode = null
-                if (!node.isRoot && node.path !in expandedPaths) onToggleExpand(node.path)
+                if (node.root == null && node.path !in expandedPaths) onToggleExpand(node.path)
                 creating = CreateTarget(node.path, CreateKind.FOLDER)
             },
             onRename = {
@@ -1166,7 +1788,7 @@ private fun FileTreeActionSheet(
                 .padding(bottom = Spacing.xl)
         ) {
             Text(
-                text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+                text = node.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -1198,7 +1820,7 @@ private fun FileTreeActionSheet(
                     onClick = onNewFolder
                 )
             }
-            if (!node.isRoot) {
+            if (node.root == null) {
                 SheetActionRow(
                     icon = FeatherIcons.Copy,
                     label = stringResource(R.string.common_copy),
@@ -1240,6 +1862,7 @@ private fun FileTreeRow(
     busy: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onRefreshRoot: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // 展开加载态加最小延迟：本地模式列目录极快，避免每次展开都闪一下转圈。
@@ -1252,7 +1875,7 @@ private fun FileTreeRow(
             showExpanding = false
         }
     }
-    val isDotfile = !node.isRoot && node.entry.name.startsWith(".")
+    val isDotfile = node.root == null && node.entry.name.startsWith(".")
     val decorationColor: Color? = when {
         node.hasError -> MaterialTheme.colorScheme.error
         node.ignored -> FileTreeIgnoredColor
@@ -1302,18 +1925,56 @@ private fun FileTreeRow(
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = if (node.isRoot) WORKSPACE_LABEL else node.entry.name,
+            text = node.displayName,
             style = MaterialTheme.typography.bodyMedium,
             color = decorationColor ?: MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             softWrap = false
         )
+        if (onRefreshRoot != null) {
+            Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = onRefreshRoot,
+                modifier = Modifier
+                    .size(32.dp)
+                    .offset(x = 8.dp)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.RefreshCw,
+                    contentDescription = stringResource(R.string.file_browser_refresh),
+                    modifier = Modifier.size(12.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
-/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。[decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
+/** 文件树行的类型图标：目录用文件夹，文件按扩展名挑选单色线性图标。容器根用「容器与镜像」列表同款图标。
+ * [decorationColor] 非空时统一染色（.gitignore/dotfile 弱化）。 */
 @Composable
 private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
+    val containerRoot = node.root as? FileTreeRoot.Container
+    if (containerRoot != null) {
+        val tint = decorationColor ?: MaterialTheme.colorScheme.primary
+        val logo = containerOsLogo(containerRoot.osId)
+        if (logo != null) {
+            Icon(
+                painter = logo,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        } else {
+            Icon(
+                imageVector = if (containerRoot.remote) FeatherIcons.Server else FeatherIcons.HardDrive,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tint
+            )
+        }
+        return
+    }
     val vector = if (node.entry.isDirectory) {
         FeatherIcons.Folder
     } else {
@@ -1332,15 +1993,15 @@ private fun FileTreeIcon(node: FileTreeNode, decorationColor: Color?) {
 /** .gitignore 命中条目的弱化色（橙，类 VSCode）。 */
 private val FileTreeIgnoredColor = Color(0xFFCC8844)
 
-/** 文件树根节点显示名，对应容器路径 `~/workspace`。 */
-private const val WORKSPACE_LABEL = "workspace"
+/** 文件树一行的显示名：根节点用根标签（工作区根 `workspace` / 当前容器名），其余用条目名。 */
+private val FileTreeNode.displayName: String get() = root?.label ?: entry.name
 
 /** 文件树一行除缩进与文本外的固定宽度开销（start 8 + 箭头 16 + 4 + 图标 20 + 8 + end 12），供预算整树统一行宽。 */
 private val FILE_TREE_ROW_OVERHEAD = 68.dp
 
 
 /**
- * 会话行长按弹出的功能菜单：置顶 / 重命名 / 导出 / 删除。底部 sheet 样式参照 git 分支的 RefActionSheet。
+ * 会话行长按弹出的功能菜单：置顶 / 重命名 / 复制会话 id / 导出 / 导入 / 批量选择 / 删除。底部 sheet 样式参照 git 分支的 RefActionSheet。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1349,6 +2010,7 @@ private fun SessionActionSheet(
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onImport: () -> Unit,
     onBatchSelect: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
@@ -1374,6 +2036,7 @@ private fun SessionActionSheet(
                     .padding(horizontal = Spacing.lg)
                     .padding(bottom = Spacing.md)
             )
+            val ctx = androidx.compose.ui.platform.LocalContext.current
             SheetActionRow(
                 icon = Icons.Outlined.PushPin,
                 label = stringResource(if (session.isPinned) R.string.chat_unpin_session else R.string.chat_pin_session),
@@ -1393,12 +2056,36 @@ private fun SessionActionSheet(
                 }
             )
             SheetActionRow(
+                icon = FeatherIcons.Copy,
+                label = stringResource(R.string.chat_copy_session_id),
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = {
+                    onDismiss()
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("sessionId", session.id))
+                    android.widget.Toast.makeText(
+                        ctx,
+                        ctx.getString(R.string.chat_session_id_copied),
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+            SheetActionRow(
                 icon = FeatherIcons.Download,
                 label = stringResource(R.string.chat_export_session),
                 tint = MaterialTheme.colorScheme.onSurface,
                 onClick = {
                     onDismiss()
                     onExport()
+                }
+            )
+            SheetActionRow(
+                icon = FeatherIcons.Upload,
+                label = stringResource(R.string.chat_import_session),
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = {
+                    onDismiss()
+                    onImport()
                 }
             )
             SheetActionRow(
@@ -1502,4 +2189,311 @@ private fun sessionGroupLabel(groupKey: String, anchorSession: ChatSession): Str
         stringResource(R.string.session_group_month_format),
         Locale.getDefault()
     ).format(Date(anchorSession.updatedAt))
+}
+
+/** 交付物页：AI 发进会话的附件，按后缀分组、组内时间倒序；行点击弹出操作菜单。 */
+@Composable
+private fun DeliverablesTab(
+    deliverables: List<DeliverableItem>,
+    scanning: Boolean,
+    onRefresh: () -> Unit,
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
+    onRemoveFromList: (DeliverableItem) -> Unit = {},
+    onDeleteCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) }
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+    if (deliverables.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (scanning) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text(
+                    text = stringResource(R.string.deliverables_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+    val groups = remember(deliverables) {
+        deliverables.groupBy { deliverableGroupKey(it.attachment.fileName) }
+            .toList()
+            .sortedBy { (key, _) -> deliverableGroupOrder(key) }
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Spacing.xl)
+    ) {
+        groups.forEach { (key, list) ->
+            item(key = "deliv-$key") {
+                SettingsGroupHeader(text = deliverableGroupTitle(key))
+            }
+            items(list, key = { it.attachment.containerPath }) { item ->
+                DeliverableRow(
+                    item = item,
+                    fileAccess = fileAccess,
+                    onRemoveFromList = onRemoveFromList,
+                    onDeleteCompletely = onDeleteCompletely
+                )
+            }
+        }
+    }
+}
+
+/** 交付物分组键：按文件名后缀归类。 */
+private fun deliverableGroupKey(fileName: String): String {
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        "apk", "apks", "xapk", "aab" -> "apk"
+        "zip", "7z", "rar", "tar", "gz", "tgz" -> "archive"
+        "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg" -> "image"
+        "md", "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "json", "csv", "html" -> "doc"
+        else -> "other"
+    }
+}
+
+private fun deliverableGroupOrder(key: String): Int = when (key) {
+    "apk" -> 0
+    "archive" -> 1
+    "image" -> 2
+    "doc" -> 3
+    else -> 4
+}
+
+@Composable
+private fun deliverableGroupTitle(key: String): String = stringResource(
+    when (key) {
+        "apk" -> R.string.deliverables_group_apk
+        "archive" -> R.string.deliverables_group_archive
+        "image" -> R.string.deliverables_group_image
+        "doc" -> R.string.deliverables_group_doc
+        else -> R.string.deliverables_group_other
+    }
+)
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DeliverableRow(
+    item: DeliverableItem,
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
+    onRemoveFromList: (DeliverableItem) -> Unit = {},
+    onDeleteCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) }
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+    // 动作作用域挂在行上（菜单内容随退场动画销毁，不能在那里 rememberCoroutineScope）。
+    val actionScope = rememberCoroutineScope()
+    val key = deliverableGroupKey(item.attachment.fileName)
+    val timeText = remember(item.timestamp) {
+        if (item.timestamp <= 0) "" else SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+            .format(Date(item.timestamp))
+    }
+    val sizeText = remember(item.attachment.sizeBytes) {
+        if (item.attachment.sizeBytes <= 0) "" else
+            android.text.format.Formatter.formatShortFileSize(context, item.attachment.sizeBytes)
+    }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                // 与会话列表一致：点按=打开操作弹层，长按=同一弹层（触屏上更顺手）。
+                .combinedClickable(
+                    onClick = { menuOpen = true },
+                    onLongClick = { menuOpen = true }
+                )
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    item.attachment.fileName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        // 名称超宽时自动跑马灯滚动（可拖动），完整展示文件名。
+                        .basicMarquee()
+                )
+                val meta = listOfNotNull(
+                    timeText.takeIf { it.isNotBlank() },
+                    sizeText.takeIf { it.isNotBlank() }
+                ).joinToString(" · ")
+                if (meta.isNotEmpty()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
+            }
+        }
+        if (menuOpen) {
+            DeliverableActionSheet(
+                item = item,
+                fileAccess = fileAccess,
+                actionScope = actionScope,
+                onRemoveFromList = onRemoveFromList,
+                onDeleteCompletely = onDeleteCompletely,
+                onDismiss = { menuOpen = false }
+            )
+        }
+    }
+}
+
+/** 交付物操作弹层：与会话列表长按菜单同一套圆角底栏（AdaptiveModalBottomSheet）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DeliverableActionSheet(
+    item: DeliverableItem,
+    fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider?,
+    actionScope: kotlinx.coroutines.CoroutineScope,
+    onDismiss: () -> Unit,
+    onRemoveFromList: (DeliverableItem) -> Unit = {},
+    onDeleteCompletely: (DeliverableItem, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) }
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var confirmDelete by remember { mutableStateOf(false) }
+    AdaptiveModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.lg)
+        ) {
+            Text(
+                text = item.attachment.fileName,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            if (fileAccess != null) {
+                attachmentActionEntries(
+                    context, item.attachment, fileAccess, actionScope,
+                    // 交付物已自动导出到真机 下载/AiCodeR，不再需要手动「保存到手机」。
+                    includeSaveToPhone = false,
+                ).forEach { entry ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDismiss()
+                                entry.action()
+                            }
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            entry.icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(Spacing.md))
+                        Text(
+                            text = stringResource(entry.labelRes),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = stringResource(R.string.deliverables_unavailable),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
+                )
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // 仅从交付列表移除：不碰磁盘，文件仍可在工作区/真机副本里找到。
+            SheetMenuItem(
+                icon = FeatherIcons.X,
+                label = stringResource(R.string.deliverables_remove_from_list),
+                tint = MaterialTheme.colorScheme.onSurface
+            ) {
+                onDismiss()
+                onRemoveFromList(item)
+            }
+
+            // 彻底删除：列表条目 + 容器/工作区文件 + 真机副本，二次确认后执行。
+            SheetMenuItem(
+                icon = FeatherIcons.Trash2,
+                label = stringResource(R.string.deliverables_delete_completely),
+                tint = MaterialTheme.colorScheme.error
+            ) {
+                confirmDelete = true
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.deliverables_delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.deliverables_delete_confirm_body,
+                        item.attachment.fileName
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onDismiss()
+                    onDeleteCompletely(item) { ok ->
+                        if (!ok) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.deliverables_delete_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }) {
+                    Text(
+                        stringResource(R.string.deliverables_delete_completely),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+}
+
+/** 交付物操作弹层里的一行（图标 + 文案），与 attachmentActionEntries 渲染保持一致。 */
+@Composable
+private fun SheetMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = tint)
+        Spacer(Modifier.width(Spacing.md))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = tint)
+    }
 }

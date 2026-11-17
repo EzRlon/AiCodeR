@@ -8,7 +8,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,9 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import com.aicode.feature.agent.domain.model.ChatSession
@@ -48,6 +52,10 @@ fun ChatSessionRow(
     isExecuting: Boolean = false,
     awaitingPermission: Boolean = false,
     pinned: Boolean = false,
+    /** 子代理行等更低层级：字号再降一档，与二级会话标题拉开层次。 */
+    compact: Boolean = false,
+    /** 子代理成员显示名（如「后端」）；非空时在标题前渲染一枚成员徽章。 */
+    memberName: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     trailing: (@Composable () -> Unit)? = null,
@@ -103,15 +111,72 @@ fun ChatSessionRow(
             )
             Spacer(Modifier.width(Spacing.md))
         }
-        Text(
-            text = session.title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 成员徽章：子代理行冠以成员名（如「后端」），把「哪个专家在做」摆到行首；
+                // 标题随后给出任务描述，两者分工明确（成员 = 谁，标题 = 做什么）。
+                if (memberName != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = memberName,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(
+                    text = session.title,
+                    // 层级：分组标题(一级) > 会话标题(二级) > 子代理(三级，compact)
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = if (compact) 11.sp else 12.sp,
+                        lineHeight = if (compact) 14.sp else 16.sp
+                    ),
+                    color = when {
+                        selected -> MaterialTheme.colorScheme.primary
+                        compact -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (session.engine != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = engineBadgeLabel(session.engine).orEmpty(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+            }
+            // 会话 id 小字：与 ai-logs/session-<id>.log 等文件名逐字对应，方便手动到开发目录找内容。
+            Text(
+                text = session.id,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = if (compact) 9.sp else 10.sp),
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.semanticColors.subtleText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         trailing?.invoke()
     }
 }

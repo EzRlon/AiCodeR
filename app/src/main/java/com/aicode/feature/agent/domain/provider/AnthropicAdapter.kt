@@ -59,6 +59,10 @@ class AnthropicAdapter @Inject constructor(
     // null 时请求体不带 temperature（Gson 跳过 null 字段），交由服务端默认；开启 thinking 时官方要求必须不带。
     override var temperature: Float? = null
 
+    // 模型声明的档位（models.dev reasoning_options）；未知时按协议保守集合降级。
+    override var reasoningLevels: List<String>? = null
+    override var reasoningWireUsed: String? = null
+
     private fun extraHeaders(): Map<String, String> =
         resolveCustomHeaders(customHeaders, logSessionId, apiKey)
 
@@ -81,7 +85,8 @@ class AnthropicAdapter @Inject constructor(
         }
 
         val url = if (useFullUrl) baseUrl else joinUrl(baseUrl, defaultProviderApiPath(ProviderType.ANTHROPIC))
-        val (thinking, outputConfig) = buildThinkingConfig(reasoningEffort)
+        val thinkingPlan = buildThinkingConfig(reasoningEffort)
+        val thinking = thinkingPlan.thinking
         val request = AnthropicMessageRequest(
             model = model,
             messages = anthropicMessages,
@@ -89,7 +94,7 @@ class AnthropicAdapter @Inject constructor(
             max_tokens = resolveMaxTokens(thinking),
             temperature = if (thinking != null) null else temperature,
             thinking = thinking,
-            output_config = outputConfig,
+            output_config = thinkingPlan.outputConfig,
             tools = toolDefs,
             stream = false
         )
@@ -107,6 +112,7 @@ class AnthropicAdapter @Inject constructor(
             throw e
         } catch (e: Exception) {
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Anthropic", enriched, seq)
             throw enriched
         }
@@ -141,7 +147,8 @@ class AnthropicAdapter @Inject constructor(
             }
         }
 
-        return AIResponse(content = contentText, toolCalls = toolCalls, stopReason = response.stop_reason, stopDetail = response.stop_details?.explanation, reasoning = thinkingText.ifEmpty { null }, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks), inputTokens = totalInputTokens(response.usage.input_tokens, response.usage.cache_read_input_tokens, response.usage.cache_creation_input_tokens), outputTokens = response.usage.output_tokens, cachedInputTokens = response.usage.cache_read_input_tokens ?: 0, cacheCreationTokens = response.usage.cache_creation_input_tokens ?: 0)
+        reasoningWireUsed = thinkingPlan.effectiveEffort
+        return AIResponse(content = contentText, toolCalls = toolCalls, stopReason = response.stop_reason, stopDetail = response.stop_details?.explanation, reasoning = thinkingText.ifEmpty { null }, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks), inputTokens = UsageNormalizer.anthropic(response.usage.input_tokens, response.usage.cache_read_input_tokens, response.usage.cache_creation_input_tokens, response.usage.output_tokens).inputTokens, outputTokens = response.usage.output_tokens, cachedInputTokens = response.usage.cache_read_input_tokens ?: 0, cacheCreationTokens = response.usage.cache_creation_input_tokens ?: 0)
     }
 
     override fun completeStream(
@@ -161,7 +168,8 @@ class AnthropicAdapter @Inject constructor(
         }
 
         val url = if (useFullUrl) baseUrl else joinUrl(baseUrl, defaultProviderApiPath(ProviderType.ANTHROPIC))
-        val (thinking, outputConfig) = buildThinkingConfig(reasoningEffort)
+        val thinkingPlan = buildThinkingConfig(reasoningEffort)
+        val thinking = thinkingPlan.thinking
         val request = AnthropicMessageRequest(
             model = model,
             messages = anthropicMessages,
@@ -169,7 +177,7 @@ class AnthropicAdapter @Inject constructor(
             max_tokens = resolveMaxTokens(thinking),
             temperature = if (thinking != null) null else temperature,
             thinking = thinking,
-            output_config = outputConfig,
+            output_config = thinkingPlan.outputConfig,
             tools = toolDefs,
             stream = true
         )
@@ -374,7 +382,8 @@ class AnthropicAdapter @Inject constructor(
             val toolCalls = toolBlocks.values.map { acc ->
                 ToolCall(id = acc.id, name = acc.name, arguments = parseArgs(acc.args.toString()))
             }
-            emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = stopReason, stopDetail = stopDetail, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks.values.map { it.toBlock() }), inputTokens = totalInputTokens(streamInputTokens, streamCachedInputTokens, streamCacheCreationTokens), outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, cacheCreationTokens = streamCacheCreationTokens)))
+            reasoningWireUsed = thinkingPlan.effectiveEffort
+            emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = stopReason, stopDetail = stopDetail, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks.values.map { it.toBlock() }), inputTokens = UsageNormalizer.anthropic(streamInputTokens, streamCachedInputTokens, streamCacheCreationTokens, streamOutputTokens).inputTokens, outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, cacheCreationTokens = streamCacheCreationTokens)))
                     }
                 },
                 onRetry = { attempt, max, error -> emit(AIStreamChunk.Retrying(attempt, max, error)) }
@@ -384,6 +393,7 @@ class AnthropicAdapter @Inject constructor(
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val enriched = e.enrichWithHttpErrorBody()
+            ReasoningLearning.observe(providerId, model, enriched)
             AILogger.logError(logSessionId, "Anthropic", enriched, seq)
             throw enriched
         } finally {
@@ -436,36 +446,98 @@ class AnthropicAdapter @Inject constructor(
     /**
      * 思考强度 → Anthropic thinking 配置。
      * - 新模型（4.6+/5 系，支持 adaptive）：effort 档位直传 output_config，thinking 用 adaptive+summarized；
-     *   "none" 关闭思考用 disabled；"minimal" 无对应档，归一到 low（官方仅 low/medium/high/xhigh/max）。
+     *   "minimal" 无对应档，归一到 low（官方仅 low/medium/high/xhigh/max）。
      * - 旧模型（4.5 及更早，仅 budget_tokens）：low/medium/high 映射 1024/4096/8192（须小于 max_tokens），
      *   minimal 归一到 low，xhigh/max 归一到 high。
+     * - 关闭思考（"none"）按代际细分：Opus 5.5 / Fable 5.1 思考恒开，type=disabled 不报错但不生效，
+     *   退最低档如实发送；Sonnet 5.5 的关闭语义是 between_tools；Opus 5 / Haiku 5 关闭时 effort
+     *   不得超过 high，显式带上限避免残留高档位触发 400；其余代际直接 type=disabled。
+     *
+     * [AnthropicThinkingPlan.effectiveEffort] 一并给出「实际会发出去的思考档位」，供调用记录落库对照。
      */
-    private fun buildThinkingConfig(reasoningEffort: String?): Pair<AnthropicThinkingConfig?, AnthropicOutputConfig?> {
-        if (reasoningEffort == null) return null to null
+    private fun buildThinkingConfig(reasoningEffort: String?): AnthropicThinkingPlan {
+        if (reasoningEffort == null) return AnthropicThinkingPlan(null, null, null)
         if (supportsAdaptiveThinking()) {
             if (reasoningEffort == "none") {
-                return AnthropicThinkingConfig(type = "disabled") to null
+                val g = claudeGeneration()
+                return when {
+                    // Fable 全系思考恒开；Opus 自 5.5 起恒开 ⇒ 关闭无效，退最低档如实发送。
+                    g != null && g.major >= 5 && (g.family == "fable" || (g.family == "opus" && g.minor >= 5)) ->
+                        AnthropicThinkingPlan(
+                            AnthropicThinkingConfig(type = "adaptive", display = "summarized"),
+                            AnthropicOutputConfig(effort = "low"),
+                            effectiveEffort = "low"
+                        )
+                    // Sonnet 5.5：关闭思考 = 只在工具调用之间思考。
+                    g != null && g.major >= 5 && g.minor >= 5 && g.family == "sonnet" ->
+                        AnthropicThinkingPlan(
+                            AnthropicThinkingConfig(type = "between_tools"),
+                            null,
+                            effectiveEffort = "none"
+                        )
+                    // Opus 5 / Haiku 5：关闭时 effort 不得超过 high，显式带上限避免残留高档位触发 400。
+                    g != null && g.major >= 5 && (g.family == "opus" || g.family == "haiku") ->
+                        AnthropicThinkingPlan(
+                            AnthropicThinkingConfig(type = "disabled"),
+                            AnthropicOutputConfig(effort = "high"),
+                            effectiveEffort = "none"
+                        )
+                    else -> AnthropicThinkingPlan(
+                        AnthropicThinkingConfig(type = "disabled"),
+                        null,
+                        effectiveEffort = "none"
+                    )
+                }
             }
             // 官方 effort 无 minimal 档，归一到 low，避免透传非法档位被 400。
-            val effort = if (reasoningEffort == "minimal") "low" else reasoningEffort
-            return AnthropicThinkingConfig(type = "adaptive", display = "summarized") to AnthropicOutputConfig(effort = effort)
+            val effort = clampLearned(if (reasoningEffort == "minimal") "low" else reasoningEffort)
+            return AnthropicThinkingPlan(
+                AnthropicThinkingConfig(type = "adaptive", display = "summarized"),
+                AnthropicOutputConfig(effort = effort),
+                effectiveEffort = effort
+            )
         }
         val budget = when (reasoningEffort) {
             // Anthropic 无 minimal 档：归一到最接近的 low（避免同一档位一边 400 一边忽略的分裂）。
             "minimal", "low" -> 1024
             "medium" -> 4096
             "high", "xhigh", "max" -> 8192
-            else -> return null to null
+            else -> return AnthropicThinkingPlan(null, null, null)
         }
-        return AnthropicThinkingConfig(type = "enabled", budget_tokens = budget) to null
+        // 旧模型按 budget 直接透传 token 数，无档位可比：落库记预算形态，ReasoningAudit 不判定降级。
+        return AnthropicThinkingPlan(
+            AnthropicThinkingConfig(type = "enabled", budget_tokens = budget),
+            null,
+            effectiveEffort = "budget:$budget"
+        )
     }
+
+    /** [buildThinkingConfig] 的结果：请求体所需的 thinking/output_config，以及实际发出的思考档位。 */
+    private data class AnthropicThinkingPlan(
+        val thinking: AnthropicThinkingConfig?,
+        val outputConfig: AnthropicOutputConfig?,
+        /** 实际发给服务端的档位（apiValue）；不涉及思考或关闭时为 "none"，完全无配置时为 null。 */
+        val effectiveEffort: String?
+    )
+
+
+    /** claude-<family>-<major>[-<minor>] 的家族与代际；老命名（claude-3-5-sonnet-…）返回 null。 */
+    private fun claudeGeneration(): ClaudeGeneration? {
+        val m = Regex("claude-(opus|sonnet|haiku|fable|mythos)-(\\d+)(?:[-.](\\d+))?").find(model) ?: return null
+        val major = m.groupValues[2].toIntOrNull() ?: return null
+        return ClaudeGeneration(m.groupValues[1], major, m.groupValues[3].toIntOrNull() ?: 0)
+    }
+
+    private class ClaudeGeneration(val family: String, val major: Int, val minor: Int)
+
+    /** 按 400 文案学到的「被拒档位」收紧请求档位：被证伪时降到最近可用档，否则原样返回。 */
+    private fun clampLearned(effort: String): String =
+        ReasoningLearning.tighten(effort, providerId, model)
 
     /** 是否支持 adaptive thinking：4.6+ 及 5 系（claude-<family>-4-6/4-7/4-8 或主版本 5）。 */
     private fun supportsAdaptiveThinking(): Boolean {
-        val m = Regex("claude-(?:opus|sonnet|haiku|fable|mythos)-(\\d+)(?:-(\\d+))?").find(model)
-        val major = m?.groupValues?.get(1)?.toIntOrNull() ?: return false
-        val minor = m?.groupValues?.get(2)?.toIntOrNull()
-        return major >= 5 || (major == 4 && (minor ?: 0) >= 6)
+        val g = claudeGeneration() ?: return false
+        return g.major >= 5 || (g.major == 4 && g.minor >= 6)
     }
 
     /** 把累积的工具入参 JSON 字符串解析为 JsonObject；为空或非法时回退为空对象。 */
@@ -668,14 +740,6 @@ class AnthropicAdapter @Inject constructor(
     private companion object {
         /** 显式缓存断点：Anthropic ephemeral prompt caching。 */
         val CACHE_BREAKPOINT = mapOf("type" to "ephemeral")
-
-        /**
-         * Anthropic 的 `input_tokens` 只算未命中缓存的部分，总输入还要加上 cache_read / cache_creation——
-         * 与 OpenAI（`prompt_tokens` 含 `cached_tokens`）、Gemini（`promptTokenCount`）口径对齐。
-         * 上下文占用、压缩触发、费用与缓存命中率都按总输入算。
-         */
-        fun totalInputTokens(input: Int, cacheRead: Int?, cacheCreation: Int?): Int =
-            input + (cacheRead ?: 0) + (cacheCreation ?: 0)
 
         /** 模型元数据缺输出上限时的兜底最大输出 token。 */
         const val DEFAULT_MAX_TOKENS = 16384

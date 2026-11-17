@@ -47,6 +47,11 @@ class FileCredentialRepository @Inject constructor(
         return _credentials.value.firstOrNull { it.host == normalized }
     }
 
+    /** 备份还原写出 git-credentials 文件后重读内存缓存，使导入立即生效（无需重启 App）。 */
+    fun reload() {
+        _credentials.value = parse(credentialsFile)
+    }
+
     override suspend fun save(credential: GitCredential) = mutex.withLock {
         val host = credential.host.trim().lowercase()
         if (host.isEmpty()) return@withLock
