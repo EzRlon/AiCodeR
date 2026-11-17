@@ -2556,6 +2556,13 @@ class AIAgentViewModel @Inject constructor(
         persistUserMessage: Boolean = true
     ): Boolean {
         val sid = targetSessionId ?: _currentSessionId.value
+        // 「准备交接」直触快照：零模型调用、只读本地历史并复制剪贴板，与进行中的回合/后台
+        // CLI/暂停态都不冲突（交接时机恰恰常是后台还在跑），必须赶在一切排队/忙碌判定之前
+        // 放行——否则会被塞进队列既不执行也不提示，看起来就是「没反应」。（2026-11-17）
+        if (request.trim() == HANDOFF_PHRASE && sid != null) {
+            runResolvedCommand(ResolvedCommand.Action(handoffCommandHandler, ""), request, sid)
+            return true
+        }
         // 外部引擎子会话只读：不仅聊天面板要拦，随记「发给 AI」等旁路入口也不能把消息
         // 送进内置工作流（子会话 engine=null，父会话 engine!=null）。
         if (sid != null) {
