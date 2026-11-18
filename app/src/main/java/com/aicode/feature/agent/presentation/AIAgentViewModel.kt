@@ -3454,10 +3454,10 @@ class AIAgentViewModel @Inject constructor(
                             runCatching {
                                 chatSessionDao.addTokenUsage(
                                     sessionId,
-                                    event.inputTokens,
-                                    event.outputTokens,
-                                    event.cachedInputTokens,
-                                    event.cacheCreationTokens
+                                    event.inputTokens.toLong(),
+                                    event.outputTokens.toLong(),
+                                    event.cachedInputTokens.toLong(),
+                                    event.cacheCreationTokens.toLong()
                                 )
                                 if (event.inputTokens > 0) {
                                     chatSessionDao.updateLastInputTokens(sessionId, event.inputTokens)

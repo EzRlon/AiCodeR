@@ -290,6 +290,25 @@ internal class Migration76To77 : Migration(76, 77) {
 }
 
 /**
+ * 78→79：修复历史 Int 溢出留下的负值 token 累计。
+ *
+ * 会话累计原先用 Int 存，长会话累计超过 21 亿后回绕成负数（记忆图谱显示
+ * 「-195776062」这种一长串）。实体侧已改为 Long，SQLite 的 INTEGER 本就是 64 位；
+ * 这里把已经被写坏的负值归零，避免继续显示异常数字。
+ */
+internal class Migration78To79 : Migration(78, 79) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "UPDATE `chat_sessions` SET " +
+                "`totalInputTokens` = MAX(`totalInputTokens`, 0), " +
+                "`totalOutputTokens` = MAX(`totalOutputTokens`, 0), " +
+                "`totalCachedInputTokens` = MAX(`totalCachedInputTokens`, 0), " +
+                "`totalCacheCreationTokens` = MAX(`totalCacheCreationTokens`, 0)"
+        )
+    }
+}
+
+/**
  * 77→78：会话累计新增「缓存写入」列。
  *
  * 此前会话级累计只记缓存命中，缓存写入（cache_creation，按 1.25× 溢价计费）被错算进

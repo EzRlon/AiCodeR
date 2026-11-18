@@ -13,10 +13,14 @@
   #screen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; }
   /* 画面强制铺满浮窗：noVNC 用内联样式设置 canvas 尺寸，这里用 !important 覆盖，
      避免出现黑边。远端分辨率会跟随浮窗宽高比（见 VncOverlayViewModel），因此拉伸极小。 */
+  /* 不再强制 width/height 100%：那会让画面按容器比例拉伸变形（横屏尤其明显）。
+     改为等比适配——noVNC 的 scaleViewport 会按容器算出保持纵横比的画布尺寸，
+     这里只兜住不溢出。 */
+  #screen { display: flex; align-items: center; justify-content: center; }
   #screen canvas {
-    width: 100% !important;
-    height: 100% !important;
     display: block;
+    max-width: 100%;
+    max-height: 100%;
     /* 触摸由脚本全权处理（见下方输入层），禁止浏览器做滚动/缩放手势识别。 */
     touch-action: none;
   }
@@ -52,14 +56,14 @@
     font: 12px/1 sans-serif;
   }
   #vncbar button.active { background: #2563eb; border-color: #3b82f6; }
-  /* 触控板模式的指针指示环。必须自绘：这版 noVNC 的 core/util/cursor.js 里
-     useFallback=false，它只设置 CSS cursor（Android 触屏上根本不可见），
-     删掉自绘环后用户完全看不到指针在哪。远端光标走 cursor shape updates，
-     不画进帧缓冲，因此不会和这个环重影。 */
+  /* 触控板模式的指针。必须自绘：这版 noVNC 的 core/util/cursor.js 里
+     useFallback=false，它只设置 CSS cursor（Android 触屏上不可见）。
+     用户要求「回归原来的箭头」，所以画一个标准左上箭头（白填充+黑描边），
+     热区在箭尖 (0,0)，与桌面系统一致。 */
   #vncCursor {
-    position: fixed; left: 0; top: 0; width: 12px; height: 12px;
-    margin: -6px 0 0 -6px; border: 1.5px solid #fff; border-radius: 50%;
-    box-shadow: 0 0 0 1px rgba(0,0,0,.85), inset 0 0 0 1px rgba(0,0,0,.85);
+    position: fixed; left: 0; top: 0; width: 14px; height: 20px;
+    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='20' viewBox='0 0 14 20'><path d='M1 1 L1 16 L5 12 L7.5 18 L10 17 L7.5 11 L12.5 11 Z' fill='white' stroke='black' stroke-width='1.2' stroke-linejoin='round'/></svg>") no-repeat top left;
+    background-size: 14px 20px;
     pointer-events: none; z-index: 40; display: none;
   }
 </style>
@@ -122,8 +126,8 @@ const LONG_PRESS_MS = 500;    // 长按判定（Android 上 500ms 符合直觉�
 // 加速按「一次手势内的累计位移」而不是单次事件位移：120Hz 采样下逐事件位移只有
 // 1~3px，按单事件判阈值等于永远触发不了（表现为「挪不动」），快甩时单事件位移大
 // 又直接飞过去。Winlator 同样按累计量判断。
-const ACCEL_FULL_DIST = 240;  // 累计滑过该距离时达到最大倍率
-const ACCEL_MAX = 3.0;        // 触控板最大移动倍率
+const ACCEL_FULL_DIST = 600;  // 累计滑过该距离时达到最大倍率（调缓：手感过冲）
+const ACCEL_MAX = 2.0;        // 触控板最大移动倍率
 const SCROLL_GAIN = 4;        // 双指滚动放大：noVNC 按 WHEEL_STEP=50px 累积成一格
 
 /** direct = 触摸点即指针点；trackpad = 相对移动（手机小窗精确定位）。 */

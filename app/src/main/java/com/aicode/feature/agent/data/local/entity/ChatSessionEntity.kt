@@ -26,13 +26,13 @@ data class ChatSessionEntity(
     /** goal 生命周期状态；[goal] 为 null 时无意义。 */
     val goalStatus: String? = null,
     val goalTurnCount: Int = 0,
-    val goalStartInputTokens: Int = 0,
-    val goalStartOutputTokens: Int = 0,
+    val goalStartInputTokens: Long = 0,
+    val goalStartOutputTokens: Long = 0,
     val reasoningEffort: String = ReasoningEffort.MEDIUM.name,
     val providerId: String? = null,
     val model: String? = null,
-    val totalInputTokens: Int = 0,
-    val totalOutputTokens: Int = 0,
+    val totalInputTokens: Long = 0,
+    val totalOutputTokens: Long = 0,
     val lastInputTokens: Int = 0,
     val isPinned: Boolean = false,
     /** 子代理会话：父会话 id；null 表示普通根会话。 */
@@ -49,12 +49,12 @@ data class ChatSessionEntity(
      * 会话累计缓存命中输入：是 [totalInputTokens] 的子集，只用于展示缓存命中率，
      * **不参与总消耗**（总量已含缓存）。口径由 `UsageNormalizer` 在适配器出口统一。
      */
-    val totalCachedInputTokens: Int = 0,
+    val totalCachedInputTokens: Long = 0,
     /**
      * 会话累计缓存写入输入：是 [totalInputTokens] 的子集（与 [totalCachedInputTokens] 互不重叠），
      * 缓存写入按 1.25× 溢价计费，构成条需与全价输入区分展示，故单独累计。
      */
-    val totalCacheCreationTokens: Int = 0,
+    val totalCacheCreationTokens: Long = 0,
     /** 引擎原生工作模式 id（见 EngineModeCatalog）；null = 跟随该引擎默认档。 */
     val engineMode: String? = null
 ) {

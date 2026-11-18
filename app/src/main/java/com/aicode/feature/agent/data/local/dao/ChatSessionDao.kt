@@ -132,7 +132,7 @@ interface ChatSessionDao {
     suspend fun updateEngineMode(id: String, engineMode: String?)
     /** 设定/覆盖 goal：同时重置轮次计数与 token 快照。goal 为 null 表示清除。 */
     @Query("UPDATE chat_sessions SET goal = :goal, goalStatus = :status, goalTurnCount = 0, goalStartInputTokens = :startInput, goalStartOutputTokens = :startOutput WHERE id = :id")
-    suspend fun updateGoal(id: String, goal: String?, status: String?, startInput: Int, startOutput: Int)
+    suspend fun updateGoal(id: String, goal: String?, status: String?, startInput: Long, startOutput: Long)
 
     @Query("UPDATE chat_sessions SET goalStatus = :status WHERE id = :id")
     suspend fun updateGoalStatus(id: String, status: String?)
@@ -140,8 +140,10 @@ interface ChatSessionDao {
     @Query("UPDATE chat_sessions SET goalTurnCount = goalTurnCount + 1 WHERE id = :id")
     suspend fun incrementGoalTurn(id: String)
 
-    @Query("UPDATE chat_sessions SET totalInputTokens = totalInputTokens + :inputTokens, totalOutputTokens = totalOutputTokens + :outputTokens, totalCachedInputTokens = totalCachedInputTokens + :cachedInputTokens, totalCacheCreationTokens = totalCacheCreationTokens + :cacheCreationTokens WHERE id = :id")
-    suspend fun addTokenUsage(id: String, inputTokens: Int, outputTokens: Int, cachedInputTokens: Int, cacheCreationTokens: Int)
+    // SQLite 的 INTEGER 是 64 位，配合实体侧的 Long 映射即可避免 Int 溢出回绕成负数
+    // （历史 bug：长会话累计超过 21 亿后 totalInputTokens 变负，界面显示 -195776062）。
+    @Query("UPDATE chat_sessions SET totalInputTokens = MAX(totalInputTokens, 0) + :inputTokens, totalOutputTokens = MAX(totalOutputTokens, 0) + :outputTokens, totalCachedInputTokens = MAX(totalCachedInputTokens, 0) + :cachedInputTokens, totalCacheCreationTokens = MAX(totalCacheCreationTokens, 0) + :cacheCreationTokens WHERE id = :id")
+    suspend fun addTokenUsage(id: String, inputTokens: Long, outputTokens: Long, cachedInputTokens: Long, cacheCreationTokens: Long)
 
     @Query("UPDATE chat_sessions SET lastInputTokens = :lastInputTokens WHERE id = :id")
     suspend fun updateLastInputTokens(id: String, lastInputTokens: Int)

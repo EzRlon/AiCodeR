@@ -111,8 +111,8 @@ private fun headerInsets(): HeaderInsets {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatHeader(
-    inputTokens: Int,
-    outputTokens: Int,
+    inputTokens: Long,
+    outputTokens: Long,
     onOpenDrawer: () -> Unit,
     onNewChat: () -> Unit,
     /** 「新建会话」长按：弹新建类型选择层（新建/定时任务/定时 Plan）；null 时不响应长按。 */

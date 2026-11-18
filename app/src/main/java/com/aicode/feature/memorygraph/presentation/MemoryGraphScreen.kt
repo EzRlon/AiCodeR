@@ -964,9 +964,9 @@ private fun SessionLaneCard(
 private fun SessionStatsBar(
     threads: Int,
     running: Int,
-    totalInputTokens: Int,
-    totalOutputTokens: Int,
-    totalCachedTokens: Int,
+    totalInputTokens: Long,
+    totalOutputTokens: Long,
+    totalCachedTokens: Long,
     modifier: Modifier = Modifier,
 ) {
     val cacheRate = if (totalInputTokens > 0) {
@@ -1060,7 +1060,7 @@ private fun LaneFilterChip(selected: Boolean, label: String, onClick: () -> Unit
 
 /** 单条会话的 token 构成：全价输入 / 缓存读取 / 缓存写入 / 输出。 */
 @Composable
-private fun LaneCompositionBar(fresh: Int, cached: Int, cacheCreation: Int, output: Int) {
+private fun LaneCompositionBar(fresh: Long, cached: Long, cacheCreation: Long, output: Long) {
     val segments = listOf(
         fresh to TokenStatsPalette.Input,
         cached to TokenStatsPalette.Cache,
@@ -1093,10 +1093,16 @@ private fun modeLabelRes(mode: AgentMode): Int = when (mode) {
 
 @Composable
 /** token 数缩写：1234 → 1.2k，1234567 → 1.2M。 */
-internal fun formatTokens(tokens: Int): String = when {
-    tokens >= 1_000_000 -> "%.1fM".format(java.util.Locale.US, tokens / 1_000_000f)
-    tokens >= 1_000 -> "%.1fk".format(java.util.Locale.US, tokens / 1_000f)
-    else -> tokens.toString()
+internal fun formatTokens(tokens: Long): String {
+    // 负数只可能来自历史 Int 溢出（已改为 Long 累加）；显示时按 0 处理，
+    // 避免再出现 "-195776062" 这种一长串。
+    val safe = tokens.coerceAtLeast(0L)
+    return when {
+        safe >= 1_000_000_000L -> "%.1fB".format(java.util.Locale.US, safe / 1_000_000_000.0)
+        safe >= 1_000_000L -> "%.1fM".format(java.util.Locale.US, safe / 1_000_000.0)
+        safe >= 1_000L -> "%.1fk".format(java.util.Locale.US, safe / 1_000.0)
+        else -> safe.toString()
+    }
 }
 
 /** 相对时间：刚刚 / N 分钟前 / N 小时前 / 昨天 / MM-dd。 */

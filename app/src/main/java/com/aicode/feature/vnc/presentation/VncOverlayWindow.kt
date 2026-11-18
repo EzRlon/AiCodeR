@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -67,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -230,10 +232,12 @@ private fun FloatingVncWindow(
     parentWidth: Dp,
     parentHeight: Dp,
 ) {
-    // 默认尺寸更贴合屏幕：宽度占满（留 16dp 边），高度约占 62%，画面等比铺满。
-    // 远端分辨率会跟随这个宽高比，因此不会出现大片黑边。
-    val defaultWidth = (parentWidth - 16.dp).coerceAtMost(560.dp)
-    val defaultHeight = (parentHeight * 0.62f).coerceIn(240.dp, (parentHeight - 96.dp).coerceAtLeast(240.dp))
+    // 默认尺寸按「竖屏 3:4 的远端画面」推导：先定画面宽度，再按 3:4 算画面高度，
+    // 最后加上下方按键条的固定高度。这样默认打开与「重置位置」时画面天然贴合、
+    // 不会被拉伸；用户之后仍可任意拖拽缩放（这里只在未自定义过时给初值）。
+    val defaultWidth = (parentWidth - 16.dp).coerceAtMost(420.dp)
+    val defaultHeight = (defaultWidth / (3f / 4f) + 46.dp)
+        .coerceIn(240.dp, (parentHeight - 96.dp).coerceAtLeast(240.dp))
     LaunchedEffect(parentWidth, parentHeight) {
         viewModel.ensureGeometry(
             defaultXDp = ((parentWidth - defaultWidth) / 2).value,
@@ -292,8 +296,11 @@ private fun VncWindowSurface(
     val shape = RoundedCornerShape(if (fullscreen) 0.dp else 2.dp)
     val mouseButton by viewModel.mouseButton.collectAsStateWithLifecycle()
     var specialKeys by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier = modifier) {
+    // 横竖屏按「窗口自身形状」判断（不是屏幕方向）：窗口宽 > 高即为横屏排布。
+    val landscape = maxWidth > maxHeight
     Column(
-        modifier = modifier
+        modifier = Modifier
             .shadow(if (fullscreen) 0.dp else 8.dp, shape)
             .clip(shape)
             .background(MaterialTheme.semanticColors.cardSurface)
@@ -314,104 +321,63 @@ private fun VncWindowSurface(
         if (specialKeys && connected) {
             VncSpecialKeyBar(onKey = viewModel::sendKeysym)
         }
-        Box(modifier = Modifier.weight(1f)) {
-            VncWebViewPanel(
-                serviceState = serviceState,
-                pasteRequests = viewModel.pasteRequests.collectAsStateWithLifecycle().value,
-                reconnectRequests = viewModel.reconnectRequests.collectAsStateWithLifecycle().value,
-                onConnectedChange = viewModel::setConnected,
-                onKeyboardRequest = viewModel::requestKeyboard,
-                onPageReady = { channel ->
-                    // 页面每次重载都要回填按键与鼠标按键模式通道。
-                    viewModel.sendKeysToPage = { text -> channel.sendKeys(text) }
-                    viewModel.sendKeysymToPage = { code, down -> channel.sendKeysym(code, down) }
-                    viewModel.sendMouseButtonMode = { b -> channel.setMouseButton(b) }
-                    viewModel.sendClickToPage = { b -> channel.click(b) }
-                    viewModel.sendScrollToPage = { d -> channel.scroll(d) }
-                    viewModel.sendPointerModeToPage = { m -> channel.setPointerMode(m) }
-                    viewModel.sendTrackpadMoveToPage = { dx, dy -> channel.trackpadMove(dx, dy) }
-                    viewModel.sendTrackpadResetToPage = { channel.trackpadReset() }
-                    viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
-                    viewModel.sendPointerModeToPage?.invoke(viewModel.pointerMode.value)
-                },
-                mouseButton = mouseButton,
-                modifier = Modifier.fillMaxSize(),
-            )
-            // 笔记本式触控板（2026-11-18 用户反馈）：触控板模式下画面下沿叠一条
-            // 半透明触控区——单指移动指针、轻点=左键、双指上下滑=滚轮、双指点按=右键。
-            // 直触模式不显示，触摸直接落到画面。
-            val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
-            if (connected && pointerMode == "trackpad") {
-                VncTrackpadPad(
-                    onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
-                    onGestureEnd = viewModel::trackpadReset,
-                    onTap = { viewModel.clickMouse(0) },
-                    onTwoFingerTap = { viewModel.clickMouse(2) },
-                    onScroll = { dir -> viewModel.scrollMouse(dir) },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(84.dp),
+        val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
+        // 横屏（宽 > 高）时把画面与按键分列两区：画面占大部分、按键占右侧窄栏，
+        // 避免横屏下画面被压扁变形（用户 2026-11-18 反馈）。
+        if (landscape) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                VncImageArea(
+                    viewModel = viewModel,
+                    serviceState = serviceState,
+                    connected = connected,
+                    fullscreen = fullscreen,
+                    window = window,
+                    mouseButton = mouseButton,
+                    modifier = Modifier.weight(1f),
                 )
+                if (connected) {
+                    VncControlColumn(
+                        viewModel = viewModel,
+                        pointerMode = pointerMode,
+                        modifier = Modifier.width(64.dp).fillMaxHeight(),
+                    )
+                }
             }
-            // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
-            // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
-            VncKeyboardSink(
+        } else {
+            VncImageArea(
                 viewModel = viewModel,
-                modifier = Modifier.align(Alignment.BottomStart),
+                serviceState = serviceState,
+                connected = connected,
+                fullscreen = fullscreen,
+                window = window,
+                mouseButton = mouseButton,
+                modifier = Modifier.weight(1f),
             )
-            // 键盘拉起按钮已收进标题栏（VncTitleBar 里锁定按钮左侧），不再做悬浮按钮。
-            if (!fullscreen && !window.pinned) {
-                ResizeCornerHandle(
-                    onResize = { dx, dy -> viewModel.resizeBy(dx, dy) },
-                    onResizeEnd = viewModel::persistGeometry,
-                    modifier = Modifier.align(Alignment.BottomEnd),
-                )
-            }
-            val failed = serviceState as? VncServiceState.Failed
-            val preparing = serviceState is VncServiceState.Preparing
-            if (failed != null || preparing) {
-                Column(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(MaterialTheme.semanticColors.pageBackground.copy(alpha = 0.94f)),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    if (failed == null) {
-                        // 安装/重试期间保留「准备中」覆盖：避免重试后露出空白 WebView（装包可达数分钟）。
-                        Text(
-                            text = stringResource(R.string.vnc_preparing_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            modifier = Modifier.padding(horizontal = Spacing.lg),
-                        )
-                    } else {
-                        Text(
-                            text = stringResource(R.string.vnc_failed_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            modifier = Modifier.padding(horizontal = Spacing.lg),
-                        )
-                        Text(
-                            text = failed.message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-                        )
-                        TextButton(onClick = viewModel::retryStart) {
-                            Text(text = stringResource(R.string.vnc_retry))
-                        }
-                    }
+            // 竖屏：画面 → 按键条 → 触控板（触控板在按键之下，用户 2026-11-18 指定顺序）
+            if (connected) {
+                VncMouseBar(viewModel = viewModel)
+                if (pointerMode == "trackpad") {
+                    VncTrackpadPad(
+                        onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
+                        onGestureEnd = viewModel::trackpadReset,
+                        onTap = { viewModel.clickMouse(0) },
+                        onTwoFingerTap = { viewModel.clickMouse(2) },
+                        onScroll = { dir -> viewModel.scrollMouse(dir) },
+                        modifier = Modifier.fillMaxWidth().height(72.dp),
+                    )
                 }
             }
         }
+
+
         // 鼠标按键条：原生绘制在画面之外（窗口底部），不压在 VNC 内容上。
         if (connected) {
             VncMouseBar(viewModel = viewModel)
         }
+    }
     }
 }
 
@@ -573,6 +539,174 @@ private fun VncTrackpadPad(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * VNC 画面区（含各类覆盖层）。抽出来是因为横竖屏两种排布都要用它：
+ * 竖屏整宽、横屏与右侧按键栏并排。
+ */
+@Composable
+private fun VncImageArea(
+    viewModel: VncOverlayViewModel,
+    serviceState: VncServiceState,
+    connected: Boolean,
+    fullscreen: Boolean,
+    window: VncOverlayViewModel.WindowState,
+    mouseButton: Int,
+    modifier: Modifier = Modifier,
+) {
+    // 注意：不要在这里监听尺寸去改远端分辨率——用户拖动缩放窗口时必须完全自由，
+    // 不能被我们反过来调整远端。默认尺寸按画面比例给（见 defaultWidth/defaultHeight）。
+    Box(modifier = modifier) {
+                VncWebViewPanel(
+                    serviceState = serviceState,
+                    pasteRequests = viewModel.pasteRequests.collectAsStateWithLifecycle().value,
+                    reconnectRequests = viewModel.reconnectRequests.collectAsStateWithLifecycle().value,
+                    onConnectedChange = viewModel::setConnected,
+                    onKeyboardRequest = viewModel::requestKeyboard,
+                    onPageReady = { channel ->
+                        // 页面每次重载都要回填按键与鼠标按键模式通道。
+                        viewModel.sendKeysToPage = { text -> channel.sendKeys(text) }
+                        viewModel.sendKeysymToPage = { code, down -> channel.sendKeysym(code, down) }
+                        viewModel.sendMouseButtonMode = { b -> channel.setMouseButton(b) }
+                        viewModel.sendClickToPage = { b -> channel.click(b) }
+                        viewModel.sendScrollToPage = { d -> channel.scroll(d) }
+                        viewModel.sendPointerModeToPage = { m -> channel.setPointerMode(m) }
+                        viewModel.sendTrackpadMoveToPage = { dx, dy -> channel.trackpadMove(dx, dy) }
+                        viewModel.sendTrackpadResetToPage = { channel.trackpadReset() }
+                        viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
+                        viewModel.sendPointerModeToPage?.invoke(viewModel.pointerMode.value)
+                    },
+                    mouseButton = mouseButton,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 笔记本式触控板（2026-11-18 用户反馈）：触控板模式下画面下沿叠一条
+                // 半透明触控区——单指移动指针、轻点=左键、双指上下滑=滚轮、双指点按=右键。
+                // 直触模式不显示，触摸直接落到画面。
+                val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
+                if (connected && pointerMode == "trackpad") {
+                    VncTrackpadPad(
+                        onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
+                        onGestureEnd = viewModel::trackpadReset,
+                        onTap = { viewModel.clickMouse(0) },
+                        onTwoFingerTap = { viewModel.clickMouse(2) },
+                        onScroll = { dir -> viewModel.scrollMouse(dir) },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(84.dp),
+                    )
+                }
+                // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
+                // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
+                VncKeyboardSink(
+                    viewModel = viewModel,
+                    modifier = Modifier.align(Alignment.BottomStart),
+                )
+                // 键盘拉起按钮已收进标题栏（VncTitleBar 里锁定按钮左侧），不再做悬浮按钮。
+                if (!fullscreen && !window.pinned) {
+                    ResizeCornerHandle(
+                        onResize = { dx, dy -> viewModel.resizeBy(dx, dy) },
+                        onResizeEnd = viewModel::persistGeometry,
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    )
+                }
+                val failed = serviceState as? VncServiceState.Failed
+                val preparing = serviceState is VncServiceState.Preparing
+                if (failed != null || preparing) {
+                    Column(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(MaterialTheme.semanticColors.pageBackground.copy(alpha = 0.94f)),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        if (failed == null) {
+                            // 安装/重试期间保留「准备中」覆盖：避免重试后露出空白 WebView（装包可达数分钟）。
+                            Text(
+                                text = stringResource(R.string.vnc_preparing_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.semanticColors.subtleText,
+                                modifier = Modifier.padding(horizontal = Spacing.lg),
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.vnc_failed_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.semanticColors.subtleText,
+                                modifier = Modifier.padding(horizontal = Spacing.lg),
+                            )
+                            Text(
+                                text = failed.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.semanticColors.subtleText,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                            )
+                            TextButton(onClick = viewModel::retryStart) {
+                                Text(text = stringResource(R.string.vnc_retry))
+                            }
+                        }
+                    }
+                }
+    
+    }
+}
+
+/**
+ * 横屏右侧按键栏：竖排左/中/右 + 滚轮上/下 + 触控板区。
+ * 横屏横向空间富余，把按键拆到画面右侧的窄栏里，画面保持原始纵横比不被压扁。
+ */
+@Composable
+private fun VncControlColumn(
+    viewModel: VncOverlayViewModel,
+    pointerMode: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.semanticColors.cardSurface)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        MouseBarButton(stringResource(R.string.vnc_bar_left), false, { viewModel.clickMouse(0) })
+        MouseBarButton(stringResource(R.string.vnc_bar_middle), false, { viewModel.clickMouse(1) })
+        MouseBarButton(stringResource(R.string.vnc_bar_right), false, { viewModel.clickMouse(2) })
+        MouseBarButton(
+            "▲", false, { viewModel.scrollMouse(-1) },
+            contentDescription = stringResource(R.string.vnc_bar_scroll_up)
+        )
+        MouseBarButton(
+            "▼", false, { viewModel.scrollMouse(1) },
+            contentDescription = stringResource(R.string.vnc_bar_scroll_down)
+        )
+        MouseBarButton(
+            label = stringResource(
+                if (pointerMode == "trackpad") R.string.vnc_bar_pointer_trackpad
+                else R.string.vnc_bar_pointer_direct
+            ),
+            active = pointerMode == "trackpad",
+            onClick = {
+                viewModel.setPointerMode(if (pointerMode == "trackpad") "direct" else "trackpad")
+            },
+        )
+        if (pointerMode == "trackpad") {
+            // 横屏触控板：占按键栏剩余高度
+            VncTrackpadPad(
+                onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
+                onGestureEnd = viewModel::trackpadReset,
+                onTap = { viewModel.clickMouse(0) },
+                onTwoFingerTap = { viewModel.clickMouse(2) },
+                onScroll = { dir -> viewModel.scrollMouse(dir) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
             )
         }
     }

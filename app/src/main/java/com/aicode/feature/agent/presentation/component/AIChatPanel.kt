@@ -794,8 +794,8 @@ fun AIChatPanel(
                 rootSessions.firstOrNull { it.id == parentId }?.engine != null
         } == true
     }
-    val sessionInputTokens = currentSession?.totalInputTokens ?: 0
-    val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0
+    val sessionInputTokens = currentSession?.totalInputTokens ?: 0L
+    val sessionOutputTokens = currentSession?.totalOutputTokens ?: 0L
     val sessionLastInputTokens = currentSession?.lastInputTokens ?: 0
     val contextUsages by viewModel.contextUsages.collectAsStateWithLifecycle()
     val messagesReady = messagesState.loaded && messagesState.sessionId == currentSessionId
@@ -1133,8 +1133,8 @@ fun AIChatPanel(
             lastInputTokens = effLastInput,
             lastOutputTokens = effLastOutput,
             lastCachedTokens = effLastCached,
-            totalInputTokens = currentSession?.totalInputTokens ?: 0,
-            totalOutputTokens = currentSession?.totalOutputTokens ?: 0,
+            totalInputTokens = currentSession?.totalInputTokens ?: 0L,
+            totalOutputTokens = currentSession?.totalOutputTokens ?: 0L,
             modelContextTokens = activeModelMetadata?.contextTokens ?: 0,
             modelMaxInputTokens = activeModelMetadata?.inputTokens ?: 0,
             modelMaxOutputTokens = activeModelMetadata?.outputTokens ?: 0,
