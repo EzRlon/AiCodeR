@@ -425,11 +425,19 @@ function findTouch(list, id) {
 }
 
 // 点画面唤起键盘（不拦截事件，触摸仍由上面的输入层处理）。
+// 顺带记录触点位置：直触模式不接管触摸，但原生「左键/右键/中键/滚轮」按钮
+// 要知道点在哪里，没有这个记录就只能退到画面中心。
 function wireKeyboardFocus(screenEl, kbd) {
-  screenEl.addEventListener('touchstart', () => {
+  screenEl.addEventListener('touchstart', (ev) => {
+    const t = ev.touches && ev.touches[0];
+    if (t) g.lastPoint = { x: t.clientX, y: t.clientY };
     if (kbd) { try { kbd.focus(); } catch (err) {} }
     const b = (typeof bridge === 'function') ? bridge() : null;
     if (b && b.onVncWantKeyboard) { try { b.onVncWantKeyboard(); } catch (err) {} }
+  }, { passive: true });
+  screenEl.addEventListener('touchmove', (ev) => {
+    const t = ev.touches && ev.touches[0];
+    if (t) g.lastPoint = { x: t.clientX, y: t.clientY };
   }, { passive: true });
 }
 
@@ -460,43 +468,19 @@ function setMode(mode) {
     btn.textContent = pointerMode === 'trackpad' ? '触控板' : '直触';
     btn.classList.toggle('active', pointerMode === 'trackpad');
   }
-  // 直触交给 noVNC 原生手势，双指点按就是右键、三指点按是中键，
-  // 那两个按钮不再有用，隐藏掉减少干扰。
-  const showExtra = pointerMode === 'trackpad';
-  for (const id of ['rightBtn', 'middleBtn']) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = showExtra ? '' : 'none';
-  }
   // 切到触控板时把虚拟指针放到画面中心；切回直触不保留（环也隐藏）。
   if (pointerMode === 'trackpad') ensureCursor(); else cursor = null;
   updateRing();
 }
 window.vncSetPointerMode = setMode;
 
-let barWired = false;
-
-function wireBar() {
-  barEl.style.display = '';
-  barEl.classList.add('show');
-  if (barWired) return;
-  barWired = true;
-  const btn = document.getElementById('modeBtn');
-  btn.textContent = pointerMode === 'trackpad' ? '触控板' : '直触';
-  btn.classList.toggle('active', pointerMode === 'trackpad');
-  btn.addEventListener('touchstart', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    setMode(pointerMode === 'trackpad' ? 'direct' : 'trackpad');
-  }, { passive: false });
-
-  const bindClick = (id, button) => {
-    const el = document.getElementById(id);
-    el.addEventListener('touchstart', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      clickAt(currentPoint(), button);
-    }, { passive: false });
-  };
-  bindClick('rightBtn', 2);
-  bindClick('middleBtn', 1);
+/**
+ * 画面内的控制条已移除：按键条改由 Android 原生浮窗绘制在画面之外，
+ * 不再压在 VNC 内容上（用户 2026-11-18 反馈）。这里只保留隐藏逻辑，
+ * 防止旧版页面残留显示。
+ */
+function hideInPageBar() {
+  if (barEl) { barEl.style.display = 'none'; barEl.classList.remove('show'); }
 }
 
 window.vncTryConnect = function () {
@@ -510,7 +494,7 @@ window.vncTryConnect = function () {
     if (rfb._keyboard && kbdSink) rfb._keyboard._target = kbdSink;
     bindKeyboardSink(kbdSink);
     wireInput();
-    wireBar();
+    hideInPageBar();
     // 铺满浮窗：远端分辨率已按浮窗宽高比同步（xrandr），这里缩放铺满即可。
     rfb.scaleViewport = true;
     rfb.resizeSession = false;
@@ -586,6 +570,26 @@ window.vncSendKeysym = function (code, down) {
 // 原生侧「鼠标按键」开关：0=左键（默认），2=右键。
 window.vncSetMouseButton = function (b) {
   tapButton = (b === 2) ? 2 : 0;
+};
+
+// ── 原生浮窗按钮入口 ────────────────────────────────────────────────
+// 按键条由 Android 原生浮窗绘制（在画面之外），这里只负责把动作翻译成
+// 标准 MouseEvent；画面内的控制条已移除，避免压在 VNC 内容上。
+
+/** 在当前位置点击指定键：0=左键、1=中键、2=右键（与 DOM MouseEvent.button 一致）。 */
+window.vncClick = function (button) {
+  const p = currentPoint();
+  if (p) clickAt(p, button | 0);
+};
+
+/**
+ * 滚轮一格：dir < 0 上滚、dir > 0 下滚。
+ * noVNC 内部按 WHEEL_STEP=50px 累积成一格，这里直接给满一格，点一次滚一格。
+ */
+window.vncScroll = function (dir) {
+  const p = currentPoint();
+  if (!p) return;
+  synthWheel(p.x, p.y, (dir < 0 ? -1 : 1) * 50);
 };
 
 setMode('direct');

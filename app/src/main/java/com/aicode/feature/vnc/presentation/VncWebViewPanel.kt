@@ -88,6 +88,12 @@ internal class VncInputChannel(private val holder: VncWebViewHolder) {
     fun sendKeys(text: String) = holder.sendKeys(text)
     fun sendKeysym(code: Int, down: Boolean) = holder.sendKeysym(code, down)
     fun setMouseButton(button: Int) = holder.setMouseButton(button)
+    /** 在当前位置点击某键：0=左 1=中 2=右。 */
+    fun click(button: Int) = holder.click(button)
+    /** 滚轮一格：-1=上 1=下。 */
+    fun scroll(dir: Int) = holder.scroll(dir)
+    /** 指针模式：direct / trackpad。 */
+    fun setPointerMode(mode: String) = holder.setPointerMode(mode)
 }
 
 internal class VncWebViewHolder(
@@ -117,6 +123,25 @@ internal class VncWebViewHolder(
     fun setMouseButton(button: Int) {
         if (destroyed) return
         webView.evaluateJavascript("window.vncSetMouseButton && window.vncSetMouseButton($button)", null)
+    }
+
+    /** 原生按键条：在当前位置点击指定键（0=左 1=中 2=右）。 */
+    fun click(button: Int) {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncClick && window.vncClick($button)", null)
+    }
+
+    /** 原生按键条：滚轮一格（-1=上 1=下）。 */
+    fun scroll(dir: Int) {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncScroll && window.vncScroll($dir)", null)
+    }
+
+    /** 原生按键条：切换直触 / 触控板。 */
+    fun setPointerMode(mode: String) {
+        if (destroyed) return
+        val escaped = org.json.JSONObject.quote(mode)
+        webView.evaluateJavascript("window.vncSetPointerMode && window.vncSetPointerMode($escaped)", null)
     }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")

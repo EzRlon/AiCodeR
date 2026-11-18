@@ -293,6 +293,18 @@ class VncOverlayViewModel @Inject constructor(
     @Volatile
     var sendMouseButtonMode: ((Int) -> Unit)? = null
 
+    /** 待发送到页面的「点击某键」（0=左 1=中 2=右）；原生浮窗按键条使用。 */
+    @Volatile
+    var sendClickToPage: ((Int) -> Unit)? = null
+
+    /** 待发送到页面的「滚轮一格」（-1=上 1=下）；原生浮窗按键条使用。 */
+    @Volatile
+    var sendScrollToPage: ((Int) -> Unit)? = null
+
+    /** 待发送到页面的指针模式切换（"direct"/"trackpad"）；原生浮窗按键条使用。 */
+    @Volatile
+    var sendPointerModeToPage: ((String) -> Unit)? = null
+
     /** 鼠标按键模式：0=左键 2=右键（虚拟机式键鼠：触点按下时按此按键上报）。 */
     private val _mouseButton = MutableStateFlow(0)
     val mouseButton: StateFlow<Int> = _mouseButton.asStateFlow()
@@ -314,6 +326,26 @@ class VncOverlayViewModel @Inject constructor(
         _mouseButton.value = button
         sendMouseButtonMode?.invoke(button)
     }
+
+    /** 原生按键条：在「当前指针位置」点击指定键（0=左 1=中 2=右）。 */
+    fun clickMouse(button: Int) {
+        sendClickToPage?.invoke(button)
+    }
+
+    /** 原生按键条：滚轮一格（-1=上 1=下）。 */
+    fun scrollMouse(dir: Int) {
+        sendScrollToPage?.invoke(dir)
+    }
+
+    /** 原生按键条：切换直触 / 触控板。 */
+    fun setPointerMode(mode: String) {
+        _pointerMode.value = mode
+        sendPointerModeToPage?.invoke(mode)
+    }
+
+    /** 指针模式：direct=触摸点即指针；trackpad=相对移动（触控板）。 */
+    private val _pointerMode = MutableStateFlow("direct")
+    val pointerMode: StateFlow<String> = _pointerMode.asStateFlow()
 
     fun setRotation(rotation: VncRotation) {        _window.update { it.copy(rotation = rotation) }
         viewModelScope.launch { prefsRepository.saveRotation(rotation.ordinal) }

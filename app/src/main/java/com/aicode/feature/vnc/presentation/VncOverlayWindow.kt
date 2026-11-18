@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -55,6 +56,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -319,7 +322,11 @@ private fun VncWindowSurface(
                     viewModel.sendKeysToPage = { text -> channel.sendKeys(text) }
                     viewModel.sendKeysymToPage = { code, down -> channel.sendKeysym(code, down) }
                     viewModel.sendMouseButtonMode = { b -> channel.setMouseButton(b) }
+                    viewModel.sendClickToPage = { b -> channel.click(b) }
+                    viewModel.sendScrollToPage = { d -> channel.scroll(d) }
+                    viewModel.sendPointerModeToPage = { m -> channel.setPointerMode(m) }
                     viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
+                    viewModel.sendPointerModeToPage?.invoke(viewModel.pointerMode.value)
                 },
                 mouseButton = mouseButton,
                 modifier = Modifier.fillMaxSize(),
@@ -378,6 +385,103 @@ private fun VncWindowSurface(
                 }
             }
         }
+        // 鼠标按键条：原生绘制在画面之外（窗口底部），不压在 VNC 内容上。
+        if (connected) {
+            VncMouseBar(viewModel = viewModel)
+        }
+    }
+}
+
+/**
+ * 原生鼠标按键条（窗口内、画面外）：左键 / 中键 / 右键 / 滚轮上下 / 指针模式。
+ *
+ * 这些动作以前画在 WebView 里，既压住 VNC 内容、又只有右键和中键两项。
+ * 现在改为原生浮窗控件，按钮语义与 DOM `MouseEvent.button` 对齐，
+ * 点击作用于「当前指针位置」（直触=最后触点，触控板=虚拟指针）。
+ */
+@Composable
+private fun VncMouseBar(
+    viewModel: VncOverlayViewModel,
+) {
+    val mode by viewModel.pointerMode.collectAsStateWithLifecycle()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.semanticColors.cardSurface)
+            .padding(horizontal = Spacing.xs, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MouseBarButton(
+            label = stringResource(R.string.vnc_bar_left),
+            active = false,
+            onClick = { viewModel.clickMouse(0) },
+        )
+        MouseBarButton(
+            label = stringResource(R.string.vnc_bar_middle),
+            active = false,
+            onClick = { viewModel.clickMouse(1) },
+        )
+        MouseBarButton(
+            label = stringResource(R.string.vnc_bar_right),
+            active = false,
+            onClick = { viewModel.clickMouse(2) },
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        MouseBarButton(
+            label = "▲",
+            contentDescription = stringResource(R.string.vnc_bar_scroll_up),
+            active = false,
+            onClick = { viewModel.scrollMouse(-1) },
+        )
+        MouseBarButton(
+            label = "▼",
+            contentDescription = stringResource(R.string.vnc_bar_scroll_down),
+            active = false,
+            onClick = { viewModel.scrollMouse(1) },
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        MouseBarButton(
+            label = stringResource(
+                if (mode == "trackpad") R.string.vnc_bar_pointer_trackpad else R.string.vnc_bar_pointer_direct
+            ),
+            active = mode == "trackpad",
+            onClick = { viewModel.setPointerMode(if (mode == "trackpad") "direct" else "trackpad") },
+        )
+    }
+}
+
+@Composable
+private fun MouseBarButton(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    contentDescription: String? = null,
+) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+        modifier = Modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(17.dp))
+            .background(
+                if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            )
+            // 箭头按钮的可见文字只有符号，读屏需要一段可读描述。
+            .then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else Modifier
+            ),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (active) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 

@@ -3147,6 +3147,13 @@
     <string name="vnc_rotation_landscape">Rotation: lock landscape</string>
     <string name="vnc_rotation_portrait">Rotation: lock portrait</string>
     <string name="vnc_show_keyboard">Show keyboard</string>
+    <string name="vnc_bar_left">Left</string>
+    <string name="vnc_bar_middle">Middle</string>
+    <string name="vnc_bar_right">Right</string>
+    <string name="vnc_bar_scroll_up">Scroll up</string>
+    <string name="vnc_bar_scroll_down">Scroll down</string>
+    <string name="vnc_bar_pointer_direct">Direct</string>
+    <string name="vnc_bar_pointer_trackpad">Trackpad</string>
     <string name="vnc_mouse_left">Mouse left button (tap to switch to right)</string>
     <string name="vnc_mouse_right">Mouse right button (tap to switch back to left)</string>
     <string name="vnc_close">Close window</string>
