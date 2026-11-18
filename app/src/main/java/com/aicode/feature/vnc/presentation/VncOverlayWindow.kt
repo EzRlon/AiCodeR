@@ -281,6 +281,39 @@ private fun FloatingVncWindow(
             modifier = Modifier.fillMaxSize(),
         )
     }
+
+    // ── 触控板：独立浮块，位于窗口之外（用户 2026-11-18 要求「在浮窗外面」）──
+    // 优先贴在窗口下方；下方空间不足时放到窗口上方。与窗口同样带阴影与描边，
+    // 视觉上是一个独立的小触摸板，不占据 VNC 画面、也不吃画面区的触摸。
+    val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
+    if (connected && pointerMode == "trackpad") {
+        val padHeight = 110.dp
+        val gap = 8.dp
+        val roomBelow = parentHeight - (offY + winHeight)
+        val placeAbove = roomBelow < padHeight + gap + 12.dp
+        val padY = if (placeAbove) {
+            (offY - padHeight - gap).coerceAtLeast(minYDp)
+        } else {
+            (offY + winHeight + gap).coerceIn(minYDp, (parentHeight - padHeight).coerceAtLeast(minYDp))
+        }
+        val padWidth = winWidth.coerceAtMost(parentWidth - 16.dp)
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(offX.roundToPx(), padY.roundToPx()) }
+                .size(padWidth, padHeight)
+                .shadow(6.dp, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(12.dp)),
+        ) {
+            VncTrackpadPad(
+                onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
+                onGestureEnd = viewModel::trackpadReset,
+                onTap = { viewModel.clickMouse(0) },
+                onTwoFingerTap = { viewModel.clickMouse(2) },
+                onScroll = { dir -> viewModel.scrollMouse(dir) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
 }
 
 /** 窗体内容（浮动与全屏共用）：标题栏 + VNC 画面 + 失败提示覆盖层。 */
@@ -359,24 +392,10 @@ private fun VncWindowSurface(
             // 竖屏：画面 → 按键条 → 触控板（触控板在按键之下，用户 2026-11-18 指定顺序）
             if (connected) {
                 VncMouseBar(viewModel = viewModel)
-                if (pointerMode == "trackpad") {
-                    VncTrackpadPad(
-                        onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
-                        onGestureEnd = viewModel::trackpadReset,
-                        onTap = { viewModel.clickMouse(0) },
-                        onTwoFingerTap = { viewModel.clickMouse(2) },
-                        onScroll = { dir -> viewModel.scrollMouse(dir) },
-                        modifier = Modifier.fillMaxWidth().height(72.dp),
-                    )
-                }
             }
         }
 
 
-        // 鼠标按键条：原生绘制在画面之外（窗口底部），不压在 VNC 内容上。
-        if (connected) {
-            VncMouseBar(viewModel = viewModel)
-        }
     }
     }
 }
@@ -558,9 +577,12 @@ private fun VncImageArea(
     mouseButton: Int,
     modifier: Modifier = Modifier,
 ) {
-    // 注意：不要在这里监听尺寸去改远端分辨率——用户拖动缩放窗口时必须完全自由，
-    // 不能被我们反过来调整远端。默认尺寸按画面比例给（见 defaultWidth/defaultHeight）。
-    Box(modifier = modifier) {
+    // 画面区尺寸变化时把宽高比同步给远端（xrandr）：远端帧与画面区同比例，
+    // 铺满窗口时既不留黑边也不拉伸。这不影响用户缩放——窗口大小仍完全由用户决定，
+    // 我们只让远端分辨率去适配它。
+    Box(modifier = modifier.onSizeChanged { size ->
+        viewModel.onImageAreaSize(size.width, size.height)
+    }) {
                 VncWebViewPanel(
                     serviceState = serviceState,
                     pasteRequests = viewModel.pasteRequests.collectAsStateWithLifecycle().value,
@@ -583,23 +605,6 @@ private fun VncImageArea(
                     mouseButton = mouseButton,
                     modifier = Modifier.fillMaxSize(),
                 )
-                // 笔记本式触控板（2026-11-18 用户反馈）：触控板模式下画面下沿叠一条
-                // 半透明触控区——单指移动指针、轻点=左键、双指上下滑=滚轮、双指点按=右键。
-                // 直触模式不显示，触摸直接落到画面。
-                val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
-                if (connected && pointerMode == "trackpad") {
-                    VncTrackpadPad(
-                        onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
-                        onGestureEnd = viewModel::trackpadReset,
-                        onTap = { viewModel.clickMouse(0) },
-                        onTwoFingerTap = { viewModel.clickMouse(2) },
-                        onScroll = { dir -> viewModel.scrollMouse(dir) },
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height(84.dp),
-                    )
-                }
                 // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
                 // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
                 VncKeyboardSink(
@@ -695,20 +700,6 @@ private fun VncControlColumn(
                 viewModel.setPointerMode(if (pointerMode == "trackpad") "direct" else "trackpad")
             },
         )
-        if (pointerMode == "trackpad") {
-            // 横屏触控板：占按键栏剩余高度
-            VncTrackpadPad(
-                onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
-                onGestureEnd = viewModel::trackpadReset,
-                onTap = { viewModel.clickMouse(0) },
-                onTwoFingerTap = { viewModel.clickMouse(2) },
-                onScroll = { dir -> viewModel.scrollMouse(dir) },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-            )
-        }
     }
 }
 
@@ -924,14 +915,31 @@ private fun MinimizedBall(
     val ballMinY = with(ballDensity) { WindowInsets.statusBars.getTop(this).toDp() } + 8.dp
     val ballY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight - ballSize - 96.dp).value else window.offsetY)
         .dp.coerceIn(ballMinY, (parentHeight - ballSize).coerceAtLeast(ballMinY))
+    // 最小化后图标可任意拖动（2026-11-18 用户反馈）：与聊天顶栏/底栏重叠时能自己挪开。
+    var bx by remember(window.offsetX) { mutableStateOf(ballX) }
+    var byY by remember(window.offsetY) { mutableStateOf(ballY) }
     Box(
         modifier = Modifier
-            .offset { IntOffset(ballX.roundToPx(), ballY.roundToPx()) }
+            .offset { IntOffset(bx.roundToPx(), byY.roundToPx()) }
             .size(ballSize)
             .shadow(4.dp, CircleShape)
             .clip(CircleShape)
             .background(MaterialTheme.semanticColors.cardSurface)
             .border(1.dp, MaterialTheme.semanticColors.subtleBorder, CircleShape)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragEnd = { viewModel.persistMinimizedBall(bx.value, byY.value) },
+                ) { change, drag ->
+                    change.consume()
+                    val dx = drag.x.toDp()
+                    val dy = drag.y.toDp()
+                    bx = (bx + dx).coerceIn(0.dp, (parentWidth - ballSize).coerceAtLeast(0.dp))
+                    byY = (byY + dy).coerceIn(
+                        ballMinY,
+                        (parentHeight - ballSize).coerceAtLeast(ballMinY)
+                    )
+                }
+            }
             .clickable { viewModel.setMinimized(false) },
         contentAlignment = Alignment.Center,
     ) {

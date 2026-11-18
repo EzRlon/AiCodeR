@@ -450,6 +450,34 @@ class VncOverlayViewModel @Inject constructor(
         }
     }
 
+    /** 最小化图标被拖动后保存其位置（复用窗口坐标记忆，复原时沿用）。 */
+    fun persistMinimizedBall(xDp: Float, yDp: Float) {
+        _window.update { it.copy(offsetX = xDp, offsetY = yDp) }
+        viewModelScope.launch { prefsRepository.saveGeometry(xDp, yDp, 0f, 0f) }
+    }
+
+    /** 上次已同步的画面区宽高比；变化不足 3% 不重复 xrandr（避免拖动窗口时刷屏）。 */
+    private var lastImageRatio: Float = 0f
+
+    /**
+     * 画面区尺寸变化（像素）：远端分辨率按画面区的宽高比设置，
+     * 使画面铺满窗口且不拉伸。用户缩放窗口不受影响——只调远端，不改窗口。
+     */
+    fun onImageAreaSize(widthPx: Int, heightPx: Int) {
+        if (widthPx <= 0 || heightPx <= 0) return
+        val ratio = (widthPx.toFloat() / heightPx).coerceIn(0.4f, 2.5f)
+        if (lastImageRatio > 0f && kotlin.math.abs(ratio - lastImageRatio) / lastImageRatio < 0.03f) return
+        lastImageRatio = ratio
+        viewModelScope.launch {
+            val (sw, sh) = if (ratio >= 1f) {
+                DESKTOP_LONG_EDGE to (DESKTOP_LONG_EDGE / ratio).toInt()
+            } else {
+                (DESKTOP_LONG_EDGE * ratio).toInt() to DESKTOP_LONG_EDGE
+            }
+            serviceController.resizeDisplay(sw.coerceAtLeast(480), sh.coerceAtLeast(480))
+        }
+    }
+
     /**
      * 让虚拟屏跟随浮窗宽高比：横屏 → 宽图，竖屏 → 高图。
      * 长边固定 [DESKTOP_LONG_EDGE]，短边按比例推导；比例过窄时钳到 480 保底。
