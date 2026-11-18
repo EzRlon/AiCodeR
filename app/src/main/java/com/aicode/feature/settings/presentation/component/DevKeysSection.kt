@@ -36,7 +36,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,15 +133,22 @@ internal fun DevKeysSection(
             )
         }
 
-        // ── 以项目为单位：先看有哪些构建版本、各需要什么材料（2026-11-16 用户反馈 1）──
-        BuildVariantsSection(readiness = state.readiness)
+        // ── 项目 → 发布材料 → 构建版本 → 打包（2026-11-18 用户反馈：层级仍不清）──
+        // 发布材料只有一套、三个正式版本共用，因此先呈现材料再列版本；
+        // 旧实现把同一套四项材料在每个版本下各列一遍，且「发布就绪」悬在版本之外，
+        // 让人误以为每个版本要求不同、就绪状态与版本无隶属关系。
+        val readiness = state.readiness
+            ?.takeIf { it.projectName == null || it.projectName == currentProject?.name }
+        if (readiness != null) {
+            ReleaseReadinessCard(readiness = readiness, onRecheck = onRecheck)
+            Spacer(Modifier.height(Spacing.md))
+        }
+
+        BuildVariantsSection(readiness = readiness)
         Spacer(Modifier.height(Spacing.md))
 
-        // ── 发布就绪卡：回答「现在打正式包，够不够」，并给出每一项的下一步 ──
-        state.readiness
-            ?.takeIf { it.projectName == null || it.projectName == currentProject?.name }
-            ?.let { readiness ->
-            ReleaseReadinessCard(readiness = readiness, onRecheck = onRecheck)
+        // ── 打包发布资产：属于「正式版」，紧跟版本矩阵 ──
+        if (readiness != null) {
             SettingsGroup {
                 SettingsRow(
                     icon = FeatherIcons.Package,
@@ -444,65 +450,32 @@ private val BUILD_VARIANTS = listOf(
 )
 
 /**
- * 构建版本矩阵（2026-11-16 反馈 1 的层级重做）：
- * 项目 → 构建版本 → 该版本需要哪些材料；而不是一上来就丢一张「未就绪」清单。
+ * 构建版本矩阵（2026-11-18 层级重做）：
+ * 项目 → 发布材料 → 构建版本，材料是项目级、三个正式版本共用一套，只在上面列一次。
+ * 每个版本行只回答一件事：现在能不能打包。旧实现把同一套四项材料在每个版本下各列一遍，
+ * 让人误以为每个版本要求不同。
  */
 @Composable
 private fun BuildVariantsSection(readiness: ReleaseReadiness?) {
-    var expanded by rememberSaveable { mutableStateOf(setOf<Int>()) }
-    val certOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_CERT }?.passed == true
-    val configOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_CONFIG }?.passed == true
-    val entriesOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_ENTRIES }?.passed == true
-    val aliasOk = readiness?.items?.firstOrNull { it.key == ReleaseReadiness.KEY_ALIAS }?.passed == true
+    val missing = readiness?.items?.count { !it.passed && it.blocking }
 
     SettingsGroupHeader(text = stringResource(R.string.dev_keys_variants_title))
     SettingsGroup {
         BUILD_VARIANTS.forEachIndexed { index, variant ->
             if (index > 0) SettingsDivider()
-            val isOpen = index in expanded
             SettingsRow(
                 icon = if (variant.isDebug) FeatherIcons.Tool else FeatherIcons.Package,
                 title = stringResource(variant.titleRes),
                 subtitle = if (variant.isDebug) {
                     stringResource(R.string.dev_keys_variant_debug_desc)
-                } else {
-                    stringResource(R.string.dev_keys_variant_needs)
+                } else when {
+                    missing == null -> stringResource(R.string.dev_keys_variant_needs_check)
+                    missing == 0 -> stringResource(R.string.dev_keys_variant_ready)
+                    else -> stringResource(R.string.dev_keys_variant_missing, missing)
                 },
-                showChevron = !variant.isDebug,
-                onClick = if (variant.isDebug) null else ({
-                    expanded = if (isOpen) expanded - index else expanded + index
-                })
+                showChevron = false
             )
-            if (!variant.isDebug && isOpen) {
-                VariantRequirementRow(R.string.dev_keys_required_cert, certOk, last = false)
-                VariantRequirementRow(R.string.dev_keys_required_config, configOk, last = false)
-                VariantRequirementRow(R.string.dev_keys_required_entries, entriesOk, last = false)
-                VariantRequirementRow(R.string.dev_keys_required_alias, aliasOk, last = true)
-            }
         }
-    }
-}
-
-/** 单个版本的材料要求：✓ / ✗ + 一句说明，缩进在版本行下方。 */
-@Composable
-private fun VariantRequirementRow(labelRes: Int, ok: Boolean, last: Boolean) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = Spacing.xl, end = Spacing.lg, top = 6.dp, bottom = if (last) 10.dp else 0.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = if (ok) "✓" else "✗",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (ok) MaterialTheme.semanticColors.success else MaterialTheme.colorScheme.error
-        )
-        Spacer(Modifier.width(Spacing.sm))
-        Text(
-            text = stringResource(labelRes),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 

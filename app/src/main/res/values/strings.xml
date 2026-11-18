@@ -270,6 +270,9 @@
     <string name="dev_keys_variant_release_x86">正式包 · x86solo（模拟器）</string>
     <string name="dev_keys_variant_debug">调试包 · debug</string>
     <string name="dev_keys_variant_needs">需要证书与口令配置，展开查看</string>
+    <string name="dev_keys_variant_ready">发布材料齐备，可直接打包</string>
+    <string name="dev_keys_variant_missing">缺少 %1$d 项发布材料，见上方清单</string>
+    <string name="dev_keys_variant_needs_check">点上方「重新检查」获取打包条件</string>
     <string name="dev_keys_variant_debug_desc">使用调试签名，无需发布材料</string>
     <string name="dev_keys_required_cert">签名证书（.jks / .keystore）</string>
     <string name="dev_keys_required_config">keystore.properties（口令配置）</string>

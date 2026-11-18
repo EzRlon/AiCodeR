@@ -269,6 +269,9 @@
     <string name="dev_keys_variant_release_x86">Release · x86solo (emulator)</string>
     <string name="dev_keys_variant_debug">Debug build</string>
     <string name="dev_keys_variant_needs">Requires certificate and signing config — expand to check</string>
+    <string name="dev_keys_variant_ready">Release material complete — ready to build</string>
+    <string name="dev_keys_variant_missing">%1$d release item(s) missing — see the list above</string>
+    <string name="dev_keys_variant_needs_check">Tap “Recheck” above to evaluate build readiness</string>
     <string name="dev_keys_variant_debug_desc">Uses the debug key; no release material needed</string>
     <string name="dev_keys_required_cert">Signing certificate (.jks / .keystore)</string>
     <string name="dev_keys_required_config">keystore.properties (signing config)</string>

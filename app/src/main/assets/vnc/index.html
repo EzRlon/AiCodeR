@@ -20,6 +20,12 @@
     /* 触摸由脚本全权处理（见下方输入层），禁止浏览器做滚动/缩放手势识别。 */
     touch-action: none;
   }
+  /* noVNC 在鼠标按下时会盖一层全屏捕获元素（position:fixed、100%×100%、z-index 10000），
+     它靠真实 mouseup 事件（window 上的监听）来隐藏。我们的输入是合成的 MouseEvent，
+     不会产生真实 mouseup，捕获层因此会一直盖在画面上、吞掉后续所有触摸
+     （表现为「点第一下之后画面就再也不响应」）。让它永不参与命中测试：
+     真实鼠标仍能通过 noVNC 注册在 window 上的监听被正常转发。 */
+  #noVNC_mouse_capture_elem { pointer-events: none !important; }
   #status {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     display: flex; align-items: center; justify-content: center;
@@ -119,7 +125,6 @@ const g = {
   t0: 0,           // 起始时间
   moved: false,    // 是否已超过点击允许位移
   dragDown: false, // 是否已发出 mouse down（拖动中）
-  dragFrom: null,  // 拖动起点（发出 mouse down 的位置）
   longTimer: null,
   longFired: false,
   // 双指手势
@@ -206,14 +211,12 @@ function onSingleStart(t, now) {
   g.t0 = now;
   g.moved = false;
   g.dragDown = false;
-  g.dragFrom = null;
   g.longFired = false;
   g.lastPoint = { x: t.clientX, y: t.clientY };
 
   if (pointerMode === 'direct') {
     // 直触：立即按下。点击=按下+抬起；按住再滑=拖动；长按=保持按下（不改成右键）。
     g.dragDown = true;
-    g.dragFrom = { x: t.clientX, y: t.clientY };
     synthMouse('mousedown', t.clientX, t.clientY, tapButton, 1 << tapButton);
     return;
   }
@@ -256,7 +259,6 @@ function onSingleMove(t) {
   if (g.moved && !g.dragDown) {
     // 越过点击阈值才按住：从「按下时指针所在处」开始拖，避免拖动起点漂移。
     g.dragDown = true;
-    g.dragFrom = { x: cursor.x, y: cursor.y };
     synthMouse('mousedown', cursor.x, cursor.y, tapButton, 1 << tapButton);
   }
   synthMouse('mousemove', cursor.x, cursor.y, 0, g.dragDown ? (1 << tapButton) : 0);
