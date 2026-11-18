@@ -337,6 +337,24 @@ class VncOverlayViewModel @Inject constructor(
         sendScrollToPage?.invoke(dir)
     }
 
+    /** 笔记本式触控板：相对位移（屏幕 px）发给页面，由页面换算成远端坐标。 */
+    fun trackpadMove(dx: Float, dy: Float) {
+        sendTrackpadMoveToPage?.invoke(dx, dy)
+    }
+
+    /** 笔记本式触控板：手势结束，通知页面清零累计位移。 */
+    fun trackpadReset() {
+        sendTrackpadResetToPage?.invoke()
+    }
+
+    /** 待发送到页面的触控板相对移动（屏幕像素）；页面加载完成后回填。 */
+    @Volatile
+    var sendTrackpadMoveToPage: ((Float, Float) -> Unit)? = null
+
+    /** 待发送到页面的触控板手势结束通知。 */
+    @Volatile
+    var sendTrackpadResetToPage: (() -> Unit)? = null
+
     /** 原生按键条：切换直触 / 触控板。 */
     fun setPointerMode(mode: String) {
         _pointerMode.value = mode

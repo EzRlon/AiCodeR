@@ -329,9 +329,11 @@ internal fun buildStatusStripSegments(
         val percent = (contextTokens.toFloat() / compactionLineTokens * 100f)
             .coerceIn(0f, 999f)
             .toInt()
+        // 只留百分比（2026-11-18 用户反馈：原「30k/115k · 26%」里双数字像一长串）。
+        // 用户关心的是离压缩还有多远，百分比最直观；明细在长按状态条与 Token 统计页。
         segments += StatusStripSegment(
             label = labels.context,
-            value = "${formatStripTokens(contextTokens)}/${formatStripTokens(compactionLineTokens)} · $percent%"
+            value = "$percent%"
         )
     }
 

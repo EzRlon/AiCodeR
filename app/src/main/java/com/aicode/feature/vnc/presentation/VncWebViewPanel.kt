@@ -94,6 +94,10 @@ internal class VncInputChannel(private val holder: VncWebViewHolder) {
     fun scroll(dir: Int) = holder.scroll(dir)
     /** 指针模式：direct / trackpad。 */
     fun setPointerMode(mode: String) = holder.setPointerMode(mode)
+    /** 触控板相对移动（屏幕像素）。 */
+    fun trackpadMove(dx: Float, dy: Float) = holder.trackpadMove(dx, dy)
+    /** 触控板手势结束。 */
+    fun trackpadReset() = holder.trackpadReset()
 }
 
 internal class VncWebViewHolder(
@@ -142,6 +146,20 @@ internal class VncWebViewHolder(
         if (destroyed) return
         val escaped = org.json.JSONObject.quote(mode)
         webView.evaluateJavascript("window.vncSetPointerMode && window.vncSetPointerMode($escaped)", null)
+    }
+
+    /** 原生触控板：相对移动（屏幕像素），页面负责换算与加速。 */
+    fun trackpadMove(dx: Float, dy: Float) {
+        if (destroyed) return
+        webView.evaluateJavascript(
+            "window.vncTrackpadMove && window.vncTrackpadMove($dx,$dy)", null
+        )
+    }
+
+    /** 原生触控板：手势结束，清零页面侧的累计位移。 */
+    fun trackpadReset() {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncTrackpadReset && window.vncTrackpadReset()", null)
     }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")

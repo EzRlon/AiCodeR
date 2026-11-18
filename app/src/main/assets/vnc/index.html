@@ -171,6 +171,7 @@ function synthMouse(type, x, y, button = 0, buttons = 0) {
  * 滚轮：把双指位移原样交给 noVNC，由它按 WHEEL_STEP(50px) 累积成一格滚轮，
  * 与桌面浏览器行为一致，不另造阈值。
  */
+
 function synthWheel(x, y, deltaY) {
   const cv = canvasEl();
   if (!cv || !deltaY) return;
@@ -570,6 +571,29 @@ window.vncSendKeysym = function (code, down) {
 // 原生侧「鼠标按键」开关：0=左键（默认），2=右键。
 window.vncSetMouseButton = function (b) {
   tapButton = (b === 2) ? 2 : 0;
+};
+
+// ── 原生触控板（画面外的独立触控区，Android 原生手势识别）──────────
+// 原生层只送来「这次相对移动了多少屏幕像素」，换算与加速都在这里做，
+// 与页面内触控板路径共用同一套虚拟指针与指针环。
+let trackpadDist = 0; // 独立触控板的手势内累计位移（与画面内触控板分开计）
+
+window.vncTrackpadMove = function (dx, dy) {
+  if (!rfb || !vncConnected) return;
+  if (!cursor) ensureCursor();
+  if (!cursor) return;
+  trackpadDist += Math.hypot(dx, dy);
+  const speed = speedFor(trackpadDist);
+  cursor.x += dx * speed;
+  cursor.y += dy * speed;
+  clampCursor();
+  synthMouse('mousemove', cursor.x, cursor.y, 0, 0);
+  updateRing();
+};
+
+// 原生触控板：手指抬起/切换模式时清零累计位移，让下一次滑动从 1× 重新起步。
+window.vncTrackpadReset = function () {
+  trackpadDist = 0;
 };
 
 // ── 原生浮窗按钮入口 ────────────────────────────────────────────────

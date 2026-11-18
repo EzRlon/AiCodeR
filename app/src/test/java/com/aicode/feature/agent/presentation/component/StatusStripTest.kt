@@ -64,7 +64,8 @@ class StatusStripTest {
         )
 
         assertEquals(1, segments.size)
-        assertEquals("34k/838k · 4%", segments.single().value)
+        // 2026-11-18 用户反馈：双数字像一长串，上下文段只留百分比。
+        assertEquals("4%", segments.single().value)
     }
 
     @Test
@@ -152,7 +153,7 @@ class StatusStripTest {
         )
 
         val summary = statusStripSummary(segments)
-        assertTrue(summary.contains("上下文 34k/838k"))
+        assertTrue(summary.contains("上下文 4%"))
         assertTrue(summary.contains("余额 \$18.42"))
         assertNull("没有估算段时不该出现在摘要里", summary.indexOf("估算").takeIf { it >= 0 })
     }

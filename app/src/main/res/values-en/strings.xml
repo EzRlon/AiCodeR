@@ -3154,6 +3154,7 @@
     <string name="vnc_bar_scroll_down">Scroll down</string>
     <string name="vnc_bar_pointer_direct">Direct</string>
     <string name="vnc_bar_pointer_trackpad">Trackpad</string>
+    <string name="vnc_trackpad_hint">Trackpad: slide to move · tap=left · two-finger tap=right · two-finger slide=scroll</string>
     <string name="vnc_mouse_left">Mouse left button (tap to switch to right)</string>
     <string name="vnc_mouse_right">Mouse right button (tap to switch back to left)</string>
     <string name="vnc_close">Close window</string>

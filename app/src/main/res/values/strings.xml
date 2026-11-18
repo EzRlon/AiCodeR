@@ -3156,6 +3156,7 @@
     <string name="vnc_bar_scroll_down">向下滚动</string>
     <string name="vnc_bar_pointer_direct">直触</string>
     <string name="vnc_bar_pointer_trackpad">触控板</string>
+    <string name="vnc_trackpad_hint">触控板：滑动移动指针 · 轻点=左键 · 双指点按=右键 · 双指滑动=滚轮</string>
     <string name="vnc_mouse_left">鼠标左键模式（点按切换为右键）</string>
     <string name="vnc_mouse_right">鼠标右键模式（点按切换回左键）</string>
     <string name="vnc_close">关闭小窗</string>

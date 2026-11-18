@@ -44,6 +44,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
@@ -60,11 +61,14 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.focus.FocusRequester
@@ -325,12 +329,31 @@ private fun VncWindowSurface(
                     viewModel.sendClickToPage = { b -> channel.click(b) }
                     viewModel.sendScrollToPage = { d -> channel.scroll(d) }
                     viewModel.sendPointerModeToPage = { m -> channel.setPointerMode(m) }
+                    viewModel.sendTrackpadMoveToPage = { dx, dy -> channel.trackpadMove(dx, dy) }
+                    viewModel.sendTrackpadResetToPage = { channel.trackpadReset() }
                     viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
                     viewModel.sendPointerModeToPage?.invoke(viewModel.pointerMode.value)
                 },
                 mouseButton = mouseButton,
                 modifier = Modifier.fillMaxSize(),
             )
+            // 笔记本式触控板（2026-11-18 用户反馈）：触控板模式下画面下沿叠一条
+            // 半透明触控区——单指移动指针、轻点=左键、双指上下滑=滚轮、双指点按=右键。
+            // 直触模式不显示，触摸直接落到画面。
+            val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
+            if (connected && pointerMode == "trackpad") {
+                VncTrackpadPad(
+                    onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
+                    onGestureEnd = viewModel::trackpadReset,
+                    onTap = { viewModel.clickMouse(0) },
+                    onTwoFingerTap = { viewModel.clickMouse(2) },
+                    onScroll = { dir -> viewModel.scrollMouse(dir) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(84.dp),
+                )
+            }
             // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
             // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
             VncKeyboardSink(
@@ -451,6 +474,110 @@ private fun VncMouseBar(
     }
 }
 
+/**
+ * 笔记本式触控板：画面下沿的独立触控区（用户 2026-11-18 反馈第 2 条——
+ * 依赖手指直点画面太小根本点不中）。手势语义对齐笔记本触摸板：
+ * - 单指滑动：移动指针（相对位移交给页面换算+加速）
+ * - 单指轻点：左键
+ * - 双指点按：右键
+ * - 双指上下滑：滚轮
+ * 半透明底 + 细描边，能看见但不喧宾夺主。
+ */
+@Composable
+private fun VncTrackpadPad(
+    onMove: (Float, Float) -> Unit,
+    onGestureEnd: () -> Unit,
+    onTap: () -> Unit,
+    onTwoFingerTap: () -> Unit,
+    onScroll: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    // 滚动累积：noVNC 按 50px 一格，原生侧攒够 ~40dp 就发一格，跟手且不过敏。
+    val scrollStepPx = with(density) { 40.dp.toPx() }
+    var scrollAcc by remember { mutableStateOf(0f) }
+    var activePointers by remember { mutableStateOf(0) }
+    var gestureStart by remember { mutableStateOf(0L) }
+    var moved by remember { mutableStateOf(false) }
+    var last by remember { mutableStateOf(Offset.Zero) }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+        modifier = modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                activePointers = 1
+                moved = false
+                gestureStart = System.currentTimeMillis()
+                scrollAcc = 0f
+                last = down.position
+                onGestureEnd()
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val pressed: List<androidx.compose.ui.input.pointer.PointerInputChange> =
+                        event.changes.filter { c -> c.pressed }
+                    val count = pressed.size
+                    if (count != activePointers) {
+                        // 手指数量变化：切换手势类型（单指↔双指）
+                        if (activePointers == 2 && count < 2) {
+                            // 双指中抬起一指：短且未动 = 双指点按（右键）
+                            if (!moved && System.currentTimeMillis() - gestureStart <= 250) {
+                                onTwoFingerTap()
+                            }
+                            scrollAcc = 0f
+                        }
+                        if (activePointers == 1 && count == 0) {
+                            // 单指抬起：短且未动 = 轻点左键
+                            if (!moved && System.currentTimeMillis() - gestureStart <= 250) {
+                                onTap()
+                            }
+                            onGestureEnd()
+                        }
+                        activePointers = count
+                        if (count == 0) break
+                        last = pressed.firstOrNull()?.position ?: last
+                        continue
+                    }
+                    val change = pressed.first()
+                    if (activePointers == 1) {
+                        val dx = change.position.x - last.x
+                        val dy = change.position.y - last.y
+                        if (dx != 0f || dy != 0f) moved = true
+                        onMove(dx, dy)
+                    } else {
+                        // 双指：中点纵向位移 → 滚动
+                        val midX = pressed.map { c -> c.position.x }.average().toFloat()
+                        val midY = pressed.map { c -> c.position.y }.average().toFloat()
+                        val dy = midY - last.y
+                        scrollAcc += dy
+                        while (scrollAcc >= scrollStepPx) { onScroll(1); scrollAcc -= scrollStepPx }
+                        while (scrollAcc <= -scrollStepPx) { onScroll(-1); scrollAcc += scrollStepPx }
+                        if (dy != 0f) moved = true
+                        last = Offset(midX, midY)
+                        event.changes.forEach { c -> c.consume() }
+                        continue
+                    }
+                    last = change.position
+                    event.changes.forEach { c -> c.consume() }
+                }
+            }
+        },
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = stringResource(R.string.vnc_trackpad_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+            )
+        }
+    }
+}
+
 @Composable
 private fun MouseBarButton(
     label: String,
@@ -458,30 +585,32 @@ private fun MouseBarButton(
     onClick: () -> Unit,
     contentDescription: String? = null,
 ) {
-    TextButton(
-        onClick = onClick,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-        modifier = Modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(17.dp))
-            .background(
-                if (active) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            )
-            // 箭头按钮的可见文字只有符号，读屏需要一段可读描述。
-            .then(
-                if (contentDescription != null) {
-                    Modifier.semantics { this.contentDescription = contentDescription }
-                } else Modifier
-            ),
+    // 紧凑固定尺寸：TextButton 的默认最小触控尺寸（48dp）+ 默认内边距会把这条
+    // 按键条撑得又高又宽，小窗里直接盖到 VNC 画面（用户 2026-11-18 反馈）。
+    // 这里用 Surface+clickable 完全自控尺寸，绕开 M3 的最小尺寸强制。
+    val shape = RoundedCornerShape(14.dp)
+    var m = Modifier
+        .size(width = 44.dp, height = 30.dp)
+        .clip(shape)
+        .clickable(onClick = onClick)
+    if (contentDescription != null) {
+        m = m.then(Modifier.semantics { this.contentDescription = contentDescription })
+    }
+    Surface(
+        shape = shape,
+        color = if (active) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = m,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (active) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (active) MaterialTheme.colorScheme.onPrimary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
     }
 }
 
