@@ -119,7 +119,9 @@ setInterval(fitScreen, 1000);
 //   4) 加速按「阈值 + 固定倍率」（Winlator 的 CURSOR_ACCELERATION_THRESHOLD / 1.25×），
 //      不做自创曲线：慢移保持 1:1 精确，快滑才放大。
 const TAP_MAX_MS = 200;       // 点击判定最长时长
-const TAP_MAX_TRAVEL = 10;    // 点击判定最大位移 px
+const TAP_MAX_TRAVEL = 24;    // 点击判定最大位移 px：真实手指点按普遍带着 ~20px 微动，
+                              // 之前 10px 太紧，轻点大面积被判成拖动，按钮收到
+                              // 按下-微移-抬起，远端应用不当成点击，表现为点哪都没反应
 const LONG_PRESS_MS = 500;    // 长按判定（Android 上 500ms 符合直觉）
 // 加速按「一次手势内的累计位移」而不是单次事件位移：120Hz 采样下逐事件位移只有
 // 1~3px，按单事件判阈值等于永远触发不了（表现为「挪不动」），快甩时单事件位移大
@@ -601,6 +603,9 @@ window.vncTrackpadMove = function (dx, dy) {
   if (!rfb || !vncConnected) return;
   if (!cursor) ensureCursor();
   if (!cursor) return;
+  // 原生层传来的是物理像素，cursor 是 CSS 像素：真机 3 倍密度下不除 dpr 会快 3 倍。
+  const dpr = window.devicePixelRatio || 1;
+  dx = dx / dpr; dy = dy / dpr;
   trackpadDist += Math.hypot(dx, dy);
   const speed = speedFor(trackpadDist);
   const sc = canvasScale();

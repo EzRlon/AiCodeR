@@ -500,10 +500,16 @@ private fun VncTrackpadPad(
     val density = LocalDensity.current
     // 滚动累积：noVNC 按 50px 一格，原生侧攒够 ~40dp 就发一格，跟手且不过敏。
     val scrollStepPx = with(density) { 40.dp.toPx() }
+    // 轻点容差：真实手指点按普遍带几像素微动，零容差会把轻点大面积判成滑动，
+    // onTap 永远不触发（远端按钮点不动）；净位移超 12dp 才算滑动。
+    val tapSlopPx = with(density) { 12.dp.toPx() }
     var scrollAcc by remember { mutableStateOf(0f) }
     var activePointers by remember { mutableStateOf(0) }
     var gestureStart by remember { mutableStateOf(0L) }
     var moved by remember { mutableStateOf(false) }
+    var tapOrigin by remember { mutableStateOf(Offset.Zero) }
+    var twoOrigin by remember { mutableStateOf(Offset.Zero) }
+    var twoTracked by remember { mutableStateOf(false) }
     var last by remember { mutableStateOf(Offset.Zero) }
     var lastTapAt by remember { mutableLongStateOf(0L) }
     val scope = rememberCoroutineScope()
@@ -557,6 +563,8 @@ private fun VncTrackpadPad(
                 gestureStart = System.currentTimeMillis()
                 scrollAcc = 0f
                 last = down.position
+                tapOrigin = down.position
+                twoTracked = false
                 onGestureEnd()
                 while (true) {
                     val event = awaitPointerEvent()
@@ -595,17 +603,25 @@ private fun VncTrackpadPad(
                     if (activePointers == 1) {
                         val dx = change.position.x - last.x
                         val dy = change.position.y - last.y
-                        if (dx != 0f || dy != 0f) moved = true
+                        if (kotlin.math.abs(change.position.x - tapOrigin.x) +
+                            kotlin.math.abs(change.position.y - tapOrigin.y) > tapSlopPx
+                        ) moved = true
                         onMove(dx, dy)
                     } else {
                         // 双指：中点纵向位移 → 滚动
                         val midX = pressed.map { c -> c.position.x }.average().toFloat()
                         val midY = pressed.map { c -> c.position.y }.average().toFloat()
+                        if (!twoTracked) {
+                            twoOrigin = Offset(midX, midY)
+                            twoTracked = true
+                        }
                         val dy = midY - last.y
                         scrollAcc += dy
                         while (scrollAcc >= scrollStepPx) { onScroll(1); scrollAcc -= scrollStepPx }
                         while (scrollAcc <= -scrollStepPx) { onScroll(-1); scrollAcc += scrollStepPx }
-                        if (dy != 0f) moved = true
+                        if (kotlin.math.abs(midX - twoOrigin.x) +
+                            kotlin.math.abs(midY - twoOrigin.y) > tapSlopPx
+                        ) moved = true
                         last = Offset(midX, midY)
                         event.changes.forEach { c -> c.consume() }
                         continue
