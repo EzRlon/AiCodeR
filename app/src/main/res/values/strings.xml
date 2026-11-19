@@ -322,10 +322,15 @@
     <string name="dev_keys_readiness_detail_alias_unknown">别名「%1$s」无法自动验证（容器内没有 keytool）</string>
     <string name="dev_keys_readiness_next_alias_unknown">发布前在构建环境跑一次 assembleRelease 终检</string>
     <string name="dev_keys_readiness_detail_key_password">keyPassword 已填写，但 App 无法在构建前验证</string>
+    <string name="dev_keys_readiness_detail_key_password_ok">keyPassword 已用 keytool 验证通过</string>
+    <string name="dev_keys_readiness_detail_key_password_bad">keyPassword 与证书不匹配，签名会失败</string>
+    <string name="dev_keys_readiness_next_key_password_bad">核对 keyPassword，使其与证书实际口令一致</string>
     <string name="dev_keys_readiness_next_key_password">发布前跑一次 assembleRelease，确认签名阶段不报错</string>
     <string name="dev_keys_readiness_detail_signing_scheme">storeType / v1 / v2 未显式配置，按 Gradle 默认策略签名</string>
+    <string name="dev_keys_readiness_detail_signing_scheme_ok">证书签名算法：%1$s</string>
     <string name="dev_keys_readiness_next_signing_scheme">需要固定签名方案时，在项目 signingConfigs 显式声明 storeType 与 enableV1/V2Signing</string>
     <string name="dev_keys_readiness_detail_cert_meta">证书有效期 / 算法需要 keytool，App 未自动检查</string>
+    <string name="dev_keys_readiness_detail_cert_meta_ok">证书有效期至：%1$s</string>
     <string name="dev_keys_readiness_next_cert_meta">发布前用 keytool -list -v 确认证书未过期、算法与密钥长度符合要求</string>
     <string name="dev_keys_export_bundle">打包发布资产</string>
     <string name="dev_keys_export_bundle_desc">证书 + 口令配置 + 校验和 + 恢复说明，一个 zip 带走发布所需的全部</string>

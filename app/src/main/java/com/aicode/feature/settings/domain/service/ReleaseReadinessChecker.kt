@@ -27,7 +27,8 @@ import javax.inject.Singleton
  * 3. 配置含 storeFile/storePassword/keyAlias/keyPassword；
  * 4. `storeFile` 按项目目录解析后存在；
  * 5. alias 是否在证书里（keytool 不可用时记为「无法自动验证」，不阻断）；
- * 6. `keyPassword` 无法离线验证，明确提示发布前跑一次 assembleRelease。
+ * 6. `keyPassword`、签名方案与证书元数据：容器内有 keytool 时真实验证
+ *    （importkeystore 试钥 + 解析证书），无 keytool 时才标「未验证」。
  */
 @Singleton
 class ReleaseReadinessChecker @Inject constructor(
@@ -220,29 +221,67 @@ class ReleaseReadinessChecker @Inject constructor(
             )
         }
 
-        // keyPassword 无法离线验证：明确标为「未验证」，不伪装成通过，也不阻断就绪。
+        // keyPassword / 签名方案 / 证书元数据：有 keytool 就真实验证，不伪造结论；
+        // 无 keytool 才退回「未验证」（不阻断）。
+        val facts = verifyKeystoreFacts(jksPath, config)
         items += ReadinessItem(
             key = ReleaseReadiness.KEY_KEY_PASSWORD,
-            passed = false,
-            blocking = false,
-            detail = context.getString(R.string.dev_keys_readiness_detail_key_password),
-            nextStep = context.getString(R.string.dev_keys_readiness_next_key_password)
+            passed = facts?.keyPasswordVerified == true,
+            blocking = facts?.keyPasswordVerified == false,
+            detail = when {
+                facts == null -> context.getString(R.string.dev_keys_readiness_detail_key_password)
+                facts.keyPasswordVerified == true -> context.getString(
+                    R.string.dev_keys_readiness_detail_key_password_ok
+                )
+                else -> context.getString(R.string.dev_keys_readiness_detail_key_password_bad)
+            },
+            nextStep = when {
+                facts?.keyPasswordVerified == false -> context.getString(
+                    R.string.dev_keys_readiness_next_key_password_bad
+                )
+                facts == null -> context.getString(R.string.dev_keys_readiness_next_key_password)
+                else -> null
+            }
         )
 
-        // 签名方案与证书元数据：没有事实源时不伪造结论，明确标为「未验证」。
+        // 签名方案：从证书解析实际签名算法。
         items += ReadinessItem(
             key = ReleaseReadiness.KEY_SIGNING_SCHEME,
-            passed = false,
+            passed = facts?.signingAlgorithm != null,
             blocking = false,
-            detail = context.getString(R.string.dev_keys_readiness_detail_signing_scheme),
-            nextStep = context.getString(R.string.dev_keys_readiness_next_signing_scheme)
+            detail = if (facts?.signingAlgorithm != null) {
+                context.getString(
+                    R.string.dev_keys_readiness_detail_signing_scheme_ok,
+                    facts.signingAlgorithm!!
+                )
+            } else {
+                context.getString(R.string.dev_keys_readiness_detail_signing_scheme)
+            },
+            nextStep = if (facts?.signingAlgorithm != null) {
+                null
+            } else {
+                context.getString(R.string.dev_keys_readiness_next_signing_scheme)
+            }
         )
+
+        // 证书元数据：从证书解析有效期。
         items += ReadinessItem(
             key = ReleaseReadiness.KEY_CERT_META,
-            passed = false,
+            passed = facts?.certValidUntil != null,
             blocking = false,
-            detail = context.getString(R.string.dev_keys_readiness_detail_cert_meta),
-            nextStep = context.getString(R.string.dev_keys_readiness_next_cert_meta)
+            detail = if (facts?.certValidUntil != null) {
+                context.getString(
+                    R.string.dev_keys_readiness_detail_cert_meta_ok,
+                    facts.certValidUntil!!
+                )
+            } else {
+                context.getString(R.string.dev_keys_readiness_detail_cert_meta)
+            },
+            nextStep = if (facts?.certValidUntil != null) {
+                null
+            } else {
+                context.getString(R.string.dev_keys_readiness_next_cert_meta)
+            }
         )
 
         return ReleaseReadiness(
@@ -284,6 +323,71 @@ class ReleaseReadinessChecker @Inject constructor(
             .map { dir -> "$dir/${value.removePrefix("./")}" }
             .firstOrNull { runCatching { fileAccess.exists(it) }.getOrDefault(false) }
             ?: "$configDir/${value.removePrefix("./")}"
+    }
+
+    /**
+     * 用容器内 keytool 真实验证 keyPassword / 签名算法 / 证书有效期：
+     * - `keytool -importkeystore` 以配置口令尝试导入，验证 keyPassword 是否有效；
+     * - `keytool -list -v` 解析证书的签名算法与有效期。
+     * 任一步骤无法执行（无 keytool / 复制失败）时返回 null，按「未验证」处理，不阻断。
+     */
+    private data class KeystoreFacts(
+        val keyPasswordVerified: Boolean?,
+        val signingAlgorithm: String?,
+        val certValidUntil: String?
+    )
+
+    private fun verifyKeystoreFacts(jksPath: String, config: Map<String, String>): KeystoreFacts? {
+        val local = runCatching { fileAccess.copyToLocal(jksPath) }.getOrNull() ?: return null
+        val storePass = config["storePassword"].orEmpty()
+        val keyPass = config["keyPassword"].orEmpty()
+        val alias = config["keyAlias"].orEmpty()
+        val tempOut = runCatching {
+            java.io.File.createTempFile("keycheck", ".jks").apply { deleteOnExit() }
+        }.getOrNull() ?: return null
+        try {
+            var keyPasswordVerified: Boolean? = null
+            val import = runCatching {
+                ProcessBuilder(
+                    "keytool", "-importkeystore",
+                    "-srckeystore", local.absolutePath,
+                    "-srcstorepass", storePass,
+                    "-srckeypass", keyPass,
+                    "-alias", alias,
+                    "-destkeystore", tempOut.absolutePath,
+                    "-deststorepass", "aicode-check"
+                ).redirectErrorStream(true).start()
+            }.getOrNull()
+            if (import != null) {
+                val finished = runCatching { import.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
+                if (finished) keyPasswordVerified = import.exitValue() == 0
+            }
+            var signingAlgorithm: String? = null
+            var certValidUntil: String? = null
+            val list = runCatching {
+                ProcessBuilder(
+                    "keytool", "-list", "-v", "-keystore", local.absolutePath,
+                    "-storepass", storePass
+                ).redirectErrorStream(true).start()
+            }.getOrNull()
+            if (list != null) {
+                val finished = runCatching { list.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
+                if (finished && list.exitValue() == 0) {
+                    val output = runCatching {
+                        list.inputStream.bufferedReader().readText()
+                    }.getOrDefault("")
+                    signingAlgorithm = Regex(
+                        """(?:签名算法名称|signature algorithm name)\s*[:：]\s*(\S+)"""
+                    ).find(output)?.groupValues?.get(1)
+                    certValidUntil = Regex(
+                        """(?:有效期至|valid until|until)\s*[:：]\s*(.+)"""
+                    ).find(output)?.groupValues?.get(1)?.trim()
+                }
+            }
+            return KeystoreFacts(keyPasswordVerified, signingAlgorithm, certValidUntil)
+        } finally {
+            runCatching { tempOut.delete() }
+        }
     }
 
     /**

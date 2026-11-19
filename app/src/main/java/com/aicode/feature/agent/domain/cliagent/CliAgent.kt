@@ -64,6 +64,9 @@ data class CliAgent(
             "echo \"npm registry: \$REG\"; " +
             "NPM_ARGS='--fetch-retries=3 --fetch-timeout=600000 --no-audit --no-fund'; " +
             "try_install() { npm install -g --registry=\"\$1\" \$NPM_ARGS $npmPackage@$version; }; " +
+            // 全新安装前先清掉中断残留的损坏安装：npm 装到一半的包命令不可用，
+            // 不卸载直接重装，残留文件会让新版本安装后依旧失效。
+            "npm uninstall -g $npmPackage >/dev/null 2>&1 || true; " +
             // npmmirror 对平台二进制包（含 bin 的 optionalDependencies）返回 cnpm 风格 .l2s.* 硬链布局，
             // npm 装完后 bin 符号链接指向不存在的文件（命令 not found），npm 自身退出码却为 0；
             // 因此装完必须实测命令可执行，断链时卸载后回退官方源重装。
@@ -79,7 +82,9 @@ data class CliAgent(
             "try_install https://registry.npmjs.org; " +
             "fi; fi; " +
             "echo '───'; " +
-            "if command -v $command >/dev/null 2>&1; then " +
+            // 成功与否以版本命令实测为准：软链存在但原生二进制缺失（如 claude 的 install.cjs 未执行）
+            // 时命令并不可用，只看 command -v 会假报成功，让设置页复检必然失败。
+            "if $command --version >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
             "else P=\$(npm prefix -g 2>/dev/null)/bin; " +
             // npm 已报安装成功但 PATH 探测不到：全局 bin 目录不在 PATH。先尝试软链到
@@ -88,12 +93,21 @@ data class CliAgent(
             "if [ -x \"\$P/$command\" ]; then " +
             "ln -sf \"\$P/$command\" /usr/local/bin/$command 2>/dev/null; " +
             "hash -r 2>/dev/null; fi; " +
-            "if command -v $command >/dev/null 2>&1; then " +
+            // 部分包（如 claude-code）安装时原生二进制的 postinstall 未随 npm 执行，命令软链存在但本体缺失；
+            // 补跑包自带的 install.cjs 完成平台二进制下载，补完后再次实测版本。
+            "PKG_DIR=\$(npm root -g 2>/dev/null)/$npmPackage; " +
+            "if [ -f \"\$PKG_DIR/install.cjs\" ]; then " +
+            "echo '命令不可执行：补跑包原生二进制 postinstall（install.cjs）…'; " +
+            "node \"\$PKG_DIR/install.cjs\" 2>&1 || true; " +
+            "fi; " +
+            "if $command --version >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
-            "else if [ -x \"\$P/$command\" ]; then " +
+            "elif command -v $command >/dev/null 2>&1; then " +
+            "echo '命令存在但版本检测失败：安装可能被中断，请检查网络后重试'; exit 1; " +
+            "elif [ -x \"\$P/$command\" ]; then " +
             "echo \"已安装但当前会话未检测到，请执行 export PATH=\$P:\$PATH（重启容器永久生效）\"; " +
             // 真失败必须返回非零，让设置页如实显示「安装失败」，而不是假成功。
-            "else echo '安装失败：未生成可执行命令，请检查网络/代理后重试'; exit 1; fi; fi; fi"
+            "else echo '安装失败：未生成可执行命令，请检查网络/代理后重试'; exit 1; fi; fi"
 
     /** 检测命令：已安装则输出首行版本号，未安装静默失败。 */
     val detectCommand: String =

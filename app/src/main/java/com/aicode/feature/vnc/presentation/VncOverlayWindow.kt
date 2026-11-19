@@ -259,7 +259,7 @@ private fun FloatingVncWindow(
     LaunchedEffect(parentWidth, parentHeight) {
         viewModel.ensureGeometry(
             defaultXDp = ((parentWidth - defaultWidth) / 2).value,
-            defaultYDp = (parentHeight * 0.16f).value,
+            defaultYDp = ((parentHeight - defaultHeight) / 2).value,
             defaultWDp = defaultWidth.value,
             defaultHDp = defaultHeight.value,
         )
@@ -276,7 +276,7 @@ private fun FloatingVncWindow(
     val statusTopDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val minYDp = statusTopDp + 8.dp
     val maxYDp = (parentHeight - 56.dp).coerceAtLeast(minYDp)
-    val offY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight * 0.18f).value else window.offsetY)
+    val offY = (if (window.offsetY == Float.MIN_VALUE) ((parentHeight - winHeight) / 2).value else window.offsetY)
         .dp.coerceIn(minYDp, maxYDp)
     // 注意：不要在这里「发现 offsetY < minY 就 resetGeometry」——拖动过程中 raw 值
     // 会短暂低于最小值，自动重置会和用户拖动打架（真机反馈“位置挪不动”）。
@@ -818,39 +818,47 @@ private fun VncTitleBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .then(
-                if (fullscreen || window.pinned) {
-                    Modifier
-                } else {
-                    Modifier.pointerInput(Unit) {
-                        detectDragGestures(
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                viewModel.dragBy(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
-                            },
-                            onDragEnd = { viewModel.persistGeometry() },
-                        )
-                    }
-                }
-            )
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
+        // 拖动区只覆盖左侧标题：此前拖动手势盖住整条标题栏，点按钮时手指
+        // 微移就触发拖动并消费事件，关闭/缩小/放大按钮怎么点都没反应。
+        Row(
             modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(statusTint(serviceState, connected))
-        )
-        Spacer(modifier = Modifier.width(Spacing.sm))
-        Text(
-            text = stringResource(statusTextRes(serviceState, connected)),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+                .weight(1f)
+                .then(
+                    if (fullscreen || window.pinned) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(Unit) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    viewModel.dragBy(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
+                                },
+                                onDragEnd = { viewModel.persistGeometry() },
+                            )
+                        }
+                    }
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(statusTint(serviceState, connected))
+            )
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Text(
+                text = stringResource(statusTextRes(serviceState, connected)),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
         // 旋转是（全屏）画面专属控制，浮窗状态下不展示，避免误以为它会立刻转屏。
         if (fullscreen) {
             VncTitleAction(

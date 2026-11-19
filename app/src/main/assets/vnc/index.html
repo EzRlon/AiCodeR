@@ -125,7 +125,7 @@ const LONG_PRESS_MS = 500;    // 长按判定（Android 上 500ms 符合直觉�
 // 1~3px，按单事件判阈值等于永远触发不了（表现为「挪不动」），快甩时单事件位移大
 // 又直接飞过去。Winlator 同样按累计量判断。
 const ACCEL_FULL_DIST = 600;  // 累计滑过该距离时达到最大倍率（调缓：手感过冲）
-const ACCEL_MAX = 2.0;        // 触控板最大移动倍率
+const ACCEL_MAX = 1.5;        // 触控板最大移动倍率
 const SCROLL_GAIN = 4;        // 双指滚动放大：noVNC 按 WHEEL_STEP=50px 累积成一格
 
 /** direct = 触摸点即指针点；trackpad = 相对移动（手机小窗精确定位）。 */
@@ -197,6 +197,17 @@ function clampCursor() {
   if (!r || !cursor) return;
   cursor.x = Math.min(Math.max(cursor.x, r.left + 1), r.right - 1);
   cursor.y = Math.min(Math.max(cursor.y, r.top + 1), r.bottom - 1);
+}
+
+/**
+ * 画布缩放系数 = 显示宽 / 远端像素宽。scaleViewport=true 时画布被缩放显示，
+ * 而触控板位移是视口像素：不乘这个系数的话，远端分辨率大于视口（scale<1）时
+ * 同样一段滑动在远端会被放大数倍，表现为「指针移动过快」。
+ */
+function canvasScale() {
+  const cv = canvasEl();
+  if (!cv || !cv.width) return 1;
+  return cv.clientWidth / cv.width;
 }
 
 /**
@@ -284,8 +295,9 @@ function onSingleMove(t) {
   if (!cursor) return;
   g.dist += Math.hypot(dx, dy);
   const speed = speedFor(g.dist);
-  cursor.x += dx * speed;
-  cursor.y += dy * speed;
+  const sc = canvasScale();
+  cursor.x += dx * speed * sc;
+  cursor.y += dy * speed * sc;
   clampCursor();
 
   // 点击纪律：每次按下前先发同坐标的移动，让远端（以及 noVNC 的按钮状态机）
@@ -586,8 +598,9 @@ window.vncTrackpadMove = function (dx, dy) {
   if (!cursor) return;
   trackpadDist += Math.hypot(dx, dy);
   const speed = speedFor(trackpadDist);
-  cursor.x += dx * speed;
-  cursor.y += dy * speed;
+  const sc = canvasScale();
+  cursor.x += dx * speed * sc;
+  cursor.y += dy * speed * sc;
   clampCursor();
   synthMouse('mousemove', cursor.x, cursor.y, 0, 0);
   updateRing();
