@@ -8,8 +8,11 @@ import com.aicode.feature.settings.domain.model.SIGNING_CONFIG_NAMES
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.StringReader
+import java.security.KeyStore
+import java.security.cert.X509Certificate
+import java.text.SimpleDateFormat
+import java.util.Locale
 import java.util.Properties
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,9 +29,10 @@ import javax.inject.Singleton
  * 2. 口令配置存在（项目 `app/keystore.properties` 优先，其次证书同目录）；
  * 3. 配置含 storeFile/storePassword/keyAlias/keyPassword；
  * 4. `storeFile` 按项目目录解析后存在；
- * 5. alias 是否在证书里（keytool 不可用时记为「无法自动验证」，不阻断）；
- * 6. `keyPassword`、签名方案与证书元数据：容器内有 keytool 时真实验证
- *    （importkeystore 试钥 + 解析证书），无 keytool 时才标「未验证」。
+ * 5. alias 是否在证书里（证书读不了时记为「无法自动验证」，不阻断）；
+ * 6. `keyPassword`、签名方案与证书元数据：用 Android 内置 KeyStore API 真实验证
+ *    （加载证书 + getKey 试钥 + 读证书条目），零外部依赖——keytool 只存在于容器里，
+ *    App 进程执行不了，用它永远只剩「未验证」。
  */
 @Singleton
 class ReleaseReadinessChecker @Inject constructor(
@@ -326,12 +330,15 @@ class ReleaseReadinessChecker @Inject constructor(
     }
 
     /**
-     * 用容器内 keytool 真实验证 keyPassword / 签名算法 / 证书有效期：
-     * - `keytool -importkeystore` 以配置口令尝试导入，验证 keyPassword 是否有效；
-     * - `keytool -list -v` 解析证书的签名算法与有效期。
-     * 任一步骤无法执行（无 keytool / 复制失败）时返回 null，按「未验证」处理，不阻断。
+     * 用 Android 内置 KeyStore API 真实验证别名 / keyPassword / 签名算法 / 证书有效期：
+     * - 加载证书（先 PKCS12 后 JKS）：storePassword 错误时打不开；
+     * - `getKey` 试钥：keyPassword 错误抛 UnrecoverableKeyException；
+     * - `X509Certificate`：直接读签名算法与有效期。
+     * 文件复制失败时返回 null（按「未验证」处理，不阻断）。
      */
     private data class KeystoreFacts(
+        val storeOpenable: Boolean?,
+        val aliasPresent: Boolean?,
         val keyPasswordVerified: Boolean?,
         val signingAlgorithm: String?,
         val certValidUntil: String?
@@ -339,79 +346,65 @@ class ReleaseReadinessChecker @Inject constructor(
 
     private fun verifyKeystoreFacts(jksPath: String, config: Map<String, String>): KeystoreFacts? {
         val local = runCatching { fileAccess.copyToLocal(jksPath) }.getOrNull() ?: return null
+        // 证书本体读不到（storeFile 缺失 / 远程复制失败）时全部按「未验证」处理，
+        // 不误报成「口令错误」；storeFile 缺失由 KEY_STORE_FILE 项单独报错。
+        if (!local.exists()) return null
         val storePass = config["storePassword"].orEmpty()
         val keyPass = config["keyPassword"].orEmpty()
         val alias = config["keyAlias"].orEmpty()
-        val tempOut = runCatching {
-            java.io.File.createTempFile("keycheck", ".jks").apply { deleteOnExit() }
-        }.getOrNull() ?: return null
-        try {
-            var keyPasswordVerified: Boolean? = null
-            val import = runCatching {
-                ProcessBuilder(
-                    "keytool", "-importkeystore",
-                    "-srckeystore", local.absolutePath,
-                    "-srcstorepass", storePass,
-                    "-srckeypass", keyPass,
-                    "-alias", alias,
-                    "-destkeystore", tempOut.absolutePath,
-                    "-deststorepass", "aicode-check"
-                ).redirectErrorStream(true).start()
-            }.getOrNull()
-            if (import != null) {
-                val finished = runCatching { import.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
-                if (finished) keyPasswordVerified = import.exitValue() == 0
-            }
-            var signingAlgorithm: String? = null
-            var certValidUntil: String? = null
-            val list = runCatching {
-                ProcessBuilder(
-                    "keytool", "-list", "-v", "-keystore", local.absolutePath,
-                    "-storepass", storePass
-                ).redirectErrorStream(true).start()
-            }.getOrNull()
-            if (list != null) {
-                val finished = runCatching { list.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
-                if (finished && list.exitValue() == 0) {
-                    val output = runCatching {
-                        list.inputStream.bufferedReader().readText()
-                    }.getOrDefault("")
-                    signingAlgorithm = Regex(
-                        """(?:签名算法名称|signature algorithm name)\s*[:：]\s*(\S+)"""
-                    ).find(output)?.groupValues?.get(1)
-                    certValidUntil = Regex(
-                        """(?:有效期至|valid until|until)\s*[:：]\s*(.+)"""
-                    ).find(output)?.groupValues?.get(1)?.trim()
-                }
-            }
-            return KeystoreFacts(keyPasswordVerified, signingAlgorithm, certValidUntil)
-        } finally {
-            runCatching { tempOut.delete() }
+        // PKCS12 是 keytool 现代默认；老 .jks 是 JKS。加载失败两种类型都试过再判不可用。
+        val store = openKeystore(local, storePass)
+        if (store == null) {
+            return KeystoreFacts(
+                storeOpenable = false,
+                aliasPresent = null,
+                keyPasswordVerified = null,
+                signingAlgorithm = null,
+                certValidUntil = null
+            )
         }
+        val aliasPresent = runCatching { store.isKeyEntry(alias) }.getOrNull()
+        // keyPassword 错误时 getKey 抛 UnrecoverableKeyException；别名不存在同样取不到私钥。
+        val keyOk = runCatching {
+            store.getKey(alias, keyPass.toCharArray())
+            true
+        }.getOrDefault(false)
+        val cert = runCatching {
+            store.getCertificate(alias) as? X509Certificate
+        }.getOrNull()
+        return KeystoreFacts(
+            storeOpenable = true,
+            aliasPresent = aliasPresent,
+            keyPasswordVerified = keyOk,
+            signingAlgorithm = cert?.sigAlgName,
+            certValidUntil = cert?.notAfter?.let {
+                SimpleDateFormat("yyyy-MM-dd", Locale.US).format(it)
+            }
+        )
+    }
+
+    private fun openKeystore(file: java.io.File, storePass: String): KeyStore? {
+        for (type in listOf("PKCS12", "JKS")) {
+            val ks = runCatching { KeyStore.getInstance(type) }.getOrNull() ?: continue
+            val loaded = runCatching {
+                file.inputStream().use { ks.load(it, storePass.toCharArray()) }
+                ks
+            }.getOrNull()
+            if (loaded != null) return loaded
+        }
+        return null
     }
 
     /**
-     * 验证 alias 是否在证书里：容器内跑 `keytool -list`（PATH 里有 JDK 就能行）。
-     * 区分「keytool 不可用」（UNKNOWN，不阻断）与「证书能打开但别名不对 / 口令错」（MISMATCH）。
+     * 验证 alias 是否在证书里。
+     * 区分「证书读不了」（UNKNOWN，不阻断）与「证书能打开但别名不对 / 口令错」（MISMATCH）。
      */
     private fun verifyAlias(jksPath: String, config: Map<String, String>): AliasCheck {
-        val local = runCatching { fileAccess.copyToLocal(jksPath) }.getOrNull() ?: return AliasCheck.UNKNOWN
-        val process = runCatching {
-            ProcessBuilder(
-                "keytool", "-list", "-keystore", local.absolutePath,
-                "-storepass", config["storePassword"].orEmpty()
-            ).redirectErrorStream(true).start()
-        }.getOrNull() ?: return AliasCheck.UNKNOWN
-        // 先等进程结束再读输出：读管道本身会阻塞，超时守不住。
-        // keytool -list 输出很小，不会填满管道缓冲区。
-        val finished = runCatching { process.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
-        if (!finished) {
-            runCatching { process.destroyForcibly() }
-            return AliasCheck.UNKNOWN
+        val facts = verifyKeystoreFacts(jksPath, config) ?: return AliasCheck.UNKNOWN
+        return when {
+            facts.storeOpenable == false -> AliasCheck.MISMATCH
+            facts.aliasPresent == true -> AliasCheck.VERIFIED
+            else -> AliasCheck.MISMATCH
         }
-        val output = runCatching { process.inputStream.bufferedReader().readText() }.getOrDefault("")
-        if (process.exitValue() != 0) return AliasCheck.MISMATCH
-        val alias = config["keyAlias"].orEmpty()
-        return if (output.contains(alias, ignoreCase = true)) AliasCheck.VERIFIED else AliasCheck.MISMATCH
     }
 }
