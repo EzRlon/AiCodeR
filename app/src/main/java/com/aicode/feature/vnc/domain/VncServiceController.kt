@@ -315,6 +315,9 @@ class VncServiceController @Inject constructor(
             i=0
             while [ ${'$'}i -lt 10 ] && [ ! -S /tmp/.X11-unix/X1 ]; do sleep 0.5; i=${'$'}((i+1)); done
             command -v xsetroot >/dev/null 2>&1 && DISPLAY=:1 xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
+            # noVNC 直接显示远端 X 光标；默认 24px 在手机上过大，统一缩到 16px。
+            export XCURSOR_SIZE=16
+            printf '%s\n' 'Xcursor.size: 16' 'Xcursor.theme: default' | DISPLAY=:1 xrdb -merge >/dev/null 2>&1 || true
             # 桌面会话总线：lxpanel/pcmanfm 缺 dbus 会静默退出（表现就是没有任务栏）。
             if command -v dbus-launch >/dev/null 2>&1 && [ -z "${'$'}DBUS_SESSION_BUS_ADDRESS" ]; then
                 eval "${'$'}(dbus-launch --sh-syntax)" >/dev/null 2>&1 || true

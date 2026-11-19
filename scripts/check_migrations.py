@@ -68,6 +68,28 @@ if schema_ver is None:
 elif versions and schema_ver != max(versions):
     errors.append("SCHEMA_VERSION=%d 与最大迁移版本 %d 不一致" % (schema_ver, max(versions)))
 
+# ---------- 2b. 最低 schema 下限（防止旧包覆盖新数据） ----------
+FLOOR_FILE = os.path.join(ROOT, "app/schema-floor.txt")
+if schema_ver is not None:
+    if os.path.exists(FLOOR_FILE):
+        with open(FLOOR_FILE, encoding="utf-8") as f:
+            floor_text = f.read().strip()
+        try:
+            floor = int(floor_text)
+        except ValueError:
+            floor = None
+            errors.append("app/schema-floor.txt 内容不是整数：%r" % floor_text)
+        if floor is not None:
+            if schema_ver < floor:
+                errors.append(
+                    "SCHEMA_VERSION=%d 低于最低已发布 schema %d；旧包不能覆盖新数据，"
+                    "请把 schema 升到 %d 或更高" % (schema_ver, floor, floor)
+                )
+            else:
+                notes.append("最低 schema 下限 = %d" % floor)
+    else:
+        errors.append("缺少 app/schema-floor.txt（最低已发布 schema 下限）")
+
 # ---------- 3. AutoMigration 与文件式迁移的衔接 ----------
 auto_migs = [
     (int(a), int(b))

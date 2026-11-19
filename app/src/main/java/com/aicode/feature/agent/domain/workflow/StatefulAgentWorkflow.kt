@@ -119,7 +119,9 @@ class StatefulAgentWorkflow @Inject constructor(
     private val eventInjector: AgentEventInjector,
     private val hookRunner: HookRunner,
     private val fileAccess: FileAccessProvider,
-    private val auditRecorder: PermissionAuditRecorder
+    private val auditRecorder: PermissionAuditRecorder,
+    /** Bash 命令产出 APK/AAB 时自动构造交付附件（内置机制，不再依赖模型记得调 send_file）。 */
+    private val buildArtifactDelivery: com.aicode.feature.agent.domain.tool.container.BuildArtifactDelivery
 ) : AgentWorkflow {
 
     /**
@@ -1869,10 +1871,16 @@ class StatefulAgentWorkflow @Inject constructor(
                     }
                 }
                 val result = finalResult ?: ToolResult.Error("流式工具未返回结果", "MISSING_STREAM_RESULT")
+                // 命令类工具：输出里出现构建产物（APK/AAB）即自动构造附件挂到消息上，
+                // 用户在聊天区直接拿到包，不依赖模型再调 send_file。
+                val artifactAttachments = if (toolCall.name == "Bash" && result is ToolResult.Success) {
+                    val outputText = (result.data as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                    buildArtifactDelivery.extract(outputText)
+                } else emptyList()
                 val processed = toolOutputStore.process(toolCall.name, toolCall.id, result)
                 val images = if (result is ToolResult.Success) result.images else emptyList()
                 logToolDuration(toolCall.name, startedAt, processed is ToolResult.Error)
-                ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, images = images)
+                ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, artifactAttachments, images)
             }
         } catch (e: CancellationException) {
             throw e

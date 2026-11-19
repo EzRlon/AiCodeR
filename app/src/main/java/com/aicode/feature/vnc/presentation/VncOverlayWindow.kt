@@ -8,10 +8,18 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.PixelCopy
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,11 +60,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -65,6 +76,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -88,6 +104,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -308,6 +326,7 @@ private fun FloatingVncWindow(
                 onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
                 onGestureEnd = viewModel::trackpadReset,
                 onTap = { viewModel.clickMouse(0) },
+                onDoubleTap = { viewModel.clickMouse(0) },
                 onTwoFingerTap = { viewModel.clickMouse(2) },
                 onScroll = { dir -> viewModel.scrollMouse(dir) },
                 modifier = Modifier.fillMaxSize(),
@@ -473,6 +492,7 @@ private fun VncTrackpadPad(
     onMove: (Float, Float) -> Unit,
     onGestureEnd: () -> Unit,
     onTap: () -> Unit,
+    onDoubleTap: () -> Unit,
     onTwoFingerTap: () -> Unit,
     onScroll: (Int) -> Unit,
     modifier: Modifier = Modifier,
@@ -485,14 +505,51 @@ private fun VncTrackpadPad(
     var gestureStart by remember { mutableStateOf(0L) }
     var moved by remember { mutableStateOf(false) }
     var last by remember { mutableStateOf(Offset.Zero) }
+    var lastTapAt by remember { mutableLongStateOf(0L) }
+    val scope = rememberCoroutineScope()
+    val activity = LocalContext.current as? Activity
+    val window = activity?.window
+    var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
+    var lastCapture by remember { mutableLongStateOf(0L) }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-        ),
-        shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
-        modifier = modifier.pointerInput(Unit) {
+    Box(
+        modifier = modifier.onGloballyPositioned { coords ->
+            val now = SystemClock.uptimeMillis()
+            if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && now - lastCapture > 700) {
+                val rect = coords.boundsInWindow()
+                val width = rect.width.toInt()
+                val height = rect.height.toInt()
+                if (width > 0 && height > 0) {
+                    lastCapture = now
+                    runCatching {
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        PixelCopy.request(
+                            window,
+                            Rect(rect.left.toInt(), rect.top.toInt(), rect.right.toInt(), rect.bottom.toInt()),
+                            bitmap,
+                            { result -> if (result == PixelCopy.SUCCESS) backdrop = bitmap.asImageBitmap() },
+                            Handler(Looper.getMainLooper())
+                        )
+                    }
+                }
+            }
+        }
+    ) {
+        backdrop?.let {
+            Image(
+                bitmap = it,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize().blur(16.dp)
+            )
+        }
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.28f),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+            modifier = Modifier.matchParentSize().pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 activePointers = 1
@@ -516,9 +573,16 @@ private fun VncTrackpadPad(
                             scrollAcc = 0f
                         }
                         if (activePointers == 1 && count == 0) {
-                            // 单指抬起：短且未动 = 轻点左键
+                            // 单指抬起：短且未动 = 轻点左键；320ms 内第二下 = 双击
                             if (!moved && System.currentTimeMillis() - gestureStart <= 250) {
-                                onTap()
+                                val now = SystemClock.uptimeMillis()
+                                if (now - lastTapAt <= 320) {
+                                    lastTapAt = 0L
+                                    onDoubleTap()
+                                } else {
+                                    lastTapAt = now
+                                    onTap()
+                                }
                             }
                             onGestureEnd()
                         }
@@ -559,6 +623,7 @@ private fun VncTrackpadPad(
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 maxLines = 1,
             )
+        }
         }
     }
 }

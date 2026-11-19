@@ -332,6 +332,14 @@ class VncOverlayViewModel @Inject constructor(
         sendClickToPage?.invoke(button)
     }
 
+    fun doubleClickMouse(button: Int) {
+        viewModelScope.launch {
+            sendClickToPage?.invoke(button)
+            delay(45)
+            sendClickToPage?.invoke(button)
+        }
+    }
+
     /** 原生按键条：滚轮一格（-1=上 1=下）。 */
     fun scrollMouse(dir: Int) {
         sendScrollToPage?.invoke(dir)

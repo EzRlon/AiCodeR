@@ -18,6 +18,7 @@ import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.provider.ReasoningLearning
+import com.aicode.feature.agent.domain.tool.container.PendingDeliveryStore
 import com.aicode.feature.agent.domain.provider.SharedPrefsReasoningLearningStore
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
@@ -26,12 +27,14 @@ import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.terminal.domain.KeepaliveWorker
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -185,6 +188,7 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var agentDatabase: com.aicode.feature.agent.data.local.database.AgentDatabase
 
+
     /** 旧 Room git 凭据一次性迁移器：启动即把旧表数据写入 git-credentials 文件后删表（真源已迁到文件）。 */
     @Inject
     lateinit var legacyCredentialMigrator: com.aicode.feature.credentials.data.LegacyCredentialMigrator
@@ -270,7 +274,11 @@ class AIEditorApp : Application(), Configuration.Provider {
     lateinit var engineProcessRegistry: com.aicode.feature.agent.domain.engine.EngineProcessRegistry
 
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            FileLogger.e(TAG, "应用级协程异常，已拦截防崩", e)
+        }
+    )
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -297,6 +305,17 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             runCatching { engineProcessRegistry.reclaimOrphansOnColdStart() }
                 .onFailure { FileLogger.w(TAG, "冷启动回收孤儿引擎进程失败", it) }
+        }
+        // 构建产物补投递：上一会话里容器脚本构建成功但会话被杀、包没来得及发到聊天区时，
+        // 待投递文件路径记录在 <工作区>/.aicode/pending-delivery.txt。启动时读出来登记到
+        // 交付注册表，由会话回合收尾时挂成文件卡片（与 send_file 同一条链路）。
+        appScope.launch {
+            runCatching {
+                // 等当前工作区就绪：Application.onCreate 时 current 仍为 null，
+                // 早跑会拿 projectsRoot 当会话工作区，查不到会话，标记也留在原地。
+                workspaceRepository.current.filterNotNull().first()
+                deliverPendingArtifacts()
+            }.onFailure { FileLogger.w(TAG, "补投递构建产物失败", it) }
         }
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
@@ -499,6 +518,96 @@ class AIEditorApp : Application(), Configuration.Provider {
         // AppCompatDelegate.setApplicationLocales 的自动 recreate 不生效，
         // 且两者同时设置 locale 会竞争导致偶发语言错乱。
     }
+
+    /**
+     * 补投递构建产物（内置机制，2026-11-19）：读 `<工作区>/.aicode/pending-delivery.txt`
+     * 里的待发文件路径（容器脚本构建成功但会话被杀时写下），逐个校验存在后**直接追加到
+     * 交付物页的数据源**——落到当前工作区最近的会话消息里做不到（App 冷启动时无会话上下文），
+     * 因此采用「登记到交付物页 + 通知栏提示」的组合，保证用户一定能拿到包。
+     * 成功后删除标记文件；文件不存在或全部无效时也删（避免反复空转）。
+     */
+    private suspend fun deliverPendingArtifacts() {
+        val root = pluginFileAccess
+        val pendingFile = workspacePendingFile() ?: return
+        val content = runCatching { root.readFile(pendingFile) }.getOrNull() ?: return
+        val paths = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (paths.isEmpty()) {
+            runCatching { root.delete(pendingFile) }
+            return
+        }
+
+        val workspacePath = runCatching { workspaceRepository.currentPath() }.getOrNull()
+        val messageDao = agentDatabase.agentMessageDao()
+        val sessionDao = agentDatabase.chatSessionDao()
+        val existingPaths = if (workspacePath == null) emptySet() else runCatching {
+            messageDao.messagesWithAttachments(workspacePath)
+                .flatMap { com.aicode.feature.agent.data.local.entity.AgentMessageEntity.decodeAttachments(it.attachmentsJson) }
+                .map { it.containerPath }
+                .toSet()
+        }.getOrDefault(emptySet())
+        val freshPaths = paths.filter { it !in existingPaths }
+
+        val attachments = mutableListOf<com.aicode.feature.agent.presentation.AgentAttachment>()
+        for (path in freshPaths) {
+            val attachment = runCatching {
+                if (!root.exists(path) || root.isDirectory(path)) return@runCatching null
+                val local = root.copyToLocal(path)
+                val name = path.substringAfterLast('/')
+                com.aicode.feature.agent.presentation.AgentAttachment(
+                    fileName = name,
+                    containerPath = path,
+                    localPath = local.absolutePath,
+                    mimeType = java.net.URLConnection.guessContentTypeFromName(name) ?: "application/octet-stream",
+                    sizeBytes = runCatching { root.fileSize(path) }.getOrDefault(local.length()),
+                    isImage = false
+                )
+            }.onFailure { FileLogger.w(TAG, "补投递单文件失败 $path: ${it.message}") }.getOrNull()
+            if (attachment != null) attachments += attachment
+        }
+
+        var registered = false
+        if (attachments.isNotEmpty() && workspacePath != null) {
+            registered = runCatching {
+                val session = sessionDao.getLatestRootSessionByWorkspace(workspacePath)
+                if (session == null) {
+                    FileLogger.w(TAG, "补投递：当前工作区没有可用会话，标记保留待下次启动")
+                    false
+                } else {
+                    val now = System.currentTimeMillis()
+                    messageDao.insert(
+                        com.aicode.feature.agent.data.local.entity.AgentMessageEntity(
+                            id = java.util.UUID.randomUUID().toString(),
+                            sessionId = session.id,
+                            role = com.aicode.feature.agent.presentation.MessageRole.ASSISTANT.name,
+                            content = "构建产物已补投递：${attachments.joinToString("、") { it.fileName }}",
+                            timestamp = now,
+                            attachmentsJson = com.aicode.feature.agent.data.local.entity.AgentMessageEntity.encodeAttachments(attachments)
+                        )
+                    )
+                    FileLogger.i(TAG, "补投递构建产物 ${attachments.size} 个到会话 ${session.id}")
+                    true
+                }
+            }.onFailure { FileLogger.w(TAG, "补投递登记失败: ${it.message}") }.getOrDefault(false)
+        }
+
+        if (registered) {
+            // 只移除已投递成功的路径；复制失败/无效路径必须留在标记里等下次重试。
+            PendingDeliveryStore.remove(root, attachments.map { it.containerPath })
+        } else if (freshPaths.isEmpty()) {
+            runCatching { root.delete(pendingFile) }
+        } else {
+            FileLogger.w(TAG, "补投递未完成，保留标记文件 $pendingFile 待下次启动重试")
+        }
+    }
+
+    /** 待投递标记文件的容器路径（当前工作区根下）；工作区未就绪返回 null。 */
+    private fun workspacePendingFile(): String? {
+        val ws = runCatching {
+            com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT
+        }.getOrNull() ?: return null
+        return "$ws/.aicode/pending-delivery.txt"
+    }
+
 
     /** 记录设备/版本信息：用户报「某系统版本上容器起不来」时，日志里得先有系统与 ABI 上下文。 */
     private fun logDeviceInfo() {

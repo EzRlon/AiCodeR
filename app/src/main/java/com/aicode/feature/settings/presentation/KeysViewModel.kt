@@ -97,13 +97,43 @@ class KeysViewModel @Inject constructor(
             // 文件探测、读取配置、keytool 全部是 IO（远程模式还是 SFTP 往返）：不能压在主线程，
             // 否则进入签名页/切项目/点重新检查会有明显卡顿甚至 ANR。
             val (projectConfig, readiness) = withContext(Dispatchers.IO) {
-                // 多项目：Gradle 实际读取的是 app/keystore.properties；其它位置只用于迁移诊断。
-                val gradleConfigPath =
-                    "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/app/keystore.properties"
-                val config = listOf(
+                // 多项目：Gradle 实际读取的是「Gradle 工程根」下的 app/keystore.properties。
+                // 工作区根不一定是工程根（本项目就在 <工作区>/AiCodeR 下），因此要先定位工程：
+                // 先看工作区根，再向下找一层子目录（子目录里有 app/ 即视为工程根）。
+                // 只硬编码工作区根会导致「文件明明存在却报缺口令配置」。
+                val workspaceRoot =
+                    com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT
+                val projectRoot = run {
+                    val direct = "$workspaceRoot/app"
+                    if (fileAccess.exists(direct)) return@run workspaceRoot
+                    val subDirs = runCatching { fileAccess.listFiles(workspaceRoot) }.getOrNull()
+                        .orEmpty()
+                        .filter { it.isDirectory }
+                        .map { it.name }
+                    subDirs.firstOrNull { fileAccess.exists("$workspaceRoot/$it/app") }
+                        ?.let { "$workspaceRoot/$it" }
+                }
+                // 找不到 Gradle 工程根时不自动写：避免把口令配置落到工作区根或别的项目。
+                val gradleConfigPath = projectRoot?.let { "$it/app/keystore.properties" }
+                // 新设备/重装：统一密钥库里带签名包自带的 keystore.properties 时自动落到工程 app/，
+                // 不再要求用户手写口令配置。
+                val libraryConfig = "~/.aicode/keys/keystore.properties"
+                if (gradleConfigPath != null && projectRoot != null &&
+                    !fileAccess.exists(gradleConfigPath) && fileAccess.exists(libraryConfig)
+                ) {
+                    runCatching {
+                        val content = fileAccess.readFile(libraryConfig)
+                        fileAccess.mkdirs("$projectRoot/app")
+                        fileAccess.writeFile(gradleConfigPath, content)
+                        FileLogger.i("KeysVM", "已从统一密钥库自动恢复 app/keystore.properties")
+                    }.onFailure { FileLogger.w("KeysVM", "自动恢复 keystore.properties 失败: ${it.message}") }
+                }
+                val config = listOfNotNull(
                     gradleConfigPath,
-                    "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/keystore.properties",
-                    "${com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT}/signing.properties"
+                    projectRoot?.let { "$it/keystore.properties" },
+                    projectRoot?.let { "$it/signing.properties" },
+                    "$workspaceRoot/keystore.properties",
+                    "$workspaceRoot/signing.properties"
                 ).firstOrNull { fileAccess.exists(it) }
                 // 配置里 storeFile 指向的证书优先；否则回退到统一密钥库/工作区的第一张发布证书。
                 val declaredStorePath = runCatching {
@@ -124,7 +154,7 @@ class KeysViewModel @Inject constructor(
                     readinessChecker.check(
                         jksPath = releaseJks?.containerPath,
                         // 只把 Gradle 真正读取的位置标为「合规」；root/证书同目录配置会显示为非阻断警告
-                        projectConfigPath = gradleConfigPath,
+                        projectConfigPath = gradleConfigPath ?: "",
                         projectName = project?.name
                     )
                 }.onFailure { FileLogger.w("KeysVM", "发布就绪检查失败: ${it.message}") }
