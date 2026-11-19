@@ -42,7 +42,9 @@ data class CliAgent(
             "echo '未检测到 Node.js/npm，正在自动安装 Node.js 环境…'; " +
             "if [ -f \"\$HOME/.aicode/lib/env-common.sh\" ]; then " +
                 ". \"\$HOME/.aicode/lib/env-common.sh\"; detect_pmgr; " +
-                "env_ensure_node 18.0.0 >/dev/null 2>&1 || true; " +
+                // 22 而非 18：claude-code 2.x 要求 node>=22，node18+npm9 会直接崩溃（Exit handler
+                // never called），镜像/官方源三次重试全灭，新用户容器怎么装都装不上。
+                "env_ensure_node 22.0.0 >/dev/null 2>&1 || true; " +
                 "command -v npm >/dev/null 2>&1 || { [ -n \"\$PMGR\" ] && pkg_add npm >/dev/null 2>&1 || true; }; " +
             "fi; " +
             "command -v npm >/dev/null 2>&1 && return 0; " +
@@ -67,6 +69,13 @@ data class CliAgent(
             // 全新安装前先清掉中断残留的损坏安装：npm 装到一半的包命令不可用，
             // 不卸载直接重装，残留文件会让新版本安装后依旧失效。
             "npm uninstall -g $npmPackage >/dev/null 2>&1 || true; " +
+            // npm 中断还会残留 .包名-随机 临时目录（uninstall/install 均报 ENOTEMPTY）
+            // 与全局 bin 死链（install 报 EEXIST），残留后怎么重装都失败；用 node fs
+            // 程序化清掉包目录、scope 内残留与 bin 同名残留，保证重装自愈。
+            "NODE_ROOT=\$(npm root -g 2>/dev/null); " +
+            "if [ -n \"\$NODE_ROOT\" ]; then " +
+            "node -e 'const fs=require(\"fs\");const root=process.argv[1],pkg=process.argv[2],cmd=process.argv[3],bin=process.argv[4];const segs=pkg.split(\"/\");const name=segs[segs.length-1].split(\"@\")[0];try{fs.rmSync(root+\"/\"+segs.join(\"/\"),{recursive:true,force:true});}catch(e){}const scopeDir=segs.length>1?root+\"/\"+segs[0]:root;try{for(const d of fs.readdirSync(scopeDir)){if(d.startsWith(\".\")&&d.includes(name)){fs.rmSync(scopeDir+\"/\"+d,{recursive:true,force:true});}}}catch(e){}try{fs.unlinkSync(bin+\"/\"+cmd);}catch(e){}' \"\$NODE_ROOT\" \"$npmPackage\" \"$command\" \"\$(npm prefix -g 2>/dev/null)/bin\" >/dev/null 2>&1 || true; " +
+            "fi; " +
             // npmmirror 对平台二进制包（含 bin 的 optionalDependencies）返回 cnpm 风格 .l2s.* 硬链布局，
             // npm 装完后 bin 符号链接指向不存在的文件（命令 not found），npm 自身退出码却为 0；
             // 因此装完必须实测命令可执行，断链时卸载后回退官方源重装。
