@@ -244,9 +244,14 @@ function clickAt(point, button) {
   synthMouse('mouseup', point.x, point.y, button, 0);
 }
 
-/** 直触模式下按钮点击的位置：最近一次触点，否则画面中心。 */
+/**
+ * 原生「左键/右键/中键/滚轮」按钮的点击位置：以可见光标为准（触控板移动与
+ * 光标环都跟它走），其次最近触点，最后画面中心。此前按模式分流，direct 模式
+ * 下 lastPoint 无人维护，触控板把光标移到按钮上再点左键，点击却落在画面中心，
+ * 表现为「软件里的按钮怎么点都没反应」。
+ */
 function currentPoint() {
-  if (pointerMode === 'trackpad') { ensureCursor(); return cursor; }
+  if (cursor) { ensureCursor(); return cursor; }
   if (g.lastPoint) return g.lastPoint;
   const r = canvasRect();
   return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
