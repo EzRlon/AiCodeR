@@ -1,6 +1,7 @@
 package com.aicode.core.net
 
 import android.content.Context
+import com.aicode.core.util.FileLogger
 import okhttp3.Authenticator
 import okhttp3.Credentials
 import okhttp3.Route
@@ -70,6 +71,18 @@ object AppProxy {
         val username: String, val password: String
     )
 
+    /**
+     * 代理故障自动降级：某目标 host 的代理连接连续失败 ≥[PROXY_FAILURE_THRESHOLD] 次
+     * 后，在退避窗口内对该 host 直连，窗口到期自动恢复代理。场景：用户开 VPN 后
+     * 全局/提供商代理与 VPN 通道叠加冲突（翻译/润色/对话静默失败），降级直连可自愈；
+     * 直连本身也不通时（被墙 API）多一次失败无害，窗口到期后仍会重试代理。
+     */
+    private val proxyFailures = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val failSince = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private const val TAG = "AppProxy"
+    private const val PROXY_FAILURE_THRESHOLD = 2L
+    private const val PROXY_FAILURE_BACKOFF_MS = 60_000L
+
     /** 按目标 host+路径分派：provider 级代理优先（路径前缀最具体者胜），否则全局代理；不可用返回 null。 */
     private fun selectProxy(host: String, path: String?): SelectedProxy? {
         providerRegistry?.findByUrl(host, path)?.takeIf { it.valid }?.let { e ->
@@ -99,10 +112,29 @@ object AppProxy {
             val host = uri.host ?: return listOf(Proxy.NO_PROXY)
             if (isNoProxy(host, uri.port, cfg.noProxy)) return listOf(Proxy.NO_PROXY)
             val sel = selectProxy(host, uri.path) ?: return listOf(Proxy.NO_PROXY)
+            // 故障降级窗口内对该 host 直连；窗口过期清计数恢复代理。
+            proxyFailures[host]?.let { failCount ->
+                if (failCount >= PROXY_FAILURE_THRESHOLD) {
+                    if (System.currentTimeMillis() - failSince[host]!! < PROXY_FAILURE_BACKOFF_MS) {
+                        return listOf(Proxy.NO_PROXY)
+                    }
+                    proxyFailures.remove(host)
+                    failSince.remove(host)
+                }
+            }
             return listOf(proxyOf(sel))
         }
 
-        override fun connectFailed(uri: URI, sa: SocketAddress, ioe: IOException) = Unit
+        override fun connectFailed(uri: URI, sa: SocketAddress, ioe: IOException) {
+            val host = uri.host ?: return
+            if (selectProxy(host, uri.path) == null) return
+            val count = (proxyFailures[host] ?: 0L) + 1
+            proxyFailures[host] = count
+            if (count == PROXY_FAILURE_THRESHOLD) {
+                failSince[host] = System.currentTimeMillis()
+                FileLogger.w(TAG, "代理连接连续失败：$host 降级直连 ${PROXY_FAILURE_BACKOFF_MS / 1000}s（VPN 与应用内代理叠加冲突时自愈）")
+            }
+        }
     }
 
     /** 供 OkHttpClient 构建时挂载：代理返回 407 时应答 Basic 认证，按目标 host 分派凭据（provider 优先）。 */
