@@ -54,6 +54,11 @@ class AIEditorApp : Application(), Configuration.Provider {
         private const val KEY_CRASH_UI_SHOWING = "crash_ui_showing"
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
         private const val KEY_CRASH_COUNT = "crash_count"
+        /** 安全模式：置位后下次冷启动跳过全部后台/网络初始化，让用户能进 App 自救；
+         *  启动 10 分钟后自动清除（自愈回正常模式，若崩溃源仍在会再次熔断置位）。 */
+        private const val KEY_SAFE_MODE = "safe_mode"
+        /** 安全模式启动后经过多久自动恢复正常初始化。 */
+        private const val SAFE_MODE_HEAL_DELAY_MS = 10 * 60_000L
         /** ApplicationExitInfo 增量游标：已处理过的最大退出时间戳，避免重复上报历史退出。 */
         private const val KEY_LAST_EXIT_TIMESTAMP = "last_exit_timestamp"
         /** ApplicationExitInfo 读取的历史退出记录条数上限。 */
@@ -95,6 +100,20 @@ class AIEditorApp : Application(), Configuration.Provider {
                 .remove(KEY_CRASH_COUNT)
                 .remove(KEY_LAST_CRASH_TIME)
                 .apply()
+        }
+
+        /** 是否处于安全模式（跳过后台初始化的降级启动）。 */
+        fun isSafeMode(context: android.content.Context): Boolean =
+            context.getSharedPreferences(CRASH_PREFS, android.content.Context.MODE_PRIVATE)
+                .getBoolean(KEY_SAFE_MODE, false)
+
+        /** 置/清安全模式标记（崩溃错误页“安全模式重启”与自愈协程共用）。 */
+        fun setSafeMode(context: android.content.Context, value: Boolean) {
+            context.getSharedPreferences(CRASH_PREFS, android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_SAFE_MODE, value)
+                // commit 同步落盘：置位发生在崩溃处理器里，进程即将被杀，apply 可能丢。
+                .commit()
         }
 
         /** 向后兼容的旧别名，保留供外部调用。 */
@@ -295,11 +314,19 @@ class AIEditorApp : Application(), Configuration.Provider {
             return
         }
         super.onCreate()
+        // 安全模式：上次短时间内连续崩浘3 次后熔断置位。本次冷启动跳过全部后台/网络/容器
+        // 初始化（保留 Hilt 注入与数据层），让用户至少能进 App 导出数据/修复配置；
+        // 10 分钟后自动清除标记自愈回正常模式，若崩溃源仍在会再次熔断置位，不会更糟。
+        val safeMode = isSafeMode(this)
+        if (safeMode) {
+            FileLogger.w(TAG, "安全模式启动：跳过后台初始化（上次连续崩溃熔断），10 分钟后自动恢复正常模式")
+        }
         // 追踪前台 Activity：商店人机校验需要临时挂一个不可见 WebView 到当前窗口。
         com.aicode.core.util.ActivityTracker.install(this)
         logDeviceInfo()
         // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
         appScope.launch { reportAbnormalExits() }
+        if (!safeMode) {
         // 冷启动回收：上次进程被 LMK 时来不及收尸的 proot + claude/codex/opencode 进程树。
         // 只按落盘 PID 精确回收（PID + /proc 启动时间 + cmdline 三重校验），不扫无关进程。
         appScope.launch {
@@ -317,6 +344,7 @@ class AIEditorApp : Application(), Configuration.Provider {
                 deliverPendingArtifacts()
             }.onFailure { FileLogger.w(TAG, "补投递构建产物失败", it) }
         }
+        } // end if (!safeMode)
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
@@ -329,6 +357,7 @@ class AIEditorApp : Application(), Configuration.Provider {
             registerBouncyCastle()
         }
         createNotificationChannels()
+        if (!safeMode) {
         // 启动凭据请求监听：容器内 credential helper 写来的 cred-req-* → 全局弹窗回填 → 回喂 git 续跑。
         credentialRequestBridge.start()
         // 启动工具授权通知通道：App 在后台时 AI 的授权请求可从通知栏直接批准/拒绝。
@@ -395,6 +424,7 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             modelMetadataService.refreshFromNetworkIfStale()
         }
+        } // end if (!safeMode)
         // providers.json 预设已内置化（见 ProviderPresetLibrary）：不从官方仓库拉取，
         // 自建分支的 models 预填字段只存在于内置数据，网络刷新会覆盖它们。
         // 镜像目录的网络刷新暂不启用：发布源（data 分支的 container-images.json）随官方 CI
@@ -419,6 +449,7 @@ class AIEditorApp : Application(), Configuration.Provider {
                 executionModeHolder.setSelfImproveMode(it)
             }
         }
+        if (!safeMode) {
         // SSH 连接监督常驻（config 为空时空转）：定期探活、断线自动重连，重连成功后重载工作区与同步文档。
         appScope.launch {
             remoteSshConnection.startSupervisor(appScope) {
@@ -502,6 +533,19 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 权限规则由 App 启动即常驻订阅（AI 评估随时要读到最新规则）；MCP 配置与技能列表
         // 改由各自消费方（McpManager / 设置页）按需订阅，无需在这里拉起。
         appScope.launch { permissionRulesRepository.startWatching() }
+        } // end if (!safeMode)
+
+        if (safeMode) {
+            // 自愈：安全模式跑满 10 分钟后自动清除标记，下次冷启动恢复正常初始化。
+            // 若崩溃源仍在，正常模式的初始化会再次崩溃并再次熔断置位，循环受控。
+            appScope.launch {
+                kotlinx.coroutines.delay(SAFE_MODE_HEAL_DELAY_MS)
+                if (isSafeMode(this@AIEditorApp)) {
+                    setSafeMode(this@AIEditorApp, false)
+                    FileLogger.i(TAG, "安全模式自愈：已恢复正常模式标记，下次冷启动恢复全部初始化")
+                }
+            }
+        }
         // 持续同步工作区模式缓存，崩溃时随报告带出
         appScope.launch {
             executionModeRepository.executionModeFlow.collect { mode ->
@@ -738,6 +782,11 @@ class AIEditorApp : Application(), Configuration.Provider {
             // 熔断保护：错误页正在展示又发生崩溃，或短时间内连续崩溃达到阈值
             if (isUiShowing || recentCrashCount >= MAX_CONSECUTIVE_CRASHES) {
                 FileLogger.e(TAG, "触发崩溃熔断保护 (isUiShowing=$isUiShowing, count=$recentCrashCount)，终止自启交由系统处理")
+                if (recentCrashCount >= MAX_CONSECUTIVE_CRASHES) {
+                    // 同步落盘：下次冷启动进入安全模式（跳过后台初始化），让用户至少能进 App 自救。
+                    setSafeMode(this@AIEditorApp, true)
+                    FileLogger.e(TAG, "已置安全模式标记：下次冷启动将跳过后台初始化")
+                }
                 previous?.uncaughtException(thread, throwable)
                 Process.killProcess(Process.myPid())
                 return@setDefaultUncaughtExceptionHandler
