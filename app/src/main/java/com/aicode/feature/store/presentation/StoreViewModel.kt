@@ -31,6 +31,7 @@ import com.aicode.feature.store.data.toStoreItem
 import com.aicode.feature.store.domain.ScanResult
 import com.aicode.feature.store.domain.EnginePluginInstaller
 import com.aicode.feature.store.domain.StoreInstallScanner
+import com.aicode.feature.store.domain.EngineTargetInstaller
 import com.aicode.feature.store.domain.StoreInstaller
 import com.aicode.feature.store.domain.SkillInstallPlan
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -60,18 +61,32 @@ sealed class PendingScanGate {
     abstract val key: String
     abstract val title: String
 
-    data class Skill(val plan: SkillInstallPlan) : PendingScanGate() {
+    /** 安装目标引擎：null = 内置引擎；非 null = 外部引擎官方目录。 */
+    abstract val target: EngineTarget?
+
+    /** [target] 为 null 表示内置引擎安装；非 null 表示装到对应外部引擎官方目录。 */
+    data class Skill(
+        val plan: SkillInstallPlan,
+        override val target: EngineTarget? = null
+    ) : PendingScanGate() {
         override val scan: ScanResult get() = plan.scan
         override val key: String get() = plan.item.id
         override val title: String get() = plan.item.name
     }
 
-    data class Mcp(val item: StoreItem, override val scan: ScanResult) : PendingScanGate() {
+    data class Mcp(
+        val item: StoreItem,
+        override val scan: ScanResult,
+        override val target: EngineTarget? = null
+    ) : PendingScanGate() {
         override val key: String get() = item.id
         override val title: String get() = item.name
     }
 
-    data class Team(val plan: TeamInstallPlan) : PendingScanGate() {
+    data class Team(
+        val plan: TeamInstallPlan,
+        override val target: EngineTarget? = null
+    ) : PendingScanGate() {
         override val scan: ScanResult get() = plan.scan
         override val key: String get() = plan.item.fileName
         override val title: String get() = plan.item.name
@@ -147,6 +162,7 @@ class StoreViewModel @Inject constructor(
     private val fileAccess: com.aicode.feature.workspace.domain.FileAccessProvider,
     private val sourceConfig: StoreSourceConfig,
     private val pluginInstaller: EnginePluginInstaller,
+    private val engineInstaller: EngineTargetInstaller,
     baseClient: okhttp3.OkHttpClient,
     @param:ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
@@ -500,9 +516,16 @@ class StoreViewModel @Inject constructor(
         }
     }
 
-    /** 安装当前 tab 的条目：[item] 为 null 时表示缓存失效需重拉列表（此处不需要）。 */
-    fun install(item: StoreItem) {
+    /** 安装当前 tab 的条目：[target] 为 null 装到内置引擎，非 null 装到对应外部引擎官方目录。 */
+    fun install(item: StoreItem, target: EngineTarget? = null) {
         if (_state.value.installingId != null || _state.value.pendingScan != null) return
+        if (target != null) {
+            val reason = engineInstaller.unsupportedReason(item, target)
+            if (reason != null) {
+                _state.update { it.copy(message = reason) }
+                return
+            }
+        }
         viewModelScope.launch {
             _state.update { it.copy(installingId = item.id) }
             try {
@@ -510,19 +533,29 @@ class StoreViewModel @Inject constructor(
                     StoreKind.SKILL -> {
                         val plan = installer.planSkillInstall(item)
                         recordScan(plan.item.id, plan.scan)
-                        resolveGate(PendingScanGate.Skill(plan)) {
-                            val installed = installer.commitSkillInstall(plan)
-                            linkTranslation(item.storeTranslationKey(), "SKILL:${installed.lowercase()}")
-                            "已安装技能「$installed」（默认未启用，可在技能页开启）"
+                        resolveGate(PendingScanGate.Skill(plan, target)) {
+                            if (target == null) {
+                                val installed = installer.commitSkillInstall(plan)
+                                linkTranslation(item.storeTranslationKey(), "SKILL:${installed.lowercase()}")
+                                "已安装技能「$installed」（默认未启用，可在技能页开启）"
+                            } else {
+                                val installed = engineInstaller.installSkill(plan)
+                                "已安装技能「$installed」到 ${target.label}（~/.claude/skills/$installed）"
+                            }
                         }
                     }
                     StoreKind.MCP -> {
                         val scan = installer.scanMcp(item)
                         recordScan(item.id, scan)
-                        resolveGate(PendingScanGate.Mcp(item, scan)) {
-                            val name = installer.installMcp(item)
-                            linkTranslation(item.storeTranslationKey(), "MCP:$name")
-                            "已添加 MCP 服务器「$name」（默认未启用，可在 MCP 页开启）"
+                        resolveGate(PendingScanGate.Mcp(item, scan, target)) {
+                            if (target == null) {
+                                val name = installer.installMcp(item)
+                                linkTranslation(item.storeTranslationKey(), "MCP:$name")
+                                "已添加 MCP 服务器「$name」（默认未启用，可在 MCP 页开启）"
+                            } else {
+                                val name = engineInstaller.installMcp(item, target)
+                                "已添加 MCP 服务器「$name」到 ${target.label} 配置"
+                            }
                         }
                     }
                     StoreKind.EXPERT -> {
@@ -561,21 +594,37 @@ class StoreViewModel @Inject constructor(
                 var teamInstalled = false
                 val msg = when (gate) {
                     is PendingScanGate.Skill -> {
-                        val installed = installer.commitSkillInstall(gate.plan)
-                        linkTranslation(gate.plan.item.storeTranslationKey(), "SKILL:${installed.lowercase()}")
-                        "已安装技能「$installed」（默认未启用，可在技能页开启）"
+                        if (gate.target == null) {
+                            val installed = installer.commitSkillInstall(gate.plan)
+                            linkTranslation(gate.plan.item.storeTranslationKey(), "SKILL:${installed.lowercase()}")
+                            "已安装技能「$installed」（默认未启用，可在技能页开启）"
+                        } else {
+                            val installed = engineInstaller.installSkill(gate.plan)
+                            "已安装技能「$installed」到 ${gate.target.label}（~/.claude/skills/$installed）"
+                        }
                     }
                     is PendingScanGate.Mcp -> {
-                        val name = installer.installMcp(gate.item)
-                        linkTranslation(gate.item.storeTranslationKey(), "MCP:$name")
-                        "已添加 MCP 服务器「$name」（默认未启用，可在 MCP 页开启）"
+                        if (gate.target == null) {
+                            val name = installer.installMcp(gate.item)
+                            linkTranslation(gate.item.storeTranslationKey(), "MCP:$name")
+                            "已添加 MCP 服务器「$name」（默认未启用，可在 MCP 页开启）"
+                        } else {
+                            val name = engineInstaller.installMcp(gate.item, gate.target)
+                            "已添加 MCP 服务器「$name」到 ${gate.target.label} 配置"
+                        }
                     }
                     is PendingScanGate.Team -> {
-                        teamInstalled = withContext(Dispatchers.IO) { commitTeam(gate.plan) }
-                        if (teamInstalled) {
-                            context.getString(R.string.store_expert_installed_toast, gate.plan.item.name)
+                        if (gate.target == null) {
+                            teamInstalled = withContext(Dispatchers.IO) { commitTeam(gate.plan) }
+                            if (teamInstalled) {
+                                context.getString(R.string.store_expert_installed_toast, gate.plan.item.name)
+                            } else {
+                                context.getString(R.string.store_expert_install_failed)
+                            }
                         } else {
-                            context.getString(R.string.store_expert_install_failed)
+                            engineInstaller.installTeam(gate.plan.item.name, gate.plan.agents)
+                            teamInstalled = true
+                            "已安装专家团「${gate.plan.item.name}」到 ${gate.target.label}（~/.claude/agents）"
                         }
                     }
                 }
@@ -822,32 +871,49 @@ class StoreViewModel @Inject constructor(
         null
     }
 
-    /** 安装专家团：内容就绪 + 安全扫描后写盘；扫描命中时挂起等待用户确认。 */
-    fun installTeam(item: TeamStoreItem) {
+    /** 安装专家团：[target] 为 null 装到内置引擎，Claude Code 装到官方 agents 目录，其余引擎不支持。 */
+    fun installTeam(item: TeamStoreItem, target: EngineTarget? = null) {
         if (_state.value.installingId != null || _state.value.pendingScan != null) return
+        if (target != null && target != EngineTarget.CLAUDE_CODE) {
+            _state.update { it.copy(message = "${target.label} 官方暂不支持专家团定义，请在内置引擎安装") }
+            return
+        }
         viewModelScope.launch {
             _state.update { it.copy(installingId = item.fileName) }
             try {
                 val plan = withContext(Dispatchers.IO) { prepareTeamPlan(item) }
                 recordScan(item.fileName, plan.scan)
                 if (plan.scan is ScanResult.Pass) {
-                    val ok = withContext(Dispatchers.IO) { commitTeam(plan) }
-                    _state.update { s ->
-                        s.copy(
-                            installingId = null,
-                            teams = s.teams.map {
-                                if (it.fileName == item.fileName && ok) it.copy(installed = true) else it
-                            },
-                            message = if (ok) {
-                                context.getString(R.string.store_expert_installed_toast, item.name)
-                            } else {
-                                context.getString(R.string.store_expert_install_failed)
-                            }
-                        )
+                    if (target == null) {
+                        val ok = withContext(Dispatchers.IO) { commitTeam(plan) }
+                        _state.update { s ->
+                            s.copy(
+                                installingId = null,
+                                teams = s.teams.map {
+                                    if (it.fileName == item.fileName && ok) it.copy(installed = true) else it
+                                },
+                                message = if (ok) {
+                                    context.getString(R.string.store_expert_installed_toast, item.name)
+                                } else {
+                                    context.getString(R.string.store_expert_install_failed)
+                                }
+                            )
+                        }
+                    } else {
+                        engineInstaller.installTeam(item.name, plan.agents)
+                        _state.update { s ->
+                            s.copy(
+                                installingId = null,
+                                teams = s.teams.map {
+                                    if (it.fileName == item.fileName) it.copy(installed = true) else it
+                                },
+                                message = "已安装专家团「${item.name}」到 ${target.label}（~/.claude/agents）"
+                            )
+                        }
                     }
                 } else {
                     _state.update {
-                        it.copy(installingId = null, pendingScan = PendingScanGate.Team(plan))
+                        it.copy(installingId = null, pendingScan = PendingScanGate.Team(plan, target))
                     }
                 }
             } catch (e: CancellationException) {

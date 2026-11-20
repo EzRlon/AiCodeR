@@ -2982,6 +2982,7 @@
     <string name="crash_fix_prompt">App 刚发生了崩溃。以下是完整崩溃报告，请分析崩溃根因（定位到具体文件与行号），制定修复方案并直接实施修复，完成后汇报改动内容。</string>
     <string name="crash_copied">错误信息已复制</string>
     <string name="crash_restart">重启应用</string>
+    <string name="crash_safe_restart">安全模式重启（跳过后台初始化）</string>
     <string name="crash_exit">退出应用</string>
     <string name="crash_log_hint">完整日志文件位置：%1$s</string>
     <string name="crash_report_title">AiCodeR崩溃报告</string>

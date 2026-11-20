@@ -81,8 +81,8 @@ internal fun StoreScreen(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
-    onInstall: (StoreItem) -> Unit,
-    onInstallTeam: (TeamStoreItem) -> Unit,
+    onInstall: (StoreItem, EngineTarget?) -> Unit,
+    onInstallTeam: (TeamStoreItem, EngineTarget?) -> Unit,
     onInstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onUninstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onPluginEngineFilter: (EngineTarget?) -> Unit = {},
@@ -284,7 +284,7 @@ internal fun StoreScreen(
                         installed = item.id in state.installedIds,
                         installing = state.installingId == item.id,
                         installBusy = state.installingId != null,
-                        onInstall = { onInstall(item) },
+                        onInstall = { target -> onInstall(item, target) },
                         onOpen = { detailItem = item }
                     )
                 }
@@ -384,7 +384,7 @@ internal fun StoreScreen(
                     enabled = !installed && !installing && state.installingId == null,
                     loading = installing
                 ) {
-                    onInstall(item)
+                    onInstall(item, null)
                 }
             }
         }
@@ -449,7 +449,7 @@ internal fun StoreScreen(
                     enabled = !team.installed && state.installingId == null,
                     loading = state.installingId == team.fileName
                 ) {
-                    onInstallTeam(team)
+                    onInstallTeam(team, null)
                 }
             }
         }
@@ -605,10 +605,12 @@ private fun StoreItemCard(
     installed: Boolean,
     installing: Boolean,
     installBusy: Boolean,
-    onInstall: () -> Unit,
+    onInstall: (EngineTarget?) -> Unit,
     onOpen: () -> Unit
 ) {
     val context = LocalContext.current
+    // 安装目标引擎：null = 内置引擎；外部引擎仅 Claude Code 支持技能，MCP 三引擎均可。
+    var target by remember(item.id) { mutableStateOf<EngineTarget?>(null) }
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.semanticColors.cardSurface,
@@ -675,6 +677,24 @@ private fun StoreItemCard(
                 )
             }
             Spacer(Modifier.size(6.dp))
+            if (!installed && !item.stdinUnsupported()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PluginEngineChip(
+                        label = "内置",
+                        selected = target == null,
+                        onClick = { target = null }
+                    )
+                    EngineTarget.entries.forEach { engine ->
+                        PluginEngineChip(
+                            label = engine.label,
+                            selected = target == engine,
+                            onClick = { target = engine },
+                            enabled = engine == EngineTarget.CLAUDE_CODE || item.kind == StoreKind.MCP
+                        )
+                    }
+                }
+                Spacer(Modifier.size(2.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (item.detailUrl.isNotBlank()) {
                     TextButton(
@@ -714,7 +734,7 @@ private fun StoreItemCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    else -> TextButton(onClick = onInstall, enabled = !installBusy) {
+                    else -> TextButton(onClick = { onInstall(target) }, enabled = !installBusy) {
                         if (installing) {
                             CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(Spacing.xs))
@@ -738,7 +758,7 @@ private fun StoreItem.stdinUnsupported(): Boolean = kind == StoreKind.MCP && std
 @Composable
 private fun TeamList(
     state: StoreUiState,
-    onInstall: (TeamStoreItem) -> Unit,
+    onInstall: (TeamStoreItem, EngineTarget?) -> Unit,
     onOpen: (TeamStoreItem) -> Unit
 ) {
     if (state.teams.isEmpty()) {
@@ -827,11 +847,26 @@ private fun TeamList(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        TextButton(
-                            onClick = { onInstall(team) },
-                            enabled = state.installingId == null
-                        ) {
-                            Text(stringResource(R.string.store_expert_install))
+                        var teamTarget by remember(team.fileName) { mutableStateOf<EngineTarget?>(null) }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                PluginEngineChip(
+                                    label = "内置",
+                                    selected = teamTarget == null,
+                                    onClick = { teamTarget = null }
+                                )
+                                PluginEngineChip(
+                                    label = EngineTarget.CLAUDE_CODE.label,
+                                    selected = teamTarget == EngineTarget.CLAUDE_CODE,
+                                    onClick = { teamTarget = EngineTarget.CLAUDE_CODE }
+                                )
+                            }
+                            TextButton(
+                                onClick = { onInstall(team, teamTarget) },
+                                enabled = state.installingId == null
+                            ) {
+                                Text(stringResource(R.string.store_expert_install))
+                            }
                         }
                     }
                 }
