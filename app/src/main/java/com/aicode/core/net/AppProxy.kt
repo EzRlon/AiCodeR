@@ -128,9 +128,9 @@ object AppProxy {
         override fun connectFailed(uri: URI, sa: SocketAddress, ioe: IOException) {
             val host = uri.host ?: return
             if (selectProxy(host, uri.path) == null) return
-            val count = (proxyFailures[host] ?: 0L) + 1
-            proxyFailures[host] = count
-            if (count == PROXY_FAILURE_THRESHOLD) {
+            // 原子累加：OkHttp 连接失败回调来自多线程，read-modify-write 会丢计数。
+            proxyFailures.merge(host, 1L, Long::plus)
+            if (proxyFailures[host] == PROXY_FAILURE_THRESHOLD) {
                 failSince[host] = System.currentTimeMillis()
                 FileLogger.w(TAG, "代理连接连续失败：$host 降级直连 ${PROXY_FAILURE_BACKOFF_MS / 1000}s（VPN 与应用内代理叠加冲突时自愈）")
             }

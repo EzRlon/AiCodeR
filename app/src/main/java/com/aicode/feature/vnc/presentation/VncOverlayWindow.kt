@@ -285,9 +285,17 @@ private fun FloatingVncWindow(
     // 会短暂低于最小值，自动重置会和用户拖动打架（真机反馈“位置挪不动”）。
     // 显示层已经用 coerceIn 把窗口夹在状态栏下方；手动兜底是标题栏的重置按钮。
 
+    // 拖动中的位移只走本地 graphicsLayer：每帧写 ViewModel 的 StateFlow 会让整窗
+    // （含 WebView 画面）随之重组，真机拖动掉帧。落点才一次性写回几何。
+    val dragOffsetState = remember { mutableStateOf(Offset.Zero) }
+
     Box(
         modifier = Modifier
             .offset { IntOffset(offX.roundToPx(), offY.roundToPx()) }
+            .graphicsLayer {
+                translationX = dragOffsetState.value.x
+                translationY = dragOffsetState.value.y
+            }
             .size(winWidth, winHeight)
             // 用户要求接近直角的窗体：只留 2dp，视觉上仍是圆角但不占空间。
             .shadow(6.dp, RoundedCornerShape(2.dp))
@@ -300,6 +308,7 @@ private fun FloatingVncWindow(
             connected = connected,
             fullscreen = false,
             modifier = Modifier.fillMaxSize(),
+            dragOffset = dragOffsetState,
         )
     }
 
@@ -347,6 +356,7 @@ private fun VncWindowSurface(
     connected: Boolean,
     fullscreen: Boolean,
     modifier: Modifier = Modifier,
+    dragOffset: androidx.compose.runtime.MutableState<Offset>? = null,
 ) {
     val shape = RoundedCornerShape(if (fullscreen) 0.dp else 2.dp)
     val mouseButton by viewModel.mouseButton.collectAsStateWithLifecycle()
@@ -368,6 +378,7 @@ private fun VncWindowSurface(
             connected = connected,
             fullscreen = fullscreen,
             specialKeys = specialKeys,
+            dragOffset = dragOffset,
             onKeyboardClick = {
                 specialKeys = !specialKeys
                 if (specialKeys) viewModel.requestKeyboard()
@@ -831,6 +842,7 @@ private fun VncTitleBar(
     connected: Boolean,
     fullscreen: Boolean,
     specialKeys: Boolean,
+    dragOffset: androidx.compose.runtime.MutableState<Offset>? = null,
     onKeyboardClick: () -> Unit,
 ) {
     Row(
@@ -853,9 +865,23 @@ private fun VncTitleBar(
                             detectDragGestures(
                                 onDrag = { change, dragAmount ->
                                     change.consume()
-                                    viewModel.dragBy(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
+                                    // 拖动只累计本地位移，落点一次写回（每帧写 StateFlow 整窗重组掉帧）。
+                                    // dragOffset 为 null（理论上仅全屏）时回退到逐帧写回。
+                                    val target = dragOffset
+                                    if (target != null) target.value += dragAmount
+                                    else viewModel.dragBy(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
                                 },
-                                onDragEnd = { viewModel.persistGeometry() },
+                                onDragEnd = {
+                                    val target = dragOffset ?: return@detectDragGestures
+                                    viewModel.dragBy(target.value.x.toDp().value, target.value.y.toDp().value)
+                                    viewModel.persistGeometry()
+                                    target.value = Offset.Zero
+                                },
+                                onDragCancel = {
+                                    val target = dragOffset ?: return@detectDragGestures
+                                    viewModel.dragBy(target.value.x.toDp().value, target.value.y.toDp().value)
+                                    target.value = Offset.Zero
+                                },
                             )
                         }
                     }

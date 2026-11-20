@@ -1207,9 +1207,19 @@ class AIAgentViewModel @Inject constructor(
                 val deadline = System.currentTimeMillis() + ENGINE_INSTALL_WAIT_TIMEOUT_MS
                 var version: String? = null
                 while (System.currentTimeMillis() < deadline) {
-                    delay(10_000)
+                    delay(5_000)
                     version = cliAgentManager.detectVersion(agent, forceRefresh = true)
                     if (version != null) break
+                    // 快速失败：安装脚本进程已退出且版本仍未就绪 → 立即终判，不等满超时
+                    // （pgrep 包名匹配安装命令行；npm 尚在跑或 Node 自愈阶段则继续等）。
+                    val installerAlive = containerEngine.runCommandSyncIfReady(
+                        "pgrep -f \"${agent.npmPackage}\" >/dev/null 2>&1 && echo alive || echo done",
+                        timeoutMs = 5_000L
+                    )?.output?.trim()
+                    if (installerAlive == "done") {
+                        version = cliAgentManager.detectVersion(agent, forceRefresh = true)
+                        break
+                    }
                 }
                 if (version != null) {
                     lines += "✓ ${agent.displayName} v$version 安装成功，测试通过"

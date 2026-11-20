@@ -8,7 +8,7 @@ import com.aicode.feature.agent.presentation.AgentAttachment
 import com.aicode.feature.agent.presentation.BACKGROUND_NOTIFICATION_PREFIX
 import com.aicode.feature.agent.presentation.COMPACTION_FAILURE_TOOL_NAME
 import com.aicode.feature.agent.presentation.VERIFICATION_REPORT_TOOL_NAME
-import com.aicode.feature.agent.presentation.MessageRole
+import com.aicode.feature.agent.domain.model.MessageRole
 import com.aicode.feature.agent.presentation.AgentUIMessage
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString

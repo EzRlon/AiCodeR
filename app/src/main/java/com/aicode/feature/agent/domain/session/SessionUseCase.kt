@@ -9,7 +9,7 @@ import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.domain.model.AgentMode
 import com.aicode.feature.agent.domain.model.GoalStatus
 import com.aicode.feature.agent.domain.model.ReasoningEffort
-import com.aicode.feature.agent.presentation.MessageRole
+import com.aicode.feature.agent.domain.model.MessageRole
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton

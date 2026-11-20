@@ -8,7 +8,7 @@ import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
 import com.aicode.feature.agent.domain.model.CONTEXT_SUMMARY_LEGACY_PREFIX
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.presentation.AgentAttachment
-import com.aicode.feature.agent.presentation.MessageRole
+import com.aicode.feature.agent.domain.model.MessageRole
 import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

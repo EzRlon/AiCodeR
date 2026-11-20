@@ -1,7 +1,7 @@
 package com.aicode.feature.agent.domain.subagent
 
 import com.aicode.feature.agent.data.local.entity.AgentMessageEntity
-import com.aicode.feature.agent.presentation.MessageRole
+import com.aicode.feature.agent.domain.model.MessageRole
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
