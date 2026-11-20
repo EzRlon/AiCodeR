@@ -32,6 +32,7 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -101,6 +102,7 @@ import com.aicode.core.ui.LocalImageViewer
 import com.aicode.core.ui.readableContentMaxWidth
 import com.aicode.core.ui.rememberImageViewerState
 import com.aicode.core.ui.rememberViewerDecodeSpec
+import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.tool.question.UserQuestionAnswer
 import com.aicode.feature.agent.domain.voice.VoskModelManager
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
@@ -1995,6 +1997,71 @@ fun AIChatPanel(
         LocalAttachmentOpener provides attachmentOpener,
         LocalAttachmentLongPress provides attachmentLongPressHandler
     ) {
+        // 会话内引擎引导安装：切引擎发现未装 → 弹窗确认（单装/全装）→ 全自动安装（装后自动测试并续切）。
+        val pendingEngineInstall = viewModel.pendingEngineInstall.collectAsStateWithLifecycle().value
+        val engineInstallState = viewModel.engineInstallState.collectAsStateWithLifecycle().value
+        pendingEngineInstall?.let { pending ->
+            val agentName = CliAgentCatalog.byEngine(pending.engine)?.displayName ?: pending.engine
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissEngineInstallDialog() },
+                title = { Text(stringResource(R.string.chat_engine_install_title, agentName)) },
+                text = {
+                    Text(
+                        if (pending.containerNotReady) stringResource(R.string.chat_engine_install_container_busy)
+                        else stringResource(R.string.chat_engine_install_body, agentName)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.installEngines(false) }) {
+                        Text(stringResource(R.string.chat_engine_install_one))
+                    }
+                },
+                dismissButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TextButton(onClick = { viewModel.installEngines(true) }) {
+                            Text(stringResource(R.string.chat_engine_install_all))
+                        }
+                        TextButton(onClick = { viewModel.dismissEngineInstallDialog() }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
+                }
+            )
+        }
+        when (val engineState = engineInstallState) {
+            is AIAgentViewModel.EngineInstallState.Running -> {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(stringResource(R.string.chat_engine_installing)) },
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Text(stringResource(R.string.chat_engine_installing_progress, engineState.name, engineState.index, engineState.total))
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+            is AIAgentViewModel.EngineInstallState.Done -> {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { viewModel.clearEngineInstallState() },
+                    title = { Text(stringResource(R.string.chat_engine_installed_title)) },
+                    text = { Text(engineState.summary) },
+                    confirmButton = {
+                        TextButton(onClick = { viewModel.clearEngineInstallState() }) {
+                            Text(stringResource(R.string.ok))
+                        }
+                    }
+                )
+            }
+            else -> {}
+        }
         Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),

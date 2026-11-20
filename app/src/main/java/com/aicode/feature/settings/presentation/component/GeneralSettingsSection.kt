@@ -88,8 +88,6 @@ internal fun GeneralSettingsSection(
     onSetHandoffAutoPercent: (Int) -> Unit,
     floatBallEnabled: Boolean,
     onToggleFloatBallEnabled: (Boolean) -> Unit,
-    vncAutoPopupEnabled: Boolean,
-    onToggleVncAutoPopup: (Boolean) -> Unit,
     voiceEngine: VoiceEngine,
     voiceModelState: VoskModelManager.ModelState,
     onSelectVoiceEngine: (VoiceEngine) -> Unit,
@@ -230,18 +228,6 @@ internal fun GeneralSettingsSection(
                                 onToggleFloatBallEnabled(enabled)
                             }
                         }
-                    )
-                }
-            )
-            SettingsDivider()
-            SettingsRow(
-                icon = null,
-                title = stringResource(R.string.settings_vnc_auto_popup),
-                subtitle = stringResource(R.string.settings_vnc_auto_popup_desc),
-                trailing = {
-                    AppSwitch(
-                        checked = vncAutoPopupEnabled,
-                        onCheckedChange = { onToggleVncAutoPopup(it) }
                     )
                 }
             )

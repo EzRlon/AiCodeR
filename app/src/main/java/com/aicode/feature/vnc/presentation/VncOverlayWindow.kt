@@ -76,6 +76,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -85,6 +86,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -1009,8 +1011,10 @@ private fun MinimizedBall(
     // 最小化后图标可任意拖动（2026-11-18 用户反馈）：与聊天顶栏/底栏重叠时能自己挪开。
     var bx by remember(window.offsetX) { mutableStateOf(ballX) }
     var byY by remember(window.offsetY) { mutableStateOf(ballY) }
-    // 拖动只更新 translation：阴影/裁剪在 graphicsLayer 里复用同一 RenderNode，
-    // 之前 shadow(4.dp) 挂在 offset 之后的链上，每帧拖动都重建投影，拖起来发涩。
+    // 拖动只更新 translation：阴影/裁剪在 graphicsLayer 里复用同一 RenderNode。
+    // 每帧只做两次 state 写：位置钳制移到落点一次性 clamp（每帧 coerceIn 的比较与
+    // Dp 运算在低端机上有可感知的拖拽发涩），awaitEachGesture+drag 去掉 touch slop
+    // 死区（down 即跟手），并取代 clickable 双层仲裁（点按/拖动同源判定）。
     val ballShape = CircleShape
     Box(
         modifier = Modifier
@@ -1025,20 +1029,28 @@ private fun MinimizedBall(
             .background(MaterialTheme.semanticColors.cardSurface, ballShape)
             .border(1.dp, MaterialTheme.semanticColors.subtleBorder, ballShape)
             .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = { viewModel.persistMinimizedBall(bx.value, byY.value) },
-                ) { change, drag ->
-                    change.consume()
-                    val dx = drag.x.toDp()
-                    val dy = drag.y.toDp()
-                    bx = (bx + dx).coerceIn(0.dp, (parentWidth - ballSize).coerceAtLeast(0.dp))
-                    byY = (byY + dy).coerceIn(
-                        ballMinY,
-                        (parentHeight - ballSize).coerceAtLeast(ballMinY)
-                    )
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    var moved = false
+                    drag(down.id) { change ->
+                        val delta = change.positionChange()
+                        if (delta != Offset.Zero) {
+                            change.consume()
+                            moved = true
+                            bx += delta.x.toDp()
+                            byY += delta.y.toDp()
+                        }
+                    }
+                    bx = bx.coerceIn(0.dp, (parentWidth - ballSize).coerceAtLeast(0.dp))
+                    byY = byY.coerceIn(ballMinY, (parentHeight - ballSize).coerceAtLeast(ballMinY))
+                    if (moved) {
+                        viewModel.persistMinimizedBall(bx.value, byY.value)
+                    } else {
+                        viewModel.setMinimized(false)
+                    }
                 }
-            }
-            .clickable { viewModel.setMinimized(false) },
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(

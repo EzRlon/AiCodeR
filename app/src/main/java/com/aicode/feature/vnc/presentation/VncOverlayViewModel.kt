@@ -28,7 +28,7 @@ import kotlinx.coroutines.launch
  * VNC 悬浮小窗的状态中枢：窗口几何/钉住/最小化/全屏 + 容器服务状态 + 自动弹出轮询。
  * 作用域为聊天页 NavBackStackEntry（与 WorkbenchPane 同惯例）；轮询在聊天页存续期间运行
  * （每 5s 一次本地 TCP 端口探测，毫秒级且不唤起容器，本地模式之外直接短路）；
- * 几何与钉住状态经 DataStore 跨会话记忆，手动收起后 [AUTO_POPUP_COOLDOWN_MS] 内不再自动弹出。
+ * 几何与钉住状态经 DataStore 跨会话记忆；仅用户手动入口或业务代码调用 [show] 时打开浮窗。
  */
 @HiltViewModel
 class VncOverlayViewModel @Inject constructor(
@@ -36,7 +36,6 @@ class VncOverlayViewModel @Inject constructor(
     private val prefsRepository: VncOverlayPrefsRepository,
     private val mcpManager: com.aicode.feature.agent.domain.mcp.McpManager,
     private val mcpConfigRepository: com.aicode.feature.agent.domain.mcp.McpConfigRepository,
-    private val generalSettingsRepository: com.aicode.feature.settings.data.repository.GeneralSettingsRepository,
 ) : ViewModel() {
 
     /** 画面旋转方式：跟随系统；或锁定横屏 / 竖屏。全屏时 AUTO 取「自动横屏」。 */
@@ -76,8 +75,6 @@ class VncOverlayViewModel @Inject constructor(
     private val _reconnectRequests = MutableStateFlow(0)
     val reconnectRequests: StateFlow<Int> = _reconnectRequests.asStateFlow()
 
-    private var autoPopupBlockedUntilMs = 0L
-
     /** 常驻服务会话句柄：小窗关闭时取消，让 proot 退出并回收服务进程。 */
     private var serviceJob: Job? = null
 
@@ -99,49 +96,12 @@ class VncOverlayViewModel @Inject constructor(
                     heightDp = saved.heightDp,
                 )
             }
-            val sinceDismissed = System.currentTimeMillis() - saved.dismissedAtMs
-            if (sinceDismissed in 0 until AUTO_POPUP_COOLDOWN_MS) {
-                autoPopupBlockedUntilMs = saved.dismissedAtMs + AUTO_POPUP_COOLDOWN_MS
-            }
         }
         // 服务就绪后立刻按当前浮窗宽高比同步一次分辨率：否则首开沿用 Xvfb 默认尺寸，
         // 竖屏浮窗里整张桌面被缩小，文字看起来又小又挤。
         viewModelScope.launch {
             serviceController.state.collect { st ->
                 if (st is VncServiceState.Ready) syncDisplayToWindow()
-            }
-        }
-        // 自动弹出：聊天页存续期间探测容器图形服务，从无到有即弹窗（AI 跑图形测试/用户手动起服务都会触发）。
-        // 指数退避到 PROBE_MAX_INTERVAL_MS：没起服务时是最常见的长稳态，固定 5s 一轮等于白白唤醒
-        // 容器探测。代价是服务新起后最长要等 30s 才弹窗（原来的上限是 5s）——这是刻意的取舍：
-        // 自动弹窗是辅助入口，用户随时可手动打开，不值得为它每秒级轮询。
-        viewModelScope.launch {
-            var interval = PROBE_INTERVAL_MS
-            while (coroutineContext.isActive) {
-                delay(interval)
-                if (_window.value.visible) {
-                    interval = PROBE_INTERVAL_MS
-                    continue
-                }
-                if (System.currentTimeMillis() < autoPopupBlockedUntilMs) continue
-                // 自动弹出默认关闭（设置里显式启用后才有此行为）；关闭时空转到最大间隔，不再探测。
-                if (!generalSettingsRepository.vncAutoPopupEnabled()) {
-                    interval = PROBE_MAX_INTERVAL_MS
-                    continue
-                }
-                val running = try {
-                    serviceController.probeRunning()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    false
-                }
-                if (running) {
-                    interval = PROBE_INTERVAL_MS
-                    show()
-                } else {
-                    interval = (interval * 2).coerceAtMost(PROBE_MAX_INTERVAL_MS)
-                }
             }
         }
     }
@@ -261,9 +221,6 @@ class VncOverlayViewModel @Inject constructor(
         _window.update { it.copy(visible = false, fullscreen = false) }
         _connected.value = false
         stopServiceSession()
-        val now = System.currentTimeMillis()
-        autoPopupBlockedUntilMs = now + AUTO_POPUP_COOLDOWN_MS
-        viewModelScope.launch { prefsRepository.saveDismissedAt(now) }
     }
 
     fun setMinimized(minimized: Boolean) =
@@ -505,11 +462,6 @@ class VncOverlayViewModel @Inject constructor(
     companion object {
         private const val TAG = "VncOverlayViewModel"
         private const val MULTI_LLM_SERVER_NAME = "multi-llm"
-        private const val PROBE_INTERVAL_MS = 5_000L
-
-        /** 退避上限：服务没起时最长的探测间隔。 */
-        private const val PROBE_MAX_INTERVAL_MS = 30_000L
-        private const val AUTO_POPUP_COOLDOWN_MS = 10 * 60_000L
         const val MIN_WIDTH_DP = 200f
 
         /** 虚拟屏长边像素：按浮窗宽高比推导另一条边，兼顾横竖屏且不超 1280。 */

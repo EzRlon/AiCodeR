@@ -152,6 +152,10 @@ private fun selfHealingLaunch(command: String): String =
 
 /** 内置智能体目录：三个容器实测跑通的 AI CLI。 */
 object CliAgentCatalog {
+
+    /** 按会话引擎 id（"claude"/"codex"/"opencode"）查找目录项；未知返回 null。 */
+    fun byEngine(engine: String): CliAgent? = ALL.firstOrNull { it.id == engine }
+
     val ALL: List<CliAgent> = listOf(
         CliAgent(
             id = "claude",

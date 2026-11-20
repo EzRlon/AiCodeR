@@ -271,6 +271,7 @@ fun SettingsScreen(
     val logViewerState by viewModel.logViewerState.collectAsStateWithLifecycle()
     val mcpAuthState by viewModel.mcpAuthState.collectAsStateWithLifecycle()
     val mcpImportState by viewModel.mcpImportState.collectAsStateWithLifecycle()
+    val pendingRelayRisk by viewModel.pendingRelayRisk.collectAsStateWithLifecycle()
     val mcpEntries by viewModel.mcpEntries.collectAsStateWithLifecycle()
     val mcpStatuses by viewModel.mcpStatuses.collectAsStateWithLifecycle()
     val mcpReloading by viewModel.mcpReloading.collectAsStateWithLifecycle()
@@ -317,7 +318,6 @@ fun SettingsScreen(
     val handoffAutoEnabled by viewModel.handoffAutoEnabled.collectAsStateWithLifecycle()
     val handoffAutoPercent by viewModel.handoffAutoPercent.collectAsStateWithLifecycle()
     val floatBallEnabled by viewModel.floatBallEnabled.collectAsStateWithLifecycle()
-    val vncAutoPopupEnabled by viewModel.vncAutoPopupEnabled.collectAsStateWithLifecycle()
     val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
     val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -654,6 +654,24 @@ fun SettingsScreen(
             },
             label = "settings-section"
         ) { current ->
+        // 中转站风险确认：官方密钥配到第三方 baseUrl 时提醒被盗用风险（用户可选仍要保存）。
+        pendingRelayRisk?.let { (risk, _) ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissRelayRisk() },
+                title = { Text(stringResource(R.string.relay_risk_title)) },
+                text = { Text(stringResource(R.string.relay_risk_body, risk.host, risk.keyOwner)) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.confirmSaveProviderRegardless() }) {
+                        Text(stringResource(R.string.relay_risk_save_anyway))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissRelayRisk() }) {
+                        Text(stringResource(R.string.relay_risk_go_back))
+                    }
+                }
+            )
+        }
         when {
             // 这两页自带顶栏，不能嵌进下面的 Scaffold（会双层顶栏）：窄窗占整屏，大屏占右栏。
             current == SettingsSection.ProviderEditor -> ProviderEditorScreen(
@@ -1204,8 +1222,6 @@ fun SettingsScreen(
                     onSetHandoffAutoPercent = { viewModel.setHandoffAutoPercent(it) },
                     floatBallEnabled = floatBallEnabled,
                     onToggleFloatBallEnabled = { viewModel.setFloatBallEnabled(it) },
-                    vncAutoPopupEnabled = vncAutoPopupEnabled,
-                    onToggleVncAutoPopup = { viewModel.setVncAutoPopupEnabled(it) },
                     voiceEngine = voiceEngine,
                     voiceModelState = voiceModelState,
                     onSelectVoiceEngine = { viewModel.setVoiceEngine(it) },

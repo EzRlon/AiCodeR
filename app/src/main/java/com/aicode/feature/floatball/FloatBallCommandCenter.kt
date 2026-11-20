@@ -38,6 +38,9 @@ object FloatBallCommandCenter {
     @Volatile
     var updateDraft: ((String) -> Unit)? = null
 
+    /** FB3：润色面板输入框文本（复用会话输入框润色链路）；null 表示 ViewModel 未就绪。 */
+    var polishText: (suspend (String) -> String?)? = null
+
     /** FB2：悬浮窗内嵌模型选择的数据快照（按需拉取，随 App 模型列表变化）。 */
     data class FloatModelPickerData(
         val currentProviderId: String?,

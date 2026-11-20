@@ -56,6 +56,8 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.agent.domain.subagent.AgentSaveError
 import com.aicode.feature.agent.domain.subagent.InjectPart
 import com.aicode.feature.agent.domain.tool.ToolRegistry
+import com.aicode.feature.settings.data.RelayKeyRisk
+import com.aicode.feature.settings.data.RelayKeyRiskDetector
 import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
@@ -681,9 +683,6 @@ class SettingsViewModel @Inject constructor(
     private val _floatBallEnabled = MutableStateFlow(false)
     val floatBallEnabled: StateFlow<Boolean> = _floatBallEnabled.asStateFlow()
 
-    private val _vncAutoPopupEnabled = MutableStateFlow(false)
-    val vncAutoPopupEnabled: StateFlow<Boolean> = _vncAutoPopupEnabled.asStateFlow()
-
     private val _startupSessionMode = MutableStateFlow(StartupSessionMode.NEW_SESSION)
     val startupSessionMode: StateFlow<StartupSessionMode> = _startupSessionMode.asStateFlow()
 
@@ -1153,12 +1152,6 @@ class SettingsViewModel @Inject constructor(
             launch {
                 generalSettingsRepository.floatBallEnabledFlow.collectLatest {
                     _floatBallEnabled.value = it
-                }
-            }
-
-            launch {
-                generalSettingsRepository.vncAutoPopupEnabledFlow.collectLatest {
-                    _vncAutoPopupEnabled.value = it
                 }
             }
 
@@ -2205,12 +2198,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setVncAutoPopupEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            generalSettingsRepository.setVncAutoPopupEnabled(enabled)
-        }
-    }
-
     /** 切换语音输入引擎（系统 / 离线；离线需模型就绪）。 */
     fun setVoiceEngine(engine: VoiceEngine) {
         viewModelScope.launch {
@@ -2784,6 +2771,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveProvider(provider: AIProviderConfig) {
+        // 中转站风险提醒：第三方 baseUrl + 官方密钥 → 中转站可完整读取并留存密钥，先弹窗确认。
+        // 用户确认后走 confirmSaveProviderRegardless；无风险直接保存。
+        val relayRisk = RelayKeyRiskDetector.detect(provider)
+        if (relayRisk != null && confirmedRelayRiskProviderId != provider.id) {
+            _pendingRelayRisk.value = relayRisk to provider
+            return
+        }
         viewModelScope.launch {
             val removedModels = (repository.getProviderById(provider.id)?.models ?: emptyList())
                 .toSet() - provider.models.toSet()
@@ -2792,6 +2786,30 @@ class SettingsViewModel @Inject constructor(
             // 保存后重置该提供商在内存中的面板状态，以便主页即时以最新脚本与配置重新加载
             _providerDashboards.update { it - provider.id }
         }
+    }
+
+    /** 中转站风险确认弹窗状态：非 null 时 UI 弹「仍要保存」确认。 */
+    private val _pendingRelayRisk = MutableStateFlow<Pair<RelayKeyRisk, AIProviderConfig>?>(null)
+    val pendingRelayRisk: StateFlow<Pair<RelayKeyRisk, AIProviderConfig>?> = _pendingRelayRisk.asStateFlow()
+
+    /** 本轮已确认过中转风险的 provider id（确认后允许直存）。 */
+    private var confirmedRelayRiskProviderId: String? = null
+
+    /** 用户确认在中转站使用官方密钥：仍保存。 */
+    fun confirmSaveProviderRegardless() {
+        val (_, provider) = _pendingRelayRisk.value ?: return
+        _pendingRelayRisk.value = null
+        confirmedRelayRiskProviderId = provider.id
+        try {
+            saveProvider(provider)
+        } finally {
+            confirmedRelayRiskProviderId = null
+        }
+    }
+
+    /** 取消中转站风险保存（用户回去改用中转站自己的密钥）。 */
+    fun dismissRelayRisk() {
+        _pendingRelayRisk.value = null
     }
 
     /**
