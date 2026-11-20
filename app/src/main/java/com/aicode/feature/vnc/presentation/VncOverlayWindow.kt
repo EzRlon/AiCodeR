@@ -69,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.shadow
@@ -996,7 +997,8 @@ private fun MinimizedBall(
     parentWidth: Dp,
     parentHeight: Dp,
 ) {
-    val ballSize = 56.dp
+    // 44dp 紧配：56dp 的圆视觉过大，与 20dp 图标不匹配（用户反馈“底部的圆太大”）。
+    val ballSize = 44.dp
     val ballX = (if (window.offsetX == Float.MIN_VALUE) (parentWidth - ballSize - 12.dp).value else window.offsetX)
         .dp.coerceIn(0.dp, parentWidth - ballSize)
     // 球同样不允许进状态栏：否则最小化后也点不到，用户彻底失去入口。
@@ -1007,14 +1009,21 @@ private fun MinimizedBall(
     // 最小化后图标可任意拖动（2026-11-18 用户反馈）：与聊天顶栏/底栏重叠时能自己挪开。
     var bx by remember(window.offsetX) { mutableStateOf(ballX) }
     var byY by remember(window.offsetY) { mutableStateOf(ballY) }
+    // 拖动只更新 translation：阴影/裁剪在 graphicsLayer 里复用同一 RenderNode，
+    // 之前 shadow(4.dp) 挂在 offset 之后的链上，每帧拖动都重建投影，拖起来发涩。
+    val ballShape = CircleShape
     Box(
         modifier = Modifier
-            .offset { IntOffset(bx.roundToPx(), byY.roundToPx()) }
             .size(ballSize)
-            .shadow(4.dp, CircleShape)
-            .clip(CircleShape)
-            .background(MaterialTheme.semanticColors.cardSurface)
-            .border(1.dp, MaterialTheme.semanticColors.subtleBorder, CircleShape)
+            .graphicsLayer {
+                translationX = bx.toPx()
+                translationY = byY.toPx()
+                shape = ballShape
+                clip = true
+                shadowElevation = 2.dp.toPx()
+            }
+            .background(MaterialTheme.semanticColors.cardSurface, ballShape)
+            .border(1.dp, MaterialTheme.semanticColors.subtleBorder, ballShape)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragEnd = { viewModel.persistMinimizedBall(bx.value, byY.value) },
@@ -1036,7 +1045,7 @@ private fun MinimizedBall(
             imageVector = FeatherIcons.Monitor,
             contentDescription = stringResource(R.string.vnc_minimized_ball),
             tint = statusTint(serviceState, connected),
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(20.dp),
         )
     }
 }
