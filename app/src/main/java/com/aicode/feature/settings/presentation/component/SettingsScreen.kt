@@ -1850,9 +1850,15 @@ fun SettingsScreen(
             selected = themeMode,
             selectedPresetId = themePresetId,
             dynamicColorEnabled = dynamicColorEnabled,
+            scheduleStart = viewModel.themeScheduleStart.collectAsStateWithLifecycle().value,
+            scheduleEnd = viewModel.themeScheduleEnd.collectAsStateWithLifecycle().value,
             onSelected = { viewModel.setThemeMode(it) },
             onPresetSelected = { viewModel.setThemePreset(it) },
             onDynamicColorChanged = { viewModel.setDynamicColorEnabled(it) },
+            onScheduleChanged = { start, end ->
+                viewModel.setThemeScheduleStart(start)
+                viewModel.setThemeScheduleEnd(end)
+            },
             onDismiss = { showThemeSheet = false }
         )
     }

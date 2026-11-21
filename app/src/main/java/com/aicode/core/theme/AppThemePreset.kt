@@ -183,7 +183,97 @@ data class AppThemePreset(
             )
         )
 
-        val ALL_PRESETS = listOf(DEFAULT, COFFEE, GRAPHITE, FOREST, CRIMSON)
+        /** 紫罗兰：宝蓝紫主色，亮色态沉稳、暗色态提亮为香芋紫保证可读。 */
+        val VIOLET = fromSeeds(
+            id = "violet",
+            nameRes = R.string.theme_preset_violet,
+            lightSeed = AppThemeSeed(
+                primary = Color(0xFF6D28D9),
+                secondary = Color(0xFF0891B2),
+                tertiary = Color(0xFFBE185D),
+                background = Color(0xFFF6F4FB),
+                surface = Color(0xFFFCFBFE),
+                surfaceVariant = Color(0xFFEBE7F6),
+                onSurface = Color(0xFF16131F),
+                onSurfaceVariant = Color(0xFF5F5A70),
+                outline = Color(0xFFA9A3B8),
+                outlineVariant = Color(0xFFE0DBED)
+            ),
+            darkSeed = AppThemeSeed(
+                primary = Color(0xFFA78BFA),
+                secondary = Color(0xFF67E8F9),
+                tertiary = Color(0xFFF472B6),
+                background = Color(0xFF110F16),
+                surface = Color(0xFF1A1721),
+                surfaceVariant = Color(0xFF262233),
+                onSurface = Color(0xFFF5F3FA),
+                onSurfaceVariant = Color(0xFFA39DB4),
+                outline = Color(0xFF615B72),
+                outlineVariant = Color(0xFF332E41)
+            )
+        )
+
+        /** 海洋：青蓝主色，取自近海晴空，深色态为亮青蓝。 */
+        val OCEAN = fromSeeds(
+            id = "ocean",
+            nameRes = R.string.theme_preset_ocean,
+            lightSeed = AppThemeSeed(
+                primary = Color(0xFF0369A1),
+                secondary = Color(0xFF0D9488),
+                tertiary = Color(0xFFCA8A04),
+                background = Color(0xFFF2F7FB),
+                surface = Color(0xFFFAFCFE),
+                surfaceVariant = Color(0xFFE2ECF4),
+                onSurface = Color(0xFF101820),
+                onSurfaceVariant = Color(0xFF51616E),
+                outline = Color(0xFF9AAAB6),
+                outlineVariant = Color(0xFFD8E5EC)
+            ),
+            darkSeed = AppThemeSeed(
+                primary = Color(0xFF38BDF8),
+                secondary = Color(0xFF2DD4BF),
+                tertiary = Color(0xFFFACC15),
+                background = Color(0xFF0A1118),
+                surface = Color(0xFF121A22),
+                surfaceVariant = Color(0xFF1C2731),
+                onSurface = Color(0xFFEDF4FA),
+                onSurfaceVariant = Color(0xFF97A7B4),
+                outline = Color(0xFF556672),
+                outlineVariant = Color(0xFF283641)
+            )
+        )
+
+        /** 琥珀：暖金黄主色，亮色态深晚、暗色态琥珀提亮。 */
+        val AMBER = fromSeeds(
+            id = "amber",
+            nameRes = R.string.theme_preset_amber,
+            lightSeed = AppThemeSeed(
+                primary = Color(0xFFB45309),
+                secondary = Color(0xFF4D7C0F),
+                tertiary = Color(0xFF0369A1),
+                background = Color(0xFFFAF6EF),
+                surface = Color(0xFFFDFBF7),
+                surfaceVariant = Color(0xFFF3ECDF),
+                onSurface = Color(0xFF1F1A12),
+                onSurfaceVariant = Color(0xFF6E6555),
+                outline = Color(0xFFB4A996),
+                outlineVariant = Color(0xFFE9E1D2)
+            ),
+            darkSeed = AppThemeSeed(
+                primary = Color(0xFFFBBF24),
+                secondary = Color(0xFFA3E635),
+                tertiary = Color(0xFF38BDF8),
+                background = Color(0xFF151209),
+                surface = Color(0xFF1F1B10),
+                surfaceVariant = Color(0xFF2C2717),
+                onSurface = Color(0xFFFBF8EF),
+                onSurfaceVariant = Color(0xFFB3AB97),
+                outline = Color(0xFF6E6754),
+                outlineVariant = Color(0xFF393322)
+            )
+        )
+
+        val ALL_PRESETS = listOf(DEFAULT, COFFEE, GRAPHITE, FOREST, CRIMSON, VIOLET, OCEAN, AMBER)
 
         fun findById(id: String?): AppThemePreset =
             ALL_PRESETS.firstOrNull { it.id == id } ?: DEFAULT

@@ -6,6 +6,7 @@ import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.engine.ClaudeCodeBridge
 import com.aicode.feature.agent.domain.engine.CodexBridge
+import com.aicode.feature.agent.domain.engine.DeepSeekBridge
 import com.aicode.feature.agent.domain.engine.OpenCodeBridge
 import com.aicode.feature.agent.domain.workflow.AgentEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -29,7 +30,8 @@ class EngineTurnRouter @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val claudeCodeBridge: ClaudeCodeBridge,
     private val codexBridge: CodexBridge,
-    private val openCodeBridge: OpenCodeBridge
+    private val openCodeBridge: OpenCodeBridge,
+    private val deepSeekBridge: DeepSeekBridge
 ) {
     suspend fun buildEventFlow(
         engine: String?,
@@ -99,6 +101,30 @@ class EngineTurnRouter @Inject constructor(
             val bridge = openCodeBridge
             if (!bridge.isAvailable()) {
                 failed(R.string.engine_opencode_unavailable)
+            } else {
+                val authHint = bridge.authHint(providerId)
+                if (authHint != null) {
+                    failedMessage(authHint)
+                } else {
+                    bridge.runTurn(
+                        sessionId = sessionId,
+                        userRequest = userRequest,
+                        projectPath = projectPath,
+                        model = model,
+                        resume = resume,
+                        providerId = providerId,
+                        engineMode = engineMode,
+                        images = images,
+                        attachments = attachments
+                    )
+                }
+            }
+        }
+
+        AgentEngines.DEEPSEEK -> {
+            val bridge = deepSeekBridge
+            if (!bridge.isAvailable()) {
+                failed(R.string.engine_deepseek_unavailable)
             } else {
                 val authHint = bridge.authHint(providerId)
                 if (authHint != null) {

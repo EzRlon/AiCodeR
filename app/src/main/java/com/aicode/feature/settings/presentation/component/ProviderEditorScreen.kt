@@ -1967,6 +1967,7 @@ private fun SkeletonBlock(
 internal fun defaultProviderBaseUrl(type: ProviderType): String = when (type) {
     ProviderType.ANTHROPIC -> "https://api.anthropic.com/"
     ProviderType.GEMINI -> "https://generativelanguage.googleapis.com/"
+    ProviderType.DEEPSEEK -> "https://api.deepseek.com/"
     else -> "https://api.openai.com/"
 }
 
@@ -2149,6 +2150,7 @@ internal fun providerTypeLabel(type: ProviderType): String = when (type) {
     ProviderType.OPENAI -> "OpenAI"
     ProviderType.ANTHROPIC -> "Anthropic"
     ProviderType.GEMINI -> "Gemini"
+    ProviderType.DEEPSEEK -> "DeepSeek"
 }
 
 @Composable

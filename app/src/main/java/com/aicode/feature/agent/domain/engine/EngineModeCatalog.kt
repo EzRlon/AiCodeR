@@ -56,11 +56,23 @@ object EngineModeCatalog {
         Entry("plan+auto", AgentMode.PLAN)
     )
 
+    /**
+     * DeepSeek Harness（dsh headless）`--permission-mode` 的原生 preset。
+     * 0.2.2-rc.x 实测：known: read-only, workspace-write, danger-full-access（与 Codex 的
+     * 只读沙箱同型），PLAN 语义可硬承载。
+     */
+    val DEEPSEEK: List<Entry> = listOf(
+        Entry("read-only", AgentMode.PLAN),
+        Entry("workspace-write", AgentMode.BUILD, isDefault = true),
+        Entry("danger-full-access", AgentMode.AUTO)
+    )
+
     /** 按引擎标识取原生档位清单；null / 未知引擎 = 本体内置工作流。 */
     fun entriesFor(engine: String?): List<Entry> = when (engine) {
         AgentEngines.CLAUDE_CODE -> CLAUDE_CODE
         AgentEngines.CODEX -> CODEX
         AgentEngines.OPENCODE -> OPENCODE
+        AgentEngines.DEEPSEEK -> DEEPSEEK
         else -> BUILTIN
     }
 

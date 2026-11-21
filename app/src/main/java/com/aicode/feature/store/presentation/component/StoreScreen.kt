@@ -18,6 +18,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.aicode.feature.agent.presentation.component.engineBrandColor
+import com.aicode.feature.agent.presentation.component.engineShortLabel
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -25,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -82,6 +85,7 @@ internal fun StoreScreen(
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onInstall: (StoreItem, EngineTarget?) -> Unit,
+    onUninstallMcp: (StoreItem, EngineTarget) -> Unit = { _, _ -> },
     onInstallTeam: (TeamStoreItem, EngineTarget?) -> Unit,
     onInstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onUninstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
@@ -284,7 +288,9 @@ internal fun StoreScreen(
                         installed = item.id in state.installedIds,
                         installing = state.installingId == item.id,
                         installBusy = state.installingId != null,
+                        installedEngines = state.installedMcpEngines[item.id].orEmpty(),
                         onInstall = { target -> onInstall(item, target) },
+                        onUninstall = { target -> onUninstallMcp(item, target) },
                         onOpen = { detailItem = item }
                     )
                 }
@@ -605,12 +611,12 @@ private fun StoreItemCard(
     installed: Boolean,
     installing: Boolean,
     installBusy: Boolean,
+    installedEngines: Set<EngineTarget> = emptySet(),
     onInstall: (EngineTarget?) -> Unit,
+    onUninstall: (EngineTarget) -> Unit = {},
     onOpen: () -> Unit
 ) {
     val context = LocalContext.current
-    // 安装目标引擎：null = 内置引擎；外部引擎仅 Claude Code 支持技能，MCP 三引擎均可。
-    var target by remember(item.id) { mutableStateOf<EngineTarget?>(null) }
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.semanticColors.cardSurface,
@@ -677,23 +683,54 @@ private fun StoreItemCard(
                 )
             }
             Spacer(Modifier.size(6.dp))
-            if (!installed && !item.stdinUnsupported()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PluginEngineChip(
-                        label = "内置",
-                        selected = target == null,
-                        onClick = { target = null }
-                    )
-                    EngineTarget.entries.forEach { engine ->
+            // MCP：插件页同构的 per-engine 安装状态（每 chip = 该引擎的已装/安装/卸载）；
+            // 技能：单一存放点全引擎可用，不分引擎（不再展示目标选择 chips）；
+            // 专家团：仅内置与 CC 支持定义文件写入。
+            when {
+                item.stdinUnsupported() -> Unit
+                item.kind == StoreKind.MCP -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         PluginEngineChip(
-                            label = engine.label,
-                            selected = target == engine,
-                            onClick = { target = engine },
-                            enabled = engine == EngineTarget.CLAUDE_CODE || item.kind == StoreKind.MCP
+                            label = engineShortLabel(null),
+                            selected = installed,
+                            onClick = { if (!installed) onInstall(null) },
+                            enabled = !installBusy && !installed,
+                            accent = engineBrandColor(null)
+                        )
+                        EngineTarget.entries.forEach { engine ->
+                            val installedHere = engine in installedEngines
+                            PluginEngineChip(
+                                label = engineShortLabel(engine),
+                                selected = installedHere,
+                                onClick = {
+                                    if (installedHere) onUninstall(engine) else onInstall(engine)
+                                },
+                                enabled = !installBusy,
+                                accent = engineBrandColor(engine)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.size(2.dp))
+                }
+                item.kind == StoreKind.EXPERT -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        PluginEngineChip(
+                            label = engineShortLabel(null),
+                            selected = true,
+                            onClick = { if (!installed) onInstall(null) },
+                            enabled = !installBusy && !installed,
+                            accent = engineBrandColor(null)
+                        )
+                        PluginEngineChip(
+                            label = engineShortLabel(EngineTarget.CLAUDE_CODE),
+                            selected = false,
+                            onClick = { onInstall(EngineTarget.CLAUDE_CODE) },
+                            enabled = !installBusy,
+                            accent = engineBrandColor(EngineTarget.CLAUDE_CODE)
                         )
                     }
+                    Spacer(Modifier.size(2.dp))
                 }
-                Spacer(Modifier.size(2.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (item.detailUrl.isNotBlank()) {
@@ -721,7 +758,11 @@ private fun StoreItemCard(
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                     ) {
                         Text(
-                            text = stringResource(R.string.store_installed),
+                            text = if (item.kind == StoreKind.SKILL) {
+                                stringResource(R.string.store_installed_all_engines)
+                            } else {
+                                stringResource(R.string.store_installed)
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -734,7 +775,11 @@ private fun StoreItemCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    else -> TextButton(onClick = { onInstall(target) }, enabled = !installBusy) {
+                    // MCP 由上方引擎 chips 直接安装，不再需要单独按钮；技能/专家团的「内置」需按钮入口
+                    else -> TextButton(
+                        onClick = { onInstall(null) },
+                        enabled = !installBusy && item.kind != StoreKind.MCP
+                    ) {
                         if (installing) {
                             CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(Spacing.xs))
@@ -849,16 +894,18 @@ private fun TeamList(
                     } else {
                         var teamTarget by remember(team.fileName) { mutableStateOf<EngineTarget?>(null) }
                         Column(horizontalAlignment = Alignment.End) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 PluginEngineChip(
-                                    label = "内置",
+                                    label = engineShortLabel(null),
                                     selected = teamTarget == null,
-                                    onClick = { teamTarget = null }
+                                    onClick = { teamTarget = null },
+                                    accent = engineBrandColor(null)
                                 )
                                 PluginEngineChip(
-                                    label = EngineTarget.CLAUDE_CODE.label,
+                                    label = engineShortLabel(EngineTarget.CLAUDE_CODE),
                                     selected = teamTarget == EngineTarget.CLAUDE_CODE,
-                                    onClick = { teamTarget = EngineTarget.CLAUDE_CODE }
+                                    onClick = { teamTarget = EngineTarget.CLAUDE_CODE },
+                                    accent = engineBrandColor(EngineTarget.CLAUDE_CODE)
                                 )
                             }
                             TextButton(
@@ -904,9 +951,10 @@ private fun PluginList(
             )
             EngineTarget.entries.forEach { target ->
                 PluginEngineChip(
-                    label = target.label,
+                    label = engineShortLabel(target),
                     selected = state.pluginEngineFilter == target,
-                    onClick = { onEngineFilter(target) }
+                    onClick = { onEngineFilter(target) },
+                    accent = engineBrandColor(target)
                 )
             }
         }
@@ -985,7 +1033,7 @@ private fun PluginList(
                             plugin.engines.forEach { target ->
                                 val installed = target in state.installedPluginEngines[plugin.id].orEmpty()
                                 PluginEngineChip(
-                                    label = if (installed) "${target.label} ✓" else target.label,
+                                    label = if (installed) engineShortLabel(target) + " ✓" else engineShortLabel(target),
                                     selected = installed,
                                     onClick = {
                                         if (installed) {
@@ -994,7 +1042,8 @@ private fun PluginList(
                                             onInstall(plugin, target)
                                         }
                                     },
-                                    enabled = state.installingId == null
+                                    enabled = state.installingId == null,
+                                    accent = engineBrandColor(target)
                                 )
                             }
                         }
@@ -1005,26 +1054,34 @@ private fun PluginList(
     }
 }
 
-/** 引擎胶囊：既做筛选也做安装入口（插件卡片内按引擎逐个给出按钮）。 */
+/** 引擎胶囊：既做筛选也做安装入口（插件卡片内按引擎逐个给出按钮）。选中态用引擎品牌色。 */
 @Composable
 private fun PluginEngineChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    accent: Color? = null
 ) {
+    val brand = accent ?: MaterialTheme.colorScheme.primary
     Surface(
         shape = RoundedCornerShape(50),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.semanticColors.cardSurface,
-        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-        else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = when {
+            selected && accent != null -> brand
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.semanticColors.cardSurface
+        },
+        contentColor = when {
+            selected && accent != null -> Color.White
+            selected -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
         modifier = Modifier.clickable(enabled = enabled) { onClick() }
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
         )
     }
 }

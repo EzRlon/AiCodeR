@@ -33,6 +33,7 @@ fun providerBrandKey(provider: AIProviderConfig?): String? {
         com.aicode.feature.settings.domain.model.ProviderType.OPENAI -> "openai"
         com.aicode.feature.settings.domain.model.ProviderType.ANTHROPIC -> "anthropic"
         com.aicode.feature.settings.domain.model.ProviderType.GEMINI -> "google"
+        com.aicode.feature.settings.domain.model.ProviderType.DEEPSEEK -> "deepseek"
     }
 }
 

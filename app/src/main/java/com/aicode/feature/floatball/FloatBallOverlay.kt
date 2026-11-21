@@ -74,6 +74,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -538,11 +539,17 @@ class FloatBallOverlay(
         // 悬浮窗宿主是 Service（同样被语言 wrapper 包裹），isSystemInDarkTheme() 读冻结值，
         // 改读系统深浅实时镜像流（AIEditorApp.onConfigurationChanged 驱动）。
         val systemDark by themeSettings.systemDark.collectAsState(initial = false)
+        // SCHEDULED 的时段解析是挂起调用（DataStore 读取），用 produceState 承接；
+        // 模式或系统深浅变化时重算，时段边界内的自动翻转由仓库解析流的 30s 重算兜底。
         val darkTheme = when (mode) {
             AppThemeMode.AUTO -> systemDark
             AppThemeMode.DARK -> true
             AppThemeMode.BLACK -> true
             AppThemeMode.LIGHT -> false
+            AppThemeMode.SCHEDULED ->
+                produceState(initialValue = systemDark, mode, systemDark) {
+                    value = runCatching { themeSettings.resolveInitialDark() }.getOrDefault(systemDark)
+                }.value
         }
         AIEditorTheme(
             darkTheme = darkTheme,

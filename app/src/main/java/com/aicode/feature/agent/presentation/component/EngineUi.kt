@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.aicode.R
 import com.aicode.feature.agent.domain.engine.AgentEngines
+import com.aicode.feature.store.data.EngineTarget
 import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
@@ -43,6 +44,7 @@ internal fun engineDisplayName(engine: String?): String = when (engine) {
     AgentEngines.CLAUDE_CODE -> "Claude Code"
     AgentEngines.CODEX -> "Codex"
     AgentEngines.OPENCODE -> "OpenCode"
+    AgentEngines.DEEPSEEK -> "DeepSeek"
     else -> engine
 }
 
@@ -51,8 +53,36 @@ internal fun engineBadgeLabel(engine: String?): String? = when (engine) {
     AgentEngines.CLAUDE_CODE -> "CC"
     AgentEngines.CODEX -> "CX"
     AgentEngines.OPENCODE -> "OC"
+    AgentEngines.DEEPSEEK -> "DS"
     else -> null
 }
+
+/** 商店/选择器等窄空间的引擎短名（内置引擎有名字，外部引擎用双字徽章）。 */
+internal fun engineShortLabel(engine: String?): String = engineBadgeLabel(engine) ?: "内置"
+
+/**
+ * 引擎品牌色（商店选择器、会话徽章等处的引擎识别色）。
+ * 不随主题变：暗色下直接铺底 + 白字，亮色下降饱和处理由调用方控制透明度。
+ */
+internal fun engineBrandColor(engine: String?): Color = when (engine) {
+    AgentEngines.CLAUDE_CODE -> Color(0xFFD97757)
+    AgentEngines.CODEX -> Color(0xFF10A37F)
+    AgentEngines.OPENCODE -> Color(0xFF8B7CF6)
+    AgentEngines.DEEPSEEK -> Color(0xFF4D6BFE)
+    else -> Color(0xFF5A7BD8)
+}
+
+/** 商店安装目标 → 会话引擎 id 的映射（品牌色/短名复用同源）。 */
+internal fun EngineTarget.toEngineId(): String = when (this) {
+    EngineTarget.CLAUDE_CODE -> AgentEngines.CLAUDE_CODE
+    EngineTarget.CODEX -> AgentEngines.CODEX
+    EngineTarget.OPENCODE -> AgentEngines.OPENCODE
+    EngineTarget.DEEPSEEK -> AgentEngines.DEEPSEEK
+}
+
+internal fun engineShortLabel(target: EngineTarget): String = engineShortLabel(target.toEngineId())
+
+internal fun engineBrandColor(target: EngineTarget): Color = engineBrandColor(target.toEngineId())
 
 /** 引擎标识图标：内置=星形，CLI=品牌 logo / 终端图标。[tint] 为 null 时按次级文字色着色。 */
 @Composable
@@ -72,6 +102,7 @@ internal fun EngineMarkIcon(
             tint = iconTint,
             modifier = modifier.size(size)
         )
+        AgentEngines.DEEPSEEK -> ModelLogoIcon(modelName = "deepseek", size = size, modifier = modifier)
         null -> Icon(
             Icons.Rounded.AutoAwesome,
             contentDescription = null,
@@ -87,9 +118,9 @@ internal fun EngineMarkIcon(
     }
 }
 
-/** 引擎切换四选项（会话维度；null=内置引擎）。 */
+/** 引擎切换选项（会话维度；null=内置引擎）。 */
 internal val selectableEngines: List<String?> =
-    listOf(null, AgentEngines.CLAUDE_CODE, AgentEngines.CODEX, AgentEngines.OPENCODE)
+    listOf(null, AgentEngines.CLAUDE_CODE, AgentEngines.CODEX, AgentEngines.OPENCODE, AgentEngines.DEEPSEEK)
 
 /**
  * 模型弹窗顶部的引擎切换行：四个胶囊一排，当前高亮。

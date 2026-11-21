@@ -434,6 +434,8 @@
     <string name="theme_dark">深色</string>
     <string name="theme_black">极黑</string>
     <string name="theme_light">浅色</string>
+    <string name="theme_scheduled">定时</string>
+    <string name="theme_schedule_desc">深色时段（跨午夜支持）</string>
     <string name="theme_mode_section">明暗模式</string>
     <string name="theme_preset_section">配色方案</string>
     <string name="theme_preset_default">默认蓝</string>
@@ -441,6 +443,9 @@
     <string name="theme_preset_graphite">石墨</string>
     <string name="theme_preset_forest">森林</string>
     <string name="theme_preset_crimson">鲜红</string>
+    <string name="theme_preset_violet">紫罗兰</string>
+    <string name="theme_preset_ocean">海洋</string>
+    <string name="theme_preset_amber">琥珀</string>
     <string name="theme_dynamic_color">动态取色</string>
     <string name="theme_dynamic_color_desc">从系统壁纸提取配色，开启后配色方案不再生效</string>
     <string name="settings_background_image">背景图</string>
@@ -616,8 +621,15 @@
     <string name="cli_model_builtin_group">引擎模型</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
+    <string name="engine_deepseek_unavailable">DeepSeek 引擎未就绪：请先在容器中安装 DeepSeek Harness（可在设置 → 模型与引擎中一键安装），或把会话切回内置引擎</string>
     <string name="engine_mode_note_codex_build">Codex 引擎无逐次审批：构建模式在工作区内自动执行，区外被拦截</string>
     <string name="engine_mode_note_codex_plan">Codex 引擎以只读沙箱执行，任何写入都会被底层拒绝</string>
+    <string name="engine_mode_deepseek_read_only">只读沙箱（read-only 档，任何写入都被底层拒绝）</string>
+    <string name="engine_mode_deepseek_workspace_write">工作区内自动执行，区外调用被拒绝（headless 无逐次审批）</string>
+    <string name="engine_mode_deepseek_full_access">完整系统权限自动执行（danger-full-access 档，慎用）</string>
+    <string name="engine_mode_desc_deepseek_read_only">dsh 档位 read-only：只读沙箱执行，任何写入都会被底层拒绝</string>
+    <string name="engine_mode_desc_deepseek_workspace_write">dsh 档位 workspace-write：工作区路径内可写，区外写入与联网外呼被拒绝</string>
+    <string name="engine_mode_desc_deepseek_full_access">dsh 档位 danger-full-access：全系统可写，无边界防护，仅在明确需要时使用</string>
 
     <!-- Claude Code 原生权限档位（permission-mode 的六个取值） -->
     <string name="engine_mode_claude_manual">默认询问</string>
@@ -1966,6 +1978,7 @@
     <string name="store_install">安装</string>
     <string name="store_installing">安装中…</string>
     <string name="store_installed">已安装</string>
+    <string name="store_installed_all_engines">已装 · 全引擎可用</string>
     <string name="store_load_more">加载更多</string>
     <string name="store_empty">没有找到内容，试试更换关键词</string>
     <string name="store_error_load">加载失败，请检查网络</string>

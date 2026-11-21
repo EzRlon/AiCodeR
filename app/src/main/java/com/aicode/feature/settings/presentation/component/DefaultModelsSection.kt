@@ -830,6 +830,7 @@ private fun CliEngineRows(
 private fun engineIdOf(agentId: String): String = when (agentId) {
     "claude" -> AgentEngines.CLAUDE_CODE
     "codex" -> AgentEngines.CODEX
+    "deepseek" -> AgentEngines.DEEPSEEK
     else -> AgentEngines.OPENCODE
 }
 

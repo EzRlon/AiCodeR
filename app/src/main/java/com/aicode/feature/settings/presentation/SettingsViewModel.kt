@@ -719,6 +719,14 @@ class SettingsViewModel @Inject constructor(
     private val _themeMode = MutableStateFlow(AppThemeMode.AUTO)
     val themeMode: StateFlow<AppThemeMode> = _themeMode.asStateFlow()
 
+    /** 定时深浅的深色时段起点（HH:mm，跨午夜支持）。 */
+    private val _themeScheduleStart = MutableStateFlow(ThemeSettingsRepository.DEFAULT_DARK_START)
+    val themeScheduleStart: StateFlow<String> = _themeScheduleStart.asStateFlow()
+
+    /** 定时深浅的深色时段终点（HH:mm）。 */
+    private val _themeScheduleEnd = MutableStateFlow(ThemeSettingsRepository.DEFAULT_DARK_END)
+    val themeScheduleEnd: StateFlow<String> = _themeScheduleEnd.asStateFlow()
+
     private val _themePresetId = MutableStateFlow<String?>(null)
     val themePresetId: StateFlow<String?> = _themePresetId.asStateFlow()
 
@@ -1230,6 +1238,18 @@ class SettingsViewModel @Inject constructor(
             launch {
                 themeSettingsRepository.themeModeFlow.collectLatest {
                     _themeMode.value = it
+                }
+            }
+
+            launch {
+                themeSettingsRepository.scheduleDarkStartFlow.collectLatest {
+                    _themeScheduleStart.value = it
+                }
+            }
+
+            launch {
+                themeSettingsRepository.scheduleDarkEndFlow.collectLatest {
+                    _themeScheduleEnd.value = it
                 }
             }
 
@@ -2296,6 +2316,18 @@ class SettingsViewModel @Inject constructor(
     fun setThemePreset(id: String) {
         viewModelScope.launch {
             themeSettingsRepository.setThemePresetId(id)
+        }
+    }
+
+    fun setThemeScheduleStart(value: String) {
+        viewModelScope.launch {
+            themeSettingsRepository.setScheduleDarkStart(value)
+        }
+    }
+
+    fun setThemeScheduleEnd(value: String) {
+        viewModelScope.launch {
+            themeSettingsRepository.setScheduleDarkEnd(value)
         }
     }
 

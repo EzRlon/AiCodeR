@@ -17,6 +17,12 @@ import javax.inject.Singleton
  *
  * 一律调引擎自己的 CLI 而不是手写其插件目录：各引擎的缓存布局是内部实现，
  * 手写等于复刻私有格式，上游改一次就失效。
+ *
+ * DeepSeek（dsh）的特殊性：`dsh plugin add/remove/ls` 是 profile 内 pnpm 转发，
+ * 命令会先 boot profile —— 而 profile boot 强依赖有效 LLM 凭据（无 Key 时直接
+ * MISSING_CREDENTIAL/AUTH 退出，pnpm 根本不执行，实测）。因此安装命令带
+ * `--profile headless` 且凭据缺失时翻译成「先完成引擎认证」的可操作指引；
+ * 商店 MCP 则不依赖凭据（由 DeepSeekBridge 的 --patch 层管理）。
  */
 @Singleton
 class EnginePluginInstaller @Inject constructor(
@@ -55,6 +61,8 @@ class EnginePluginInstaller @Inject constructor(
                 // OpenCode 的插件就是 npm 包/Git 仓库，无需 marketplace 步骤
                 run(target, "plugin", "add", item.installRef)
             }
+
+            EngineTarget.DEEPSEEK -> runDshPlugin("plugin", "add", item.installRef)
         }
         FileLogger.i(TAG, "已安装插件 ${item.name} → ${target.label}")
     }
@@ -70,6 +78,9 @@ class EnginePluginInstaller @Inject constructor(
 
             EngineTarget.OPENCODE ->
                 run(target, "plugin", "remove", item.installRef)
+
+            EngineTarget.DEEPSEEK ->
+                runDshPlugin("plugin", "remove", item.installRef)
         }
         FileLogger.i(TAG, "已卸载插件 ${item.name} ← ${target.label}")
     }
@@ -80,6 +91,7 @@ class EnginePluginInstaller @Inject constructor(
             EngineTarget.CLAUDE_CODE -> runRaw(target, "plugin", "list", "--json")
             EngineTarget.CODEX -> runRaw(target, "plugin", "list")
             EngineTarget.OPENCODE -> runRaw(target, "plugin", "list")
+            EngineTarget.DEEPSEEK -> runRaw(target, "--profile", "headless", "plugin", "ls")
         }
         if (result.exitCode != 0) return emptySet()
         return result.output.lineSequence()
@@ -135,6 +147,26 @@ class EnginePluginInstaller @Inject constructor(
             throw IllegalStateException(
                 "${target.label} 安装失败（退出码 ${result.exitCode}）" +
                     if (detail.isNotEmpty()) "：$detail" else ""
+            )
+        }
+    }
+
+    /**
+     * dsh 的插件子命令：`--profile` 必须紧跟在 `dsh` 后（子命令的 option），boot
+     * profile 需要有效凭据，无凭据/无效 Key 时把底层报错翻译成可操作指引。
+     */
+    private suspend fun runDshPlugin(vararg args: String) {
+        try {
+            run(EngineTarget.DEEPSEEK, "--profile", "headless", *args)
+        } catch (e: IllegalStateException) {
+            val m = e.message ?: ""
+            throw IllegalStateException(
+                if ("MISSING_CREDENTIAL" in m || "AUTH" in m || "api key" in m.lowercase() || "Token is invalid" in m) {
+                    "DeepSeek 插件管理需要有效的 DeepSeek 凭据（dsh 启动 profile 时校验）：" +
+                        "请先完成引擎认证（设置 → 模型 配置 Key，或容器 ~/.dsh/.env 写入 DEEPSEEK_API_KEY），再安装插件"
+                } else {
+                    m
+                }
             )
         }
     }

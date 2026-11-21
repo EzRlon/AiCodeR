@@ -232,6 +232,9 @@ class MainActivity : ComponentActivity() {
                 AppThemeMode.AUTO -> systemDark
                 AppThemeMode.DARK, AppThemeMode.BLACK -> true
                 AppThemeMode.LIGHT -> false
+                // 定时模式冷启动按当前时刻解析（深色时段内用深色底）
+                AppThemeMode.SCHEDULED ->
+                    kotlinx.coroutines.runBlocking { themeSettings.resolveInitialDark() }
             }
             when {
                 mode == AppThemeMode.BLACK -> setTheme(R.style.Theme_AICode_BlackBg)
@@ -291,16 +294,19 @@ class MainActivity : ComponentActivity() {
             // AUTO 模式的系统深浅判定不用 isSystemInDarkTheme()：语言 wrapper 冻结 uiMode、
             // configChanges 含 uiMode 不重建，二者叠加导致系统自动切换时该值不更新。
             // 改读 AIEditorApp.onConfigurationChanged 实时刷新的镜像流。
-            val systemDarkTheme by themeSettings.systemDark.collectAsStateWithLifecycle()
+            // 运行时主题经仓库解析流统一出（含 SCHEDULED 模式的 30s 时钟重算：
+            // 跨过自定义时段边界时自动翻转深浅，无需 Activity 重建）。
+            // initial 跟随系统深浅：流首发射前的短暂窗口不闪浅色（深色系统用户）。
+            val resolvedTheme by themeSettings.resolvedThemeFlow.collectAsStateWithLifecycle(
+                initialValue = com.aicode.feature.settings.data.repository.ResolvedUiTheme(
+                    dark = themeSettings.systemDark.value,
+                    black = false
+                )
+            )
             val themeMode by themeSettings.themeModeFlow.collectAsStateWithLifecycle(initialValue = AppThemeMode.AUTO)
             val themePresetId by themeSettings.themePresetIdFlow.collectAsStateWithLifecycle(initialValue = null)
             val dynamicColor by themeSettings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
-            val darkTheme = when (themeMode) {
-                AppThemeMode.AUTO -> systemDarkTheme
-                AppThemeMode.DARK -> true
-                AppThemeMode.BLACK -> true
-                AppThemeMode.LIGHT -> false
-            }
+            val darkTheme = resolvedTheme.dark
             val view = LocalView.current
             // 状态栏/导航栏图标色跟随主题；回到前台时再校正一遍——个别 ROM 会在后台重置系统栏外观，
             // 只靠组合期的设置不足以覆盖（“切浅色后字色/图标色没反向”的加强）。
@@ -330,7 +336,7 @@ class MainActivity : ComponentActivity() {
                 darkTheme = darkTheme,
                 preset = AppThemePreset.findById(themePresetId),
                 dynamicColor = dynamicColor,
-                amoledBlack = themeMode == AppThemeMode.BLACK
+                amoledBlack = resolvedTheme.black
             ) {
                 // 窗口底色与当前主题背景同步（含强制深浅与自定义预设）：启动窗/重建过渡到首帧
                 // 之间露出的窗口区域不闪色（“切回闪光/页面顶部异常”的加强）。

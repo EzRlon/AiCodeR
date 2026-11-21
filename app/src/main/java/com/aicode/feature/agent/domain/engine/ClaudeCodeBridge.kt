@@ -1030,7 +1030,7 @@ const TOKEN = process.env.PERMISSION_BRIDGE_TOKEN || '';
 const TIMEOUT_MS = 5 * 60 * 1000;
 
 const MEMORY_DIRS = [path.join(HOME, 'memory')].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'memory')] : []);
-const SKILL_DIRS = [path.join(HOME, 'skills')].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'skills')] : []);
+const SKILL_DIRS = [path.join(HOME, 'skills'), '/root/.claude/skills'].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'skills')] : []);
 const RULE_FILES = [path.join(HOME, 'AGENTS.md'), path.join(HOME, 'CLAUDE.md')]
   .concat(PROJECT ? [path.join(PROJECT, '.aicode', 'AGENTS.md'), path.join(PROJECT, '.aicode', 'CLAUDE.md')] : []);
 

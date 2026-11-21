@@ -29,7 +29,8 @@ import java.io.ByteArrayInputStream
 
 /**
  * 小窗内的 VNC 画面：WebView 加载 assets/vnc（noVNC），经 WebViewAssetLoader 的
- * https 虚拟域以支持 ES module，再连本机回环 ws://127.0.0.1:6080（容器内 websockify）。
+ * https 虚拟域以支持 ES module，再连本机回环 ws://127.0.0.1:6081（容器内 websockify；
+ * 6080 已被宿主自身 noVNC 占用，PRoot 共享网络栈，必须错开）。
  * https 页面连明文 ws 属 mixed content，需 MIXED_CONTENT_ALWAYS_ALLOW（目标仅 127.0.0.1）。
  * 页面与 App 之间用 VncBridge 同步连接状态与剪贴板。
  */
@@ -170,7 +171,7 @@ internal class VncWebViewHolder(
         return WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            // 保留 ALWAYS_ALLOW：https 虚拟域页面连 ws://127.0.0.1:6080 属 mixed content，
+            // 保留 ALWAYS_ALLOW：https 虚拟域页面连 ws://127.0.0.1:6081 属 mixed content，
             // 降为 COMPATIBILITY_MODE 会直接断掉 VNC 连接（不是配置偏好问题）。
             // 改由下方「只允许加载自身资产」封住滥用面：页面永远只能是我们自己的 vnc 资产，
             // 外部内容既加载不到、也导航不过去，mixed content 策略因此无外部子资源可利用。

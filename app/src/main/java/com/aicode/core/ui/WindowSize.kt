@@ -47,8 +47,8 @@ object ContentWidth {
     val readable = 800.dp
 
     /** 侧边栏宽度：窄屏到紧凑档（验收反馈：整个左侧弹出卡片再缩窄）；大屏相应收窄。 */
-    val drawerCompact = 200.dp
-    val drawerWide = 220.dp
+    val drawerCompact = 216.dp
+    val drawerWide = 236.dp
 
     /**
      * 面板外标签列的悬出宽度：标签左直边贴面板右缘、整体落在面板外的 scrim 上（图1 定稿）。

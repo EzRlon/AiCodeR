@@ -30,7 +30,7 @@
 - AI 配置目录为 `~/.aicode`；工具完整输出日志在 `~/.aicode/tool-output/...`。
 
 ## 容器图形环境
-- 本地容器的图形环境由 App 集成管理：Xvfb（显示 :1）+ x11vnc（:5901）+ websockify（:6080），App 的 VNC 悬浮小窗（仅本地 PRoot 模式可用）直接展示容器画面；服务未就绪时会自动拉起，无需手动安装。
+- 本地容器的图形环境由 App 集成管理：Xvfb（显示 :1）+ x11vnc（:5901）+ websockify（:6081，宿主自身 noVNC 占 6080，必须错开），App 的 VNC 悬浮小窗（仅本地 PRoot 模式可用）直接展示容器画面；服务未就绪时会自动拉起，无需手动安装。
 - 需要在容器里运行图形程序时用 `DISPLAY=:1`；不要安装或查找 `vncserver`/tigervnc 等其它 VNC 实现，也不要因找不到 `vncserver` 就断言「没有 VNC 服务」——先检查 `command -v x11vnc websockify`，缺失时引导用户进终端执行 `aicode` 补装容器图形组件。
 
 ## 子代理

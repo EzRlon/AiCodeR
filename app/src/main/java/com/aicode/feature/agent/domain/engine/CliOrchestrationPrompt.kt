@@ -66,8 +66,9 @@ class CliOrchestrationPrompt @Inject constructor(
                 AgentDefinitionRepository.matchesDefinitionName(it.definition, member)
             }?.definition?.description.orEmpty()
         }
-        // Codex 没有自定义成员派发能力：只给出成员分工参考，不诱导它调用不存在的 Task。
-        if (engine == AgentEngines.CODEX) {
+        // Codex / DeepSeek（dsh headless 无子代理映射通道）：只给出成员分工参考，
+        // 不诱导它们调用不存在的派发入口。
+        if (engine == AgentEngines.CODEX || engine == AgentEngines.DEEPSEEK) {
             return@withContext OrchestrationPolicy.BASE + "\n\n" + OrchestrationPolicy.teamSection(
                 teamName = team.name,
                 teamPrompt = team.prompt,

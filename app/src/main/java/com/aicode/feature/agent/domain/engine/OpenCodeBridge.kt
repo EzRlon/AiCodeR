@@ -156,13 +156,13 @@ class OpenCodeBridge @Inject constructor(
             }
         }.getOrNull()
 
-    /** 按 id 解析 App 供应商（仅 OpenAI/Anthropic 型且启用可用；其余返回 null）。 */
+    /** 按 id 解析 App 供应商（仅 OpenAI/Anthropic/DeepSeek 型且启用可用；其余返回 null）。 */
     private suspend fun resolveProvider(providerId: String?): com.aicode.feature.settings.domain.model.AIProviderConfig? {
         if (providerId.isNullOrBlank()) return null
         return runCatching {
             aiProviderRepository.getAllProviders().first().firstOrNull {
                 it.id == providerId &&
-                    (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC) &&
+                    (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC || it.type == ProviderType.DEEPSEEK) &&
                     it.isEnabled && it.hasUsableApiKey
             }
         }.getOrNull()
@@ -279,10 +279,11 @@ class OpenCodeBridge @Inject constructor(
             // App 内已配 key 时透传（opencode 识别标准 provider 环境变量，实测 OPENAI_API_KEY 生效）；
             // 会话选定供应商时只透传该供应商的 Key，避免误用其它供应商的凭据
             if (selectedProvider != null) {
-                if (selectedProvider.type == ProviderType.OPENAI) {
-                    put("OPENAI_API_KEY", selectedProvider.firstUsableApiKey)
-                } else {
-                    put("ANTHROPIC_API_KEY", selectedProvider.firstUsableApiKey)
+                when (selectedProvider.type) {
+                    ProviderType.OPENAI -> put("OPENAI_API_KEY", selectedProvider.firstUsableApiKey)
+                    // opencode 内置 deepseek provider（models.dev）认 DEEPSEEK_API_KEY
+                    ProviderType.DEEPSEEK -> put("DEEPSEEK_API_KEY", selectedProvider.firstUsableApiKey)
+                    else -> put("ANTHROPIC_API_KEY", selectedProvider.firstUsableApiKey)
                 }
             } else {
                 transmittableProvider(ProviderType.OPENAI)?.let { p ->
@@ -290,6 +291,9 @@ class OpenCodeBridge @Inject constructor(
                 }
                 transmittableProvider(ProviderType.ANTHROPIC)?.let { p ->
                     put("ANTHROPIC_API_KEY", p.firstUsableApiKey)
+                }
+                transmittableProvider(ProviderType.DEEPSEEK)?.let { p ->
+                    put("DEEPSEEK_API_KEY", p.firstUsableApiKey)
                 }
             }
         }

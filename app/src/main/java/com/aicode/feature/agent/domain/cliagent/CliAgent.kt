@@ -57,7 +57,29 @@ data class CliAgent(
             "command -v npm >/dev/null 2>&1; " +
         "}; " +
         "ensure_npm || { echo 'Node.js 自动安装失败：请检查网络/代理后重试'; exit 127; }; " +
+        // 引擎包可能要求比发行版源更高的 Node（实例：dsh 0.2.2-rc.x 要求 >=24.9.0，Debian
+        // bookworm 自带 18/20）。低版本 npm 装这类包会报误导性的 "Invalid response body /
+        // ENOENT"（实为版本过低，双源同样报错，已实测），且旧逻辑在 npm 已存在时直接跳过
+        // 一切版本检查。这里安装前读包的 engines.node 并按需升级；取不到要求（无网络/包
+        // 无声明）时跳过，由安装本身的报错兜底。
+        "ensure_node_engines() { " +
+            "_pkg=\"\$1\"; " +
+            "_req=\$(npm view \"\$_pkg\" engines.node 2>/dev/null || true); " +
+            "[ -z \"\$_req\" ] && return 0; " +
+            "_need=\$(printf '%s' \"\$_req\" | grep -oE '[0-9]+(\\.[0-9]+)*' | head -1); " +
+            "[ -z \"\$_need\" ] && return 0; " +
+            "if [ ! -f \"\$HOME/.aicode/lib/env-common.sh\" ]; then return 0; fi; " +
+            ". \"\$HOME/.aicode/lib/env-common.sh\"; detect_pmgr; " +
+            "env_node_ok \"\$_need\" 2>/dev/null && return 0; " +
+            "echo \"当前 Node \$(node -v 2>/dev/null) 低于 \$_pkg 的 engines 要求（\$_req），正在自动升级 Node…\"; " +
+            "env_ensure_node \"\$_need\" || { echo \"Node 自动升级到 \$_need 失败：该包要求 \$_req。请在终端运行 aicode 菜单升级 Node 后重试\"; exit 126; }; " +
+            "hash -r 2>/dev/null || true; " +
+            "env_node_ok \"\$_need\" 2>/dev/null && return 0; " +
+            "echo \"Node 升级后仍不满足 \$_req（当前 \$(node -v 2>/dev/null)），请手动升级后重试\"; exit 126; " +
+        "}; " +
+        "ensure_node_engines \"$npmPackage\"; " +
         "echo \"Node: \$(node -v 2>/dev/null) / npm: \$(npm -v 2>/dev/null)\"; " +
+        "echo \"开始安装 $npmPackage：首次安装需下载较多依赖，视网络带宽约 1-5 分钟，请勿关闭页面\"; " +
         "REG=https://registry.npmmirror.com; " +
             "if command -v curl >/dev/null 2>&1; then " +
             "curl -fsI --max-time 4 \"\$REG/\" >/dev/null 2>&1 || REG=https://registry.npmjs.org; " +
@@ -184,6 +206,15 @@ object CliAgentCatalog {
             command = "opencode",
             websiteUrl = "https://opencode.ai",
             loginUrl = "https://opencode.ai/auth"
+        ),
+        CliAgent(
+            id = "deepseek",
+            displayName = "DeepSeek",
+            npmPackage = "@deepseek-ai/dsh",
+            version = "0.2.2-rc.5",
+            command = "dsh",
+            websiteUrl = "https://github.com/deepseek-ai/deepseek-harness",
+            loginUrl = "https://platform.deepseek.com/api_keys"
         )
     )
 }

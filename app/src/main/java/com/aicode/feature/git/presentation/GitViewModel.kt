@@ -854,6 +854,8 @@ class GitViewModel @Inject constructor(
             AppThemeMode.DARK -> true
             AppThemeMode.BLACK -> true
             AppThemeMode.LIGHT -> false
+            AppThemeMode.SCHEDULED ->
+                runCatching { themeSettings.resolveInitialDark() }.getOrDefault(systemDark)
         }
     }
 

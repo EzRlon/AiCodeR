@@ -13,6 +13,7 @@ enum class StoreKind { SKILL, MCP, EXPERT, PLUGIN }
  * Claude Code 与 Codex 都走 marketplace 源，但源格式不同；OpenCode 无 marketplace，只能装 npm 包。
  */
 enum class EngineTarget(val label: String, val cli: String) {
+    DEEPSEEK("DeepSeek", "dsh"),
     CLAUDE_CODE("Claude Code", "claude"),
     CODEX("Codex", "codex"),
     OPENCODE("OpenCode", "opencode")

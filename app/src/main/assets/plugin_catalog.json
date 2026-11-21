@@ -705,6 +705,46 @@
       "installRef": "unit-testing@claude-code-workflows",
       "marketplaceSource": "wshobson/agents",
       "marketplaceName": "claude-code-workflows"
+    },
+    {
+      "id": "dsh-tool-cordis",
+      "name": "@deepseek-ai/dsh-tool-cordis",
+      "description": "Introspect the dsh Cordis runtime and mount/unmount plugins live from a session (official DeepSeek toolset)",
+      "version": "0.0.1-rc.1",
+      "engines": [
+        "deepseek"
+      ],
+      "installRef": "@deepseek-ai/dsh-tool-cordis"
+    },
+    {
+      "id": "dsh-agent-preset",
+      "name": "@deepseek-ai/dsh-agent-preset",
+      "description": "Declare agent capability bundles (models, tools, plugins) as Cordis YAML presets for dsh (official DeepSeek package)",
+      "version": "0.1.7-alpha.1",
+      "engines": [
+        "deepseek"
+      ],
+      "installRef": "@deepseek-ai/dsh-agent-preset"
+    },
+    {
+      "id": "dsh-shell-env",
+      "name": "@deepseek-ai/dsh-shell-env",
+      "description": "A DSH_* shell environment registry: read/write env vars that persist across dsh sessions (official DeepSeek package)",
+      "version": "0.0.1-rc.3",
+      "engines": [
+        "deepseek"
+      ],
+      "installRef": "@deepseek-ai/dsh-shell-env"
+    },
+    {
+      "id": "ds-balance",
+      "name": "ds-balance",
+      "description": "DeepSeek API balance and per-session cost tracking plugin for dsh (community)",
+      "version": "0.2.4",
+      "engines": [
+        "deepseek"
+      ],
+      "installRef": "ds-balance"
     }
   ]
 }

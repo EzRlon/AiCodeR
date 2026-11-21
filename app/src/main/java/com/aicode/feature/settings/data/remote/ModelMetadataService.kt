@@ -279,6 +279,7 @@ class ModelMetadataService @Inject constructor(
             )
             ProviderType.ANTHROPIC -> listOf("anthropic", "google-vertex-anthropic")
             ProviderType.GEMINI -> listOf("google", "google-vertex")
+            ProviderType.DEEPSEEK -> listOf("deepseek")
         }
 
         /** 在 [catalog]（键大小写已由调用方对齐）里按候选顺序查找：先偏好 provider，再全目录同名键。 */

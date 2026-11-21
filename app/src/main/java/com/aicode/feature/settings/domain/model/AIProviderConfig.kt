@@ -145,7 +145,7 @@ fun AIProviderConfig.sanitized(): AIProviderConfig = copy(
 )
 
 enum class ProviderType {
-    OPENAI, ANTHROPIC, GEMINI
+    OPENAI, ANTHROPIC, GEMINI, DEEPSEEK
 }
 
 /** 默认触发多 Key 自动切换的 HTTP 状态码：鉴权（401）、计费/额度（402）、权限（403）、限流（429）。 */

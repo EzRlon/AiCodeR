@@ -29,12 +29,19 @@ sealed interface VncServiceState {
 }
 
 /**
- * 容器内 VNC 服务（Xvfb :1 + x11vnc :5901 + websockify :6080）的幂等拉起与探测。
+ * 容器内 VNC 服务（Xvfb :1 起 + x11vnc :5901 + websockify :6081）的幂等拉起与探测。
  *
  * 仅本地 PRoot 容器模式可用：PRoot 与 App 共享网络命名空间，App 内 WebView 直接连
- * 127.0.0.1:6080 即可拿到容器画面；远程 SSH 模式下 127.0.0.1 是服务器侧，画面回不到手机。
- * 端口约定（Xvfb :1 / x11vnc :5901 / websockify :6080）与容器内其他图形工具链路兼容，避免端口冲突；
- * Xvfb -nolock 与 x11vnc -noshm 是 PRoot 环境的硬性参数（无 /tmp 锁文件与 SysV shm）。
+ * 127.0.0.1:6081 即可拿到容器画面；远程 SSH 模式下 127.0.0.1 是服务器侧，画面回不到手机。
+ * 端口约定（Xvfb :1 起 / x11vnc :5901 / websockify :6081）：websockify 必须用 6081 ——
+ * PRoot 与宿主共享网络栈，宿主侧自身的 noVNC 服务占用 6080，容器内绑 6080 必然
+ * EADDRINUSE（实测），且宿主 6080 会让 [probeRunning] 误报就绪；x11vnc -noshm
+ * 是 PRoot 环境的硬性参数（不支持 SysV shm，shmget 直接 ENOSYS）。
+ * Xvfb 显示号自适应：异常退出的 Xvfb 残留进程会永久占住抽象命名空间 socket
+ * （不落盘，删锁文件无效；xtrans 在抽象 socket 绑定失败后不回退 filesystem socket，
+ * 本机 Xvfb 也不支持 -nolisten abstract），Xvfb 直接退出 —— 故按号探测，
+ * 绑不上且号上无活 X 就换 :2/:3，实际显示号落盘 /root/.aicode-vnc-display 供
+ * [resizeDisplay] 跟随。
  * websockify 与 x11vnc 均只绑本机回环，画面流不暴露给局域网。
  */
 @Singleton
@@ -54,10 +61,10 @@ class VncServiceController @Inject constructor(
         executionModeHolder.currentMode() == ExecutionMode.LOCAL_PROOT
 
     /**
-     * 轻量探测服务是否在跑。websockify 是本机回环 6080 的唯一预期监听者（PRoot 与 App
-     * 共享网络命名空间），用本地 TCP 连接探测代替每轮一次的容器内 pgrep：语义等价，
-     * 聊天页存续期间的高频自动弹出探测不再唤醒容器执行命令。容器未就绪/远程模式
-     * 连不上，返回 false，不会触发 rootfs 解压等初始化。
+     * 轻量探测服务是否在跑。探测 6081（容器 websockify 专用端口；6080 已被宿主自身
+     * noVNC 占用，探它会永远误报就绪），用本地 TCP 连接探测代替每轮一次的容器内
+     * pgrep：语义等价，聊天页存续期间的高频自动弹出探测不再唤醒容器执行命令。
+     * 容器未就绪/远程模式连不上，返回 false，不会触发 rootfs 解压等初始化。
      */
     suspend fun probeRunning(): Boolean {
         if (!isSupported()) return false
@@ -77,9 +84,16 @@ class VncServiceController @Inject constructor(
     suspend fun resizeDisplay(width: Int, height: Int) {
         if (!isSupported()) return
         if (width < 320 || height < 320) return
+        // 显示号由 HOLD_SCRIPT 落盘（Xvfb 自适应后可能是 :2/:3）；读不到回退 :1。
+        val display = runCatching {
+            commandEngine.runCommandSync(
+                command = "cat /root/.aicode-vnc-display 2>/dev/null",
+                timeoutMs = RESIZE_TIMEOUT_MS
+            ).trim().takeIf { it.matches(Regex("\\d+")) }
+        }.getOrNull() ?: "1"
         runCatching {
             commandEngine.runCommandSync(
-                command = "DISPLAY=:1 xrandr --fb ${width}x$height",
+                command = "DISPLAY=:$display xrandr --fb ${width}x$height",
                 timeoutMs = RESIZE_TIMEOUT_MS
             )
         }.onFailure { FileLogger.w(TAG, "调整 VNC 分辨率失败: ${width}x$height", it) }
@@ -98,35 +112,51 @@ class VncServiceController @Inject constructor(
     suspend fun startAndHold() {
         if (!isSupported()) return
         var everReady = false
+        var consecutiveFailures = 0
         while (currentCoroutineContext().isActive) {
             _state.value = VncServiceState.Preparing
-            // 先清孤儿：旧会话被强杀后 websockify 可能仍占 6080，导致本次 bind 失败。
+            // 先清孤儿：旧会话被强杀后 websockify 可能仍占 6081，导致本次 bind 失败。
             // 清理必须独立会话执行：HOLD_SCRIPT 以 sh -c 内联运行，命令行含 "websockify"
             // 明文，同脚本内 pkill -f "[w]ebsockify" 会命中父 shell 自杀（v5 实机验证的教训）。
             runCatching {
                 commandEngine.runCommandSync(command = CLEANUP_SCRIPT, timeoutMs = CLEANUP_TIMEOUT_MS)
             }.onFailure { FileLogger.w(TAG, "VNC 孤儿清理失败: ${it.message}") }
             var becameReady = false
+            var failReason: String? = null
             commandEngine.runCommandStream(
                 command = HOLD_SCRIPT,
                 timeoutMs = HOLD_TIMEOUT_MS,
             ).collect { event ->
                 when (event) {
-                    is CommandEvent.Line -> if (event.text.contains(READY_MARKER)) {
-                        becameReady = true
-                        everReady = true
-                        _state.value = VncServiceState.Ready
+                    is CommandEvent.Line -> when {
+                        event.text.contains(READY_MARKER) -> {
+                            becameReady = true
+                            everReady = true
+                            _state.value = VncServiceState.Ready
+                        }
+                        event.text.startsWith(FAIL_MARKER) ->
+                            failReason = event.text.removePrefix(FAIL_MARKER).trim().take(200)
                     }
                     is CommandEvent.Exit -> Unit
                 }
             }
-            if (!becameReady) {
-                FileLogger.e(TAG, "VNC 服务未能启动")
-                _state.value = VncServiceState.Failed("服务未能启动")
+            if (becameReady) {
+                consecutiveFailures = 0
+                // 会话被看门狗 30 分钟上限强杀（或连接异常断开）：短暂停顿后续接，避免热循环
+                delay(RECONNECT_DELAY_MS)
+                continue
+            }
+            // 启动失败：透出 HOLD_SCRIPT 的原因（VNC_FAIL=…），指数退避防闪烁；
+            // 连续失败达上限进终态，由用户手动重试（重试会重置计数）。
+            consecutiveFailures++
+            val reason = failReason ?: "服务未能启动（无诊断输出）"
+            FileLogger.e(TAG, "VNC 服务第 $consecutiveFailures 次启动失败: $reason")
+            if (consecutiveFailures >= MAX_START_FAILURES) {
+                _state.value = VncServiceState.Failed(reason)
                 return
             }
-            // 会话被看门狗 30 分钟上限强杀（或连接异常断开）：短暂停顿后续接，避免热循环
-            delay(RECONNECT_DELAY_MS)
+            _state.value = VncServiceState.Failed(reason)
+            delay(RECONNECT_DELAY_MS shl (consecutiveFailures - 1))
         }
     }
 
@@ -134,6 +164,12 @@ class VncServiceController @Inject constructor(
         private const val TAG = "VncService"
         private const val RESIZE_TIMEOUT_MS = 5_000L
         private const val READY_MARKER = "VNC_READY"
+
+        /** HOLD_SCRIPT 启动失败时输出诊断前缀（原因经 [startAndHold] 透出到状态层）。 */
+        private const val FAIL_MARKER = "VNC_FAIL="
+
+        /** 连续启动失败上限：达到后进 Failed 终态，避免无退避热循环导致悬浮窗闪烁。 */
+        private const val MAX_START_FAILURES = 3
 
         /**
          * 常驻会话超时。
@@ -149,8 +185,8 @@ class VncServiceController @Inject constructor(
         /** 孤儿清理会话的超时；pkill+sleep 2s 内必完成。 */
         private const val CLEANUP_TIMEOUT_MS = 15_000L
 
-        /** websockify 在本机回环的监听端口（App 内 WebView 直连 127.0.0.1:6080）。 */
-        private const val VNC_WS_PORT = 6080
+        /** websockify 在本机回环的监听端口（App 内 WebView 直连 127.0.0.1:6081）。 */
+        private const val VNC_WS_PORT = 6081
         private const val PROBE_TIMEOUT_MS = 800
         private const val LOOPBACK = "127.0.0.1"
 
@@ -310,14 +346,29 @@ class VncServiceController @Inject constructor(
             chmod +x /root/Desktop/*.desktop 2>/dev/null || true
             # jwm 作为兜底配置（lxpanel 缺失时仍能有菜单）。
             printf '%s\n' $JWM_CONFIG_LINES > /root/.jwmrc
-            # :1 可能已由 multi-llm 的 MCP 会话持有；绑定失败属预期，后续继续接管同一 X。
-            Xvfb :1 -screen 0 720x1280x24 -nolock -nolisten tcp >/dev/null 2>&1 &
+            # 显示号自适应：:1 优先（multi-llm 等 MCP 会话持有的活 X 直接接管，原语义不变）；
+            # 但异常退出的 Xvfb 残留进程会永久占住抽象命名空间 socket（不落盘、删锁文件无效，
+            # xtrans 绑定失败不回退 filesystem socket，本机 Xvfb 也不支持 -nolisten abstract），
+            # Xvfb 直接退出。用「进程活着？」判定，绑不上且号上也无活 X 就换号，而非无限重试。
+            XVFB_DISP=""
+            for d in 1 2 3; do
+                Xvfb :${'$'}d -screen 0 720x1280x24 -nolock -nolisten tcp >/dev/null 2>&1 &
+                xvfb_pid=${'$'}!
+                sleep 1
+                if kill -0 ${'$'}xvfb_pid 2>/dev/null; then XVFB_DISP=${'$'}d; break; fi
+                if DISPLAY=:${'$'}d xset -q >/dev/null 2>&1; then XVFB_DISP=${'$'}d; break; fi
+            done
+            if [ -z "${'$'}XVFB_DISP" ]; then
+                echo "VNC_FAIL=Xvfb :1..:3 均无法建立（抽象 socket 幽灵占用或包缺失）"
+                exit 1
+            fi
+            echo "${'$'}XVFB_DISP" > /root/.aicode-vnc-display
             i=0
-            while [ ${'$'}i -lt 10 ] && [ ! -S /tmp/.X11-unix/X1 ]; do sleep 0.5; i=${'$'}((i+1)); done
-            command -v xsetroot >/dev/null 2>&1 && DISPLAY=:1 xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
+            while [ ${'$'}i -lt 10 ] && [ ! -S /tmp/.X11-unix/X${'$'}XVFB_DISP ]; do sleep 0.5; i=${'$'}((i+1)); done
+            command -v xsetroot >/dev/null 2>&1 && DISPLAY=:${'$'}XVFB_DISP xsetroot -solid '#1e1e1e' >/dev/null 2>&1 || true
             # noVNC 直接显示远端 X 光标；默认 24px 在手机上过大，统一缩到 16px。
             export XCURSOR_SIZE=16
-            printf '%s\n' 'Xcursor.size: 16' 'Xcursor.theme: default' | DISPLAY=:1 xrdb -merge >/dev/null 2>&1 || true
+            printf '%s\n' 'Xcursor.size: 16' 'Xcursor.theme: default' | DISPLAY=:${'$'}XVFB_DISP xrdb -merge >/dev/null 2>&1 || true
             # 桌面会话总线：lxpanel/pcmanfm 缺 dbus 会静默退出（表现就是没有任务栏）。
             if command -v dbus-launch >/dev/null 2>&1 && [ -z "${'$'}DBUS_SESSION_BUS_ADDRESS" ]; then
                 eval "${'$'}(dbus-launch --sh-syntax)" >/dev/null 2>&1 || true
@@ -327,30 +378,45 @@ class VncServiceController @Inject constructor(
             # 不能只起 openbox——那样桌面没有开始菜单也没有任务栏（用户截图实测）。
             panel_ok=0
             if command -v lxpanel >/dev/null 2>&1; then
-                pgrep -x lxpanel >/dev/null 2>&1 || (DISPLAY=:1 lxpanel >/dev/null 2>&1 &)
+                pgrep -x lxpanel >/dev/null 2>&1 || (DISPLAY=:${'$'}XVFB_DISP lxpanel >/dev/null 2>&1 &)
                 sleep 1
                 pgrep -x lxpanel >/dev/null 2>&1 && panel_ok=1
             fi
             if [ "${'$'}panel_ok" = "1" ] && command -v openbox >/dev/null 2>&1; then
-                pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:1 openbox >/dev/null 2>&1 &)
+                pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:${'$'}XVFB_DISP openbox >/dev/null 2>&1 &)
             elif command -v jwm >/dev/null 2>&1; then
                 # 切到 jwm：它自带任务栏（TaskList/Clock）与右键菜单，保证一定有开始菜单入口。
-                pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:1 jwm >/dev/null 2>&1 &)
+                pgrep -x jwm >/dev/null 2>&1 || (DISPLAY=:${'$'}XVFB_DISP jwm >/dev/null 2>&1 &)
             elif command -v openbox >/dev/null 2>&1; then
-                pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:1 openbox >/dev/null 2>&1 &)
+                pgrep -x openbox >/dev/null 2>&1 || (DISPLAY=:${'$'}XVFB_DISP openbox >/dev/null 2>&1 &)
             elif command -v twm >/dev/null 2>&1; then
-                pgrep -x twm >/dev/null 2>&1 || (DISPLAY=:1 twm >/dev/null 2>&1 &)
+                pgrep -x twm >/dev/null 2>&1 || (DISPLAY=:${'$'}XVFB_DISP twm >/dev/null 2>&1 &)
             fi
-            command -v pcmanfm >/dev/null 2>&1 && { pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:1 pcmanfm --desktop >/dev/null 2>&1 &); }
+            command -v pcmanfm >/dev/null 2>&1 && { pgrep -x pcmanfm >/dev/null 2>&1 || (DISPLAY=:${'$'}XVFB_DISP pcmanfm --desktop >/dev/null 2>&1 &); }
             # 诊断：把关键组件是否就绪写进日志文件，真机可据此判断缺什么。
-            { echo "panel_ok=${'$'}panel_ok"; for c in lxpanel openbox jwm pcmanfm synaptic; do
+            { echo "panel_ok=${'$'}panel_ok"; echo "xvfb_disp=${'$'}XVFB_DISP"; for c in lxpanel openbox jwm pcmanfm synaptic; do
                 command -v "${'$'}c" >/dev/null 2>&1 && echo "${'$'}c=yes" || echo "${'$'}c=no"; done
               echo "fonts=$(fc-list 2>/dev/null | grep -ci 'CJK\\|WenQuanYi')"; } > /root/.aicode-desktop-diag.txt 2>&1
             sleep 1
-            x11vnc -display :1 -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
-            sleep 1
+            # x11vnc：PRoot 不支持 SysV shm（shmget ENOSYS），-noshm 硬性参数。
+            x11vnc -display :${'$'}XVFB_DISP -rfbport 5901 -forever -shared -nopw -localhost -noshm -quiet -xrandr >/dev/null 2>&1 &
+            # READY 前真实校验：5901 的 RFB 握手可达才宣告就绪（旧写法无条件 echo，
+            # X 没起来时也是「就绪」，悬浮窗在准备中/就绪间反复抖闪）。
+            x11vnc_ok=0; i=0
+            while [ ${'$'}i -lt 20 ]; do
+                if python3 -c "import socket;s=socket.create_connection(('127.0.0.1',5901),1);s.close()" 2>/dev/null; then
+                    x11vnc_ok=1; break
+                fi
+                sleep 0.5; i=${'$'}((i+1))
+            done
+            if [ "${'$'}x11vnc_ok" != "1" ]; then
+                echo "VNC_FAIL=x11vnc 未就绪：X 显示器 :${'$'}XVFB_DISP 或 x11vnc 启动失败"
+                exit 1
+            fi
             echo $READY_MARKER
-            exec websockify localhost:6080 localhost:5901
+            # 6081 而非 6080：PRoot 与宿主共享网络栈，宿主自身 noVNC 占用 6080，
+            # 容器内绑 6080 必然 EADDRINUSE（实测），且宿主 6080 会干扰就绪探测。
+            exec websockify localhost:6081 localhost:5901
         """.trimIndent()
     }
 }

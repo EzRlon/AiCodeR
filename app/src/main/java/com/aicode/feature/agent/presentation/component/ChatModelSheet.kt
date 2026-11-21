@@ -127,6 +127,7 @@ internal fun ModelIconButton(
         val fallbackModel = when (engine) {
             AgentEngines.CODEX -> "gpt"
             AgentEngines.OPENCODE -> "default"
+            AgentEngines.DEEPSEEK -> "deepseek"
             else -> "claude"
         }
         val iconModel = cliModel?.takeIf { it.isNotBlank() && it != "default" } ?: fallbackModel
@@ -486,6 +487,10 @@ private fun CliModelPage(
         AgentEngines.OPENCODE ->
             // default 同上；其余为 models.dev 常用 provider/model 形态
             listOf("default", "openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-5")
+        AgentEngines.DEEPSEEK ->
+            // default = 不改写 agent-default-model，跟随 dsh 内置默认路由；
+            // 其余经 --patch overlay 配置到 @deepseek-ai/dsh-agent-default-model
+            listOf("default", "deepseek-chat", "deepseek-reasoner")
         else -> listOf("sonnet", "opus", "haiku")
     }
     // 供应商类型口径与桥的透传一致：Claude=Anthropic 型直透 + OpenAI 型全量（host 命中厂商端点表走直连，
@@ -496,6 +501,11 @@ private fun CliModelPage(
             it.type == ProviderType.ANTHROPIC && !it.useFullUrl || it.type == ProviderType.OPENAI
         }
         AgentEngines.CODEX -> providers.filter { it.type == ProviderType.OPENAI && !it.useFullUrl }
+        // DeepSeek 引擎与 OpenCode 同口径：DeepSeek 型直透内置 provider；OpenAI 兼容端点与
+        // Anthropic 兼容端点经 --patch 自定义路由（apiKeyEnv 环境变量）透传，模型目录同源
+        AgentEngines.DEEPSEEK -> providers.filter {
+            (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC || it.type == ProviderType.DEEPSEEK) && !it.useFullUrl
+        }
         else -> providers.filter { (it.type == ProviderType.OPENAI || it.type == ProviderType.ANTHROPIC) && !it.useFullUrl }
     }
     // 折叠的供应商组（引擎自带组不参与折叠，组数少且最常用）；弹窗生命周期内记忆
@@ -536,10 +546,10 @@ private fun CliModelPage(
                     val adapted = engine == AgentEngines.CLAUDE_CODE && provider.type == ProviderType.OPENAI
                     val label = if (adapted) provider.name + "（自动适配）" else provider.name
                     add(Group(label, provider.id, models.map { model ->
-                        val ref = if (engine == AgentEngines.OPENCODE) {
-                            CliModelRef.opencodeModelRef(provider.name, provider.id, provider.type, provider.baseUrl, model)
-                        } else {
-                            model
+                        val ref = when (engine) {
+                            AgentEngines.OPENCODE -> CliModelRef.opencodeModelRef(provider.name, provider.id, provider.type, provider.baseUrl, model)
+                            AgentEngines.DEEPSEEK -> CliModelRef.deepseekModelRef(provider.name, provider.id, provider.type, provider.baseUrl, model)
+                            else -> model
                         }
                         model to ref
                     }))

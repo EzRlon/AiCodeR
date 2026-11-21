@@ -139,7 +139,9 @@ data class StoreUiState(
     /** 插件引擎筛选：null = 全部。 */
     val pluginEngineFilter: EngineTarget? = null,
     /** 插件已安装的引擎组合（key = 插件 id，value = 已装的引擎集合）。 */
-    val installedPluginEngines: Map<String, Set<EngineTarget>> = emptyMap()
+    val installedPluginEngines: Map<String, Set<EngineTarget>> = emptyMap(),
+    /** MCP 条目在外置引擎的已装组合（key = 条目 id，value = 已装的引擎集合；内置已装看 [installedIds]）。 */
+    val installedMcpEngines: Map<String, Set<EngineTarget>> = emptyMap()
 )
 
 /**
@@ -540,7 +542,7 @@ class StoreViewModel @Inject constructor(
                                 "已安装技能「$installed」（默认未启用，可在技能页开启）"
                             } else {
                                 val installed = engineInstaller.installSkill(plan)
-                                "已安装技能「$installed」到 ${target.label}（~/.claude/skills/$installed）"
+                                "已安装技能「$installed」（~/.claude/skills/$installed，各引擎经桥工具可用）"
                             }
                         }
                     }
@@ -600,7 +602,7 @@ class StoreViewModel @Inject constructor(
                             "已安装技能「$installed」（默认未启用，可在技能页开启）"
                         } else {
                             val installed = engineInstaller.installSkill(gate.plan)
-                            "已安装技能「$installed」到 ${gate.target.label}（~/.claude/skills/$installed）"
+                            "已安装技能「$installed」（~/.claude/skills/$installed，各引擎经桥工具可用）"
                         }
                     }
                     is PendingScanGate.Mcp -> {
@@ -778,6 +780,7 @@ class StoreViewModel @Inject constructor(
                     "claude_code" -> EngineTarget.CLAUDE_CODE
                     "codex" -> EngineTarget.CODEX
                     "opencode" -> EngineTarget.OPENCODE
+                    "deepseek" -> EngineTarget.DEEPSEEK
                     else -> null
                 }
             }
@@ -1234,6 +1237,25 @@ class StoreViewModel @Inject constructor(
     }
 
     /** 刷新「已安装」集合：本地技能名（忽略大小写）+ 本地 MCP 配置名。 */
+    /** 从 [target] 卸载 MCP 条目（幂等）；内置引擎的卸载在 MCP 页完成。 */
+    fun uninstallMcpFrom(item: StoreItem, target: EngineTarget) {
+        if (_state.value.installingId != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(installingId = item.id) }
+            try {
+                engineInstaller.uninstallMcp(installer.sanitizeMcpName(item), target)
+                _state.update { it.copy(message = "已从 ${target.label} 移除 MCP「${item.name}」") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(message = e.message ?: "卸载失败") }
+            } finally {
+                _state.update { it.copy(installingId = null) }
+                refreshInstalled()
+            }
+        }
+    }
+
     private fun refreshInstalled() {
         viewModelScope.launch {
             val skillNames = runCatching {
@@ -1242,6 +1264,9 @@ class StoreViewModel @Inject constructor(
             val mcpNames = runCatching {
                 mcpConfig.getGlobalServers().map { it.name }.toSet()
             }.getOrDefault(emptySet())
+            // 外置引擎已装 MCP：各引擎一条 grep 命令探测官方配置，按条目 id 归档
+            val engineMcpNames = runCatching { engineInstaller.probeMcpEngines() }
+                .getOrDefault(emptyMap())
             _state.update { s ->
                 val installed = s.items.mapNotNull { item ->
                     when (item.kind) {
@@ -1251,7 +1276,11 @@ class StoreViewModel @Inject constructor(
                         StoreKind.PLUGIN -> null
                     }
                 }.toSet()
-                s.copy(installedIds = installed)
+                val mcpEngines = s.items.filter { it.kind == StoreKind.MCP }.associate { item ->
+                    val name = installer.sanitizeMcpName(item)
+                    item.id to engineMcpNames.filterValues { name in it }.keys
+                }.filterValues { it.isNotEmpty() }
+                s.copy(installedIds = installed, installedMcpEngines = mcpEngines)
             }
         }
     }

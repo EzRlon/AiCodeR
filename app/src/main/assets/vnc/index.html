@@ -509,7 +509,7 @@ window.vncTryConnect = function () {
   if (rfb) return;
   setStatus(TEXT.connecting);
   try {
-    rfb = new RFB(document.getElementById('screen'), 'ws://127.0.0.1:6080', { shared: true });
+    rfb = new RFB(document.getElementById('screen'), 'ws://127.0.0.1:6081', { shared: true });
     // noVNC 把 keydown/keyup 挂在 canvas 上，而 Android WebView 里 canvas 不可编辑、
     // 点它不会唤起输入法。把键盘目标换成隐藏的可编辑 textarea。
     const kbdSink = document.getElementById('kbdinput');
