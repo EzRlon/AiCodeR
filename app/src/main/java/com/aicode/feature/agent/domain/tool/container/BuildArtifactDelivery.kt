@@ -94,6 +94,34 @@ class BuildArtifactDelivery @Inject constructor(
     fun deliveryNotice(attachments: List<AgentAttachment>): String? =
         if (attachments.isEmpty()) null else
             "\n\n[构建产物已自动发送到聊天区] " + attachments.joinToString("、") { it.fileName }
+
+    /**
+     * 显式 sendFile 交付后登记：与命令输出自动交付共享去重窗口。
+     * 模型习惯先把产物 cp 到工作区根再 ls + sendFile，两条链路各挂一个文件行
+     * 就成了「同一文件发两遍、来自不同路径」；互斥后聊天区只出一条。
+     */
+    fun markDeliveredExternally(path: String) {
+        dedupKey(path)?.let { recent[it] = System.currentTimeMillis() }
+    }
+
+    /** 显式 sendFile 前查询：去重窗口内同路径已随命令自动送达则返回 true。 */
+    fun deliveredRecently(path: String): Boolean {
+        val key = dedupKey(path) ?: return false
+        val recentAt = recent[key] ?: return false
+        return System.currentTimeMillis() - recentAt < DEDUP_WINDOW_MS
+    }
+
+    /** recent 键与 extract 抓到的输出原样路径对齐：~/ 前缀展开为容器绝对路径。 */
+    private fun dedupKey(path: String): String? {
+        val trimmed = path.trim()
+        if (trimmed.isEmpty()) return null
+        val expanded = if (trimmed.startsWith("~/")) {
+            WorkspacePathMapper.CONTAINER_ROOT + trimmed.removePrefix("~")
+        } else {
+            trimmed
+        }
+        return expanded.trimEnd('/')
+    }
 }
 
 /**

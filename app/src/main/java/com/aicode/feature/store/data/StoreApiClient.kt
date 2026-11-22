@@ -53,6 +53,18 @@ class StoreApiClient @Inject constructor(
     suspend fun skillDetail(slug: String, baseUrl: String? = null): Result<CmSkillDetail> =
         getJson("${baseUrl ?: CM_BASE}/api/skills/${urlEncode(slug)}")
 
+    /**
+     * GitHub 仓库目录列表（引擎官方技能源，如 anthropics/skills、openai/skills）：
+     * contents API 返回目录数组，每项为一个技能目录。
+     */
+    suspend fun listGithubSkillDirs(
+        owner: String,
+        repo: String,
+        ref: String,
+        path: String
+    ): Result<List<GithubDirEntry>> =
+        getJson("https://api.github.com/repos/$owner/$repo/contents/${urlEncode(path)}?ref=${urlEncode(ref)}")
+
     /** claudemarket 全库搜索（含技能与 MCP；调用方按 type 过滤）。 */
     suspend fun search(query: String, limit: Int = 30, baseUrl: String? = null): Result<CmSearchResponse> =
         getJson("${baseUrl ?: CM_BASE}/api/search?q=${urlEncode(query)}&limit=$limit")

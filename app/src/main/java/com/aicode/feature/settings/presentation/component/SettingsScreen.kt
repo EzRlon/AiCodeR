@@ -119,6 +119,7 @@ import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
 import compose.icons.feathericons.Code
+import compose.icons.feathericons.Activity
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.Download
@@ -202,6 +203,8 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
     DevEnvironments(R.string.settings_dev_env),
+    LocalModels(R.string.settings_local_model),
+    Diagnostics(R.string.settings_diagnostics),
     Proxy(R.string.proxy_title),
     Log(R.string.settings_log),
     Permissions(R.string.settings_permissions),
@@ -888,6 +891,8 @@ fun SettingsScreen(
                             onInstallPlugin = { item, target -> storeViewModel.installPlugin(item, target) },
                             onUninstallPlugin = { item, target -> storeViewModel.uninstallPlugin(item, target) },
                             onPluginEngineFilter = { storeViewModel.setPluginEngineFilter(it) },
+                            onSourceFilter = { storeViewModel.setSourceFilter(it) },
+                            onInstallPluginToAll = { storeViewModel.installPluginToAll(it) },
                             onConsumeMessage = { storeViewModel.consumeMessage() },
                             onRetryTranslation = { storeViewModel.retryTranslation() },
                             onConfirmScan = { storeViewModel.confirmPendingScan() },
@@ -1423,6 +1428,17 @@ fun SettingsScreen(
                         installedIds = devEnvInstalled,
                         onLaunch = onLaunchDevEnv
                     )
+                }
+                SettingsSection.LocalModels -> {
+                    val localModelViewModel: com.aicode.feature.settings.presentation.component.LocalModelViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    LaunchedEffect(Unit) { localModelViewModel.refresh() }
+                    LocalModelSection(viewModel = localModelViewModel)
+                }
+                SettingsSection.Diagnostics -> {
+                    val diagnosticsViewModel: com.aicode.feature.settings.presentation.component.DiagnosticsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    DiagnosticsSection(viewModel = diagnosticsViewModel)
                 }
                 SettingsSection.Scripts -> {
                     val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
@@ -2329,6 +2345,18 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Tool,
                 title = stringResource(SettingsSection.DevEnvironments.titleRes),
                 onClick = { onOpen(SettingsSection.DevEnvironments) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Cpu,
+                title = stringResource(SettingsSection.LocalModels.titleRes),
+                onClick = { onOpen(SettingsSection.LocalModels) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Activity,
+                title = stringResource(SettingsSection.Diagnostics.titleRes),
+                onClick = { onOpen(SettingsSection.Diagnostics) }
             )
             SettingsDivider()
             SettingsRow(

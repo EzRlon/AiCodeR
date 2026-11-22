@@ -36,7 +36,11 @@ data class PluginStoreItem(
     /** 安装所需的 marketplace 源；OpenCode 为 null。 */
     val marketplaceSource: String? = null,
     /** marketplace 显示名，安装时以 `plugin@marketplace` 形式引用。 */
-    val marketplaceName: String? = null
+    val marketplaceName: String? = null,
+    /** 来源渠道性质：引擎官方 / 社区 / 内置。 */
+    val origin: StoreOrigin = StoreOrigin.COMMUNITY,
+    /** 资源归属引擎生态（claude/codex/opencode/deepseek）。 */
+    val engineOrigin: String? = null
 )
 
 /**
@@ -85,8 +89,20 @@ data class StoreItem(
     /** 来源展示名。 */
     val sourceName: String = "ClaudeMarket",
     /** 来源是否可信；不可信源安装前需二次确认。 */
-    val sourceTrusted: Boolean = true
+    val sourceTrusted: Boolean = true,
+    /** 来源渠道性质：引擎官方 / 社区 / 内置 / 用户自定义。 */
+    val origin: StoreOrigin = StoreOrigin.COMMUNITY,
+    /** 资源归属引擎生态（claude/codex/opencode/deepseek）；社区通用源为空。 */
+    val engineOrigin: String? = null,
+    /** 技能本体仓库地址（官方 GitHub 目录型源自带，免市场详情接口直接下载）。 */
+    val repoUrl: String? = null
 )
+
+/** 条目来源渠道性质。 */
+enum class StoreOrigin { OFFICIAL, COMMUNITY, BUILTIN, CUSTOM }
+
+/** 商店列表的来源筛选档位。 */
+enum class StoreSourceFilter { ALL, OFFICIAL, COMMUNITY }
 
 // ── claudemarket.ai DTO ────────────────────────────────────────────
 
@@ -97,6 +113,14 @@ data class CmSkillsResponse(
     val limit: Int = 0,
     val offset: Int = 0,
     val results: List<CmSkill> = emptyList()
+)
+
+/** GitHub contents API 目录条目（引擎官方技能源用）。 */
+@Serializable
+data class GithubDirEntry(
+    val name: String = "",
+    val path: String = "",
+    val type: String = ""
 )
 
 @Serializable
@@ -110,7 +134,9 @@ data class CmSkill(
     val author: String = "",
     val version: String = "",
     val license: String = "",
-    val url: String = ""
+    val url: String = "",
+    /** 官方 GitHub 目录型源自带；社区条目由详情接口提供。 */
+    val repoUrl: String = ""
 )
 
 @Serializable
@@ -200,7 +226,8 @@ fun CmSkill.toStoreItem(): StoreItem = StoreItem(
     category = category,
     detailUrl = url,
     version = version,
-    license = license
+    license = license,
+    repoUrl = repoUrl.takeIf { it.isNotBlank() }
 )
 
 fun McpRegistryServer.toStoreItem(): StoreItem {

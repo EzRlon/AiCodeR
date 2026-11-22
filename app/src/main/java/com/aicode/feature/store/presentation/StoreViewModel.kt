@@ -12,6 +12,8 @@ import com.aicode.feature.store.data.HttpStatusException
 import com.aicode.feature.store.data.StoreApiClient
 import com.aicode.feature.store.data.StoreCatalogCache
 import com.aicode.feature.store.data.StoreItem
+import com.aicode.feature.store.data.StoreOrigin
+import com.aicode.feature.store.data.StoreSourceFilter
 import com.aicode.feature.store.data.StoreSource
 import com.aicode.feature.store.data.StoreSourceConfig
 import com.aicode.feature.store.data.CmSkill
@@ -136,6 +138,8 @@ data class StoreUiState(
     val lastScans: Map<String, ScanResult> = emptyMap(),
     /** 引擎插件列表（PLUGIN tab）。 */
     val plugins: List<PluginStoreItem> = emptyList(),
+    /** 来源筛选：全部/官方/社区（技能与插件 tab）。 */
+    val sourceFilter: StoreSourceFilter = StoreSourceFilter.ALL,
     /** 插件引擎筛选：null = 全部。 */
     val pluginEngineFilter: EngineTarget? = null,
     /** 插件已安装的引擎组合（key = 插件 id，value = 已装的引擎集合）。 */
@@ -183,6 +187,12 @@ class StoreViewModel @Inject constructor(
         /** 在线专家团市场（wshobson/agents，MIT）：经 gh-proxy 镜像访问。 */
         const val GH_PROXY = "https://gh-proxy.com/"
         const val MARKET_URL = GH_PROXY + "https://raw.githubusercontent.com/wshobson/agents/main/.claude-plugin/marketplace.json"
+
+        /** 引擎官方插件市场（结构化 marketplace.json，与 wshobson 同格式）。 */
+        const val OFFICIAL_CLAUDE_MARKET_URL =
+            GH_PROXY + "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json"
+        const val OFFICIAL_CODEX_MARKET_URL =
+            GH_PROXY + "https://raw.githubusercontent.com/openai/plugins/main/.agents/plugins/marketplace.json"
         const val PLUGIN_API_BASE = GH_PROXY + "https://api.github.com/repos/wshobson/agents/contents/"
     }
 
@@ -210,6 +220,11 @@ class StoreViewModel @Inject constructor(
         if (_state.value.tab == tab) return
         _state.value = StoreUiState(tab = tab)   // 重置列表与搜索
         loadTab(tab)
+    }
+
+    /** 来源筛选（官方/社区/全部）：纯展示过滤，不触发重新拉取。 */
+    fun setSourceFilter(filter: StoreSourceFilter) {
+        _state.update { it.copy(sourceFilter = filter) }
     }
 
     fun updateQuery(query: String) {
@@ -370,6 +385,11 @@ class StoreViewModel @Inject constructor(
         val deferred = srcs.map { src ->
             async {
                 if (src.id == "mcp-registry") return@async null
+                if (src.official && src.engine != null) {
+                    // 引擎官方 GitHub 目录型技能源：列出技能目录，逐个读 SKILL.md 简介
+                    val skills = fetchOfficialGithubSkills(src)
+                    return@async Triple(src, skills.getOrNull(), skills.exceptionOrNull())
+                }
                 val result = api.listSkills(
                     page = 1,
                     limit = limit,
@@ -396,10 +416,70 @@ class StoreViewModel @Inject constructor(
         SkillsAggregate(bySlug.values.toList(), null)
     }
 
-    /** 按源 id 回填来源展示字段；内置/未知源回原样。 */
+    /** 按源 id 回填来源展示字段与渠道性质；内置/未知源回原样。 */
     private fun StoreItem.withSource(sourceId: String): StoreItem {
         val src = sourceConfig.sources.value.firstOrNull { it.id == sourceId } ?: return this
-        return copy(sourceId = src.id, sourceName = src.name, sourceTrusted = src.trusted)
+        return copy(
+            sourceId = src.id,
+            sourceName = src.name,
+            sourceTrusted = src.trusted,
+            origin = when {
+                src.official -> StoreOrigin.OFFICIAL
+                src.builtIn -> StoreOrigin.COMMUNITY
+                else -> StoreOrigin.CUSTOM
+            },
+            engineOrigin = src.engine
+        )
+    }
+
+    /**
+     * 引擎官方 GitHub 目录型技能源（anthropics/skills、openai/skills）：
+     * 目录 API 列技能 → 逐个顺序读 SKILL.md 取 frontmatter 简介（不并发，避免限流）。
+     */
+    private suspend fun fetchOfficialGithubSkills(src: StoreSource): Result<List<CmSkill>> = runCatching {
+        val m = Regex("https://github\\.com/([^/]+)/([^/]+)").find(src.baseUrl)
+            ?: throw IllegalStateException("官方源地址不合法：${src.baseUrl}")
+        val owner = m.groupValues[1]
+        val repo = m.groupValues[2].removeSuffix(".git")
+        // 技能目录约定在仓库 skills/ 子目录下；无该目录时回退仓库根。
+        val dirs = api.listGithubSkillDirs(owner, repo, ref = "main", path = "skills")
+            .recoverCatching { api.listGithubSkillDirs(owner, repo, ref = "main", path = "").getOrThrow() }
+            .getOrThrow()
+        dirs.filter { it.type == "dir" }.map { dir ->
+            val raw = api.fetchText(
+                "https://raw.githubusercontent.com/$owner/$repo/main/${dir.path}/SKILL.md",
+                maxBytes = 256 shl 10
+            ).getOrNull()
+            CmSkill(
+                slug = dir.name,
+                name = dir.name,
+                description = raw?.let(::skillMarkdownDescription).orEmpty(),
+                category = "官方技能",
+                source = src.id,
+                author = src.name,
+                repoUrl = "https://github.com/$owner/$repo/tree/main/${dir.path}"
+            )
+        }
+    }
+
+    /** 解析 SKILL.md YAML frontmatter 的 description（单行或折叠多行块，截 300 字）。 */
+    private fun skillMarkdownDescription(md: String): String? {
+        if (!md.startsWith("---")) return null
+        val end = md.indexOf("\n---", 3)
+        if (end < 0) return null
+        val lines = md.substring(3, end).lines()
+        val idx = lines.indexOfFirst { it.startsWith("description:") }
+        if (idx < 0) return null
+        val first = lines[idx].removePrefix("description:").trim().trim('"', '\'')
+        val sb = StringBuilder(first)
+        for (line in lines.subList(idx + 1, lines.size)) {
+            val t = line.trim()
+            if (t.isBlank()) break
+            if (t.contains(": ") && !t.startsWith("-") && !t.startsWith(">")) break
+            sb.append(' ').append(t.removePrefix("-").removePrefix(">").trim())
+        }
+        val text = sb.toString().trim()
+        return text.takeIf { it.isNotBlank() }?.take(300)
     }
 
     fun toggleSource(id: String, enabled: Boolean) {
@@ -700,6 +780,16 @@ class StoreViewModel @Inject constructor(
             _state.update { it.copy(plugins = builtin) }
             kickTranslation()
 
+            // 引擎官方插件市场（anthropics/claude-plugins-official、openai/plugins）：
+            // 与内置清单合并展示，同 id 内置优先；拉取失败保持内置清单。
+            val official = withContext(Dispatchers.IO) { fetchOfficialMarketplacePlugins() }
+            if (official.isNotEmpty()) {
+                _state.update { s ->
+                    val merged = official.filter { o -> s.plugins.none { it.id == o.id } } + s.plugins
+                    s.copy(plugins = merged.sortedBy { it.name.lowercase() })
+                }
+            }
+
             val installedByEngine = withContext(Dispatchers.IO) {
                 EngineTarget.entries.associateWith { target ->
                     runCatching { pluginInstaller.listInstalled(target) }.getOrDefault(emptySet())
@@ -763,6 +853,83 @@ class StoreViewModel @Inject constructor(
                     _state.update { it.copy(installingId = null, error = e.message ?: "卸载失败") }
                 }
             )
+        }
+    }
+
+    /**
+     * 拉取引擎官方插件市场（Claude 官方 anthropics/claude-plugins-official、
+     * Codex 官方 openai/plugins，均为 marketplace.json 结构化格式）：
+     * 顺序拉取（限流约束），单边失败不影响另一边；条目带官方来源标记。
+     */
+    private fun fetchOfficialMarketplacePlugins(): List<PluginStoreItem> {
+        val specs = listOf(
+            Triple(
+                OFFICIAL_CLAUDE_MARKET_URL,
+                EngineTarget.CLAUDE_CODE,
+                "anthropics/claude-plugins-official"
+            ),
+            Triple(OFFICIAL_CODEX_MARKET_URL, EngineTarget.CODEX, "openai/plugins")
+        )
+        val out = ArrayList<PluginStoreItem>()
+        for ((url, engine, repo) in specs) {
+            runCatching {
+                val request = okhttp3.Request.Builder().url(url).build()
+                storeClient.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching
+                    val root = org.json.JSONObject(resp.body?.string().orEmpty())
+                    val marketName = root.optString("name").takeIf { it.isNotBlank() } ?: repo.substringAfter('/')
+                    val arr = root.optJSONArray("plugins") ?: return@runCatching
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val name = obj.optString("name").takeIf { it.isNotBlank() } ?: continue
+                        out.add(
+                            PluginStoreItem(
+                                id = "$repo/$name",
+                                name = name,
+                                description = obj.optString("description"),
+                                version = obj.optString("version"),
+                                engines = listOf(engine),
+                                installRef = "$name@$marketName",
+                                marketplaceSource = repo,
+                                marketplaceName = marketName,
+                                origin = StoreOrigin.OFFICIAL,
+                                engineOrigin = engine.cli
+                            )
+                        )
+                    }
+                }
+            }.onFailure { e -> FileLogger.w(TAG, "官方插件市场拉取失败：$repo", e) }
+        }
+        return out
+    }
+
+    /** 一键装到全部适用引擎：逐个串行安装（限流约束），汇总结果到消息栏。 */
+    fun installPluginToAll(item: PluginStoreItem) {
+        if (_state.value.installingId != null) return
+        if (item.engines.size < 2) return
+        viewModelScope.launch {
+            _state.update { it.copy(installingId = item.id, error = null) }
+            val results = item.engines.map { target ->
+                val ok = runCatching { pluginInstaller.install(item, target) }
+                    .fold(onSuccess = { true }, onFailure = { false })
+                target to ok
+            }
+            val okTargets = results.filter { it.second }.map { it.first.label }
+            val failTargets = results.filterNot { it.second }.map { it.first.label }
+            val installedSet = results.filter { it.second }.map { it.first }.toSet()
+            _state.update { s ->
+                s.copy(
+                    installingId = null,
+                    installedPluginEngines = s.installedPluginEngines.toMutableMap().apply {
+                        put(item.id, get(item.id).orEmpty() + installedSet)
+                    },
+                    message = buildString {
+                        append("装到全部完成：")
+                        append(if (okTargets.isEmpty()) "无成功" else "成功 ${okTargets.joinToString("、")}")
+                        if (failTargets.isNotEmpty()) append("；失败 ${failTargets.joinToString("、")}")
+                    }
+                )
+            }
         }
     }
 

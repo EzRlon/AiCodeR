@@ -86,7 +86,8 @@ data class CliAgent(
             "elif command -v wget >/dev/null 2>&1; then " +
             "wget -q --spider -T 4 \"\$REG/\" || REG=https://registry.npmjs.org; fi; " +
             "echo \"npm registry: \$REG\"; " +
-            "NPM_ARGS='--fetch-retries=3 --fetch-timeout=600000 --no-audit --no-fund'; " +
+            // 缓存指向 ~/.aicode（绑定挂载、跨容器重建保留）：换发行版/重置环境后引擎重装不重新下载。
+            "NPM_ARGS='--cache=/root/.aicode/npm-cache --fetch-retries=3 --fetch-timeout=600000 --no-audit --no-fund'; " +
             "try_install() { npm install -g --registry=\"\$1\" \$NPM_ARGS $npmPackage@$version; }; " +
             // 全新安装前先清掉中断残留的损坏安装：npm 装到一半的包命令不可用，
             // 不卸载直接重装，残留文件会让新版本安装后依旧失效。

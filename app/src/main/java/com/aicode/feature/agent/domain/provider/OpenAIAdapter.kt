@@ -45,6 +45,13 @@ class OpenAIAdapter @Inject constructor(
     override var providerId = ""
     override var logSessionId: String? = null
     override var firstByteTimeoutMs: Long = FIRST_BYTE_TIMEOUT_MS
+
+    /** 本机 llama.cpp 等端点：预填充可达数分钟，首字节超时按本地放宽下限。 */
+    private val isLocalEndpoint: Boolean
+        get() = baseUrl.startsWith("http://127.0.0.1") || baseUrl.startsWith("http://localhost")
+
+    private val effectiveFirstByteTimeoutMs: Long
+        get() = if (isLocalEndpoint) maxOf(firstByteTimeoutMs, 900_000L) else firstByteTimeoutMs
     override var streamIdleTimeoutMs: Long = 0L
     override var maxNetworkRetries: Int = MAX_NETWORK_RETRIES
 
@@ -372,7 +379,7 @@ class OpenAIAdapter @Inject constructor(
                     } else false
                 },
                 attemptOnce = { onContent ->
-                    withFirstContentTimeout(firstByteTimeoutMs) { firstContent ->
+                    withFirstContentTimeout(effectiveFirstByteTimeoutMs) { firstContent ->
             val textBuilder = StringBuilder()
             val budget = StreamBudget()
             // tool_call index -> 累积中的工具调用（保序）。
@@ -564,7 +571,7 @@ class OpenAIAdapter @Inject constructor(
                     } else false
                 },
                 attemptOnce = { onContent ->
-                    withFirstContentTimeout(firstByteTimeoutMs) { firstContent ->
+                    withFirstContentTimeout(effectiveFirstByteTimeoutMs) { firstContent ->
                     val acc = ResponsesStreamAccumulator()
 
                     val body = firstContent.awaitBody(api.streamResponses(

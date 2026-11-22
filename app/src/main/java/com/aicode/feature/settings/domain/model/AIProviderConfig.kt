@@ -71,8 +71,12 @@ data class AIProviderConfig(
             listOf(ProviderKey(apiKey)).filter { it.value.isNotBlank() }
         }
 
-    /** 是否已配置至少一个可用 Key。 */
-    val hasUsableApiKey: Boolean get() = effectiveApiKeys.isNotEmpty()
+    /** 是否指向本机服务（llama.cpp 等），无需 API Key。 */
+    val isLocalBaseUrl: Boolean
+        get() = baseUrl.startsWith("http://127.0.0.1") || baseUrl.startsWith("http://localhost")
+
+    /** 是否已配置至少一个可用 Key；本地服务无需 Key。 */
+    val hasUsableApiKey: Boolean get() = effectiveApiKeys.isNotEmpty() || isLocalBaseUrl
 
     /** 实际生效的切换状态码：留空回退默认集合。 */
     val effectiveKeySwitchStatusCodes: Set<Int>

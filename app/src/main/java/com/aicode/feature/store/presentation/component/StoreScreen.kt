@@ -22,6 +22,8 @@ import com.aicode.feature.agent.presentation.component.engineBrandColor
 import com.aicode.feature.agent.presentation.component.engineShortLabel
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +59,8 @@ import com.aicode.core.util.containsCjk
 import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.StoreOrigin
+import com.aicode.feature.store.data.StoreSourceFilter
 import com.aicode.feature.store.data.PluginStoreItem
 import com.aicode.feature.store.data.EngineTarget
 import com.aicode.feature.store.data.StoreTranslation
@@ -90,6 +94,8 @@ internal fun StoreScreen(
     onInstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onUninstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onPluginEngineFilter: (EngineTarget?) -> Unit = {},
+    onSourceFilter: (StoreSourceFilter) -> Unit = {},
+    onInstallPluginToAll: (PluginStoreItem) -> Unit = {},
     onConsumeMessage: () -> Unit,
     onRetryTranslation: () -> Unit = {},
     onConfirmScan: () -> Unit = {},
@@ -230,7 +236,9 @@ internal fun StoreScreen(
                 state = state,
                 onInstall = onInstallPlugin,
                 onUninstall = onUninstallPlugin,
-                onEngineFilter = onPluginEngineFilter
+                onEngineFilter = onPluginEngineFilter,
+                onSourceFilter = onSourceFilter,
+                onInstallToAll = onInstallPluginToAll
             )
 
             state.tab == StoreKind.EXPERT -> TeamList(
@@ -272,16 +280,28 @@ internal fun StoreScreen(
                 modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 24.dp)
             )
 
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = Spacing.lg,
-                    end = Spacing.lg,
-                    bottom = Spacing.xl
-                ),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(state.items, key = { "${it.kind}:${it.id}" }) { item ->
+            else -> Column(modifier = Modifier.fillMaxWidth()) {
+                SourceFilterRow(
+                    selected = state.sourceFilter,
+                    onSelect = onSourceFilter
+                )
+                val filteredItems = remember(state.items, state.sourceFilter) {
+                    when (state.sourceFilter) {
+                        StoreSourceFilter.ALL -> state.items
+                        StoreSourceFilter.OFFICIAL -> state.items.filter { it.origin == StoreOrigin.OFFICIAL }
+                        StoreSourceFilter.COMMUNITY -> state.items.filter { it.origin != StoreOrigin.OFFICIAL }
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = Spacing.lg,
+                        end = Spacing.lg,
+                        bottom = Spacing.xl
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                items(filteredItems, key = { "${it.kind}:${it.id}" }) { item ->
                     StoreItemCard(
                         item = item,
                         translation = state.translations[item.storeTranslationKey()],
@@ -311,6 +331,7 @@ internal fun StoreScreen(
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -603,6 +624,89 @@ private fun Button2(text: String, enabled: Boolean, loading: Boolean, onClick: (
     }
 }
 
+/** 来源筛选行：全部 / 官方 / 社区（引擎官方渠道优先展示）。 */
+@Composable
+private fun SourceFilterRow(
+    selected: StoreSourceFilter,
+    onSelect: (StoreSourceFilter) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StoreSourceFilter.entries.forEach { f ->
+            FilterChip(
+                selected = selected == f,
+                onClick = { onSelect(f) },
+                label = {
+                    Text(
+                        when (f) {
+                            StoreSourceFilter.ALL -> "全部"
+                            StoreSourceFilter.OFFICIAL -> "官方"
+                            StoreSourceFilter.COMMUNITY -> "社区"
+                        },
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            )
+        }
+    }
+}
+
+/**
+ * 来源标签行：官方渠道用引擎品牌色「官方·引擎名」，其余显示来源名（社区/自定义）——
+ * 让用户一眼区分资源来自哪个引擎生态、是否官方出品。
+ */
+@Composable
+private fun OriginSourceBadge(item: StoreItem) {
+    val isOfficial = item.origin == StoreOrigin.OFFICIAL
+    val engine = item.engineOrigin?.let { id -> EngineTarget.entries.firstOrNull { it.cli == id } }
+    if (!isOfficial && item.sourceName.isBlank()) return
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.padding(top = 2.dp)
+    ) {
+        val (label, accent) = when {
+            isOfficial && engine != null -> "官方·${engineShortLabel(engine)}" to engineBrandColor(engine)
+            isOfficial -> "官方" to Color(0xFF4CAF50)
+            else -> item.sourceName to MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        Text(
+            text = "●",
+            style = MaterialTheme.typography.labelSmall,
+            color = accent
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isOfficial) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** 插件卡来源标签（官方渠道用引擎品牌色）。 */
+@Composable
+private fun PluginOriginBadge(plugin: PluginStoreItem) {
+    val engine = plugin.engineOrigin?.let { id -> EngineTarget.entries.firstOrNull { it.cli == id } }
+    val (label, accent) = when {
+        plugin.origin == StoreOrigin.OFFICIAL && engine != null ->
+            "官方·${engineShortLabel(engine)}" to engineBrandColor(engine)
+        plugin.origin == StoreOrigin.OFFICIAL -> "官方" to Color(0xFF4CAF50)
+        else -> return
+    }
+    Text(
+        text = "● $label",
+        style = MaterialTheme.typography.labelSmall,
+        color = accent,
+        modifier = Modifier.padding(top = 2.dp)
+    )
+}
+
 /** 单条商店卡片：名称/作者/版本/描述 + 安装按钮 + 来源链接。 */
 @Composable
 private fun StoreItemCard(
@@ -661,6 +765,7 @@ private fun StoreItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            OriginSourceBadge(item = item)
             val descriptionZh = translation?.descriptionZh.orEmpty()
             if (descriptionZh.isNotBlank()) {
                 // 中文界面本土化硬规则：有中文译文时不再追加英文原文，避免双语摘要混排。
@@ -931,11 +1036,19 @@ private fun PluginList(
     state: StoreUiState,
     onInstall: (PluginStoreItem, EngineTarget) -> Unit,
     onUninstall: (PluginStoreItem, EngineTarget) -> Unit,
-    onEngineFilter: (EngineTarget?) -> Unit
+    onEngineFilter: (EngineTarget?) -> Unit,
+    onSourceFilter: (StoreSourceFilter) -> Unit,
+    onInstallToAll: (PluginStoreItem) -> Unit
 ) {
-    val filtered = state.pluginEngineFilter?.let { t ->
-        state.plugins.filter { t in it.engines }
-    } ?: state.plugins
+    val filtered = state.plugins
+        .filter { t -> state.pluginEngineFilter?.let { it in t.engines } ?: true }
+        .filter {
+            when (state.sourceFilter) {
+                StoreSourceFilter.ALL -> true
+                StoreSourceFilter.OFFICIAL -> it.origin == StoreOrigin.OFFICIAL
+                StoreSourceFilter.COMMUNITY -> it.origin != StoreOrigin.OFFICIAL
+            }
+        }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -958,6 +1071,10 @@ private fun PluginList(
                 )
             }
         }
+        SourceFilterRow(
+            selected = state.sourceFilter,
+            onSelect = onSourceFilter
+        )
 
         if (filtered.isEmpty()) {
             Text(
@@ -1025,11 +1142,24 @@ private fun PluginList(
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
+                        if (plugin.origin == StoreOrigin.OFFICIAL) {
+                            PluginOriginBadge(plugin = plugin)
+                        }
                         Row(
                             modifier = Modifier.padding(top = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            if (plugin.engines.size >= 2 && state.installingId == null) {
+                                Text(
+                                    text = "装到全部（${plugin.engines.size}）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .clickable { onInstallToAll(plugin) }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                )
+                            }
                             plugin.engines.forEach { target ->
                                 val installed = target in state.installedPluginEngines[plugin.id].orEmpty()
                                 PluginEngineChip(

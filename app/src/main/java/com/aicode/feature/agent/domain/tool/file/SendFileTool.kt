@@ -31,6 +31,7 @@ import javax.inject.Inject
  * 文件数据（内容/base64）不会进入模型上下文，模型只收到文件元数据文本。
  */
 class SendFileTool @Inject constructor(
+    private val artifactDelivery: com.aicode.feature.agent.domain.tool.container.BuildArtifactDelivery,
     private val fileAccess: FileAccessProvider,
     private val generalSettingsRepository: GeneralSettingsRepository
 ) : AgentTool() {
@@ -112,10 +113,29 @@ class SendFileTool @Inject constructor(
                 return ToolResult.Error(failures.joinToString("；"), "INVALID_FILE")
             }
 
-            val files = paths.mapIndexed { index, path ->
+            // 与命令输出自动交付互斥：cp+ls 后紧跟 sendFile 时，同一路径已在工具消息上
+            // 自动挂过文件行，再显式发送就是聊天区「同一文件两条来自不同入口的交付」。
+            val named = paths.mapIndexed { index, path -> path to names.getOrNull(index) }
+            val sendable = named.filter { !artifactDelivery.deliveredRecently(it.first) }
+            val autoDelivered = named.filter { artifactDelivery.deliveredRecently(it.first) }
+            if (sendable.isEmpty()) {
+                return ToolResult.Success(
+                    JsonObject(
+                        mapOf(
+                            "content" to JsonPrimitive(
+                                "以下文件已随命令输出自动发送到聊天区，无需重复发送：" +
+                                    autoDelivered.joinToString("、") { fileAccess.toDisplayPath(it.first) }
+                            ),
+                            "file_count" to JsonPrimitive(0)
+                        )
+                    )
+                )
+            }
+
+            val files = sendable.mapIndexed { index, (path, customName) ->
                 val rawName = path.substringAfterLast('/').ifBlank { path }
                 // 显示名允许自定义；MIME 类型必须按原始文件名推断，自定义名缺后缀/加前缀都不影响类型识别。
-                val displayName = names.getOrNull(index)?.takeIf { it.isNotBlank() } ?: rawName
+                val displayName = customName?.takeIf { it.isNotBlank() } ?: rawName
                 JsonObject(
                     mapOf(
                         "path" to JsonPrimitive(fileAccess.toDisplayPath(path)),
@@ -128,7 +148,8 @@ class SendFileTool @Inject constructor(
                 )
             }
 
-            FileLogger.i(TAG, "sendFile 成功: ${paths.size} 个文件 ${paths.joinToString(", ") { fileAccess.toDisplayPath(it) }}")
+            sendable.forEach { artifactDelivery.markDeliveredExternally(it.first) }
+            FileLogger.i(TAG, "sendFile 成功: ${sendable.size} 个文件 ${sendable.joinToString(", ") { fileAccess.toDisplayPath(it.first) }}")
             ToolResult.Success(
                 JsonObject(
                     mapOf(
@@ -141,6 +162,10 @@ class SendFileTool @Inject constructor(
                                     append(file["name"]?.jsonPrimitive?.contentOrNull)
                                     append("：")
                                     append(file["path"]?.jsonPrimitive?.contentOrNull)
+                                }
+                                if (autoDelivered.isNotEmpty()) {
+                                    append("\n已随命令自动发送过、本次跳过：")
+                                    append(autoDelivered.joinToString("、") { fileAccess.toDisplayPath(it.first) })
                                 }
                             }
                         ),

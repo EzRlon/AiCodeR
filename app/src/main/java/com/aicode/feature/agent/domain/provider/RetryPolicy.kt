@@ -448,12 +448,42 @@ private const val MAX_RETRY_AFTER_MILLIS = 60_000L
  * 此函数会消费 errorBody，而重试日志只在本异常**即将被丢弃**（未达上限、确定会重试）时打印，
  * 故消费无副作用；勿用于仍要向上抛出的异常，否则后续 enrich 将拿不到响应体。
  */
-private fun Throwable.describeForRetryLog(): String {
+private fun Throwable.describeForRetryLog(preDetail: String? = null): String {
     val base = "${javaClass.simpleName} ${message ?: ""}".trim()
     if (this !is HttpException) return base
-    val detail = extractHttpErrorDetail(extractRawErrorBody())
+    val detail = preDetail ?: extractHttpErrorDetail(extractRawErrorBody())
     return if (detail.isBlank()) base else "$base: $detail"
 }
+
+/**
+ * 把已消费 errorBody 的 503「网关耗尽」异常组装成保留 detail 的最终形态抛出，
+ * 避免上层 enrich 再读 body 只拿到空。
+ */
+private fun HttpException.toGatewayExhaustedException(raw: String?): EnrichedHttpException {
+    val detail = extractHttpErrorDetail(raw)
+    val meaning = httpStatusMeaning(code())
+    val composed = buildString {
+        append("HTTP ").append(code())
+        if (meaning != null) append("（").append(meaning).append("）")
+        if (detail.isNotBlank()) append(": ").append(detail)
+    }
+    return EnrichedHttpException(composed, code(), raw, this)
+}
+
+/**
+ * 网关「确定性耗尽」文案：账号池/渠道全部限流或熔断隔离（如聚合网关返回
+ * 「没有可用账号…熔断隔离中，直接跳过」）。此时重试只会空耗重试次数与约 30s 等待，应立即失败。
+ */
+private val GATEWAY_EXHAUSTED_MESSAGES = listOf(
+    "没有可用账号",
+    "无可用渠道",
+    "没有可用渠道",
+    "no available channel",
+    "熔断隔离"
+)
+
+private fun isGatewayExhaustedDetail(detail: String): Boolean =
+    GATEWAY_EXHAUSTED_MESSAGES.any { detail.contains(it, ignoreCase = true) }
 
 /**
  * 在指数退避下重试 [block]（保持原方法名），用于非流式请求。
@@ -489,9 +519,17 @@ suspend fun <T> retryStaircase(
                 if (!isRateLimitError(e)) throw e
             }
             if (attempt >= maxRetries) throw e
+            // 异常即将被丢弃（确定重试），可安全消费 errorBody；命中「网关耗尽」文案则立即失败，
+            // 不按瞬时故障退避（实测熔断 503 重试 6 次空耗约 30s）
+            val preRaw = (e as? HttpException)?.extractRawErrorBody()
+            if (e is HttpException && e.code() == 503 &&
+                isGatewayExhaustedDetail(extractHttpErrorDetail(preRaw))
+            ) {
+                throw e.toGatewayExhaustedException(preRaw)
+            }
             awaitNetworkIfOffline()
             val wait = retryDelayMillis(attempt, e)
-            FileLogger.w(TAG, "网络请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog()}")
+            FileLogger.w(TAG, "网络请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog(preDetail = preRaw?.let(::extractHttpErrorDetail))}")
             onRetry?.invoke(attempt + 1, maxRetries, e.toRetryErrorInfo())
             attempt++
             if (wait > 0) delay(wait)
@@ -537,9 +575,16 @@ suspend fun streamWithStaircaseRetry(
                 if (!(isRateLimitError(e) && !receivedContent)) throw e
             }
             if (attempt >= maxRetries) throw e
+            // 同非流式：即将丢弃的异常可安全预读 body，命中「网关耗尽」则立即失败
+            val preRaw = (e as? HttpException)?.extractRawErrorBody()
+            if (e is HttpException && e.code() == 503 &&
+                isGatewayExhaustedDetail(extractHttpErrorDetail(preRaw))
+            ) {
+                throw e.toGatewayExhaustedException(preRaw)
+            }
             awaitNetworkIfOffline()
             val wait = retryDelayMillis(attempt, e)
-            FileLogger.w(TAG, "流式请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog()}")
+            FileLogger.w(TAG, "流式请求失败，第 ${attempt + 1}/$maxRetries 次重试（等待 ${wait}ms）: ${e.describeForRetryLog(preDetail = preRaw?.let(::extractHttpErrorDetail))}")
             onRetry?.invoke(attempt + 1, maxRetries, e.toRetryErrorInfo())
             attempt++
             if (wait > 0) delay(wait)

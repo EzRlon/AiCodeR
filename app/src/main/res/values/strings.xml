@@ -222,6 +222,8 @@
     <string name="settings_dev_keys">签名与凭据</string>
     <string name="settings_dev_keys_desc">发布签名、口令配置与就绪检查</string>
     <string name="settings_dev_env">开发环境</string>
+    <string name="settings_local_model">本地模型</string>
+    <string name="settings_diagnostics">诊断与自测</string>
     <string name="dev_env_intro">选择你想开发什么，确认后会新建会话并自动把搭建任务发给 AI：它会先检测当前容器的发行版与包管理器（apk / apt / dnf / pacman），再按实际情况安装工具链、跑验证命令并汇报版本。安装过程在会话里可中断、可追问。</string>
     <string name="dev_env_installed">已安装</string>
     <string name="dev_env_confirm_body">将新建一个会话，并自动发送搭建任务给 AI 执行。开始后你可以随时在会话里补充要求。</string>
