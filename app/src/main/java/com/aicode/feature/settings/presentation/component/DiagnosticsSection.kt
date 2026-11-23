@@ -85,12 +85,18 @@ class DiagnosticsViewModel @Inject constructor(
     private val _subprogramReport = MutableStateFlow<String?>(null)
     val subprogramReport: StateFlow<String?> = _subprogramReport.asStateFlow()
 
+    /** 结构化体检结果：（包名，是否同签名），供一键添加。 */
+    private val _installedSubPackages = MutableStateFlow<List<Pair<String, Boolean>>>(emptyList())
+    val installedSubPackages: StateFlow<List<Pair<String, Boolean>>> = _installedSubPackages.asStateFlow()
+
     /** L1 安装态体检：列出设备上由母程序生成的子程序。 */
     fun listSubprograms() {
         viewModelScope.launch {
-            _subprogramReport.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                collector.listInstalledSubprograms()
+            val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                collector.discoverInstalledSubprograms()
             }
+            _installedSubPackages.value = found
+            _subprogramReport.value = collector.listInstalledSubprograms()
         }
     }
 
@@ -110,10 +116,23 @@ class DiagnosticsViewModel @Inject constructor(
         _subprograms.value = subprogramRegistry.load()
     }
 
-    fun addSubprogram(name: String, packageName: String, port: Int, token: String): String? {
+    /**
+     * 添加子程序：port/token 传 null 时自动分配（端口从 41000 起顺延取未占用，token 随机 UUID），
+     * name 传空串时自动取包名末段——用户只需填一个包名。
+     */
+    fun addSubprogram(name: String, packageName: String, port: Int? = null, token: String? = null): String? {
+        val pkg = packageName.trim()
+        if (pkg.isBlank()) return "包名不能为空"
         val list = subprogramRegistry.load().toMutableList()
-        if (list.any { it.name == name.trim() }) return "同名子程序已存在"
-        list.add(com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram(name.trim(), packageName.trim(), port, token.trim()))
+        val finalName = name.trim().ifBlank { pkg.substringAfterLast('.') }
+        if (list.any { it.name == finalName }) return "同名子程序已存在"
+        val finalPort = port ?: run {
+            val used = list.map { it.port }.toSet()
+            generateSequence(41000) { it + 1 }.first { it !in used }
+        }
+        val finalToken = token?.trim()?.takeIf { it.isNotBlank() }
+            ?: java.util.UUID.randomUUID().toString().replace("-", "")
+        list.add(com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram(finalName, pkg, finalPort, finalToken))
         subprogramRegistry.save(list)
         refreshSubprograms()
         return null
@@ -133,6 +152,11 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     /** 健康检查：容器内 curl 探活子程序 MCP 端点。 */
+    /** 按包名找到注册条目并探活（一键添加后立即检查）。 */
+    fun checkSubprogramByName(packageName: String) {
+        subprograms.value.firstOrNull { it.packageName == packageName }?.let { checkSubprogram(it) }
+    }
+
     fun checkSubprogram(sub: com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram) {
         viewModelScope.launch {
             _subHealth[sub.name] = null
@@ -250,6 +274,7 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
     val selfTestReport by viewModel.selfTestReport.collectAsStateWithLifecycle()
     val logMessage by viewModel.logMessage.collectAsStateWithLifecycle()
     val subprogramReport by viewModel.subprogramReport.collectAsStateWithLifecycle()
+    val subprograms by viewModel.subprograms.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     Column(
@@ -340,6 +365,30 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
                 OutlinedButton(onClick = viewModel::listSubprograms) {
                     Text("体检子程序")
                 }
+                // 体检结果直接可一键添加：包名自动带出，端口/token 自动分配，零输入。
+                val installedSubs by viewModel.installedSubPackages.collectAsStateWithLifecycle()
+                val registered = remember(subprograms.size) { subprograms.map { it.packageName }.toSet() }
+                installedSubs.forEach { (pkg, sameSig) ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            pkg + if (sameSig) "（同签名）" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (pkg in registered) {
+                            Text(
+                                "已注册",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            TextButton(onClick = {
+                                val r = viewModel.addSubprogram("", pkg)
+                                if (r == null) viewModel.checkSubprogramByName(pkg)
+                            }) { Text("一键添加") }
+                        }
+                    }
+                }
                 subprogramReport?.let { text ->
                     Text(
                         text = text,
@@ -404,6 +453,7 @@ private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
     val subprograms by viewModel.subprograms.collectAsStateWithLifecycle()
     val subOpMessage by viewModel.subOpMessage.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) { viewModel.refreshSubprograms() }
 
@@ -430,6 +480,11 @@ private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
                         )
                     }
                     TextButton(onClick = { viewModel.checkSubprogram(sub) }) { Text("检查") }
+                    TextButton(onClick = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("subprogram token", sub.token))
+                        Toast.makeText(context, "Token 已复制（子程序侧需一致）", Toast.LENGTH_SHORT).show()
+                    }) { Text("Token") }
                     TextButton(onClick = { viewModel.attachSubprogramToMcp(sub) }) { Text("接入 MCP") }
                     Text(
                         text = "删除",
@@ -449,30 +504,28 @@ private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
     if (showAdd) {
         var name by remember { mutableStateOf("") }
         var pkg by remember { mutableStateOf("") }
-        var port by remember { mutableStateOf("") }
-        var token by remember { mutableStateOf("") }
         var err by remember { mutableStateOf<String?>(null) }
         AlertDialog(
             onDismissRequest = { showAdd = false },
             title = { Text("添加子程序") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = name, onValueChange = { name = it; err = null }, label = { Text("名称") }, singleLine = true)
-                    OutlinedTextField(value = pkg, onValueChange = { pkg = it }, label = { Text("包名") }, singleLine = true)
-                    OutlinedTextField(value = port, onValueChange = { port = it.filter(Char::isDigit) }, label = { Text("端口") }, singleLine = true)
-                    OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Token（生成时分配）") }, singleLine = true)
+                    Text(
+                        "只需填包名；端口与 Token 自动分配，名称留空自动取包名末段。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(value = name, onValueChange = { name = it; err = null }, label = { Text("名称（可留空）") }, singleLine = true)
+                    OutlinedTextField(value = pkg, onValueChange = { pkg = it; err = null }, label = { Text("包名（必填）") }, singleLine = true)
                     err?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val p = port.toIntOrNull()
-                    err = when {
-                        name.isBlank() || pkg.isBlank() || token.isBlank() -> "请填写完整"
-                        p == null || p !in 1024..65535 -> "端口需为 1024-65535"
-                        else -> viewModel.addSubprogram(name, pkg, p, token).also { r ->
-                            if (r == null) showAdd = false
-                        }
+                    if (pkg.isBlank()) {
+                        err = "请填写包名"
+                    } else {
+                        viewModel.addSubprogram(name, pkg)?.let { err = it } ?: run { showAdd = false }
                     }
                 }) { Text("保存") }
             },

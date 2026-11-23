@@ -163,13 +163,29 @@ class DiagnosticsCollector @Inject constructor(
      * 能拿到：版本、首次安装时间、最近更新时间；私有数据/日志不可见（沙盒边界，由 L2 MCP 通道解决）。
      */
     fun listInstalledSubprograms(): String {
-        val pm = context.packageManager
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA)
+        val found = discoverInstalledSubprograms()
+        if (found.isEmpty()) {
+            return "设备上暂未发现由母程序生成的子程序（识别规则：包名 com.aicoder.app.* 前缀或同签名）"
+        }
+        val rows = StringBuilder()
+        for ((pkg, sameSig) in found) {
+            val info = runCatching { context.packageManager.getPackageInfo(pkg, 0) }.getOrNull() ?: continue
+            rows.appendLine(
+                "- $pkg：v${info.versionName}（装于 ${fmt.format(info.firstInstallTime)}，" +
+                    "更新 ${fmt.format(info.lastUpdateTime)}${if (sameSig) "，同签名" else ""}）"
+            )
+        }
+        return "发现 ${found.size} 个子程序：\n$rows"
+    }
+
+    /** 结构化体检：包名 → 是否与母程序同签名，供诊断页一键添加子程序。 */
+    fun discoverInstalledSubprograms(): List<Pair<String, Boolean>> {
+        val pm = context.packageManager
         val selfSig = runCatching {
             pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES).signatures?.firstOrNull()
         }.getOrNull()
-        val rows = StringBuilder()
-        var found = 0
+        val result = mutableListOf<Pair<String, Boolean>>()
         runCatching {
             for (info in pm.getInstalledPackages(PackageManager.GET_SIGNATURES)) {
                 if (info.packageName == context.packageName) continue
@@ -177,18 +193,10 @@ class DiagnosticsCollector @Inject constructor(
                 val sameSig = selfSig != null &&
                     info.signatures?.any { it.toCharsString() == selfSig.toCharsString() } == true
                 if (!isFamily && !sameSig) continue
-                found++
-                rows.appendLine(
-                    "- ${info.packageName}：v${info.versionName}（装于 ${fmt.format(info.firstInstallTime)}，" +
-                        "更新 ${fmt.format(info.lastUpdateTime)}${if (sameSig) "，同签名" else ""}）"
-                )
+                result += info.packageName to sameSig
             }
         }
-        return if (found == 0) {
-            "设备上暂未发现由母程序生成的子程序（识别规则：包名 com.aicoder.app.* 前缀或同签名）"
-        } else {
-            "发现 $found 个子程序：\n$rows"
-        }
+        return result
     }
 
     /**
