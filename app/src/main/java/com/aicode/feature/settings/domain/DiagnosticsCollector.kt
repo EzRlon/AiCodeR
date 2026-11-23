@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.StatFs
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.domain.container.CommandEngine
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -91,8 +92,8 @@ class DiagnosticsCollector @Inject constructor(
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "移动数据"
                 else -> "其他"
             }
-            val bw = caps?.linkDownstreamBandwidthKbps ?: 0
-            sb.appendLine("- 网络：$type（下行约 ${bw / 1024} Mbps）")
+            // linkDownstreamBandwidthKbps 在移动数据下严重不准（常见报个位数 Mbps），只报连接类型。
+            sb.appendLine("- 网络：$type")
         }
         sb.appendLine()
     }
@@ -191,7 +192,8 @@ class DiagnosticsCollector @Inject constructor(
     }
 
     /**
-     * 清理旧日志：删除 logs/ai-logs 目录中今天之前的文件（当前正在写的今日日志保留）。
+     * 清理旧日志：删除 logs/ai-logs 目录中今天之前的文件（当前正在写的今日日志保留），
+     * 再做容量裁剪：总量超过 [MAX_LOG_TOTAL_BYTES] 时从最旧文件开始删（跳过各目录最新的一个）。
      * 返回摘要；日志目录在 App 外部专属存储，只能由 App 原生删除（容器无挂载）。
      */
     fun cleanOldLogs(): String {
@@ -203,14 +205,49 @@ class DiagnosticsCollector @Inject constructor(
             set(java.util.Calendar.SECOND, 0)
             set(java.util.Calendar.MILLISECOND, 0)
         }.timeInMillis
-        for (name in listOf("logs", "ai-logs")) {
-            val dir = context.getExternalFilesDir(name) ?: continue
+        val dirs = listOf("logs", "ai-logs").mapNotNull { context.getExternalFilesDir(it) }
+        for (dir in dirs) {
             dir.listFiles().orEmpty().filter { it.isFile && it.lastModified() < todayStart }.forEach {
                 bytes += it.length()
                 if (it.delete()) files++
             }
         }
-        return if (files == 0) "没有今天之前的旧日志可清理" else "已清理 $files 个旧日志文件，释放 ${dirSizeText(bytes)}"
+        val (trimmed, trimmedBytes) = trimByTotalSize(dirs)
+        files += trimmed
+        bytes += trimmedBytes
+        return if (files == 0) "没有可清理的日志" else "已清理 $files 个日志文件，释放 ${dirSizeText(bytes)}"
+    }
+
+    /** 启动时静默执行一次日志清理（旧文件 + 容量裁剪），失败不扰启动。 */
+    fun autoCleanLogsOnStartup() {
+        runCatching { cleanOldLogs() }
+            .onFailure { FileLogger.w(TAG, "启动自动清理日志失败", it) }
+    }
+
+    /**
+     * 容量裁剪：logs+ai-logs 总量超过阈值时按 lastModified 升序删除，
+     * 跳过各目录最新的一个文件（可能正在写）。返回（删除文件数，释放字节数）。
+     */
+    private fun trimByTotalSize(dirs: List<java.io.File>): Pair<Int, Long> {
+        val all = dirs.flatMap { d -> d.listFiles().orEmpty().filter { it.isFile } }
+        var total = all.sumOf { it.length() }
+        if (total <= MAX_LOG_TOTAL_BYTES) return 0 to 0L
+        var removed = 0
+        var freed = 0L
+        val newestPerDir = dirs.mapNotNull { d ->
+            d.listFiles().orEmpty().filter { it.isFile }.maxByOrNull { f -> f.lastModified() }
+        }
+        for (f in all.sortedBy { it.lastModified() }) {
+            if (total <= MAX_LOG_TOTAL_BYTES) break
+            if (f in newestPerDir) continue
+            val len = f.length()
+            if (f.delete()) {
+                total -= len
+                freed += len
+                removed++
+            }
+        }
+        return removed to freed
     }
 
     private fun dirSizeText(bytes: Long): String = when {
@@ -273,6 +310,9 @@ class DiagnosticsCollector @Inject constructor(
     private fun fmt(v: Double): String = String.format(java.util.Locale.CHINA, "%.1f", v)
 
     companion object {
+        private const val TAG = "DiagnosticsCollector"
         private const val GB = 1_000_000_000L
+        /** logs+ai-logs 总量超过此值时启动自动裁剪（曾出现 678MB 膨胀）。 */
+        private const val MAX_LOG_TOTAL_BYTES = 200_000_000L
     }
 }

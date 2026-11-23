@@ -280,6 +280,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var containerImageCatalog: com.aicode.feature.agent.domain.container.ContainerImageCatalog
 
+    /** 诊断与自测收集器：启动时用它静默清理膨胀日志。 */
+    @Inject
+    lateinit var diagnosticsCollector: com.aicode.feature.settings.domain.DiagnosticsCollector
+
     /** 提供商级代理注册表：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
     @Inject
     lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
@@ -365,6 +369,10 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即把最新的内置指南手册提取到私有配置目录
         appScope.launch {
             ContainerInstaller.extractDocs(this@AIEditorApp)
+        }
+        // 日志自动清理：删旧文件 + 总量超 200MB 裁剪（日志曾膨胀到 678MB，手动清理按钮挡不住单日暴涨）。
+        appScope.launch(Dispatchers.IO) {
+            diagnosticsCollector.autoCleanLogsOnStartup()
         }
         // 原生插件不再随包释放：顾问团 / 分析台等一律走「设置 → 插件 → 从文件安装」，
         // 与主程序解耦（装、卸、启停都由插件体系管理，升级 App 不会凭空塞回来）。

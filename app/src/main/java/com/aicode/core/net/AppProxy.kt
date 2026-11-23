@@ -110,6 +110,8 @@ object AppProxy {
         override fun select(uri: URI): List<Proxy> {
             val cfg = config()
             val host = uri.host ?: return listOf(Proxy.NO_PROXY)
+            // 回环流量（子程序 MCP、本地模型等）永远直连：代理服务器视角的 127.0.0.1 不是本机。
+            if (isLoopbackHost(host)) return listOf(Proxy.NO_PROXY)
             if (isNoProxy(host, uri.port, cfg.noProxy)) return listOf(Proxy.NO_PROXY)
             val sel = selectProxy(host, uri.path) ?: return listOf(Proxy.NO_PROXY)
             // 故障降级窗口内对该 host 直连；窗口过期清计数恢复代理。
@@ -127,6 +129,7 @@ object AppProxy {
 
         override fun connectFailed(uri: URI, sa: SocketAddress, ioe: IOException) {
             val host = uri.host ?: return
+            if (isLoopbackHost(host)) return
             if (selectProxy(host, uri.path) == null) return
             // 原子累加：OkHttp 连接失败回调来自多线程，read-modify-write 会丢计数。
             proxyFailures.merge(host, 1L, Long::plus)
@@ -237,6 +240,11 @@ object AppProxy {
      *  `example.com` / `.example.com` 匹配自身及子域；`*.example.com` 仅子域；
      *  `host:port` 需端口一致；IPv4/IPv6 CIDR 网段（如 10.0.0.0/8、fd00::/8）按前缀匹配；
      *  大小写不敏感；配置为空时回退默认值（与容器注入一致）。 */
+    private fun isLoopbackHost(host: String): Boolean {
+        val h = host.removeSurrounding("[", "]")
+        return h == "localhost" || h == "::1" || h.startsWith("127.")
+    }
+
     private fun isNoProxy(host: String, port: Int, noProxy: String): Boolean {
         val list = noProxy.ifBlank { DEFAULT_NO_PROXY }
         val h = host.lowercase()
