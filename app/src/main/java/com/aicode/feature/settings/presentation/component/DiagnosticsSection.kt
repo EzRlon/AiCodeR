@@ -71,6 +71,18 @@ class DiagnosticsViewModel @Inject constructor(
     private val _logMessage = MutableStateFlow<String?>(null)
     val logMessage: StateFlow<String?> = _logMessage.asStateFlow()
 
+    private val _subprogramReport = MutableStateFlow<String?>(null)
+    val subprogramReport: StateFlow<String?> = _subprogramReport.asStateFlow()
+
+    /** L1 安装态体检：列出设备上由母程序生成的子程序。 */
+    fun listSubprograms() {
+        viewModelScope.launch {
+            _subprogramReport.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                collector.listInstalledSubprograms()
+            }
+        }
+    }
+
     /** 清理今天之前的旧日志（外部专属存储，App 原生删除）。 */
     fun cleanOldLogs() {
         viewModelScope.launch {
@@ -155,6 +167,7 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
     val selfTestRunning by viewModel.selfTestRunning.collectAsStateWithLifecycle()
     val selfTestReport by viewModel.selfTestReport.collectAsStateWithLifecycle()
     val logMessage by viewModel.logMessage.collectAsStateWithLifecycle()
+    val subprogramReport by viewModel.subprogramReport.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     Column(
@@ -229,6 +242,32 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
                 )
             }
         }
+        // ── L1 安装态体检：列出设备上由母程序生成的子程序 ──
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("已安装子程序体检", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    "零权限列出设备上由母程序生成的子程序（包名 com.aicoder.app.* 前缀或同签名）：版本、安装/更新时间。深度诊断由子程序内嵌的 MCP 调试通道提供（开发期注入）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(onClick = viewModel::listSubprograms) {
+                    Text("体检子程序")
+                }
+                subprogramReport?.let { text ->
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+
         // ── 项目自测：执行 .aicode/selftest.json 清单，输出逐项证据（对所有项目通用）──
         Card(
             modifier = Modifier.fillMaxWidth(),

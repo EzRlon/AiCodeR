@@ -157,6 +157,40 @@ class DiagnosticsCollector @Inject constructor(
     }
 
     /**
+     * L1 安装态体检（零权限）：列出设备上由母程序生成的子程序——
+     * 识别规则：包名前缀 com.aicoder.app.*（生成约定）或与母程序同签名（同套签名签署的家族应用）。
+     * 能拿到：版本、首次安装时间、最近更新时间；私有数据/日志不可见（沙盒边界，由 L2 MCP 通道解决）。
+     */
+    fun listInstalledSubprograms(): String {
+        val pm = context.packageManager
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA)
+        val selfSig = runCatching {
+            pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES).signatures?.firstOrNull()
+        }.getOrNull()
+        val rows = StringBuilder()
+        var found = 0
+        runCatching {
+            for (info in pm.getInstalledPackages(PackageManager.GET_SIGNATURES)) {
+                if (info.packageName == context.packageName) continue
+                val isFamily = info.packageName.startsWith("com.aicoder.app.")
+                val sameSig = selfSig != null &&
+                    info.signatures?.any { it.toCharsString() == selfSig.toCharsString() } == true
+                if (!isFamily && !sameSig) continue
+                found++
+                rows.appendLine(
+                    "- ${info.packageName}：v${info.versionName}（装于 ${fmt.format(info.firstInstallTime)}，" +
+                        "更新 ${fmt.format(info.lastUpdateTime)}${if (sameSig) "，同签名" else ""}）"
+                )
+            }
+        }
+        return if (found == 0) {
+            "设备上暂未发现由母程序生成的子程序（识别规则：包名 com.aicoder.app.* 前缀或同签名）"
+        } else {
+            "发现 $found 个子程序：\n$rows"
+        }
+    }
+
+    /**
      * 清理旧日志：删除 logs/ai-logs 目录中今天之前的文件（当前正在写的今日日志保留）。
      * 返回摘要；日志目录在 App 外部专属存储，只能由 App 原生删除（容器无挂载）。
      */

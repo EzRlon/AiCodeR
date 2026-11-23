@@ -99,7 +99,10 @@ class DeliverablesStateHolder @Inject constructor(
         // 不再对全部交付物预导出到真机 下载/AiCodeR/：那会给每个历史交付物留一份常驻副本
         // （纯浪费空间），而真正需要真机文件的动作（MT 打开 / 文件管理器查看 / 分享 / 安装）
         // 都会在按下时按需导出（见 attachmentActionEntries → prepareLocal → exportToSharedFile）。
-        return byPath.values.sortedByDescending { it.timestamp }
+        // 文件已不在（被垃圾清理/手动删除）的条目自动同步移除：列表反映真实可用的交付物。
+        return byPath.values
+            .filter { fileAccessProvider.exists(it.attachment.containerPath) }
+            .sortedByDescending { it.timestamp }
     }
 
     /**

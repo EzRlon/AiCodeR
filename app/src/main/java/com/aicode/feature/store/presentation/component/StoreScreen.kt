@@ -9,10 +9,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -301,7 +304,11 @@ internal fun StoreScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                items(filteredItems, key = { "${it.kind}:${it.id}" }) { item ->
+                officialFirstGroups(
+                    items = filteredItems,
+                    isOfficial = { it.origin == StoreOrigin.OFFICIAL },
+                    key = { "${it.kind}:${it.id}" }
+                ) { item ->
                     StoreItemCard(
                         item = item,
                         translation = state.translations[item.storeTranslationKey()],
@@ -621,6 +628,63 @@ private fun Button2(text: String, enabled: Boolean, loading: Boolean, onClick: (
             Spacer(Modifier.width(Spacing.xs))
         }
         Text(text)
+    }
+}
+
+/**
+ * 商店列表统一分组渲染：官方精选在前、社区资源在后，各带分组头——
+ * 让「来自哪、可不可信」的层级在滚动一眼可辨（官方渠道用品牌色组头）。
+ */
+private fun <T> LazyListScope.officialFirstGroups(
+    items: List<T>,
+    isOfficial: (T) -> Boolean,
+    key: (T) -> String,
+    card: @Composable (T) -> Unit
+) {
+    val official = items.filter(isOfficial)
+    val community = items.filterNot(isOfficial)
+    if (official.isNotEmpty()) {
+        item(key = "hdr-official") {
+            StoreGroupHeader(
+                title = "官方精选",
+                subtitle = "来自引擎官方渠道，可信度最高",
+                accent = MaterialTheme.colorScheme.primary
+            )
+        }
+        official.forEach { item(key = key(it), contentType = "store-card") { card(it) } }
+    }
+    if (community.isNotEmpty()) {
+        item(key = "hdr-community") {
+            StoreGroupHeader(
+                title = "社区资源",
+                subtitle = "来自第三方市场与社区贡献，安装前请留意来源",
+                accent = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        community.forEach { item(key = key(it), contentType = "store-card") { card(it) } }
+    }
+}
+
+/** 商店分组头：小型色条 + 标题 + 说明。 */
+@Composable
+private fun StoreGroupHeader(title: String, subtitle: String, accent: Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp, bottom = 2.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(28.dp)
+                .background(accent, androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+        )
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -1096,7 +1160,11 @@ private fun PluginList(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(filtered, key = { it.id }) { plugin ->
+            officialFirstGroups(
+                items = filtered,
+                isOfficial = { it.origin == StoreOrigin.OFFICIAL },
+                key = { it.id }
+            ) { plugin ->
                 val translation = state.translations[
                     StoreItem(
                         id = plugin.id,
