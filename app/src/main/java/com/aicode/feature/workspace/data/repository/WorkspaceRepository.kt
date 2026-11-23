@@ -397,6 +397,24 @@ class WorkspaceRepository @Inject constructor(
                     .put("token", UUID.randomUUID().toString().replace("-", ""))
                 regFile.writeText(JSONObject().put("subprograms", JSONArray().put(entry)).toString(2))
             }
+            // 集成指南写入 notes：notes 会注入本工作区新会话的 AI 上下文，AI 无需探索即知待办与步骤。
+            val notesDir = File(aicodeDir, "notes")
+            notesDir.mkdirs()
+            val guide = File(notesDir, "子程序MCP集成指南.md")
+            if (!guide.isFile) {
+                guide.writeText(
+                    """# 子程序 MCP 集成指南（本项目）
+                    |
+                    |本项目创建时已自动注入子程序 MCP 调试通道资产：
+                    |
+                    |- 模板：`.aicode/templates/subprogram-mcp/`（README + SubprogramMcpServer/SubprogramMcpService/AppContextHolder）
+                    |- 注册条目：`.aicode/subprograms.json`（母程序已预分配 port 与 token，子程序侧启动参数必须用同一值）
+                    |
+                    |**待办**：用户要求集成子程序调试通道时，按模板 README 的步骤执行（复制模板源码进项目、用注册条目的 port/token 启动前台服务）；
+                    |完成后把子程序包名回填 `subprograms.json` 的 `packageName` 字段，并让用户在母程序诊断页点「检查」验证——探活在线后母程序会自动接入 MCP。
+                    |""".trimMargin()
+                )
+            }
             FileLogger.i(TAG, "子程序 MCP 模板注入完成: $name")
         }.onFailure {
             FileLogger.e(TAG, "子程序 MCP 模板注入失败: $name", it)

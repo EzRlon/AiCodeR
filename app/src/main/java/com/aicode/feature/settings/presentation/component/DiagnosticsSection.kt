@@ -162,29 +162,41 @@ class DiagnosticsViewModel @Inject constructor(
             _subHealth[sub.name] = null
             val ok = runCatching { subprogramRegistry.check(sub) }.getOrDefault(false)
             _subHealth[sub.name] = ok
-            _subOpMessage.value = "${sub.name}：${if (ok) "在线" else "不在线（端口/token/服务未启动？）"}"
+            _subOpMessage.value = if (!ok) {
+                "${sub.name}：不在线（端口/token/服务未启动？可在子程序工作区会话集成调试通道）"
+            } else {
+                // 探活在线即自动接入 MCP（幂等：已接入不重写，避免触发无谓的 MCP 重连）。
+                val already = runCatching {
+                    mcpConfigRepository.getGlobalServers().any { it.name == "subprogram-${sub.port}" }
+                }.getOrDefault(false)
+                if (!already) runCatching { attachInternal(sub) }
+                "${sub.name}：在线${if (already) "（MCP 已接入" else "，已自动接入 MCP"}，工具前缀 mcp__subprogram-${sub.port}__）"
+            }
         }
     }
+
+    /** 写全局 mcp.json（幂等，同条目重写）。返回是否成功。 */
+    private suspend fun attachInternal(sub: com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram): Boolean = runCatching {
+        val servers = mcpConfigRepository.getGlobalServers().toMutableList()
+        val cfg = com.aicode.feature.agent.domain.mcp.McpServerConfig(
+            // MCP 工具名只允许 ASCII，用端口做唯一后缀（避免中文名违规）
+            name = "subprogram-${sub.port}",
+            url = "http://127.0.0.1:${sub.port}/mcp",
+            headers = mapOf("Authorization" to "Bearer ${sub.token}")
+        )
+        servers.removeAll { it.name == cfg.name }
+        servers.add(cfg)
+        mcpConfigRepository.setGlobalServers(servers)
+    }.isSuccess
 
     /** 接入 MCP：写全局 mcp.json（AI 即得以 mcp__subprogram-名__tool 调用子程序工具）。 */
     fun attachSubprogramToMcp(sub: com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram) {
         viewModelScope.launch {
-            val result = runCatching {
-                val servers = mcpConfigRepository.getGlobalServers().toMutableList()
-                val cfg = com.aicode.feature.agent.domain.mcp.McpServerConfig(
-                    // MCP 工具名只允许 ASCII，用端口做唯一后缀（避免中文名违规）
-                    name = "subprogram-${sub.port}",
-                    url = "http://127.0.0.1:${sub.port}/mcp",
-                    headers = mapOf("Authorization" to "Bearer ${sub.token}")
-                )
-                servers.removeAll { it.name == cfg.name }
-                servers.add(cfg)
-                mcpConfigRepository.setGlobalServers(servers)
-            }
-            _subOpMessage.value = if (result.isSuccess) {
+            val ok = attachInternal(sub)
+            _subOpMessage.value = if (ok) {
                 "${sub.name} 已接入 MCP（工具前缀 mcp__subprogram-${sub.port}__），可在会话中直接调用"
             } else {
-                "接入失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                "接入失败：写入 mcp.json 未成功"
             }
         }
     }
@@ -492,6 +504,25 @@ private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.clickable { viewModel.removeSubprogram(sub.name) }.padding(6.dp)
                     )
+                }
+                // 不在线 = 子程序侧多半还没集成调试通道：给出话术一键复制，粘到子程序工作区会话即可让 AI 集成。
+                if (health == false) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "未在线：需先在子程序项目里集成调试通道",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            val cmd = "按 .aicode/templates/subprogram-mcp/README.md 集成子程序 MCP 调试通道：" +
+                                "模板与 port/token 已在本项目 .aicode/ 下备好，集成完成后回填包名到 .aicode/subprograms.json，" +
+                                "然后告诉我，我去母程序诊断页点检查。"
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("subprogram integration", cmd))
+                            Toast.makeText(context, "集成指令已复制：粘贴到「${sub.name}」工作区会话发送即可", Toast.LENGTH_LONG).show()
+                        }) { Text("复制集成指令") }
+                    }
                 }
             }
         }
