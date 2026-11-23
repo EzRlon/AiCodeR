@@ -15,19 +15,28 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -45,11 +54,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-/** 诊断与自测区块 ViewModel：环境收集 + 项目自测清单执行。 */
+/** 诊断与自测区块 ViewModel：环境收集 + 项目自测 + 子程序调试通道管理。 */
 @HiltViewModel
 class DiagnosticsViewModel @Inject constructor(
     private val collector: DiagnosticsCollector,
-    private val commandEngine: com.aicode.feature.agent.domain.container.CommandEngine
+    private val commandEngine: com.aicode.feature.agent.domain.container.CommandEngine,
+    private val subprogramRegistry: com.aicode.feature.settings.domain.SubprogramRegistry,
+    private val mcpConfigRepository: com.aicode.feature.agent.domain.mcp.McpConfigRepository
 ) : ViewModel() {
 
     companion object {
@@ -79,6 +90,77 @@ class DiagnosticsViewModel @Inject constructor(
         viewModelScope.launch {
             _subprogramReport.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 collector.listInstalledSubprograms()
+            }
+        }
+    }
+
+    // ── 子程序调试通道（MCP 注册表）──
+
+    private val _subprograms = MutableStateFlow<List<com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram>>(emptyList())
+    val subprograms: StateFlow<List<com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram>> =
+        _subprograms.asStateFlow()
+
+    private val _subHealth = mutableStateMapOf<String, Boolean?>()
+    val subHealth: Map<String, Boolean?> get() = _subHealth
+
+    private val _subOpMessage = MutableStateFlow<String?>(null)
+    val subOpMessage: StateFlow<String?> = _subOpMessage.asStateFlow()
+
+    fun refreshSubprograms() {
+        _subprograms.value = subprogramRegistry.load()
+    }
+
+    fun addSubprogram(name: String, packageName: String, port: Int, token: String): String? {
+        val list = subprogramRegistry.load().toMutableList()
+        if (list.any { it.name == name.trim() }) return "同名子程序已存在"
+        list.add(com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram(name.trim(), packageName.trim(), port, token.trim()))
+        subprogramRegistry.save(list)
+        refreshSubprograms()
+        return null
+    }
+
+    fun removeSubprogram(name: String) {
+        subprogramRegistry.save(subprogramRegistry.load().filterNot { it.name == name })
+        // 同步移除已接入的全局 MCP 条目
+        viewModelScope.launch {
+            runCatching {
+                val servers = mcpConfigRepository.getGlobalServers().filterNot { it.name == "subprogram-$name" }
+                mcpConfigRepository.setGlobalServers(servers)
+            }
+            refreshSubprograms()
+            _subOpMessage.value = "已移除 $name（含 MCP 接入）"
+        }
+    }
+
+    /** 健康检查：容器内 curl 探活子程序 MCP 端点。 */
+    fun checkSubprogram(sub: com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram) {
+        viewModelScope.launch {
+            _subHealth[sub.name] = null
+            val ok = runCatching { subprogramRegistry.check(sub) }.getOrDefault(false)
+            _subHealth[sub.name] = ok
+            _subOpMessage.value = "${sub.name}：${if (ok) "在线" else "不在线（端口/token/服务未启动？）"}"
+        }
+    }
+
+    /** 接入 MCP：写全局 mcp.json（AI 即得以 mcp__subprogram-名__tool 调用子程序工具）。 */
+    fun attachSubprogramToMcp(sub: com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram) {
+        viewModelScope.launch {
+            val result = runCatching {
+                val servers = mcpConfigRepository.getGlobalServers().toMutableList()
+                val cfg = com.aicode.feature.agent.domain.mcp.McpServerConfig(
+                    // MCP 工具名只允许 ASCII，用端口做唯一后缀（避免中文名违规）
+                    name = "subprogram-${sub.port}",
+                    url = "http://127.0.0.1:${sub.port}/mcp",
+                    headers = mapOf("Authorization" to "Bearer ${sub.token}")
+                )
+                servers.removeAll { it.name == cfg.name }
+                servers.add(cfg)
+                mcpConfigRepository.setGlobalServers(servers)
+            }
+            _subOpMessage.value = if (result.isSuccess) {
+                "${sub.name} 已接入 MCP（工具前缀 mcp__subprogram-${sub.port}__），可在会话中直接调用"
+            } else {
+                "接入失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
             }
         }
     }
@@ -268,6 +350,9 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
             }
         }
 
+        // ── 子程序调试通道（MCP 注册表管理）──
+        SubprogramDebugCard(viewModel = viewModel)
+
         // ── 项目自测：执行 .aicode/selftest.json 清单，输出逐项证据（对所有项目通用）──
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -307,6 +392,92 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * 子程序调试通道管理卡：注册表（名称/包名/端口/token）+ 健康检查 + 一键接入 MCP。
+ * 子程序端由生成模板（.aicode/templates/subprogram-mcp/）内置 MCP server。
+ */
+@Composable
+private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
+    val subprograms by viewModel.subprograms.collectAsStateWithLifecycle()
+    val subOpMessage by viewModel.subOpMessage.collectAsStateWithLifecycle()
+    var showAdd by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { viewModel.refreshSubprograms() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("子程序调试通道", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Text(
+            "由母程序生成的子程序内置 MCP 调试通道（127.0.0.1 + token）。添加后可健康检查、接入 MCP，在会话中直接调用子程序的诊断工具。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (subprograms.isEmpty()) {
+            Text("暂无已注册子程序", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            subprograms.forEach { sub ->
+                val health = viewModel.subHealth[sub.name]
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(sub.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "${sub.packageName} · 端口 ${sub.port}" +
+                                (health?.let { if (it) " · 在线" else " · 不在线" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(onClick = { viewModel.checkSubprogram(sub) }) { Text("检查") }
+                    TextButton(onClick = { viewModel.attachSubprogramToMcp(sub) }) { Text("接入 MCP") }
+                    Text(
+                        text = "删除",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.clickable { viewModel.removeSubprogram(sub.name) }.padding(6.dp)
+                    )
+                }
+            }
+        }
+        OutlinedButton(onClick = { showAdd = true }) { Text("+ 添加子程序") }
+        subOpMessage?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+
+    if (showAdd) {
+        var name by remember { mutableStateOf("") }
+        var pkg by remember { mutableStateOf("") }
+        var port by remember { mutableStateOf("") }
+        var token by remember { mutableStateOf("") }
+        var err by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { showAdd = false },
+            title = { Text("添加子程序") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = name, onValueChange = { name = it; err = null }, label = { Text("名称") }, singleLine = true)
+                    OutlinedTextField(value = pkg, onValueChange = { pkg = it }, label = { Text("包名") }, singleLine = true)
+                    OutlinedTextField(value = port, onValueChange = { port = it.filter(Char::isDigit) }, label = { Text("端口") }, singleLine = true)
+                    OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Token（生成时分配）") }, singleLine = true)
+                    err?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val p = port.toIntOrNull()
+                    err = when {
+                        name.isBlank() || pkg.isBlank() || token.isBlank() -> "请填写完整"
+                        p == null || p !in 1024..65535 -> "端口需为 1024-65535"
+                        else -> viewModel.addSubprogram(name, pkg, p, token).also { r ->
+                            if (r == null) showAdd = false
+                        }
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showAdd = false }) { Text("取消") } }
+        )
     }
 }
 
