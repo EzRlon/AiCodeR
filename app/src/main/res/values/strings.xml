@@ -556,6 +556,7 @@
     <string name="float_panel_nothing_running">当前没有运行中的任务</string>
     <string name="float_panel_stop">停止任务</string>
     <string name="float_panel_open_app">回到 App</string>
+    <string name="float_panel_open_diagnostics">诊断</string>
     <string name="float_panel_collapse_panel">收起面板</string>
     <string name="float_panel_input_hint">给 AI 发指令…</string>
     <string name="float_panel_input">输入指令</string>

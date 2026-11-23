@@ -1159,6 +1159,10 @@ class FloatBallOverlay(
                                     FloatBallCommandCenter.openApp?.invoke()
                                     onDismiss()
                                 }) { Text(stringResource(R.string.float_panel_open_app)) }
+                                TextButton(onClick = {
+                                    FloatBallCommandCenter.openDiagnostics?.invoke()
+                                    onDismiss()
+                                }) { Text(stringResource(R.string.float_panel_open_diagnostics)) }
                             }
                         }
                     }

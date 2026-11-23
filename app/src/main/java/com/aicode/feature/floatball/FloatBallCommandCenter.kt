@@ -15,6 +15,10 @@ object FloatBallCommandCenter {
     @Volatile
     var openApp: (() -> Unit)? = null
 
+    /** 打开 App 并直达诊断与自测分区；null 表示 ViewModel 未就绪。 */
+    @Volatile
+    var openDiagnostics: (() -> Unit)? = null
+
     /** 停止当前正在运行的任务；null 表示未注册。返回是否真正执行了停止。 */
     @Volatile
     var stop: (() -> Boolean)? = null

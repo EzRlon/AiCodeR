@@ -250,7 +250,7 @@ private fun SettingsSection.depth(): Int = when (this) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     viewModel: SettingsViewModel,
     onNavigateBack: () -> Unit,
     onStopAllAndCloseTerminal: () -> Unit = {},
@@ -267,7 +267,9 @@ fun SettingsScreen(
     /** 授权记录「打开所在会话」：把会话 id 交给宿主页导航（null 则隐藏跳转）。 */
     onOpenSession: ((String) -> Unit)? = null,
     /** 开发环境一键搭建：场景确认后把（标题、任务提示词）交给宿主页开新会话执行。 */
-    onLaunchDevEnv: (title: String, prompt: String) -> Unit = { _, _ -> }
+    onLaunchDevEnv: (title: String, prompt: String) -> Unit = { _, _ -> },
+    /** 外部入口直达的初始分区（如悬浮球「诊断」）；null 则落在菜单页。仅首次组合生效。 */
+    initialSection: SettingsSection? = null
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
@@ -375,7 +377,7 @@ fun SettingsScreen(
     }
 
 
-    var section by remember { mutableStateOf(SettingsSection.Menu) }
+    var section by remember { mutableStateOf(initialSection ?: SettingsSection.Menu) }
     var logReturnSection by remember { mutableStateOf(SettingsSection.Menu) }
     var editingProvider by remember { mutableStateOf<AIProviderConfig?>(null) }
     var showAddProviderSheet by remember { mutableStateOf(false) }

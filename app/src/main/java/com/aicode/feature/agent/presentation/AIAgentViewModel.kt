@@ -4154,6 +4154,17 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /** 悬浮球「诊断」：打开 App 并直达设置 → 诊断与自测分区。 */
+    private val floatBallOpenDiagnosticsBridge: () -> Unit = {
+        runCatching {
+            val intent = android.content.Intent(context, com.aicode.MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(com.aicode.MainActivity.EXTRA_OPEN_DIAGNOSTICS, true)
+            }
+            context.startActivity(intent)
+        }
+    }
+
     /** 悬浮球「停止任务」：优先停当前会话，其次停任意运行中的 agent 回合或斜杠命令回合。返回是否真正执行。 */
     private val floatBallStopBridge: () -> Boolean = {
         val agentRunning = sessionJobs.filterValues { it.isActive }.keys
@@ -4192,6 +4203,7 @@ class AIAgentViewModel @Inject constructor(
         // 保留实例引用：onCleared 时仅在自己仍持有桥时才清空，避免误清新 ViewModel 的注册。
         FloatBallCommandCenter.send = floatBallSendBridge
         FloatBallCommandCenter.openApp = floatBallOpenAppBridge
+        FloatBallCommandCenter.openDiagnostics = floatBallOpenDiagnosticsBridge
         FloatBallCommandCenter.stop = floatBallStopBridge
         FloatBallCommandCenter.resolveApproval = floatBallApprovalBridge
         FloatBallCommandCenter.setMode = { setSessionMode(it) }
@@ -4275,6 +4287,7 @@ class AIAgentViewModel @Inject constructor(
         // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
         if (FloatBallCommandCenter.send === floatBallSendBridge) FloatBallCommandCenter.send = null
         if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
+        if (FloatBallCommandCenter.openDiagnostics === floatBallOpenDiagnosticsBridge) FloatBallCommandCenter.openDiagnostics = null
         if (FloatBallCommandCenter.stop === floatBallStopBridge) FloatBallCommandCenter.stop = null
         if (FloatBallCommandCenter.resolveApproval === floatBallApprovalBridge) FloatBallCommandCenter.resolveApproval = null
         if (FloatBallCommandCenter.setMode != null) FloatBallCommandCenter.setMode = null

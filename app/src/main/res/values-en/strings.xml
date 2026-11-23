@@ -543,6 +543,7 @@
     <string name="float_panel_nothing_running">No running task</string>
     <string name="float_panel_stop">Stop task</string>
     <string name="float_panel_open_app">Open app</string>
+    <string name="float_panel_open_diagnostics">Diagnostics</string>
     <string name="float_panel_collapse_panel">Collapse panel</string>
     <string name="float_panel_input_hint">Ask the AI…</string>
     <string name="float_panel_input">Input</string>
