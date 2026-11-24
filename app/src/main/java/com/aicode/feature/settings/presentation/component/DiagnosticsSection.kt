@@ -48,6 +48,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aicode.feature.agent.presentation.AIAgentViewModel
 import com.aicode.feature.settings.domain.DiagnosticsCollector
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -57,6 +58,7 @@ import kotlinx.coroutines.launch
 /** 诊断与自测区块 ViewModel：环境收集 + 项目自测 + 子程序调试通道管理。 */
 @HiltViewModel
 class DiagnosticsViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val collector: DiagnosticsCollector,
     private val commandEngine: com.aicode.feature.agent.domain.container.CommandEngine,
     private val subprogramRegistry: com.aicode.feature.settings.domain.SubprogramRegistry,
@@ -160,6 +162,16 @@ class DiagnosticsViewModel @Inject constructor(
     fun checkSubprogram(sub: com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram) {
         viewModelScope.launch {
             _subHealth[sub.name] = null
+            // MIUI 等激进后台管控会杀掉切后台的子程序前台服务：检查前跨 App 重新拉起
+            //（母程序在前台时 startForegroundService 合法；extras 名与模板 EXTRA_PORT/EXTRA_TOKEN 对应）。
+            runCatching {
+                appContext.startForegroundService(
+                    android.content.Intent().setClassName(sub.packageName, "com.aicoder.app.mcp.SubprogramMcpService")
+                        .putExtra("port", sub.port)
+                        .putExtra("token", sub.token)
+                )
+            }
+            kotlinx.coroutines.delay(2000)
             val ok = runCatching { subprogramRegistry.check(sub) }.getOrDefault(false)
             _subHealth[sub.name] = ok
             _subOpMessage.value = if (!ok) {
