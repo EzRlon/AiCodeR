@@ -541,6 +541,10 @@ class SettingsViewModel @Inject constructor(
     private val _providers = MutableStateFlow<List<AIProviderConfig>>(emptyList())
     val providers: StateFlow<List<AIProviderConfig>> = _providers.asStateFlow()
 
+    /** 密钥密文存在但解密失败的 provider id（Keystore 变更/卸载重装）；UI 显性提示以免误判为未填写。 */
+    private val _decryptFailedProviderIds = MutableStateFlow<Set<String>>(emptySet())
+    val decryptFailedProviderIds: StateFlow<Set<String>> = _decryptFailedProviderIds.asStateFlow()
+
     /** 新会话默认模型（主页空会话中选择后记忆），供未绑定会话回退。 */
     val defaultModelProviderId: StateFlow<String> = defaultModelSettingsRepository.providerIdFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
@@ -1022,6 +1026,12 @@ class SettingsViewModel @Inject constructor(
             launch {
                 repository.getAllProviders().collectLatest {
                     _providers.value = it
+                }
+            }
+
+            launch {
+                repository.observeDecryptFailures().collectLatest {
+                    _decryptFailedProviderIds.value = it
                 }
             }
 

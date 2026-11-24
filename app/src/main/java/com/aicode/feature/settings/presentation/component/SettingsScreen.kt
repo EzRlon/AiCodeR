@@ -272,6 +272,7 @@ internal fun SettingsScreen(
     initialSection: SettingsSection? = null
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
+    val decryptFailedProviderIds by viewModel.decryptFailedProviderIds.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
     val logViewerState by viewModel.logViewerState.collectAsStateWithLifecycle()
     val mcpAuthState by viewModel.mcpAuthState.collectAsStateWithLifecycle()
@@ -1236,6 +1237,7 @@ internal fun SettingsScreen(
                 )
                 SettingsSection.Providers -> ProvidersSection(
                     providers = providers,
+                    decryptFailedIds = decryptFailedProviderIds,
                     onEdit = {
                         editingProvider = it
                         section = SettingsSection.ProviderEditor

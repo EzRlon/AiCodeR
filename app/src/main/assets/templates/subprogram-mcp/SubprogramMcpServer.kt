@@ -121,7 +121,7 @@ class SubprogramMcpServer(
     private fun getRecentLogs(lines: Int): String = runCatching {
         val dir = appContext().getExternalFilesDir("logs") ?: appContext().filesDir
         val latest = dir.listFiles()?.maxByOrNull { it.lastModified() }
-        latest?.readText()?.lineSequence()?.takeLast(lines)?.joinToString("\n") ?: "（无日志文件）"
+        latest?.readText()?.lineSequence()?.toList()?.takeLast(lines)?.joinToString("\n") ?: "（无日志文件）"
     }.getOrDefault("（读取失败）")
 
     /**
@@ -139,8 +139,12 @@ class SubprogramMcpServer(
         }
         check("内存充足", !mem.lowMemory, "可用 ${mem.availMem / 1_000_000}MB")
         // TODO: 宿主 App 在此追加业务自检项
+        var passed = 0
+        for (i in 0 until items.length()) {
+            if (items.getJSONObject(i).optBoolean("pass")) passed++
+        }
         return JSONObject().put("items", items)
-            .put("passed", items.fold(0) { acc, i -> acc + if (i.optBoolean("pass")) 1 else 0 })
+            .put("passed", passed)
             .put("total", items.length())
             .toString()
     }

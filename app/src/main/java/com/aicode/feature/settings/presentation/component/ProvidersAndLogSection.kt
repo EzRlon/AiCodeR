@@ -57,7 +57,8 @@ internal fun ProvidersSection(
     providers: List<AIProviderConfig>,
     onEdit: (AIProviderConfig) -> Unit,
     onDelete: (AIProviderConfig) -> Unit,
-    onReorder: (fromIndex: Int, toIndex: Int) -> Unit
+    onReorder: (fromIndex: Int, toIndex: Int) -> Unit,
+    decryptFailedIds: Set<String> = emptySet()
 ) {
     if (providers.isEmpty()) {
         EmptyHint(stringResource(R.string.providers_empty))
@@ -115,6 +116,7 @@ internal fun ProvidersSection(
                 ) {
                     ProviderItem(
                         provider = provider,
+                        decryptFailed = provider.id in decryptFailedIds,
                         onEdit = { onEdit(provider) },
                         onDelete = { onDelete(provider) },
                         dragModifier = Modifier.longPressDraggableHandle(
@@ -157,6 +159,7 @@ internal fun EmptyHint(text: String) {
 @Composable
 fun ProviderItem(
     provider: AIProviderConfig,
+    decryptFailed: Boolean = false,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     dragModifier: Modifier = Modifier
@@ -230,6 +233,14 @@ fun ProviderItem(
                             backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier.weight(1f, fill = false)
                         )
+                        // 密文在但解不开（卸载重装/签名变更致 Keystore 密钥丢失）：显性提示，引导从备份恢复或重填。
+                        if (decryptFailed) {
+                            McpPill(
+                                text = "密钥需重填",
+                                textColor = MaterialTheme.colorScheme.error,
+                                backgroundColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                            )
+                        }
                     }
                 }
             }
