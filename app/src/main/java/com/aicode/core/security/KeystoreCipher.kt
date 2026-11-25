@@ -34,34 +34,66 @@ object KeystoreCipher {
     /** 字节密文文件头；用于区分加密文件与旧明文文件。 */
     private val BYTE_MAGIC = "AICODEENC1\u0000".toByteArray(Charsets.US_ASCII)
 
+    /** getEntry 重试次数与间隔基数：扛 keystore 服务瞬时异常（升级后首次启动最易触发）。 */
+    private const val GET_ENTRY_RETRY = 3
+    private const val RETRY_DELAY_MS = 120L
+
     private val lock = Any()
 
     private fun secretKey(): SecretKey = synchronized(lock) {
         val keyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
-        // 部分 Android 版本（实测 API 37 设备）在 keystore 服务异常时，getEntry 会把密钥条目
-        // 误判为证书条目并构造 TrustedCertificateEntry(null) 抛 NPE，直接炸崩调用线程；
-        // 这里按「密钥不可用」处理，走下方重建路径。
-        val existing = runCatching {
-            (keyStore.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
-        }.getOrNull()
-        existing ?: run {
-            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER)
-            generator.init(
-                KeyGenParameterSpec.Builder(
-                    ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build()
-            )
-            runCatching { generator.generateKey() }.getOrElse {
-                // alias 被坏条目占用时生成会失败：清掉后重试一次
-                runCatching { keyStore.deleteEntry(ALIAS) }
-                generator.generateKey()
-            }
+        // 存在性判定必须用 containsAlias，不能信 getEntry 的结果：部分系统（实测 API 37）keystore
+        // 服务瞬时异常时 getEntry 会误构造 TrustedCertificateEntry(null) 抛 NPE。**读取失败 ≠ 密钥
+        // 不存在**——若据此走 generateKey，会静默覆盖同 alias 的真实密钥，全部存量密文（供应商
+        // API Key 等）永久解不开，即「升级安装后密钥丢失」的根因（3edafc2 引入，本版修复）。
+        val aliasPresent = try {
+            keyStore.containsAlias(ALIAS)
+        } catch (e: Exception) {
+            // 连存在性都查不了：keystore 服务不可用。向上抛（读路径按解密失败兜底、密文原样保留），
+            // 绝不在此状态下生成新密钥——那等于拿新钥匙换掉可能还完好的旧钥匙。
+            throw IllegalStateException("keystore 服务不可用：无法确认密钥存在性，拒绝重建", e)
         }
+        if (aliasPresent) {
+            // 真实密钥还在：短暂重试扛服务瞬时异常；重试耗尽仍失败则向上抛。
+            // 宁可本次解密失败（密文完好保留在库里，服务恢复后即可解），绝不重建覆盖。
+            var lastError: Exception? = null
+            repeat(GET_ENTRY_RETRY) { attempt ->
+                try {
+                    return when (val entry = keyStore.getEntry(ALIAS, null)) {
+                        is KeyStore.SecretKeyEntry -> entry.secretKey
+                        // 条目在但不是 AES 密钥（真坏条目，存量密文本就无对应密钥可解）：此时重建无损
+                        else -> {
+                            FileLogger.w(TAG, "alias=$ALIAS 条目类型异常(${entry?.javaClass?.simpleName})，重建密钥")
+                            regenerate(keyStore)
+                        }
+                    }
+                } catch (e: Exception) {
+                    lastError = e
+                    runCatching { Thread.sleep(RETRY_DELAY_MS shl attempt) }
+                }
+            }
+            throw IllegalStateException(
+                "密钥读取连续 $GET_ENTRY_RETRY 次失败（keystore 服务瞬时异常），拒绝重建以免销毁真实密钥",
+                lastError
+            )
+        }
+        regenerate(keyStore)
+    }
+
+    /** 在确认 alias 不存在（或条目确非 AES 密钥）时生成新密钥；同 alias 生成会覆盖旧条目。 */
+    private fun regenerate(keyStore: KeyStore): SecretKey {
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER)
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        return generator.generateKey()
     }
 
     fun encryptBytes(plain: ByteArray): ByteArray {
@@ -84,9 +116,14 @@ object KeystoreCipher {
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
             cipher.doFinal(ciphertext)
         } catch (e: GeneralSecurityException) {
-            // 密文与当前 Keystore 密钥不匹配（密钥丢失后按新密钥重建）或数据损坏。
+            // 密文与当前 Keystore 密钥不匹配或数据损坏。
             // 返回空值而非抛出，避免单个坏字段把整条读取 Flow 带崩。
             FileLogger.w(TAG, "解密失败：密文与当前 Keystore 密钥不匹配或已损坏", e)
+            ByteArray(0)
+        } catch (e: IllegalStateException) {
+            // keystore 服务瞬时不可用（secretKey 拒绝重建而向上抛）：本次解不出，但密文仍完好
+            // 保留在库里——服务恢复后即可正常解密，且 preserveUndecryptable 防线会阻止空值覆盖密文。
+            FileLogger.w(TAG, "解密跳过：keystore 服务暂不可用，密文原样保留待恢复", e)
             ByteArray(0)
         }
     }
