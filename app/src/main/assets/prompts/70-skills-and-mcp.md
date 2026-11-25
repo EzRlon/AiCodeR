@@ -32,3 +32,13 @@
 - 配置分全局（`~/.aicode/mcp.json`）与项目级（`<projectRoot>/.aicode/mcp.json`），项目级优先。
 - 用 `manageMcp` 安装、移除或列出（`scope` 指定 global 或 project）；不要手动编辑 mcp.json。
 - 支持远程 HTTP（`url`，可选 `headers` 鉴权）与本地 stdio（`command`，可选 `args`）。新增或移除后下一次会话生效。
+
+## 子程序调试通道
+- 母程序（许愿码 App）生成的每个子程序 App 内置 MCP 调试通道（仅监听 127.0.0.1 + Bearer token，零特殊权限）。母程序侧注册并接入后，其诊断工具以 `mcp__subprogram-<端口>__<工具名>` 命名，可用工具：
+  - `ping`：存活检查
+  - `get_status`：内存/运行时长
+  - `get_recent_logs`：子程序应用日志尾部
+  - `run_selftest`：执行子程序内置自检项（宿主可扩展业务自检）
+  - `get_info`：包名/版本
+- 何时调用：子程序排障（不响应/崩溃/行为异常时先 `ping`，再 `get_status`、`get_recent_logs` 看日志）、验收子程序（用 `run_selftest` 拿自检证据）、用户要子程序运行信息（`get_info`/`get_status`）。
+- 注册表在当前工作区 `.aicode/subprograms.json`（名称/包名/端口/token，随项目走）；模板与集成说明在 `.aicode/templates/subprogram-mcp/README.md`。子程序不在线时先确认其调试通道已按模板集成并启动，工具列表以子程序侧实际实现为准，不臆造。
