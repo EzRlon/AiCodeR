@@ -318,6 +318,8 @@ class AIEditorApp : Application(), Configuration.Provider {
             return
         }
         super.onCreate()
+        // 加密初始化必须最先：主密钥哨兵依赖 filesDir，未初始化前拒绝任何加解密。
+        com.aicode.core.security.KeystoreCipher.init(this)
         // 安全模式：上次短时间内连续崩浘3 次后熔断置位。本次冷启动跳过全部后台/网络/容器
         // 初始化（保留 Hilt 注入与数据层），让用户至少能进 App 导出数据/修复配置；
         // 10 分钟后自动清除标记自愈回正常模式，若崩溃源仍在会再次熔断置位，不会更糟。

@@ -1,8 +1,10 @@
 package com.aicode.core.security
 
+import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.aicode.core.util.FileLogger
+import java.io.File
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.util.Base64
@@ -36,9 +38,87 @@ object KeystoreCipher {
 
     /** getEntry 重试次数与间隔基数：扛 keystore 服务瞬时异常（升级后首次启动最易触发）。 */
     private const val GET_ENTRY_RETRY = 3
+
+    /** containsAlias 重试次数（与 getEntry 同级）。 */
+    private const val ALIAS_CHECK_RETRY = 3
     private const val RETRY_DELAY_MS = 120L
 
+    /**
+     * 主密钥哨兵：首次生成主密钥前写入 filesDir，永不主动删除。
+     *
+     * 这是「本机曾经生成过主密钥」的唯一可信证据——keystore 服务本身不可信：
+     * 同一设备已实证 getEntry 会构造垃圾条目（3edafc2），containsAlias 也可能在服务
+     * 瞬时异常时说谎返回 false。哨兵存在时，任何「alias 不可见」状态一律拒绝重建：
+     * 若为说谎，重建会覆盖真实密钥；若为主密钥真丢失，存量密文本就不可解，重建只会
+     * 用新密钥加密后续数据，掩盖丢失并让后续保存静默覆盖死密文——两者都不能发生。
+     */
+    private const val SENTINEL_FILE = ".keystore-masterkey-created"
+
+    @Volatile
+    private var appContext: Context? = null
+
+    /** 必须在 Application.onCreate 最先调用；未初始化前加解密一律拒绝执行（宁可报错不可误重建）。 */
+    fun init(context: Context) {
+        if (appContext == null) appContext = context.applicationContext
+    }
+
     private val lock = Any()
+
+    /**
+     * 主密钥重建决策：唯一允许重建的组合是「alias 不可见且本机从未生成过主密钥」。
+     * 其余任何组合——特别是 alias 不可见但哨兵存在（keystore 说谎或主密钥丢失）——一律拒绝。
+     */
+    internal fun shouldRegenerate(aliasVisible: Boolean, sentinelExists: Boolean): Boolean =
+        !aliasVisible && !sentinelExists
+
+    private fun sentinelFile(): File {
+        val ctx = appContext ?: throw IllegalStateException(
+            "KeystoreCipher 未初始化：拒绝在无法确认主密钥归属时操作 keystore"
+        )
+        return File(ctx.filesDir, SENTINEL_FILE)
+    }
+
+    private fun sentinelExists(): Boolean = sentinelFile().exists()
+
+    /** 尽力补写哨兵（拿到「曾有主密钥」证据时调用，自愈老版本升级上来的安装）。 */
+    private fun markSentinel() {
+        runCatching {
+            val f = sentinelFile()
+            if (!f.exists()) {
+                f.parentFile?.mkdirs()
+                f.writeText("createdAt=${System.currentTimeMillis()}\n")
+            }
+        }.onFailure { FileLogger.w(TAG, "补写主密钥哨兵失败（本次不影响加解密）", it) }
+    }
+
+    /** 严格写哨兵（生成新密钥前）：写不进去就拒绝生成，否则未来会再次误判「首次使用」。 */
+    private fun markSentinelStrict(): Boolean = runCatching {
+        val f = sentinelFile()
+        if (!f.exists()) {
+            f.parentFile?.mkdirs()
+            f.writeText("createdAt=${System.currentTimeMillis()}\n")
+        }
+        true
+    }.getOrElse {
+        FileLogger.e(TAG, "写入主密钥哨兵失败：拒绝生成新密钥以免未来误重建", it)
+        false
+    }
+
+    /** containsAlias 带重试：期间出现过异常 → 结果不可信，按「未知」向上抛，绝不当作「不存在」。 */
+    private fun containsAliasWithRetry(keyStore: KeyStore): Boolean {
+        var sawError = false
+        repeat(ALIAS_CHECK_RETRY) { attempt ->
+            try {
+                if (keyStore.containsAlias(ALIAS)) return true
+            } catch (e: Exception) {
+                sawError = true
+                FileLogger.w(TAG, "查询密钥存在性失败（第 ${attempt + 1} 次）：${e.message}")
+            }
+            if (attempt < ALIAS_CHECK_RETRY - 1) runCatching { Thread.sleep(RETRY_DELAY_MS shl attempt) }
+        }
+        if (sawError) throw IllegalStateException("keystore 服务异常：无法确认主密钥存在性，拒绝任何重建")
+        return false
+    }
 
     private fun secretKey(): SecretKey = synchronized(lock) {
         val keyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
@@ -46,13 +126,7 @@ object KeystoreCipher {
         // 服务瞬时异常时 getEntry 会误构造 TrustedCertificateEntry(null) 抛 NPE。**读取失败 ≠ 密钥
         // 不存在**——若据此走 generateKey，会静默覆盖同 alias 的真实密钥，全部存量密文（供应商
         // API Key 等）永久解不开，即「升级安装后密钥丢失」的根因（3edafc2 引入，本版修复）。
-        val aliasPresent = try {
-            keyStore.containsAlias(ALIAS)
-        } catch (e: Exception) {
-            // 连存在性都查不了：keystore 服务不可用。向上抛（读路径按解密失败兜底、密文原样保留），
-            // 绝不在此状态下生成新密钥——那等于拿新钥匙换掉可能还完好的旧钥匙。
-            throw IllegalStateException("keystore 服务不可用：无法确认密钥存在性，拒绝重建", e)
-        }
+        val aliasPresent = containsAliasWithRetry(keyStore)
         if (aliasPresent) {
             // 别名存在 = 真实密钥还在。此时**任何**读取失败（抛异常或返回 null）都只能向上抛，
             // 绝不允许走到 regenerate——那会覆盖真实密钥、让全部存量密文永久解不开。
@@ -61,7 +135,11 @@ object KeystoreCipher {
             repeat(GET_ENTRY_RETRY) { attempt ->
                 try {
                     val entry = keyStore.getEntry(ALIAS, null)
-                    if (entry is KeyStore.SecretKeyEntry) return entry.secretKey
+                    if (entry is KeyStore.SecretKeyEntry) {
+                        // 自愈：老版本升级上来的安装没有哨兵，成功读到密钥即补写
+                        markSentinel()
+                        return entry.secretKey
+                    }
                     // 返回 null 或非 SecretKeyEntry：视为读取失败（不是「真坏条目可重建」）。
                     // 历史上正是「按坏条目重建」这一步销毁了用户全部供应商密钥。
                     lastError = IllegalStateException(
@@ -78,7 +156,20 @@ object KeystoreCipher {
                 lastError
             )
         }
-        // 走到这里只有一种情况：别名确实不存在（首次安装/用户已清数据），生成新密钥是安全的。
+        // alias 不可见。只有「本机从未生成过主密钥」才允许生成；哨兵存在时一律拒绝——
+        // containsAlias 说谎会销毁真实密钥，主密钥真丢失时重建也只能掩盖数据丢失。
+        val sentinelPresent = sentinelExists()
+        if (!shouldRegenerate(aliasVisible = false, sentinelExists = sentinelPresent)) {
+            throw IllegalStateException(
+                "keystore 中主密钥不可见，但本机曾生成过主密钥（哨兵存在）：疑似 keystore 服务异常或主密钥被系统清除。" +
+                    "拒绝重建——重建会覆盖真实密钥，使全部存量密文（供应商 API Key 等）永久不可解。" +
+                    "请重启设备后重试；若主密钥确已丢失，可在导出备份后清除应用数据重建（现存密文本就已不可解）。"
+            )
+        }
+        // 首次使用：先落哨兵再生成——即便生成中途进程被杀，下次也不会误判为「首次」而反复重建。
+        if (!markSentinelStrict()) {
+            throw IllegalStateException("无法写入主密钥哨兵：拒绝生成新密钥以免未来误重建")
+        }
         regenerate(keyStore)
     }
 
@@ -111,6 +202,9 @@ object KeystoreCipher {
 
     fun decryptBytes(encrypted: ByteArray): ByteArray {
         require(isEncryptedBytes(encrypted)) { "不是加密数据" }
+        // 存量密文存在 = 本机必然生成过主密钥：先补写哨兵再碰 keystore。
+        // 这样即便本次 containsAlias 说谎返回 false，下方 secretKey() 也会拒绝重建。
+        markSentinel()
         val iv = encrypted.copyOfRange(BYTE_MAGIC.size, BYTE_MAGIC.size + IV_LEN)
         val ciphertext = encrypted.copyOfRange(BYTE_MAGIC.size + IV_LEN, encrypted.size)
         return try {
@@ -161,6 +255,7 @@ object KeystoreCipher {
     /** 解密字符串；非密文（旧明文）原样返回。 */
     fun decryptString(value: String): String {
         if (!isEncryptedString(value)) return value
+        markSentinel()
         return try {
             val body = Base64.getDecoder().decode(value.removePrefix(STRING_PREFIX))
             String(decryptBytes(body), Charsets.UTF_8)
