@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -54,6 +55,7 @@ import com.aicode.core.theme.AIEditorTheme
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Shield
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.RefreshCw
@@ -116,6 +118,18 @@ class CrashActivity : ComponentActivity() {
                     onRestart = {
                         // 用户主动点击重启：清除崩溃标记与计数，允许主进程尝试冷启动
                         AIEditorApp.resetCrashState(applicationContext)
+                        startActivity(
+                            Intent(this, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            }
+                        )
+                        finish()
+                    },
+                    onSafeRestart = {
+                        // 安全模式重启：置位降级标记，下次冷启动跳过全部后台初始化。
+                        // 普通重启仍崩在同一初始化时用它自救；进 App 后 10 分钟自动自愈。
+                        AIEditorApp.resetCrashState(applicationContext)
+                        AIEditorApp.setSafeMode(applicationContext, true)
                         startActivity(
                             Intent(this, MainActivity::class.java).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -218,6 +232,7 @@ private fun CrashScreen(
     onCopy: () -> Unit,
     onFix: () -> Unit,
     onRestart: () -> Unit,
+    onSafeRestart: () -> Unit,
     onExit: () -> Unit,
 ) {
     val pageBg = MaterialTheme.semanticColors.pageBackground
@@ -320,6 +335,16 @@ private fun CrashScreen(
                             Spacer(Modifier.width(Spacing.xs))
                             Text(stringResource(R.string.crash_restart), maxLines = 1)
                         }
+                    }
+                    // 安全模式重启：普通重启仍崩在同一初始化时的自救通道（跳过后台初始化）。
+                    TextButton(
+                        onClick = onSafeRestart,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(FeatherIcons.Shield, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(Spacing.xs))
+                        Text(stringResource(R.string.crash_safe_restart), maxLines = 1)
                     }
                 }
             }

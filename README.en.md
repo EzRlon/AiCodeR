@@ -28,7 +28,7 @@ AiCodeR is a community-enhanced fork of [AiCode](https://github.com/jieapi/AiCod
 
 | Area | Upstream | This fork |
 | --- | --- | --- |
-| Execution | One built-in agent | Built-in agent + Claude Code / Codex / OpenCode CLI engines, switchable per session, capabilities fed back over an MCP bridge |
+| Execution | One built-in agent | Built-in agent + Claude Code / Codex / OpenCode / DeepSeek (dsh) CLI engines, switchable per session, capabilities fed back over an MCP bridge |
 | Context | Auto-compaction | Compaction + semantic-anchor micro-compaction + nine-section summary + failure breaker + post-compaction working-set restore + full-text recall of archived messages |
 | Permissions | Tool approval | Three permission levels per tool + approval profiles + audit log + night-watch guard + pre-approved lists for scheduled tasks |
 | Collaboration | Chat + subagents | Expert teams, message intent types, project task ledger, memory graph conclusions |
@@ -98,7 +98,10 @@ Build and delete patches for musl/PRoot; directory removal uses NOFOLLOW-safe de
 - **Wider backups** — sessions, AI assets, keystores, scheduled tasks, permission profiles, night-watch and container settings in one package
 - **Key management** — release signing, SSH and workspace keys in one place, with export/import (fingerprint manifest) and inclusion in backup scope
 - **Storage cleanup 2.0** — categories of rebuildable data (chat, container images, workspaces, AI config, checkpoints, logs, caches, APKs), plus VACUUM after session-level deletion so the database file actually shrinks
-- **Online store** — one-tap install of skills, MCP servers and expert teams (installed ≠ enabled), scanned against local safety rules before install
+- **Online store** — one-tap install of skills, MCP servers and expert teams (installed ≠ enabled), scanned against local safety rules before install; official channels for all four engines: source badges separate official from community, official skill and plugin sources install directly, with "install to all engines" support
+- **Diagnostics & self-test v2** — zero-permission four-layer collection (device / permissions / app / container) into one report; project self-test lists (`.aicode/selftest.json`) executed item by item for evidence; installed-state checkup for subprograms
+- **Subprogram MCP debug channel** — zero-permission debug channel between the host app and its generated subprogram apps: registry (name / package / port / token), a management card on the diagnostics page, one-tap MCP attach after a live probe, and automatic template injection into new workspaces
+- **Provider multi-key rotation v2.1** — adaptive cooldown (escalating on rate limits, server recovery headers first), in-stream error-body parsing for quota/auth failures, and a per-key runtime status card
 
 ### Experience and engineering quality
 

@@ -37,6 +37,9 @@ import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.model.TodoItem
 import com.aicode.feature.agent.data.local.entity.ChatSessionEntity
 import com.aicode.feature.agent.data.local.entity.FailureEventKind
+import com.aicode.feature.agent.domain.cliagent.CliAgent
+import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
+import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.ContainerInitState
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
@@ -224,6 +227,7 @@ class AIAgentViewModel @Inject constructor(
     private val toolPermissionManager: ToolPermissionManager,
     private val askUserQuestionManager: AskUserQuestionManager,
     private val containerEngine: LinuxContainerEngine,
+    private val cliAgentManager: CliAgentManager,
     private val sessionUseCase: SessionUseCase,
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val planApprovalManager: PlanApprovalManager,
@@ -1125,11 +1129,109 @@ class AIAgentViewModel @Inject constructor(
         // 状态流尚未加载（首帧）时不短路：currentSessionState 为 null 只说明还没加载，不代表引擎就是内置
         if (currentSessionState.value != null && currentSessionState.value?.engine == engine) return true
         viewModelScope.launch {
+            // 会话内切换外部引擎前先实测 CLI 是否已安装：未装则不切，改弹引导安装
+            // （装好后自动续切）；内置引擎无此依赖。
+            if (engine != null) {
+                val agent = CliAgentCatalog.byEngine(engine)
+                if (agent != null && cliAgentManager.detectVersion(agent, forceRefresh = true) == null) {
+                    val containerReady = containerEngine.runCommandSyncIfReady(
+                        "true",
+                        timeoutMs = CONTAINER_PROBE_TIMEOUT_MS
+                    ) != null
+                    _pendingEngineInstall.value = PendingEngineInstall(engine, containerNotReady = !containerReady)
+                    return@launch
+                }
+            }
             sessionUseCase.updateEngine(sid, engine)
             // 原生档位按引擎隔离：旧引擎的档位在新引擎里无意义，重置到新引擎默认档。
             sessionUseCase.updateEngineMode(sid, EngineModeCatalog.defaultModeId(engine))
         }
         return true
+    }
+
+    // ===== 会话内引擎引导安装：弹窗确认后全自动联网安装，装后自动测试并续切引擎 =====
+
+    /** 引擎未安装的引导安装请求：会话内点引擎但 CLI 不在时置位，UI 弹确认弹窗。 */
+    data class PendingEngineInstall(val engine: String, val containerNotReady: Boolean)
+
+    /** 引擎安装任务状态。 */
+    sealed interface EngineInstallState {
+        data object Idle : EngineInstallState
+
+        /** 正在装第 [index]/[total] 个引擎 [name]（CLI 在后台终端标签执行，可切过去看实时日志）。 */
+        data class Running(val name: String, val index: Int, val total: Int) : EngineInstallState
+
+        /** 全部完成，[summary] 为逐个结果。 */
+        data class Done(val summary: String) : EngineInstallState
+    }
+
+    private val _pendingEngineInstall = MutableStateFlow<PendingEngineInstall?>(null)
+    val pendingEngineInstall: StateFlow<PendingEngineInstall?> = _pendingEngineInstall.asStateFlow()
+
+    private val _engineInstallState = MutableStateFlow<EngineInstallState>(EngineInstallState.Idle)
+    val engineInstallState: StateFlow<EngineInstallState> = _engineInstallState.asStateFlow()
+
+    /** 关闭引导安装弹窗（用户取消）。 */
+    fun dismissEngineInstallDialog() {
+        _pendingEngineInstall.value = null
+    }
+
+    /** 清除安装结果弹窗（用户看完结果点确定）。 */
+    fun clearEngineInstallState() {
+        _engineInstallState.value = EngineInstallState.Idle
+    }
+
+    /** 引导安装确认：[all]=true 装全部三引擎，否则只装待切引擎；装完逐个实测版本。 */
+    fun installEngines(all: Boolean) {
+        val pending = _pendingEngineInstall.value ?: return
+        _pendingEngineInstall.value = null
+        val targets = if (all) CliAgentCatalog.ALL else listOfNotNull(CliAgentCatalog.byEngine(pending.engine))
+        if (targets.isEmpty()) return
+        if (pending.containerNotReady) {
+            _engineInstallState.value = EngineInstallState.Done("容器尚未初始化完成，无法安装引擎，请稍后再试")
+            return
+        }
+        viewModelScope.launch {
+            val lines = mutableListOf<String>()
+            var pendingEngineReady = false
+            targets.forEachIndexed { index, agent ->
+                _engineInstallState.value = EngineInstallState.Running(agent.displayName, index + 1, targets.size)
+                val detected = cliAgentManager.detectVersion(agent, forceRefresh = true)
+                if (detected != null) {
+                    lines += "✓ ${agent.displayName} 已是 v$detected"
+                    if (agent.id == pending.engine) pendingEngineReady = true
+                    return@forEachIndexed
+                }
+                // 终端标签后台安装：notify 结束通知 + 可切过去看实时日志（Node 自愈/镜像回退全自动）。
+                cliAgentManager.install(agent)
+                val deadline = System.currentTimeMillis() + ENGINE_INSTALL_WAIT_TIMEOUT_MS
+                var version: String? = null
+                while (System.currentTimeMillis() < deadline) {
+                    delay(5_000)
+                    version = cliAgentManager.detectVersion(agent, forceRefresh = true)
+                    if (version != null) break
+                    // 快速失败：安装脚本进程已退出且版本仍未就绪 → 立即终判，不等满超时
+                    // （pgrep 包名匹配安装命令行；npm 尚在跑或 Node 自愈阶段则继续等）。
+                    val installerAlive = containerEngine.runCommandSyncIfReady(
+                        "pgrep -f \"${agent.npmPackage}\" >/dev/null 2>&1 && echo alive || echo done",
+                        timeoutMs = 5_000L
+                    )?.output?.trim()
+                    if (installerAlive == "done") {
+                        version = cliAgentManager.detectVersion(agent, forceRefresh = true)
+                        break
+                    }
+                }
+                if (version != null) {
+                    lines += "✓ ${agent.displayName} v$version 安装成功，测试通过"
+                    if (agent.id == pending.engine) pendingEngineReady = true
+                } else {
+                    lines += "✗ ${agent.displayName} 安装未完成，可到终端页查看日志后重试"
+                }
+            }
+            _engineInstallState.value = EngineInstallState.Done(lines.joinToString("\n"))
+            // 用户本来要切的引擎装好了：自动续上切换。
+            if (pendingEngineReady) setSessionEngine(pending.engine)
+        }
     }
 
     /** 设置当前会话的引擎原生工作模式（[modeId] 取自 [EngineModeCatalog.entriesFor]）。 */
@@ -1555,6 +1657,10 @@ class AIAgentViewModel @Inject constructor(
         /** 外部引擎会话每完成 N 个回合做一次结论沉淀（一次有界摘要；可被结论抽取开关关闭）。 */
         const val EXTERNAL_CONCLUSION_EVERY_TURNS = 3
 
+        /** 引擎安装实测轮询上限：installCommand 自带 8 分钟重试与镜像回退，这里再笸一层。 */
+        const val ENGINE_INSTALL_WAIT_TIMEOUT_MS = 10L * 60 * 1000
+        const val CONTAINER_PROBE_TIMEOUT_MS = 5_000L
+
         /** 自动补录账本时最多记录的文件数：一轮改几十个文件时只留前若干个，避免账本条目过长。 */
         const val MAX_AUTO_LEDGER_FILES = 20
 
@@ -1575,6 +1681,10 @@ class AIAgentViewModel @Inject constructor(
 
         /** 「准备交接」自然语言短语：直触快照交接（与 /handoff 同一命令）。 */
         const val HANDOFF_PHRASE = "准备交接"
+
+        /** 交接类命令（自然语言短语或 /handoff）：零模型调用，赶在排队/忙碌判定前放行。 */
+        fun isHandoffCommand(request: String): Boolean =
+            request.trim() == HANDOFF_PHRASE || request.trim().startsWith("/handoff")
         const val AGENT_COMPLETE_CHANNEL = "agent_complete"
         const val AGENT_COMPLETE_NOTIFICATION_ID = 100
         /** wakeLock 超时保险：构建、装依赖类工具动辄十几分钟，给足 60 分钟；任务正常结束会主动释放。 */
@@ -2556,6 +2666,13 @@ class AIAgentViewModel @Inject constructor(
         persistUserMessage: Boolean = true
     ): Boolean {
         val sid = targetSessionId ?: _currentSessionId.value
+        // 交接类命令直触快照：零模型调用、只读本地历史并复制剪贴板，与进行中的回合/后台
+        // CLI/暂停态都不冲突（交接时机恰恰常是后台还在跑），必须赶在一切排队/忙碌判定之前
+        // 放行——否则会被塞进队列既不执行也不提示，看起来就是「没反应」。（2026-11-17）
+        if (sid != null && isHandoffCommand(request)) {
+            runResolvedCommand(ResolvedCommand.Action(handoffCommandHandler, ""), request, sid)
+            return true
+        }
         // 外部引擎子会话只读：不仅聊天面板要拦，随记「发给 AI」等旁路入口也不能把消息
         // 送进内置工作流（子会话 engine=null，父会话 engine!=null）。
         if (sid != null) {
@@ -3063,8 +3180,9 @@ class AIAgentViewModel @Inject constructor(
             _handoffPrompt.value = HandoffPrompt(sessionId, pausedHandoffSessions.getValue(sessionId), paused = true)
             return@launch
         }
-        // 「准备交接」：自然语言短语直触快照交接（与 /handoff 同一命令），不进入模型回合。
-        if (request.trim() == HANDOFF_PHRASE) {
+        // 「准备交接」/「/handoff」：直触快照交接，不进入模型回合（enqueueAgentRequest
+        // 入口已提前放行；此处兜底覆盖直调路径）。
+        if (isHandoffCommand(request)) {
             runResolvedCommand(ResolvedCommand.Action(handoffCommandHandler, ""), request, sessionId)
             return@launch
         }
@@ -3442,9 +3560,10 @@ class AIAgentViewModel @Inject constructor(
                             runCatching {
                                 chatSessionDao.addTokenUsage(
                                     sessionId,
-                                    event.inputTokens,
-                                    event.outputTokens,
-                                    event.cachedInputTokens
+                                    event.inputTokens.toLong(),
+                                    event.outputTokens.toLong(),
+                                    event.cachedInputTokens.toLong(),
+                                    event.cacheCreationTokens.toLong()
                                 )
                                 if (event.inputTokens > 0) {
                                     chatSessionDao.updateLastInputTokens(sessionId, event.inputTokens)
@@ -4035,6 +4154,17 @@ class AIAgentViewModel @Inject constructor(
         }
     }
 
+    /** 悬浮球「诊断」：打开 App 并直达设置 → 诊断与自测分区。 */
+    private val floatBallOpenDiagnosticsBridge: () -> Unit = {
+        runCatching {
+            val intent = android.content.Intent(context, com.aicode.MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(com.aicode.MainActivity.EXTRA_OPEN_DIAGNOSTICS, true)
+            }
+            context.startActivity(intent)
+        }
+    }
+
     /** 悬浮球「停止任务」：优先停当前会话，其次停任意运行中的 agent 回合或斜杠命令回合。返回是否真正执行。 */
     private val floatBallStopBridge: () -> Boolean = {
         val agentRunning = sessionJobs.filterValues { it.isActive }.keys
@@ -4073,10 +4203,12 @@ class AIAgentViewModel @Inject constructor(
         // 保留实例引用：onCleared 时仅在自己仍持有桥时才清空，避免误清新 ViewModel 的注册。
         FloatBallCommandCenter.send = floatBallSendBridge
         FloatBallCommandCenter.openApp = floatBallOpenAppBridge
+        FloatBallCommandCenter.openDiagnostics = floatBallOpenDiagnosticsBridge
         FloatBallCommandCenter.stop = floatBallStopBridge
         FloatBallCommandCenter.resolveApproval = floatBallApprovalBridge
         FloatBallCommandCenter.setMode = { setSessionMode(it) }
         FloatBallCommandCenter.updateDraft = { updateInputDraft(it) }
+        FloatBallCommandCenter.polishText = { polishTextExternal(it) }
         FloatBallCommandCenter.newSession = { newSession() }
         // 模型选择数据/选定由 AIChatPanel 注册（providers/modelMetadata 数据源在那里）
 
@@ -4155,10 +4287,12 @@ class AIAgentViewModel @Inject constructor(
         // 退出 App 后悬浮球面板仍可能被点按：清掉指向本 VM 的桥，面板侧据此提示「请先打开 App」。
         if (FloatBallCommandCenter.send === floatBallSendBridge) FloatBallCommandCenter.send = null
         if (FloatBallCommandCenter.openApp === floatBallOpenAppBridge) FloatBallCommandCenter.openApp = null
+        if (FloatBallCommandCenter.openDiagnostics === floatBallOpenDiagnosticsBridge) FloatBallCommandCenter.openDiagnostics = null
         if (FloatBallCommandCenter.stop === floatBallStopBridge) FloatBallCommandCenter.stop = null
         if (FloatBallCommandCenter.resolveApproval === floatBallApprovalBridge) FloatBallCommandCenter.resolveApproval = null
         if (FloatBallCommandCenter.setMode != null) FloatBallCommandCenter.setMode = null
         if (FloatBallCommandCenter.updateDraft != null) FloatBallCommandCenter.updateDraft = null
+        if (FloatBallCommandCenter.polishText != null) FloatBallCommandCenter.polishText = null
         if (FloatBallCommandCenter.newSession != null) FloatBallCommandCenter.newSession = null
         if (FloatBallCommandCenter.modelData != null) FloatBallCommandCenter.modelData = null
         if (FloatBallCommandCenter.selectModel != null) FloatBallCommandCenter.selectModel = null

@@ -28,7 +28,7 @@ import kotlinx.coroutines.launch
  * VNC 悬浮小窗的状态中枢：窗口几何/钉住/最小化/全屏 + 容器服务状态 + 自动弹出轮询。
  * 作用域为聊天页 NavBackStackEntry（与 WorkbenchPane 同惯例）；轮询在聊天页存续期间运行
  * （每 5s 一次本地 TCP 端口探测，毫秒级且不唤起容器，本地模式之外直接短路）；
- * 几何与钉住状态经 DataStore 跨会话记忆，手动收起后 [AUTO_POPUP_COOLDOWN_MS] 内不再自动弹出。
+ * 几何与钉住状态经 DataStore 跨会话记忆；仅用户手动入口或业务代码调用 [show] 时打开浮窗。
  */
 @HiltViewModel
 class VncOverlayViewModel @Inject constructor(
@@ -36,7 +36,6 @@ class VncOverlayViewModel @Inject constructor(
     private val prefsRepository: VncOverlayPrefsRepository,
     private val mcpManager: com.aicode.feature.agent.domain.mcp.McpManager,
     private val mcpConfigRepository: com.aicode.feature.agent.domain.mcp.McpConfigRepository,
-    private val generalSettingsRepository: com.aicode.feature.settings.data.repository.GeneralSettingsRepository,
 ) : ViewModel() {
 
     /** 画面旋转方式：跟随系统；或锁定横屏 / 竖屏。全屏时 AUTO 取「自动横屏」。 */
@@ -76,8 +75,6 @@ class VncOverlayViewModel @Inject constructor(
     private val _reconnectRequests = MutableStateFlow(0)
     val reconnectRequests: StateFlow<Int> = _reconnectRequests.asStateFlow()
 
-    private var autoPopupBlockedUntilMs = 0L
-
     /** 常驻服务会话句柄：小窗关闭时取消，让 proot 退出并回收服务进程。 */
     private var serviceJob: Job? = null
 
@@ -99,49 +96,12 @@ class VncOverlayViewModel @Inject constructor(
                     heightDp = saved.heightDp,
                 )
             }
-            val sinceDismissed = System.currentTimeMillis() - saved.dismissedAtMs
-            if (sinceDismissed in 0 until AUTO_POPUP_COOLDOWN_MS) {
-                autoPopupBlockedUntilMs = saved.dismissedAtMs + AUTO_POPUP_COOLDOWN_MS
-            }
         }
         // 服务就绪后立刻按当前浮窗宽高比同步一次分辨率：否则首开沿用 Xvfb 默认尺寸，
         // 竖屏浮窗里整张桌面被缩小，文字看起来又小又挤。
         viewModelScope.launch {
             serviceController.state.collect { st ->
                 if (st is VncServiceState.Ready) syncDisplayToWindow()
-            }
-        }
-        // 自动弹出：聊天页存续期间探测容器图形服务，从无到有即弹窗（AI 跑图形测试/用户手动起服务都会触发）。
-        // 指数退避到 PROBE_MAX_INTERVAL_MS：没起服务时是最常见的长稳态，固定 5s 一轮等于白白唤醒
-        // 容器探测。代价是服务新起后最长要等 30s 才弹窗（原来的上限是 5s）——这是刻意的取舍：
-        // 自动弹窗是辅助入口，用户随时可手动打开，不值得为它每秒级轮询。
-        viewModelScope.launch {
-            var interval = PROBE_INTERVAL_MS
-            while (coroutineContext.isActive) {
-                delay(interval)
-                if (_window.value.visible) {
-                    interval = PROBE_INTERVAL_MS
-                    continue
-                }
-                if (System.currentTimeMillis() < autoPopupBlockedUntilMs) continue
-                // 自动弹出默认关闭（设置里显式启用后才有此行为）；关闭时空转到最大间隔，不再探测。
-                if (!generalSettingsRepository.vncAutoPopupEnabled()) {
-                    interval = PROBE_MAX_INTERVAL_MS
-                    continue
-                }
-                val running = try {
-                    serviceController.probeRunning()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    false
-                }
-                if (running) {
-                    interval = PROBE_INTERVAL_MS
-                    show()
-                } else {
-                    interval = (interval * 2).coerceAtMost(PROBE_MAX_INTERVAL_MS)
-                }
             }
         }
     }
@@ -261,9 +221,6 @@ class VncOverlayViewModel @Inject constructor(
         _window.update { it.copy(visible = false, fullscreen = false) }
         _connected.value = false
         stopServiceSession()
-        val now = System.currentTimeMillis()
-        autoPopupBlockedUntilMs = now + AUTO_POPUP_COOLDOWN_MS
-        viewModelScope.launch { prefsRepository.saveDismissedAt(now) }
     }
 
     fun setMinimized(minimized: Boolean) =
@@ -293,6 +250,18 @@ class VncOverlayViewModel @Inject constructor(
     @Volatile
     var sendMouseButtonMode: ((Int) -> Unit)? = null
 
+    /** 待发送到页面的「点击某键」（0=左 1=中 2=右）；原生浮窗按键条使用。 */
+    @Volatile
+    var sendClickToPage: ((Int) -> Unit)? = null
+
+    /** 待发送到页面的「滚轮一格」（-1=上 1=下）；原生浮窗按键条使用。 */
+    @Volatile
+    var sendScrollToPage: ((Int) -> Unit)? = null
+
+    /** 待发送到页面的指针模式切换（"direct"/"trackpad"）；原生浮窗按键条使用。 */
+    @Volatile
+    var sendPointerModeToPage: ((String) -> Unit)? = null
+
     /** 鼠标按键模式：0=左键 2=右键（虚拟机式键鼠：触点按下时按此按键上报）。 */
     private val _mouseButton = MutableStateFlow(0)
     val mouseButton: StateFlow<Int> = _mouseButton.asStateFlow()
@@ -314,6 +283,52 @@ class VncOverlayViewModel @Inject constructor(
         _mouseButton.value = button
         sendMouseButtonMode?.invoke(button)
     }
+
+    /** 原生按键条：在「当前指针位置」点击指定键（0=左 1=中 2=右）。 */
+    fun clickMouse(button: Int) {
+        sendClickToPage?.invoke(button)
+    }
+
+    fun doubleClickMouse(button: Int) {
+        viewModelScope.launch {
+            sendClickToPage?.invoke(button)
+            delay(45)
+            sendClickToPage?.invoke(button)
+        }
+    }
+
+    /** 原生按键条：滚轮一格（-1=上 1=下）。 */
+    fun scrollMouse(dir: Int) {
+        sendScrollToPage?.invoke(dir)
+    }
+
+    /** 笔记本式触控板：相对位移（屏幕 px）发给页面，由页面换算成远端坐标。 */
+    fun trackpadMove(dx: Float, dy: Float) {
+        sendTrackpadMoveToPage?.invoke(dx, dy)
+    }
+
+    /** 笔记本式触控板：手势结束，通知页面清零累计位移。 */
+    fun trackpadReset() {
+        sendTrackpadResetToPage?.invoke()
+    }
+
+    /** 待发送到页面的触控板相对移动（屏幕像素）；页面加载完成后回填。 */
+    @Volatile
+    var sendTrackpadMoveToPage: ((Float, Float) -> Unit)? = null
+
+    /** 待发送到页面的触控板手势结束通知。 */
+    @Volatile
+    var sendTrackpadResetToPage: (() -> Unit)? = null
+
+    /** 原生按键条：切换直触 / 触控板。 */
+    fun setPointerMode(mode: String) {
+        _pointerMode.value = mode
+        sendPointerModeToPage?.invoke(mode)
+    }
+
+    /** 指针模式：direct=触摸点即指针；trackpad=相对移动（触控板）。 */
+    private val _pointerMode = MutableStateFlow("direct")
+    val pointerMode: StateFlow<String> = _pointerMode.asStateFlow()
 
     fun setRotation(rotation: VncRotation) {        _window.update { it.copy(rotation = rotation) }
         viewModelScope.launch { prefsRepository.saveRotation(rotation.ordinal) }
@@ -400,6 +415,34 @@ class VncOverlayViewModel @Inject constructor(
         }
     }
 
+    /** 最小化图标被拖动后保存其位置（复用窗口坐标记忆，复原时沿用）。 */
+    fun persistMinimizedBall(xDp: Float, yDp: Float) {
+        _window.update { it.copy(offsetX = xDp, offsetY = yDp) }
+        viewModelScope.launch { prefsRepository.saveGeometry(xDp, yDp, 0f, 0f) }
+    }
+
+    /** 上次已同步的画面区宽高比；变化不足 3% 不重复 xrandr（避免拖动窗口时刷屏）。 */
+    private var lastImageRatio: Float = 0f
+
+    /**
+     * 画面区尺寸变化（像素）：远端分辨率按画面区的宽高比设置，
+     * 使画面铺满窗口且不拉伸。用户缩放窗口不受影响——只调远端，不改窗口。
+     */
+    fun onImageAreaSize(widthPx: Int, heightPx: Int) {
+        if (widthPx <= 0 || heightPx <= 0) return
+        val ratio = (widthPx.toFloat() / heightPx).coerceIn(0.4f, 2.5f)
+        if (lastImageRatio > 0f && kotlin.math.abs(ratio - lastImageRatio) / lastImageRatio < 0.03f) return
+        lastImageRatio = ratio
+        viewModelScope.launch {
+            val (sw, sh) = if (ratio >= 1f) {
+                DESKTOP_LONG_EDGE to (DESKTOP_LONG_EDGE / ratio).toInt()
+            } else {
+                (DESKTOP_LONG_EDGE * ratio).toInt() to DESKTOP_LONG_EDGE
+            }
+            serviceController.resizeDisplay(sw.coerceAtLeast(480), sh.coerceAtLeast(480))
+        }
+    }
+
     /**
      * 让虚拟屏跟随浮窗宽高比：横屏 → 宽图，竖屏 → 高图。
      * 长边固定 [DESKTOP_LONG_EDGE]，短边按比例推导；比例过窄时钳到 480 保底。
@@ -419,11 +462,6 @@ class VncOverlayViewModel @Inject constructor(
     companion object {
         private const val TAG = "VncOverlayViewModel"
         private const val MULTI_LLM_SERVER_NAME = "multi-llm"
-        private const val PROBE_INTERVAL_MS = 5_000L
-
-        /** 退避上限：服务没起时最长的探测间隔。 */
-        private const val PROBE_MAX_INTERVAL_MS = 30_000L
-        private const val AUTO_POPUP_COOLDOWN_MS = 10 * 60_000L
         const val MIN_WIDTH_DP = 200f
 
         /** 虚拟屏长边像素：按浮窗宽高比推导另一条边，兼顾横竖屏且不超 1280。 */

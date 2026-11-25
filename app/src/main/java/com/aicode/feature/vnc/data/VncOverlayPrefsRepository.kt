@@ -26,8 +26,7 @@ data class VncOverlayPrefs(
     val widthDp: Float,
     val heightDp: Float,
     val pinned: Boolean,
-    val rotation: Int,
-    val dismissedAtMs: Long,
+    val rotation: Int
 )
 
 @Singleton
@@ -41,7 +40,6 @@ class VncOverlayPrefsRepository @Inject constructor(
         val HEIGHT_DP = floatPreferencesKey("vnc_height_dp")
         val PINNED = booleanPreferencesKey("vnc_pinned")
         val ROTATION = intPreferencesKey("vnc_rotation")
-        val DISMISSED_AT = longPreferencesKey("vnc_dismissed_at")
     }
 
     val prefs: Flow<VncOverlayPrefs> = context.vncOverlayDataStore.data.map { p ->
@@ -51,8 +49,7 @@ class VncOverlayPrefsRepository @Inject constructor(
             widthDp = p[Keys.WIDTH_DP] ?: 0f,
             heightDp = p[Keys.HEIGHT_DP] ?: 0f,
             pinned = p[Keys.PINNED] ?: false,
-            rotation = p[Keys.ROTATION] ?: 0,
-            dismissedAtMs = p[Keys.DISMISSED_AT] ?: 0L
+            rotation = p[Keys.ROTATION] ?: 0
         )
     }
 
@@ -71,9 +68,5 @@ class VncOverlayPrefsRepository @Inject constructor(
 
     suspend fun saveRotation(rotation: Int) {
         context.vncOverlayDataStore.edit { it[Keys.ROTATION] = rotation }
-    }
-
-    suspend fun saveDismissedAt(atMs: Long) {
-        context.vncOverlayDataStore.edit { it[Keys.DISMISSED_AT] = atMs }
     }
 }

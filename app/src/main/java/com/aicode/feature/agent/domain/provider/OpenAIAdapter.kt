@@ -38,6 +38,7 @@ class OpenAIAdapter @Inject constructor(
 
     override var apiKey = ""
     override var keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? = null
+    override var usageReporter: ((key: String, tokensIn: Long, tokensOut: Long, rateLimitHeaders: List<Pair<String, String>>?) -> Unit)? = null
     override var baseUrl = "https://api.openai.com/"
     override var useFullUrl = false
     override var useResponseApi = false
@@ -45,6 +46,13 @@ class OpenAIAdapter @Inject constructor(
     override var providerId = ""
     override var logSessionId: String? = null
     override var firstByteTimeoutMs: Long = FIRST_BYTE_TIMEOUT_MS
+
+    /** 本机 llama.cpp 等端点：预填充可达数分钟，首字节超时按本地放宽下限。 */
+    private val isLocalEndpoint: Boolean
+        get() = baseUrl.startsWith("http://127.0.0.1") || baseUrl.startsWith("http://localhost")
+
+    private val effectiveFirstByteTimeoutMs: Long
+        get() = if (isLocalEndpoint) maxOf(firstByteTimeoutMs, 900_000L) else firstByteTimeoutMs
     override var streamIdleTimeoutMs: Long = 0L
     override var maxNetworkRetries: Int = MAX_NETWORK_RETRIES
 
@@ -148,6 +156,7 @@ class OpenAIAdapter @Inject constructor(
         val reasoning = message?.reasoning_content?.takeIf { it.isNotEmpty() }
             ?: message?.reasoning?.takeIf { it.isNotEmpty() }
         val usage = response.usage
+        usageReporter?.invoke(apiKey, usage?.prompt_tokens?.toLong() ?: 0L, usage?.completion_tokens?.toLong() ?: 0L, null)
 
         return AIResponse(content = content, toolCalls = toolCalls, stopReason = finishReason, reasoning = reasoning, inputTokens = usage?.prompt_tokens ?: 0, outputTokens = usage?.completion_tokens ?: 0, cachedInputTokens = usage?.prompt_tokens_details?.cached_tokens ?: 0, cacheCreationTokens = usage?.prompt_tokens_details?.cache_write_tokens ?: 0, images = images)
     }
@@ -296,6 +305,7 @@ class OpenAIAdapter @Inject constructor(
 
         val parsed = parseResponsesOutput(response.get("output")?.takeIf { it.isJsonArray }?.asJsonArray)
         val usage = parseResponsesUsage(response.get("usage")?.takeIf { it.isJsonObject }?.asJsonObject)
+        usageReporter?.invoke(apiKey, usage.inputTokens.toLong(), usage.outputTokens.toLong(), null)
         val status = response.get("status")?.takeIf { it.isJsonPrimitive }?.asString
         val incompleteReason = response.get("incomplete_details")?.takeIf { it.isJsonObject }?.asJsonObject
             ?.get("reason")?.takeIf { it.isJsonPrimitive }?.asString
@@ -372,7 +382,7 @@ class OpenAIAdapter @Inject constructor(
                     } else false
                 },
                 attemptOnce = { onContent ->
-                    withFirstContentTimeout(firstByteTimeoutMs) { firstContent ->
+                    withFirstContentTimeout(effectiveFirstByteTimeoutMs) { firstContent ->
             val textBuilder = StringBuilder()
             val budget = StreamBudget()
             // tool_call index -> 累积中的工具调用（保序）。
@@ -384,13 +394,17 @@ class OpenAIAdapter @Inject constructor(
             var streamOutputTokens = 0
             var streamCachedInputTokens = 0
             var streamCacheCreationTokens = 0
+            // 响应限速头（成功时也从 Response 上拿，供 Key 账本做剩余额度预判）。
+            var rateHeaders: List<Pair<String, String>>? = null
 
             val body = firstContent.awaitBody(api.streamChatCompletion(
                 url = url,
                 authorization = "Bearer $apiKey",
                 extraHeaders = extraHeaders(),
                 request = request
-            ))
+            )) { headers ->
+                rateHeaders = headers.toList()
+            }
 
             body.use { rb ->
                 firstContent.attach { rb.close() }
@@ -516,6 +530,7 @@ class OpenAIAdapter @Inject constructor(
             val toolCalls = toolAccs.values
                 .filter { it.id.isNotEmpty() || it.name.isNotEmpty() }
                 .map { acc -> ToolCall(id = acc.id, name = acc.name, arguments = parseToolArguments(acc.args.toString())) }
+            usageReporter?.invoke(apiKey, streamInputTokens.toLong(), streamOutputTokens.toLong(), rateHeaders)
             emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = finishReason, inputTokens = streamInputTokens, outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, cacheCreationTokens = streamCacheCreationTokens, images = streamedImages)))
                     }
             },
@@ -564,7 +579,7 @@ class OpenAIAdapter @Inject constructor(
                     } else false
                 },
                 attemptOnce = { onContent ->
-                    withFirstContentTimeout(firstByteTimeoutMs) { firstContent ->
+                    withFirstContentTimeout(effectiveFirstByteTimeoutMs) { firstContent ->
                     val acc = ResponsesStreamAccumulator()
 
                     val body = firstContent.awaitBody(api.streamResponses(

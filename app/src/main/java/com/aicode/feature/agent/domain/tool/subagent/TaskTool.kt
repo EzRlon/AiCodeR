@@ -20,7 +20,7 @@ import com.aicode.feature.agent.domain.tool.ToolCapability
 import com.aicode.feature.agent.domain.tool.ToolParameter
 import com.aicode.feature.agent.domain.tool.ToolPermissionPolicy
 import com.aicode.feature.agent.domain.tool.ToolResult
-import com.aicode.feature.agent.presentation.MessageRole
+import com.aicode.feature.agent.domain.model.MessageRole
 import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepository
 import com.aicode.feature.settings.data.repository.ModelCapabilityRepository
 import com.aicode.feature.settings.data.repository.ModelRoutingTable

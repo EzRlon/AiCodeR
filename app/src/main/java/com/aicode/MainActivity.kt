@@ -133,6 +133,7 @@ import com.aicode.feature.settings.presentation.FetchState
 import com.aicode.feature.settings.presentation.UpdateCheckUiState
 import com.aicode.feature.settings.presentation.component.githubReleaseUrl
 import com.aicode.feature.settings.presentation.component.SettingsScreen
+import com.aicode.feature.settings.presentation.component.SettingsSection
 import com.aicode.feature.settings.presentation.component.UpdateCheckDialog
 import com.aicode.feature.settings.presentation.component.decodeBackgroundBitmap
 import com.aicode.feature.settings.presentation.component.openUrl
@@ -173,6 +174,9 @@ class MainActivity : ComponentActivity() {
     /** 语言偏好：attachBaseContext 时同步读取以应用 locale，变化时 recreate。 */
     @Inject
     lateinit var languageSettings: com.aicode.feature.settings.data.repository.LanguageSettingsRepository
+
+    /** 悬浮球「诊断」入口：intent extra 置位，AppNavigation 导航设置页后由设置页消费复位。 */
+    private val openDiagnosticsRequest = androidx.compose.runtime.mutableStateOf(false)
 
     /** App 回到前台时，远程模式下若 SSH 断了触发重连。 */
     @Inject
@@ -215,6 +219,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // 从冷启动闪屏主题恢复为应用主主题
         setTheme(R.style.Theme_AICode)
+        consumeDiagnosticsExtra(intent)
         // 绘制到系统状态栏/导航栏之下，让应用背景与系统栏融为一体（消除割裂的色块）。
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -232,6 +237,9 @@ class MainActivity : ComponentActivity() {
                 AppThemeMode.AUTO -> systemDark
                 AppThemeMode.DARK, AppThemeMode.BLACK -> true
                 AppThemeMode.LIGHT -> false
+                // 定时模式冷启动按当前时刻解析（深色时段内用深色底）
+                AppThemeMode.SCHEDULED ->
+                    kotlinx.coroutines.runBlocking { themeSettings.resolveInitialDark() }
             }
             when {
                 mode == AppThemeMode.BLACK -> setTheme(R.style.Theme_AICode_BlackBg)
@@ -291,16 +299,19 @@ class MainActivity : ComponentActivity() {
             // AUTO 模式的系统深浅判定不用 isSystemInDarkTheme()：语言 wrapper 冻结 uiMode、
             // configChanges 含 uiMode 不重建，二者叠加导致系统自动切换时该值不更新。
             // 改读 AIEditorApp.onConfigurationChanged 实时刷新的镜像流。
-            val systemDarkTheme by themeSettings.systemDark.collectAsStateWithLifecycle()
+            // 运行时主题经仓库解析流统一出（含 SCHEDULED 模式的 30s 时钟重算：
+            // 跨过自定义时段边界时自动翻转深浅，无需 Activity 重建）。
+            // initial 跟随系统深浅：流首发射前的短暂窗口不闪浅色（深色系统用户）。
+            val resolvedTheme by themeSettings.resolvedThemeFlow.collectAsStateWithLifecycle(
+                initialValue = com.aicode.feature.settings.data.repository.ResolvedUiTheme(
+                    dark = themeSettings.systemDark.value,
+                    black = false
+                )
+            )
             val themeMode by themeSettings.themeModeFlow.collectAsStateWithLifecycle(initialValue = AppThemeMode.AUTO)
             val themePresetId by themeSettings.themePresetIdFlow.collectAsStateWithLifecycle(initialValue = null)
             val dynamicColor by themeSettings.dynamicColorFlow.collectAsStateWithLifecycle(initialValue = false)
-            val darkTheme = when (themeMode) {
-                AppThemeMode.AUTO -> systemDarkTheme
-                AppThemeMode.DARK -> true
-                AppThemeMode.BLACK -> true
-                AppThemeMode.LIGHT -> false
-            }
+            val darkTheme = resolvedTheme.dark
             val view = LocalView.current
             // 状态栏/导航栏图标色跟随主题；回到前台时再校正一遍——个别 ROM 会在后台重置系统栏外观，
             // 只靠组合期的设置不足以覆盖（“切浅色后字色/图标色没反向”的加强）。
@@ -330,7 +341,7 @@ class MainActivity : ComponentActivity() {
                 darkTheme = darkTheme,
                 preset = AppThemePreset.findById(themePresetId),
                 dynamicColor = dynamicColor,
-                amoledBlack = themeMode == AppThemeMode.BLACK
+                amoledBlack = resolvedTheme.black
             ) {
                 // 窗口底色与当前主题背景同步（含强制深浅与自定义预设）：启动窗/重建过渡到首帧
                 // 之间露出的窗口区域不闪色（“切回闪光/页面顶部异常”的加强）。
@@ -370,7 +381,11 @@ class MainActivity : ComponentActivity() {
                     val bgPath by backgroundSettings.imagePathFlow.collectAsStateWithLifecycle(initialValue = null)
                     val bgAlpha by backgroundSettings.alphaFlow.collectAsStateWithLifecycle(initialValue = BackgroundSettingsRepository.DEFAULT_ALPHA)
                     Box(modifier = Modifier.fillMaxSize()) {
-                        AppNavigation(onboardingRepository = onboardingRepository)
+                        AppNavigation(
+                            onboardingRepository = onboardingRepository,
+                            openDiagnostics = openDiagnosticsRequest.value,
+                            onDiagnosticsConsumed = { openDiagnosticsRequest.value = false }
+                        )
                         // 全局凭据弹窗：覆盖所有页面，命令行 git 缺凭据在任意页面都能弹。
                         com.aicode.feature.credentials.presentation.component.GlobalCredentialDialogHost(
                             bridge = credentialRequestBridge
@@ -434,6 +449,17 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleSendTextIntent(this, intent)
+        consumeDiagnosticsExtra(intent)
+    }
+
+    private fun consumeDiagnosticsExtra(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_DIAGNOSTICS, false) == true) {
+            openDiagnosticsRequest.value = true
+        }
+    }
+
+    companion object {
+        const val EXTRA_OPEN_DIAGNOSTICS = "ai_code_open_diagnostics"
     }
 
 }
@@ -459,7 +485,9 @@ private const val MAX_PANE_SPLIT = 0.7f
  */
 @Composable
 fun AppNavigation(
-    onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository
+    onboardingRepository: com.aicode.feature.onboarding.data.OnboardingRepository,
+    openDiagnostics: Boolean = false,
+    onDiagnosticsConsumed: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -475,6 +503,13 @@ fun AppNavigation(
     // 记录当前路由到全局，崩溃报告用它定位崩溃页面。
     LaunchedEffect(currentRoute) {
         AIEditorApp.currentRoute = currentRoute
+    }
+
+    // 悬浮球「诊断」：请求置位时把设置页压栈，由设置页自身消费复位（避免导航前被清掉）。
+    LaunchedEffect(openDiagnostics) {
+        if (openDiagnostics) {
+            navController.navigate("settings") { launchSingleTop = true }
+        }
     }
 
     // Activity 级别的 ViewModel——Drawer 和 AIChatPanel 共享同一个实例。
@@ -1080,8 +1115,12 @@ fun AppNavigation(
                 // 复用 Activity 级 settingsViewModel（MainActivity 顶部已创建并 init），
                 // 避免进入设置页时再建一个 NavBackStackEntry 级实例、重复跑 init 与 9 路 flow 订阅，
                 // 这是侧边栏点设置「卡一下」的主因。
+                LaunchedEffect(openDiagnostics) {
+                    if (openDiagnostics) onDiagnosticsConsumed()
+                }
                 SettingsScreen(
                     viewModel = settingsViewModel,
+                    initialSection = if (openDiagnostics) SettingsSection.Diagnostics else null,
                     onNavigateBack = {
                         navController.popBackStack()
                         // 大屏返回聊天页后侧栏本就常驻，不再弹 modal 抽屉。

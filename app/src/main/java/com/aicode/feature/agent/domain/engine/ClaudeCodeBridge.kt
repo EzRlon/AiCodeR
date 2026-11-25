@@ -329,6 +329,9 @@ class ClaudeCodeBridge @Inject constructor(
         }
         if (!base.isNullOrEmpty() && !base.contains("api.anthropic.com")) {
             put("ANTHROPIC_BASE_URL", base)
+            // 第三方端点挂起时 CLI 默认可等 10 分钟，用户只能手动停进程；封顶 3 分钟让失败显性化
+            // （实测上游推理 8~44s 级，不受影响；仅非官方端点注入）
+            put("API_TIMEOUT_MS", "180000")
         }
         // 第三方端点不认 claude-* 档位别名，不映射的话子代理的 haiku 档请求直接 400；
         // 厂商路由用表内档位，转换器路径无 fastModel 概念，全部档位映射到同一模型
@@ -772,7 +775,8 @@ class ClaudeCodeBridge @Inject constructor(
                 reasoning = reasoning.toString(),
                 inputTokens = usage.inputTokens,
                 outputTokens = usage.outputTokens,
-                cachedInputTokens = usage.cachedInputTokens
+                cachedInputTokens = usage.cachedInputTokens,
+                cacheCreationTokens = usage.cacheCreationTokens
             )
         )
         events += spawnEvents
@@ -1029,7 +1033,7 @@ const TOKEN = process.env.PERMISSION_BRIDGE_TOKEN || '';
 const TIMEOUT_MS = 5 * 60 * 1000;
 
 const MEMORY_DIRS = [path.join(HOME, 'memory')].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'memory')] : []);
-const SKILL_DIRS = [path.join(HOME, 'skills')].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'skills')] : []);
+const SKILL_DIRS = [path.join(HOME, 'skills'), '/root/.claude/skills'].concat(PROJECT ? [path.join(PROJECT, '.aicode', 'skills')] : []);
 const RULE_FILES = [path.join(HOME, 'AGENTS.md'), path.join(HOME, 'CLAUDE.md')]
   .concat(PROJECT ? [path.join(PROJECT, '.aicode', 'AGENTS.md'), path.join(PROJECT, '.aicode', 'CLAUDE.md')] : []);
 

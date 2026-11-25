@@ -152,6 +152,7 @@ export default defineConfig({
           text: '扩展能力',
           items: [
             { text: 'MCP 服务器', link: '/guide/mcp' },
+            { text: '子程序 MCP 调试通道', link: '/guide/subprogram-mcp' },
             { text: '技能', link: '/guide/skills' },
             { text: '子代理', link: '/guide/subagent' },
             { text: 'Shizuku 工具', link: '/guide/shizuku' },
@@ -169,6 +170,7 @@ export default defineConfig({
             { text: '软件权限', link: '/guide/app-permissions' },
             { text: '后台运行', link: '/guide/background-run' },
             { text: '日志与故障排查', link: '/guide/logs' },
+            { text: '诊断与自测', link: '/guide/diagnostics-selftest' },
             { text: '常见错误提示', link: '/guide/error-codes' },
             { text: '存储空间', link: '/guide/storage' },
             { text: '备份与还原', link: '/guide/backup' },

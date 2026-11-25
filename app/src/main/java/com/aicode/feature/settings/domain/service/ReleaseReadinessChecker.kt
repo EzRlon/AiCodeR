@@ -8,8 +8,11 @@ import com.aicode.feature.settings.domain.model.SIGNING_CONFIG_NAMES
 import com.aicode.feature.workspace.domain.FileAccessProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.StringReader
+import java.security.KeyStore
+import java.security.cert.X509Certificate
+import java.text.SimpleDateFormat
+import java.util.Locale
 import java.util.Properties
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,8 +29,10 @@ import javax.inject.Singleton
  * 2. 口令配置存在（项目 `app/keystore.properties` 优先，其次证书同目录）；
  * 3. 配置含 storeFile/storePassword/keyAlias/keyPassword；
  * 4. `storeFile` 按项目目录解析后存在；
- * 5. alias 是否在证书里（keytool 不可用时记为「无法自动验证」，不阻断）；
- * 6. `keyPassword` 无法离线验证，明确提示发布前跑一次 assembleRelease。
+ * 5. alias 是否在证书里（证书读不了时记为「无法自动验证」，不阻断）；
+ * 6. `keyPassword`、签名方案与证书元数据：用 Android 内置 KeyStore API 真实验证
+ *    （加载证书 + getKey 试钥 + 读证书条目），零外部依赖——keytool 只存在于容器里，
+ *    App 进程执行不了，用它永远只剩「未验证」。
  */
 @Singleton
 class ReleaseReadinessChecker @Inject constructor(
@@ -220,29 +225,67 @@ class ReleaseReadinessChecker @Inject constructor(
             )
         }
 
-        // keyPassword 无法离线验证：明确标为「未验证」，不伪装成通过，也不阻断就绪。
+        // keyPassword / 签名方案 / 证书元数据：有 keytool 就真实验证，不伪造结论；
+        // 无 keytool 才退回「未验证」（不阻断）。
+        val facts = verifyKeystoreFacts(jksPath, config)
         items += ReadinessItem(
             key = ReleaseReadiness.KEY_KEY_PASSWORD,
-            passed = false,
-            blocking = false,
-            detail = context.getString(R.string.dev_keys_readiness_detail_key_password),
-            nextStep = context.getString(R.string.dev_keys_readiness_next_key_password)
+            passed = facts?.keyPasswordVerified == true,
+            blocking = facts?.keyPasswordVerified == false,
+            detail = when {
+                facts == null -> context.getString(R.string.dev_keys_readiness_detail_key_password)
+                facts.keyPasswordVerified == true -> context.getString(
+                    R.string.dev_keys_readiness_detail_key_password_ok
+                )
+                else -> context.getString(R.string.dev_keys_readiness_detail_key_password_bad)
+            },
+            nextStep = when {
+                facts?.keyPasswordVerified == false -> context.getString(
+                    R.string.dev_keys_readiness_next_key_password_bad
+                )
+                facts == null -> context.getString(R.string.dev_keys_readiness_next_key_password)
+                else -> null
+            }
         )
 
-        // 签名方案与证书元数据：没有事实源时不伪造结论，明确标为「未验证」。
+        // 签名方案：从证书解析实际签名算法。
         items += ReadinessItem(
             key = ReleaseReadiness.KEY_SIGNING_SCHEME,
-            passed = false,
+            passed = facts?.signingAlgorithm != null,
             blocking = false,
-            detail = context.getString(R.string.dev_keys_readiness_detail_signing_scheme),
-            nextStep = context.getString(R.string.dev_keys_readiness_next_signing_scheme)
+            detail = if (facts?.signingAlgorithm != null) {
+                context.getString(
+                    R.string.dev_keys_readiness_detail_signing_scheme_ok,
+                    facts.signingAlgorithm!!
+                )
+            } else {
+                context.getString(R.string.dev_keys_readiness_detail_signing_scheme)
+            },
+            nextStep = if (facts?.signingAlgorithm != null) {
+                null
+            } else {
+                context.getString(R.string.dev_keys_readiness_next_signing_scheme)
+            }
         )
+
+        // 证书元数据：从证书解析有效期。
         items += ReadinessItem(
             key = ReleaseReadiness.KEY_CERT_META,
-            passed = false,
+            passed = facts?.certValidUntil != null,
             blocking = false,
-            detail = context.getString(R.string.dev_keys_readiness_detail_cert_meta),
-            nextStep = context.getString(R.string.dev_keys_readiness_next_cert_meta)
+            detail = if (facts?.certValidUntil != null) {
+                context.getString(
+                    R.string.dev_keys_readiness_detail_cert_meta_ok,
+                    facts.certValidUntil!!
+                )
+            } else {
+                context.getString(R.string.dev_keys_readiness_detail_cert_meta)
+            },
+            nextStep = if (facts?.certValidUntil != null) {
+                null
+            } else {
+                context.getString(R.string.dev_keys_readiness_next_cert_meta)
+            }
         )
 
         return ReleaseReadiness(
@@ -287,27 +330,81 @@ class ReleaseReadinessChecker @Inject constructor(
     }
 
     /**
-     * 验证 alias 是否在证书里：容器内跑 `keytool -list`（PATH 里有 JDK 就能行）。
-     * 区分「keytool 不可用」（UNKNOWN，不阻断）与「证书能打开但别名不对 / 口令错」（MISMATCH）。
+     * 用 Android 内置 KeyStore API 真实验证别名 / keyPassword / 签名算法 / 证书有效期：
+     * - 加载证书（先 PKCS12 后 JKS）：storePassword 错误时打不开；
+     * - `getKey` 试钥：keyPassword 错误抛 UnrecoverableKeyException；
+     * - `X509Certificate`：直接读签名算法与有效期。
+     * 文件复制失败时返回 null（按「未验证」处理，不阻断）。
+     */
+    private data class KeystoreFacts(
+        val storeOpenable: Boolean?,
+        val aliasPresent: Boolean?,
+        val keyPasswordVerified: Boolean?,
+        val signingAlgorithm: String?,
+        val certValidUntil: String?
+    )
+
+    private fun verifyKeystoreFacts(jksPath: String, config: Map<String, String>): KeystoreFacts? {
+        val local = runCatching { fileAccess.copyToLocal(jksPath) }.getOrNull() ?: return null
+        // 证书本体读不到（storeFile 缺失 / 远程复制失败）时全部按「未验证」处理，
+        // 不误报成「口令错误」；storeFile 缺失由 KEY_STORE_FILE 项单独报错。
+        if (!local.exists()) return null
+        val storePass = config["storePassword"].orEmpty()
+        val keyPass = config["keyPassword"].orEmpty()
+        val alias = config["keyAlias"].orEmpty()
+        // PKCS12 是 keytool 现代默认；老 .jks 是 JKS。加载失败两种类型都试过再判不可用。
+        val store = openKeystore(local, storePass)
+        if (store == null) {
+            return KeystoreFacts(
+                storeOpenable = false,
+                aliasPresent = null,
+                keyPasswordVerified = null,
+                signingAlgorithm = null,
+                certValidUntil = null
+            )
+        }
+        val aliasPresent = runCatching { store.isKeyEntry(alias) }.getOrNull()
+        // keyPassword 错误时 getKey 抛 UnrecoverableKeyException；别名不存在同样取不到私钥。
+        val keyOk = runCatching {
+            store.getKey(alias, keyPass.toCharArray())
+            true
+        }.getOrDefault(false)
+        val cert = runCatching {
+            store.getCertificate(alias) as? X509Certificate
+        }.getOrNull()
+        return KeystoreFacts(
+            storeOpenable = true,
+            aliasPresent = aliasPresent,
+            keyPasswordVerified = keyOk,
+            signingAlgorithm = cert?.sigAlgName,
+            certValidUntil = cert?.notAfter?.let {
+                SimpleDateFormat("yyyy-MM-dd", Locale.US).format(it)
+            }
+        )
+    }
+
+    private fun openKeystore(file: java.io.File, storePass: String): KeyStore? {
+        for (type in listOf("PKCS12", "JKS")) {
+            val ks = runCatching { KeyStore.getInstance(type) }.getOrNull() ?: continue
+            val loaded = runCatching {
+                file.inputStream().use { ks.load(it, storePass.toCharArray()) }
+                ks
+            }.getOrNull()
+            if (loaded != null) return loaded
+        }
+        return null
+    }
+
+    /**
+     * 验证 alias 是否在证书里。
+     * 区分「证书读不了」（UNKNOWN，不阻断）与「证书能打开但别名不对 / 口令错」（MISMATCH）。
      */
     private fun verifyAlias(jksPath: String, config: Map<String, String>): AliasCheck {
-        val local = runCatching { fileAccess.copyToLocal(jksPath) }.getOrNull() ?: return AliasCheck.UNKNOWN
-        val process = runCatching {
-            ProcessBuilder(
-                "keytool", "-list", "-keystore", local.absolutePath,
-                "-storepass", config["storePassword"].orEmpty()
-            ).redirectErrorStream(true).start()
-        }.getOrNull() ?: return AliasCheck.UNKNOWN
-        // 先等进程结束再读输出：读管道本身会阻塞，超时守不住。
-        // keytool -list 输出很小，不会填满管道缓冲区。
-        val finished = runCatching { process.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
-        if (!finished) {
-            runCatching { process.destroyForcibly() }
-            return AliasCheck.UNKNOWN
+        val facts = verifyKeystoreFacts(jksPath, config) ?: return AliasCheck.UNKNOWN
+        return when {
+            facts.storeOpenable == false -> AliasCheck.MISMATCH
+            facts.aliasPresent == true -> AliasCheck.VERIFIED
+            else -> AliasCheck.MISMATCH
         }
-        val output = runCatching { process.inputStream.bufferedReader().readText() }.getOrDefault("")
-        if (process.exitValue() != 0) return AliasCheck.MISMATCH
-        val alias = config["keyAlias"].orEmpty()
-        return if (output.contains(alias, ignoreCase = true)) AliasCheck.VERIFIED else AliasCheck.MISMATCH
     }
 }

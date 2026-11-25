@@ -29,7 +29,8 @@ import java.io.ByteArrayInputStream
 
 /**
  * 小窗内的 VNC 画面：WebView 加载 assets/vnc（noVNC），经 WebViewAssetLoader 的
- * https 虚拟域以支持 ES module，再连本机回环 ws://127.0.0.1:6080（容器内 websockify）。
+ * https 虚拟域以支持 ES module，再连本机回环 ws://127.0.0.1:6081（容器内 websockify；
+ * 6080 已被宿主自身 noVNC 占用，PRoot 共享网络栈，必须错开）。
  * https 页面连明文 ws 属 mixed content，需 MIXED_CONTENT_ALWAYS_ALLOW（目标仅 127.0.0.1）。
  * 页面与 App 之间用 VncBridge 同步连接状态与剪贴板。
  */
@@ -88,6 +89,16 @@ internal class VncInputChannel(private val holder: VncWebViewHolder) {
     fun sendKeys(text: String) = holder.sendKeys(text)
     fun sendKeysym(code: Int, down: Boolean) = holder.sendKeysym(code, down)
     fun setMouseButton(button: Int) = holder.setMouseButton(button)
+    /** 在当前位置点击某键：0=左 1=中 2=右。 */
+    fun click(button: Int) = holder.click(button)
+    /** 滚轮一格：-1=上 1=下。 */
+    fun scroll(dir: Int) = holder.scroll(dir)
+    /** 指针模式：direct / trackpad。 */
+    fun setPointerMode(mode: String) = holder.setPointerMode(mode)
+    /** 触控板相对移动（屏幕像素）。 */
+    fun trackpadMove(dx: Float, dy: Float) = holder.trackpadMove(dx, dy)
+    /** 触控板手势结束。 */
+    fun trackpadReset() = holder.trackpadReset()
 }
 
 internal class VncWebViewHolder(
@@ -119,6 +130,39 @@ internal class VncWebViewHolder(
         webView.evaluateJavascript("window.vncSetMouseButton && window.vncSetMouseButton($button)", null)
     }
 
+    /** 原生按键条：在当前位置点击指定键（0=左 1=中 2=右）。 */
+    fun click(button: Int) {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncClick && window.vncClick($button)", null)
+    }
+
+    /** 原生按键条：滚轮一格（-1=上 1=下）。 */
+    fun scroll(dir: Int) {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncScroll && window.vncScroll($dir)", null)
+    }
+
+    /** 原生按键条：切换直触 / 触控板。 */
+    fun setPointerMode(mode: String) {
+        if (destroyed) return
+        val escaped = org.json.JSONObject.quote(mode)
+        webView.evaluateJavascript("window.vncSetPointerMode && window.vncSetPointerMode($escaped)", null)
+    }
+
+    /** 原生触控板：相对移动（屏幕像素），页面负责换算与加速。 */
+    fun trackpadMove(dx: Float, dy: Float) {
+        if (destroyed) return
+        webView.evaluateJavascript(
+            "window.vncTrackpadMove && window.vncTrackpadMove($dx,$dy)", null
+        )
+    }
+
+    /** 原生触控板：手势结束，清零页面侧的累计位移。 */
+    fun trackpadReset() {
+        if (destroyed) return
+        webView.evaluateJavascript("window.vncTrackpadReset && window.vncTrackpadReset()", null)
+    }
+
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun buildWebView(context: Context): WebView {
         val assetLoader = WebViewAssetLoader.Builder()
@@ -127,7 +171,7 @@ internal class VncWebViewHolder(
         return WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            // 保留 ALWAYS_ALLOW：https 虚拟域页面连 ws://127.0.0.1:6080 属 mixed content，
+            // 保留 ALWAYS_ALLOW：https 虚拟域页面连 ws://127.0.0.1:6081 属 mixed content，
             // 降为 COMPATIBILITY_MODE 会直接断掉 VNC 连接（不是配置偏好问题）。
             // 改由下方「只允许加载自身资产」封住滥用面：页面永远只能是我们自己的 vnc 资产，
             // 外部内容既加载不到、也导航不过去，mixed content 策略因此无外部子资源可利用。

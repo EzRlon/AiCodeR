@@ -160,6 +160,13 @@ interface AIProvider {
     var keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)?
 
     /**
+     * 请求成功后的用量/限速头上报钩子（Key 轮换统计用），工作流装配时注入；为 null 则跳过。
+     * 参数依次为：实际使用的 Key、输入 token、输出 token、响应限速头（非流式可能拿不到，传 null）。
+     * 实现方必须非阻塞（仅内存记账），可在流式解析线程上直接调用。
+     */
+    var usageReporter: ((key: String, tokensIn: Long, tokensOut: Long, rateLimitHeaders: List<Pair<String, String>>?) -> Unit)?
+
+    /**
      * 本次请求允许的最大输出 token 数，来自模型元数据的输出上限（models.dev `limit.output`）。
      * 调用前由工作流设置；为 null 时各 adapter 用自身默认值或不发该参数。
      */

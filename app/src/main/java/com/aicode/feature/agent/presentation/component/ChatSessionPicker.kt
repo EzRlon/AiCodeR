@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -111,13 +112,30 @@ fun ChatSessionRow(
             )
             Spacer(Modifier.width(Spacing.md))
         }
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(1.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 成员徽章：子代理行冠以成员名（如「后端」），把「哪个专家在做」摆到行首；
-                // 标题随后给出任务描述，两者分工明确（成员 = 谁，标题 = 做什么）。
+        // 行首标签列：引擎徽章（品牌色）+ 子代理成员徽章（主色）竖排在最左空白位，
+        // 与标题分离——「哪个引擎 / 哪个专家」一眼可辨，不再挤占标题行宽度。
+        val engineId: String? = session.engine
+        if (engineId != null || memberName != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.widthIn(min = 30.dp)
+            ) {
+                if (engineId != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(engineBrandColor(engineId).copy(alpha = 0.18f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = engineBadgeLabel(engineId).orEmpty(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = engineBrandColor(engineId),
+                            maxLines = 1
+                        )
+                    }
+                }
                 if (memberName != null) {
                     Box(
                         modifier = Modifier
@@ -132,41 +150,30 @@ fun ChatSessionRow(
                             maxLines = 1
                         )
                     }
-                    Spacer(Modifier.width(4.dp))
-                }
-                Text(
-                    text = session.title,
-                    // 层级：分组标题(一级) > 会话标题(二级) > 子代理(三级，compact)
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = if (compact) 11.sp else 12.sp,
-                        lineHeight = if (compact) 14.sp else 16.sp
-                    ),
-                    color = when {
-                        selected -> MaterialTheme.colorScheme.primary
-                        compact -> MaterialTheme.colorScheme.onSurfaceVariant
-                        else -> MaterialTheme.colorScheme.onSurface
-                    },
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                if (session.engine != null) {
-                    Spacer(Modifier.width(4.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    ) {
-                        Text(
-                            text = engineBadgeLabel(session.engine).orEmpty(),
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
                 }
             }
+            Spacer(Modifier.width(Spacing.sm))
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = session.title,
+                // 层级：分组标题(一级) > 会话标题(二级) > 子代理(三级，compact)
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = if (compact) 11.sp else 12.sp,
+                    lineHeight = if (compact) 14.sp else 16.sp
+                ),
+                color = when {
+                    selected -> MaterialTheme.colorScheme.primary
+                    compact -> MaterialTheme.colorScheme.onSurfaceVariant
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             // 会话 id 小字：与 ai-logs/session-<id>.log 等文件名逐字对应，方便手动到开发目录找内容。
             Text(
                 text = session.id,

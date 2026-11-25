@@ -1634,7 +1634,7 @@ private fun engineModeNoteRes(engine: String?, mode: AgentMode): Int? = when (en
         AgentMode.PLAN -> R.string.engine_mode_note_codex_plan
         else -> null
     }
-    AgentEngines.CLAUDE_CODE, AgentEngines.OPENCODE -> null
+    AgentEngines.CLAUDE_CODE, AgentEngines.OPENCODE, AgentEngines.DEEPSEEK -> null
     else -> null
 }
 
@@ -1659,6 +1659,11 @@ private fun engineModeLabelRes(engine: String?, modeId: String): Int = when (eng
         "plan" -> R.string.engine_mode_opencode_plan
         else -> R.string.engine_mode_opencode_plan_auto
     }
+    AgentEngines.DEEPSEEK -> when (modeId) {
+        "read-only" -> R.string.engine_mode_deepseek_read_only
+        "workspace-write" -> R.string.engine_mode_deepseek_workspace_write
+        else -> R.string.engine_mode_deepseek_full_access
+    }
     else -> modeLabelRes(EngineModeCatalog.semantic(null, modeId))
 }
 
@@ -1682,6 +1687,11 @@ private fun engineModeBannerRes(engine: String?, modeId: String): Int? = when (e
         "build+auto" -> R.string.engine_mode_desc_opencode_build_auto
         "plan" -> R.string.engine_mode_desc_opencode_plan
         else -> R.string.engine_mode_desc_opencode_plan_auto
+    }
+    AgentEngines.DEEPSEEK -> when (modeId) {
+        "read-only" -> R.string.engine_mode_desc_deepseek_read_only
+        "workspace-write" -> R.string.engine_mode_desc_deepseek_workspace_write
+        else -> R.string.engine_mode_desc_deepseek_full_access
     }
     else -> modeBannerRes(EngineModeCatalog.semantic(null, modeId))
 }

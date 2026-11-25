@@ -14,14 +14,32 @@ object CliModelRef {
     /** OpenCode 内置 provider 名（models.dev 体系），凭据经标准环境变量透传。 */
     const val OPENCODE_OPENAI_KEY = "openai"
     const val OPENCODE_ANTHROPIC_KEY = "anthropic"
+    const val OPENCODE_DEEPSEEK_KEY = "deepseek"
 
     /** 该供应商在 OpenCode 侧的模型引用串（`-m` 参数值）。 */
     fun opencodeModelRef(providerName: String, providerId: String, type: ProviderType, baseUrl: String, model: String): String {
         val prefix = if (isOfficialBase(type, baseUrl)) {
             when (type) {
                 ProviderType.ANTHROPIC -> OPENCODE_ANTHROPIC_KEY
+                ProviderType.DEEPSEEK -> OPENCODE_DEEPSEEK_KEY
                 else -> OPENCODE_OPENAI_KEY
             }
+        } else {
+            providerKey(providerName, providerId)
+        }
+        return "$prefix/$model"
+    }
+
+    /**
+     * 该供应商在 DeepSeek 引擎（dsh）侧的模型引用串（落库与 patch 路由解析共用）。
+     * DeepSeek 官方端点复用 dsh 内置 provider（DEEPSEEK_API_KEY 直透）；其余端点用
+     * 自定义路由名 —— dsh 经 `--patch` 的 @deepseek-ai/dsh-llm-pi-ai providers 段
+     * 按 [providerKey] 注册（apiKeyEnv 指向 App 注入的环境变量），与 OpenCode 的
+     * 自定义 provider 段同构。
+     */
+    fun deepseekModelRef(providerName: String, providerId: String, type: ProviderType, baseUrl: String, model: String): String {
+        val prefix = if (type == ProviderType.DEEPSEEK && isOfficialBase(type, baseUrl)) {
+            OPENCODE_DEEPSEEK_KEY
         } else {
             providerKey(providerName, providerId)
         }
@@ -48,6 +66,7 @@ object CliModelRef {
         if (base.isEmpty()) return true
         return when (type) {
             ProviderType.ANTHROPIC -> base.contains("api.anthropic.com")
+            ProviderType.DEEPSEEK -> base.contains("api.deepseek.com")
             else -> base.contains("api.openai.com")
         }
     }

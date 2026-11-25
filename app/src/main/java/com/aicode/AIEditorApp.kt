@@ -18,6 +18,7 @@ import net.schmizz.sshj.common.SecurityUtils
 import com.aicode.feature.agent.domain.container.ContainerInstaller
 import com.aicode.feature.agent.domain.mcp.McpManager
 import com.aicode.feature.agent.domain.provider.ReasoningLearning
+import com.aicode.feature.agent.domain.tool.container.PendingDeliveryStore
 import com.aicode.feature.agent.domain.provider.SharedPrefsReasoningLearningStore
 import com.aicode.feature.settings.data.repository.KeepaliveSettingsRepository
 import com.aicode.feature.settings.data.repository.LanguageSettingsRepository
@@ -26,12 +27,14 @@ import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.terminal.domain.KeepaliveWorker
 import com.aicode.feature.terminal.domain.TerminalKeepaliveService
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -51,6 +54,11 @@ class AIEditorApp : Application(), Configuration.Provider {
         private const val KEY_CRASH_UI_SHOWING = "crash_ui_showing"
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
         private const val KEY_CRASH_COUNT = "crash_count"
+        /** 安全模式：置位后下次冷启动跳过全部后台/网络初始化，让用户能进 App 自救；
+         *  启动 10 分钟后自动清除（自愈回正常模式，若崩溃源仍在会再次熔断置位）。 */
+        private const val KEY_SAFE_MODE = "safe_mode"
+        /** 安全模式启动后经过多久自动恢复正常初始化。 */
+        private const val SAFE_MODE_HEAL_DELAY_MS = 10 * 60_000L
         /** ApplicationExitInfo 增量游标：已处理过的最大退出时间戳，避免重复上报历史退出。 */
         private const val KEY_LAST_EXIT_TIMESTAMP = "last_exit_timestamp"
         /** ApplicationExitInfo 读取的历史退出记录条数上限。 */
@@ -92,6 +100,20 @@ class AIEditorApp : Application(), Configuration.Provider {
                 .remove(KEY_CRASH_COUNT)
                 .remove(KEY_LAST_CRASH_TIME)
                 .apply()
+        }
+
+        /** 是否处于安全模式（跳过后台初始化的降级启动）。 */
+        fun isSafeMode(context: android.content.Context): Boolean =
+            context.getSharedPreferences(CRASH_PREFS, android.content.Context.MODE_PRIVATE)
+                .getBoolean(KEY_SAFE_MODE, false)
+
+        /** 置/清安全模式标记（崩溃错误页“安全模式重启”与自愈协程共用）。 */
+        fun setSafeMode(context: android.content.Context, value: Boolean) {
+            context.getSharedPreferences(CRASH_PREFS, android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_SAFE_MODE, value)
+                // commit 同步落盘：置位发生在崩溃处理器里，进程即将被杀，apply 可能丢。
+                .commit()
         }
 
         /** 向后兼容的旧别名，保留供外部调用。 */
@@ -185,6 +207,7 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var agentDatabase: com.aicode.feature.agent.data.local.database.AgentDatabase
 
+
     /** 旧 Room git 凭据一次性迁移器：启动即把旧表数据写入 git-credentials 文件后删表（真源已迁到文件）。 */
     @Inject
     lateinit var legacyCredentialMigrator: com.aicode.feature.credentials.data.LegacyCredentialMigrator
@@ -257,6 +280,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var containerImageCatalog: com.aicode.feature.agent.domain.container.ContainerImageCatalog
 
+    /** 诊断与自测收集器：启动时用它静默清理膨胀日志。 */
+    @Inject
+    lateinit var diagnosticsCollector: com.aicode.feature.settings.domain.DiagnosticsCollector
+
     /** 提供商级代理注册表：启动即构建 provider→代理 索引，供 AppProxy 按 target host 分派。 */
     @Inject
     lateinit var providerProxyRegistry: com.aicode.feature.settings.data.repository.ProviderProxyRegistry
@@ -270,7 +297,11 @@ class AIEditorApp : Application(), Configuration.Provider {
     lateinit var engineProcessRegistry: com.aicode.feature.agent.domain.engine.EngineProcessRegistry
 
     /** 长驻作用域：持续把持久化的日志等级同步到 FileLogger。 */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            FileLogger.e(TAG, "应用级协程异常，已拦截防崩", e)
+        }
+    )
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -287,17 +318,37 @@ class AIEditorApp : Application(), Configuration.Provider {
             return
         }
         super.onCreate()
+        // 安全模式：上次短时间内连续崩浘3 次后熔断置位。本次冷启动跳过全部后台/网络/容器
+        // 初始化（保留 Hilt 注入与数据层），让用户至少能进 App 导出数据/修复配置；
+        // 10 分钟后自动清除标记自愈回正常模式，若崩溃源仍在会再次熔断置位，不会更糟。
+        val safeMode = isSafeMode(this)
+        if (safeMode) {
+            FileLogger.w(TAG, "安全模式启动：跳过后台初始化（上次连续崩溃熔断），10 分钟后自动恢复正常模式")
+        }
         // 追踪前台 Activity：商店人机校验需要临时挂一个不可见 WebView 到当前窗口。
         com.aicode.core.util.ActivityTracker.install(this)
         logDeviceInfo()
         // 补记 Java 未捕获异常处理器覆盖不到的异常退出（native 崩溃 / ANR / 低内存被杀 / 被信号杀死）。
         appScope.launch { reportAbnormalExits() }
+        if (!safeMode) {
         // 冷启动回收：上次进程被 LMK 时来不及收尸的 proot + claude/codex/opencode 进程树。
         // 只按落盘 PID 精确回收（PID + /proc 启动时间 + cmdline 三重校验），不扫无关进程。
         appScope.launch {
             runCatching { engineProcessRegistry.reclaimOrphansOnColdStart() }
                 .onFailure { FileLogger.w(TAG, "冷启动回收孤儿引擎进程失败", it) }
         }
+        // 构建产物补投递：上一会话里容器脚本构建成功但会话被杀、包没来得及发到聊天区时，
+        // 待投递文件路径记录在 <工作区>/.aicode/pending-delivery.txt。启动时读出来登记到
+        // 交付注册表，由会话回合收尾时挂成文件卡片（与 send_file 同一条链路）。
+        appScope.launch {
+            runCatching {
+                // 等当前工作区就绪：Application.onCreate 时 current 仍为 null，
+                // 早跑会拿 projectsRoot 当会话工作区，查不到会话，标记也留在原地。
+                workspaceRepository.current.filterNotNull().first()
+                deliverPendingArtifacts()
+            }.onFailure { FileLogger.w(TAG, "补投递构建产物失败", it) }
+        }
+        } // end if (!safeMode)
         // 把提供商级代理注册表挂到 AppProxy（applyGlobal 已在 attachBaseContext 完成），
         // 此后按目标 host 分派 provider 专属代理；无 provider 配置时回退全局代理。
         AppProxy.registerProviderProxyRegistry(providerProxyRegistry)
@@ -310,6 +361,7 @@ class AIEditorApp : Application(), Configuration.Provider {
             registerBouncyCastle()
         }
         createNotificationChannels()
+        if (!safeMode) {
         // 启动凭据请求监听：容器内 credential helper 写来的 cred-req-* → 全局弹窗回填 → 回喂 git 续跑。
         credentialRequestBridge.start()
         // 启动工具授权通知通道：App 在后台时 AI 的授权请求可从通知栏直接批准/拒绝。
@@ -317,6 +369,10 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 启动即把最新的内置指南手册提取到私有配置目录
         appScope.launch {
             ContainerInstaller.extractDocs(this@AIEditorApp)
+        }
+        // 日志自动清理：删旧文件 + 总量超 200MB 裁剪（日志曾膨胀到 678MB，手动清理按钮挡不住单日暴涨）。
+        appScope.launch(Dispatchers.IO) {
+            diagnosticsCollector.autoCleanLogsOnStartup()
         }
         // 原生插件不再随包释放：顾问团 / 分析台等一律走「设置 → 插件 → 从文件安装」，
         // 与主程序解耦（装、卸、启停都由插件体系管理，升级 App 不会凭空塞回来）。
@@ -376,6 +432,7 @@ class AIEditorApp : Application(), Configuration.Provider {
         appScope.launch {
             modelMetadataService.refreshFromNetworkIfStale()
         }
+        } // end if (!safeMode)
         // providers.json 预设已内置化（见 ProviderPresetLibrary）：不从官方仓库拉取，
         // 自建分支的 models 预填字段只存在于内置数据，网络刷新会覆盖它们。
         // 镜像目录的网络刷新暂不启用：发布源（data 分支的 container-images.json）随官方 CI
@@ -400,6 +457,7 @@ class AIEditorApp : Application(), Configuration.Provider {
                 executionModeHolder.setSelfImproveMode(it)
             }
         }
+        if (!safeMode) {
         // SSH 连接监督常驻（config 为空时空转）：定期探活、断线自动重连，重连成功后重载工作区与同步文档。
         appScope.launch {
             remoteSshConnection.startSupervisor(appScope) {
@@ -483,6 +541,19 @@ class AIEditorApp : Application(), Configuration.Provider {
         // 权限规则由 App 启动即常驻订阅（AI 评估随时要读到最新规则）；MCP 配置与技能列表
         // 改由各自消费方（McpManager / 设置页）按需订阅，无需在这里拉起。
         appScope.launch { permissionRulesRepository.startWatching() }
+        } // end if (!safeMode)
+
+        if (safeMode) {
+            // 自愈：安全模式跑满 10 分钟后自动清除标记，下次冷启动恢复正常初始化。
+            // 若崩溃源仍在，正常模式的初始化会再次崩溃并再次熔断置位，循环受控。
+            appScope.launch {
+                kotlinx.coroutines.delay(SAFE_MODE_HEAL_DELAY_MS)
+                if (isSafeMode(this@AIEditorApp)) {
+                    setSafeMode(this@AIEditorApp, false)
+                    FileLogger.i(TAG, "安全模式自愈：已恢复正常模式标记，下次冷启动恢复全部初始化")
+                }
+            }
+        }
         // 持续同步工作区模式缓存，崩溃时随报告带出
         appScope.launch {
             executionModeRepository.executionModeFlow.collect { mode ->
@@ -499,6 +570,96 @@ class AIEditorApp : Application(), Configuration.Provider {
         // AppCompatDelegate.setApplicationLocales 的自动 recreate 不生效，
         // 且两者同时设置 locale 会竞争导致偶发语言错乱。
     }
+
+    /**
+     * 补投递构建产物（内置机制，2026-11-19）：读 `<工作区>/.aicode/pending-delivery.txt`
+     * 里的待发文件路径（容器脚本构建成功但会话被杀时写下），逐个校验存在后**直接追加到
+     * 交付物页的数据源**——落到当前工作区最近的会话消息里做不到（App 冷启动时无会话上下文），
+     * 因此采用「登记到交付物页 + 通知栏提示」的组合，保证用户一定能拿到包。
+     * 成功后删除标记文件；文件不存在或全部无效时也删（避免反复空转）。
+     */
+    private suspend fun deliverPendingArtifacts() {
+        val root = pluginFileAccess
+        val pendingFile = workspacePendingFile() ?: return
+        val content = runCatching { root.readFile(pendingFile) }.getOrNull() ?: return
+        val paths = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (paths.isEmpty()) {
+            runCatching { root.delete(pendingFile) }
+            return
+        }
+
+        val workspacePath = runCatching { workspaceRepository.currentPath() }.getOrNull()
+        val messageDao = agentDatabase.agentMessageDao()
+        val sessionDao = agentDatabase.chatSessionDao()
+        val existingPaths = if (workspacePath == null) emptySet() else runCatching {
+            messageDao.messagesWithAttachments(workspacePath)
+                .flatMap { com.aicode.feature.agent.data.local.entity.AgentMessageEntity.decodeAttachments(it.attachmentsJson) }
+                .map { it.containerPath }
+                .toSet()
+        }.getOrDefault(emptySet())
+        val freshPaths = paths.filter { it !in existingPaths }
+
+        val attachments = mutableListOf<com.aicode.feature.agent.presentation.AgentAttachment>()
+        for (path in freshPaths) {
+            val attachment = runCatching {
+                if (!root.exists(path) || root.isDirectory(path)) return@runCatching null
+                val local = root.copyToLocal(path)
+                val name = path.substringAfterLast('/')
+                com.aicode.feature.agent.presentation.AgentAttachment(
+                    fileName = name,
+                    containerPath = path,
+                    localPath = local.absolutePath,
+                    mimeType = java.net.URLConnection.guessContentTypeFromName(name) ?: "application/octet-stream",
+                    sizeBytes = runCatching { root.fileSize(path) }.getOrDefault(local.length()),
+                    isImage = false
+                )
+            }.onFailure { FileLogger.w(TAG, "补投递单文件失败 $path: ${it.message}") }.getOrNull()
+            if (attachment != null) attachments += attachment
+        }
+
+        var registered = false
+        if (attachments.isNotEmpty() && workspacePath != null) {
+            registered = runCatching {
+                val session = sessionDao.getLatestRootSessionByWorkspace(workspacePath)
+                if (session == null) {
+                    FileLogger.w(TAG, "补投递：当前工作区没有可用会话，标记保留待下次启动")
+                    false
+                } else {
+                    val now = System.currentTimeMillis()
+                    messageDao.insert(
+                        com.aicode.feature.agent.data.local.entity.AgentMessageEntity(
+                            id = java.util.UUID.randomUUID().toString(),
+                            sessionId = session.id,
+                            role = com.aicode.feature.agent.presentation.MessageRole.ASSISTANT.name,
+                            content = "构建产物已补投递：${attachments.joinToString("、") { it.fileName }}",
+                            timestamp = now,
+                            attachmentsJson = com.aicode.feature.agent.data.local.entity.AgentMessageEntity.encodeAttachments(attachments)
+                        )
+                    )
+                    FileLogger.i(TAG, "补投递构建产物 ${attachments.size} 个到会话 ${session.id}")
+                    true
+                }
+            }.onFailure { FileLogger.w(TAG, "补投递登记失败: ${it.message}") }.getOrDefault(false)
+        }
+
+        if (registered) {
+            // 只移除已投递成功的路径；复制失败/无效路径必须留在标记里等下次重试。
+            PendingDeliveryStore.remove(root, attachments.map { it.containerPath })
+        } else if (freshPaths.isEmpty()) {
+            runCatching { root.delete(pendingFile) }
+        } else {
+            FileLogger.w(TAG, "补投递未完成，保留标记文件 $pendingFile 待下次启动重试")
+        }
+    }
+
+    /** 待投递标记文件的容器路径（当前工作区根下）；工作区未就绪返回 null。 */
+    private fun workspacePendingFile(): String? {
+        val ws = runCatching {
+            com.aicode.feature.workspace.domain.WorkspacePathMapper.CONTAINER_ROOT
+        }.getOrNull() ?: return null
+        return "$ws/.aicode/pending-delivery.txt"
+    }
+
 
     /** 记录设备/版本信息：用户报「某系统版本上容器起不来」时，日志里得先有系统与 ABI 上下文。 */
     private fun logDeviceInfo() {
@@ -629,6 +790,11 @@ class AIEditorApp : Application(), Configuration.Provider {
             // 熔断保护：错误页正在展示又发生崩溃，或短时间内连续崩溃达到阈值
             if (isUiShowing || recentCrashCount >= MAX_CONSECUTIVE_CRASHES) {
                 FileLogger.e(TAG, "触发崩溃熔断保护 (isUiShowing=$isUiShowing, count=$recentCrashCount)，终止自启交由系统处理")
+                if (recentCrashCount >= MAX_CONSECUTIVE_CRASHES) {
+                    // 同步落盘：下次冷启动进入安全模式（跳过后台初始化），让用户至少能进 App 自救。
+                    setSafeMode(this@AIEditorApp, true)
+                    FileLogger.e(TAG, "已置安全模式标记：下次冷启动将跳过后台初始化")
+                }
                 previous?.uncaughtException(thread, throwable)
                 Process.killProcess(Process.myPid())
                 return@setDefaultUncaughtExceptionHandler

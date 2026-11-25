@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.aicode.feature.floatball
 
 import android.content.Context
@@ -22,7 +24,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
@@ -70,6 +74,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -110,6 +115,7 @@ import com.aicode.core.theme.semanticColors
 import com.aicode.feature.settings.data.repository.AppThemeMode
 import com.aicode.feature.settings.data.repository.ThemeSettingsRepository
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Feather
 import compose.icons.feathericons.X
 import compose.icons.feathericons.ArrowDown
 import compose.icons.feathericons.ArrowLeft
@@ -533,11 +539,17 @@ class FloatBallOverlay(
         // 悬浮窗宿主是 Service（同样被语言 wrapper 包裹），isSystemInDarkTheme() 读冻结值，
         // 改读系统深浅实时镜像流（AIEditorApp.onConfigurationChanged 驱动）。
         val systemDark by themeSettings.systemDark.collectAsState(initial = false)
+        // SCHEDULED 的时段解析是挂起调用（DataStore 读取），用 produceState 承接；
+        // 模式或系统深浅变化时重算，时段边界内的自动翻转由仓库解析流的 30s 重算兜底。
         val darkTheme = when (mode) {
             AppThemeMode.AUTO -> systemDark
             AppThemeMode.DARK -> true
             AppThemeMode.BLACK -> true
             AppThemeMode.LIGHT -> false
+            AppThemeMode.SCHEDULED ->
+                produceState(initialValue = systemDark, mode, systemDark) {
+                    value = runCatching { themeSettings.resolveInitialDark() }.getOrDefault(systemDark)
+                }.value
         }
         AIEditorTheme(
             darkTheme = darkTheme,
@@ -723,30 +735,6 @@ class FloatBallOverlay(
             val msg = hint ?: return@LaunchedEffect
             delay(1600)
             if (hint == msg) hint = null
-        }
-
-        var voiceTapActive by remember { mutableStateOf(false) }
-        var voiceProcessing by remember { mutableStateOf(false) }
-        val voiceController = remember(hub.voiceEngine) {
-            com.aicode.feature.agent.presentation.component.VoiceSession.create(
-                context,
-                hub.voiceEngine ?: com.aicode.feature.settings.data.repository.VoiceEngine.SYSTEM
-            )
-        }
-        DisposableEffect(voiceController) {
-            voiceController.onResult = { text ->
-                voiceProcessing = false
-                voiceTapActive = false
-                updateInput(text.trim())
-                // 语音回填时输入窗多半处于收起态，展开让用户看到/修改识别结果
-                inputOpen = true
-            }
-            voiceController.onError = {
-                voiceProcessing = false
-                voiceTapActive = false
-                hint = context.getString(R.string.chat_voice_failed)
-            }
-            onDispose { voiceController.destroy() }
         }
 
         // 进出场：单一进度驱动 alpha/scale/位移三通道。进场用轻微过冲 spring（0.88→1 缩放 +
@@ -1171,6 +1159,10 @@ class FloatBallOverlay(
                                     FloatBallCommandCenter.openApp?.invoke()
                                     onDismiss()
                                 }) { Text(stringResource(R.string.float_panel_open_app)) }
+                                TextButton(onClick = {
+                                    FloatBallCommandCenter.openDiagnostics?.invoke()
+                                    onDismiss()
+                                }) { Text(stringResource(R.string.float_panel_open_diagnostics)) }
                             }
                         }
                     }
@@ -1211,10 +1203,11 @@ class FloatBallOverlay(
                     }
                 }
 
-                // 7) 工具排（FB2）：模式循环 / 模型切换（语音与发送已移至底栏，与 App 内同位）
+                // 7) 工具排（FB2）：模式循环 / 模型切换 / 输入入口 / 润色 / 发送，间隔均分
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     val currentMode = hub.mode ?: com.aicode.feature.agent.domain.model.AgentMode.BUILD
                     val modeEntries = com.aicode.feature.agent.domain.model.AgentMode.entries
@@ -1263,7 +1256,6 @@ class FloatBallOverlay(
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                    Spacer(Modifier.weight(1f))
                     // 输入入口（反馈1）：文本输入收进底栏中部图标，点击在工具排上方展开输入窗
                     IconButton(
                         onClick = { inputOpen = !inputOpen },
@@ -1276,36 +1268,72 @@ class FloatBallOverlay(
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                    Spacer(Modifier.weight(1f))
-                    // 语音（App 内点击聆听同业务）：识别文本回填输入框
-                    IconButton(
-                        onClick = {
-                            if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
-                                android.content.pm.PackageManager.PERMISSION_GRANTED
-                            ) {
-                                hint = context.getString(R.string.float_panel_voice_need_app)
-                                return@IconButton
-                            }
-                            if (voiceTapActive) {
-                                if (!voiceProcessing) {
-                                    voiceProcessing = true
-                                    voiceController.finish()
+                    // 润色（FB3）：点击润色输入框文本（复用会话输入框润色链路），长按恢复润色前原文
+                    var ballPolishing by remember { mutableStateOf(false) }
+                    var ballPrePolish by remember { mutableStateOf<String?>(null) }
+                    val polishScope = rememberCoroutineScope()
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .combinedClickable(
+                                enabled = !ballPolishing,
+                                onClick = {
+                                    val text = input
+                                    if (text.isBlank()) {
+                                        hint = context.getString(R.string.chat_polish_empty)
+                                        return@combinedClickable
+                                    }
+                                    val bridge = FloatBallCommandCenter.polishText
+                                    if (bridge == null) {
+                                        hint = context.getString(R.string.float_panel_send_need_app)
+                                        return@combinedClickable
+                                    }
+                                    ballPolishing = true
+                                    polishScope.launch {
+                                        // 异常安全：润色请求失败（网络/供应商错误）必须复位按钮，否则永久转圈禁用。
+                                        val polished = try {
+                                            bridge(text)
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
+                                        } catch (t: Throwable) {
+                                            null
+                                        }
+                                        ballPolishing = false
+                                        if (polished.isNullOrBlank() || polished == text) {
+                                            hint = context.getString(R.string.chat_polish_failed)
+                                        } else {
+                                            ballPrePolish = text
+                                            input = polished
+                                            FloatBallCommandCenter.updateDraft?.invoke(polished)
+                                            hint = context.getString(R.string.chat_polish_done)
+                                        }
+                                    }
+                                },
+                                onLongClick = {
+                                    val prev = ballPrePolish ?: return@combinedClickable
+                                    ballPrePolish = null
+                                    input = prev
+                                    FloatBallCommandCenter.updateDraft?.invoke(prev)
+                                    hint = context.getString(R.string.chat_polish_undo)
                                 }
-                            } else if (!voiceProcessing) {
-                                voiceTapActive = true
-                                voiceController.start()
-                            }
-                        },
-                        modifier = Modifier.size(36.dp)
+                            ),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = FeatherIcons.Mic,
-                            contentDescription = stringResource(R.string.float_panel_voice),
-                            tint = if (voiceTapActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        if (ballPolishing) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(15.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = FeatherIcons.Feather,
+                                contentDescription = stringResource(R.string.chat_polish),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                    Spacer(Modifier.width(6.dp))
                     // 发送（App 内 SendButton 同款 36dp 圆钮，箭头恒白；忙时空输入=停止）
                     val canSend = input.isNotBlank()
                     val showStop = state.busy && !canSend

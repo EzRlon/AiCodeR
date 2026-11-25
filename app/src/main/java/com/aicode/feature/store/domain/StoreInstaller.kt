@@ -74,10 +74,14 @@ class StoreInstaller @Inject constructor(
      * 由调用方挂起等待用户确认，确认后用 [commitSkillInstall] 完成安装（无需重新下载）。
      */
     suspend fun planSkillInstall(item: StoreItem): SkillInstallPlan {
-        val detail = api.skillDetail(item.id).getOrElse {
-            throw IllegalStateException("获取技能详情失败：${it.message ?: "网络错误"}")
+        // 官方 GitHub 目录型源自带 repoUrl，直接下载，免市场详情接口（claudemarket 专属）。
+        val repoUrl = item.repoUrl?.takeIf { it.isNotBlank() } ?: run {
+            val detail = api.skillDetail(item.id).getOrElse {
+                throw IllegalStateException("获取技能详情失败：${it.message ?: "网络错误"}")
+            }
+            detail.repoUrl
         }
-        val src = parseGitHubSource(detail.repoUrl)
+        val src = parseGitHubSource(repoUrl)
             ?: throw IllegalStateException("该技能未提供可下载的仓库地址（repoUrl），请打开详情页手动安装")
         val files = downloadDirectory(src)
         val scan = withContext(Dispatchers.Default) { scanner.scanFiles(files) }

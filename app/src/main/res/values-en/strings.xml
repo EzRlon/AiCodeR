@@ -269,6 +269,9 @@
     <string name="dev_keys_variant_release_x86">Release · x86solo (emulator)</string>
     <string name="dev_keys_variant_debug">Debug build</string>
     <string name="dev_keys_variant_needs">Requires certificate and signing config — expand to check</string>
+    <string name="dev_keys_variant_ready">Release material complete — ready to build</string>
+    <string name="dev_keys_variant_missing">%1$d release item(s) missing — see the list above</string>
+    <string name="dev_keys_variant_needs_check">Tap “Recheck” above to evaluate build readiness</string>
     <string name="dev_keys_variant_debug_desc">Uses the debug key; no release material needed</string>
     <string name="dev_keys_required_cert">Signing certificate (.jks / .keystore)</string>
     <string name="dev_keys_required_config">keystore.properties (signing config)</string>
@@ -540,6 +543,7 @@
     <string name="float_panel_nothing_running">No running task</string>
     <string name="float_panel_stop">Stop task</string>
     <string name="float_panel_open_app">Open app</string>
+    <string name="float_panel_open_diagnostics">Diagnostics</string>
     <string name="float_panel_collapse_panel">Collapse panel</string>
     <string name="float_panel_input_hint">Ask the AI…</string>
     <string name="float_panel_input">Input</string>
@@ -3058,6 +3062,11 @@
     <string name="provider_multi_key_status_codes">Auto-Switch Status Codes</string>
     <string name="provider_multi_key_status_codes_hint">Comma-separated; leave empty for default 401,402,403,429</string>
     <string name="provider_multi_key_cooldown">Cooldown</string>
+    <string name="provider_key_status_header">Runtime status (recent real requests)</string>
+    <string name="provider_key_status_ok">OK</string>
+    <string name="provider_key_status_cooling">Cooling until %1$s</string>
+    <string name="provider_key_status_auth_invalid">Auth invalid</string>
+    <string name="provider_key_status_today">Today %1$d req</string>
     <string name="provider_multi_key_cooldown_desc">How long a switched-away key stays out of the pool</string>
     <string name="provider_multi_key_cooldown_value">%1$d min</string>
     <string name="provider_multi_key_cooldown_off">None</string>
@@ -3144,6 +3153,14 @@
     <string name="vnc_rotation_landscape">Rotation: lock landscape</string>
     <string name="vnc_rotation_portrait">Rotation: lock portrait</string>
     <string name="vnc_show_keyboard">Show keyboard</string>
+    <string name="vnc_bar_left">Left</string>
+    <string name="vnc_bar_middle">Middle</string>
+    <string name="vnc_bar_right">Right</string>
+    <string name="vnc_bar_scroll_up">Scroll up</string>
+    <string name="vnc_bar_scroll_down">Scroll down</string>
+    <string name="vnc_bar_pointer_direct">Direct</string>
+    <string name="vnc_bar_pointer_trackpad">Trackpad</string>
+    <string name="vnc_trackpad_hint">Trackpad: slide to move · tap=left · two-finger tap=right · two-finger slide=scroll</string>
     <string name="vnc_mouse_left">Mouse left button (tap to switch to right)</string>
     <string name="vnc_mouse_right">Mouse right button (tap to switch back to left)</string>
     <string name="vnc_close">Close window</string>

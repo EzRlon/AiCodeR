@@ -7,9 +7,11 @@ import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -25,7 +27,11 @@ class ProviderProxyRegistry @Inject constructor(
     aiProviderRepository: AIProviderRepository
 ) : ProviderProxyLookup {
     // 应用级作用域：单例生命周期与 App 进程一致（随进程退出而消亡），无需外部取消。
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            FileLogger.e(TAG, "提供商代理注册表启动异常，代理暂不可用", e)
+        }
+    )
 
     /** host(lowercase) → 该主机下的代理条目列表；无配置时为空 map。 */
     @Volatile
@@ -33,7 +39,9 @@ class ProviderProxyRegistry @Inject constructor(
 
     init {
         scope.launch {
-            aiProviderRepository.getAllProviders().collectLatest { providers ->
+            aiProviderRepository.getAllProviders()
+                .catch { e -> FileLogger.e(TAG, "提供商代理配置加载失败，保留空表", e) }
+                .collectLatest { providers ->
                 val entries = providers
                     .filter { it.proxyEnabled && it.proxyHost.isNotBlank() && it.proxyPort in 1..65535 }
                     .mapNotNull { entry ->

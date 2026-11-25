@@ -15,20 +15,46 @@ data class KeySwitchResult(
     val total: Int
 )
 
+/** 失败的归因，决定用哪套冷却策略。 */
+enum class KeyFailureKind {
+    /** 429 / quota 类：按惩罚序列放大冷却，可用响应头精修。 */
+    RATE_LIMIT,
+
+    /** 401/403：凭据失效，固定冷却并标记，等待用户更换。 */
+    AUTH
+}
+
+/** 选 Key 的结果。全冷却时不再返回 null，而是带着「最早何时恢复」交给上层决定等多久。 */
+sealed interface KeyPick {
+    data class Available(val key: String, val index: Int, val total: Int) : KeyPick
+
+    /**
+     * 所有 Key 都在冷却。上层可按 [earliestRecoveryAtMs] 等待（有上限），
+     * 或直接给用户一个带恢复时间的提示——不要静默失败。
+     */
+    data class AllCooling(
+        val earliestRecoveryAtMs: Long,
+        val total: Int
+    ) : KeyPick
+}
+
 /**
- * 多 Key 轮换器：决定某个 provider 在某条会话上该用哪个 API Key，并在 Key 不可用时切到下一个。
+ * 多 Key 轮换器 v2：决定某个 provider 在某条会话上该用哪个 API Key，并在 Key 不可用时切到下一个。
  *
- * 状态全部是运行时内存态、不落库：进程重启后回到第一个 Key、冷却记录清空——多 Key 的意义是
- * 遇到鉴权/额度/限流问题时能立刻绕开，没有必须跨进程保持的语义。
+ * 与 v1 的差异：
+ * 1. 冷却状态与用量统计交给 [KeyLedger]，**跨进程持久化**——重启后不会失忆回头去撞正在锁定的 Key；
+ * 2. 冷却时长自适应（429 逐级放大到 24h），并优先采用服务端 Retry-After / reset 头；
+ * 3. 全部冷却时返回 [KeyPick.AllCooling] + 恢复时间，由上层等待或给出明确提示，而不是直接报错。
  *
- * **会话粘性**是这里的核心约束：服务端 prompt 缓存按 API Key 隔离，同一会话逐请求换 Key 会让
- * 每轮都落到没有缓存的 Key 上，缓存命中率归零、成本和首字延迟一起恶化。因此只在会话首次取
- * Key、或当前 Key 被判定不可用时才换，其余情况一直粘住同一个 Key。
+ * **会话粘性**依然保留：服务端 prompt 缓存按 API Key 隔离，同一会话逐请求换 Key 会让缓存命中率
+ * 归零、成本和首字延迟一起恶化。因此只在会话首次取 Key、或当前 Key 被判为不可用时才换。
  */
 @Singleton
-class ProviderKeyRotator @Inject constructor() {
+class ProviderKeyRotator @Inject constructor(
+    private val ledger: KeyLedger
+) {
 
-    /** 由最近一次 [activeKey] 记录的 provider Key 配置，供失败上报时读取候选与冷却时长。 */
+    /** 由最近一次 [pickKey] 记录的 provider Key 配置，供失败上报时读取候选与冷却基数。 */
     private data class KeySetup(
         val keys: List<ProviderKey>,
         val strategy: KeyRotationStrategy,
@@ -38,9 +64,6 @@ class ProviderKeyRotator @Inject constructor() {
     private val lock = Any()
 
     private val setups = mutableMapOf<String, KeySetup>()
-
-    /** providerId + Key → 冷却截止时间戳（毫秒）。 */
-    private val cooldownUntil = mutableMapOf<String, Long>()
 
     /** providerId → Key 值 → 平滑加权轮询的当前权重（运行时内存态）。 */
     private val weightedState = mutableMapOf<String, MutableMap<String, Long>>()
@@ -58,12 +81,14 @@ class ProviderKeyRotator @Inject constructor() {
     }
 
     /**
-     * 取 [config] 在 [sessionId] 上当前该用的 Key；没有任何可用 Key、或所有 Key 都在冷却时返回 null。
-     * 同时把该 provider 的 Key 配置快照下来，供后续 [reportFailure] 使用。
+     * 取 [config] 在 [sessionId] 上该用的 Key。
+     *
+     * 返回 [KeyPick.AllCooling] 时调用方可以选择等待（有上限）或直接提示用户最早恢复时间，
+     * 不要当作「没有 Key」处理。
      */
-    fun activeKey(config: AIProviderConfig, sessionId: String?): String? {
+    fun pickKey(config: AIProviderConfig, sessionId: String?): KeyPick {
         val keys = config.effectiveApiKeys
-        if (keys.isEmpty()) return null
+        if (keys.isEmpty()) return KeyPick.AllCooling(0L, 0)
         synchronized(lock) {
             setups[config.id] = KeySetup(
                 keys = keys,
@@ -72,15 +97,28 @@ class ProviderKeyRotator @Inject constructor() {
             )
 
             val bindKey = sessionId?.let { sessionBinding(config.id, it) }
-            val bound = bindKey?.let { sessionKeys[bindKey] }
-            if (bound != null && keys.any { it.value == bound } && !isCoolingDown(config.id, bound)) return bound
+            val bound = bindKey?.let { sessionKeys[it] }
+            if (bound != null && keys.any { it.value == bound } && !ledger.isCoolingDown(config.id, bound)) {
+                return KeyPick.Available(bound, keys.indexOfFirst { it.value == bound } + 1, keys.size)
+            }
 
-            val chosen = pick(config.id, keys, config.keyRotationStrategy, exclude = emptySet()) ?: return null
+            val chosen = pick(config.id, keys, config.keyRotationStrategy, exclude = emptySet())
+            if (chosen == null) {
+                val earliest = ledger.earliestRecoveryMs(config.id, keys.map { it.value })
+                return KeyPick.AllCooling(earliest, keys.size)
+            }
             if (bindKey != null) sessionKeys[bindKey] = chosen
             lastSelected[config.id] = chosen
-            return chosen
+            return KeyPick.Available(chosen, keys.indexOfFirst { it.value == chosen } + 1, keys.size)
         }
     }
+
+    /**
+     * 兼容旧调用点：返回 Key 或 null（全冷却时）。
+     * 新代码请优先用 [pickKey] 以拿到恢复时间。
+     */
+    fun activeKey(config: AIProviderConfig, sessionId: String?): String? =
+        (pickKey(config, sessionId) as? KeyPick.Available)?.key
 
     /**
      * 只读地取该 provider 当前活动的 Key：不建会话绑定、不推进轮询游标。
@@ -91,44 +129,88 @@ class ProviderKeyRotator @Inject constructor() {
         if (keys.isEmpty()) return null
         synchronized(lock) {
             val last = lastSelected[config.id]
-            if (last != null && keys.any { it.value == last } && !isCoolingDown(config.id, last)) return last
-            return keys.firstOrNull { !isCoolingDown(config.id, it.value) }?.value ?: keys.first().value
+            if (last != null && keys.any { it.value == last } && !ledger.isCoolingDown(config.id, last)) return last
+            return keys.firstOrNull { !ledger.isCoolingDown(config.id, it.value) }?.value ?: keys.first().value
         }
     }
 
+    /** 这组 Key（可排除已试过的）最早何时恢复；全部健康返回 0。 */
+    fun earliestRecovery(config: AIProviderConfig, exclude: Set<String> = emptySet()): Long {
+        val keys = config.effectiveApiKeys.map { it.value }.filter { it !in exclude }
+        if (keys.isEmpty()) return 0L
+        return ledger.earliestRecoveryMs(config.id, keys)
+    }
+
+    /** 当前 provider 的每个 Key 的运行时画像，供设置页「运行状态」卡片展示。 */
+    fun snapshots(config: AIProviderConfig): List<KeyRuntimeSnapshot> =
+        ledger.snapshots(config.id, config.effectiveApiKeys.map { it.value })
+
+    /** 按明文 Key 值取运行时画像（编辑页里用户可能尚未保存配置）。 */
+    fun snapshots(providerId: String, keyValues: List<String>): List<KeyRuntimeSnapshot> =
+        ledger.snapshots(providerId, keyValues)
+
     /**
-     * 上报一次可归因于 [key] 的失败：**立即**切到下一个可用 Key、把 [key] 打入冷却并重绑会话，
-     * 返回切换结果；没有可切换的候选（候选已试完、或全部在冷却）时返回 null——此时**不冷却** [key]，
-     * 避免把最后一个可用 Key 也锁死、让用户在一段时间内完全无法发起请求。
+     * 每次真正发出请求前调用，用于统计。
+     */
+    fun reportRequest(providerId: String, key: String) {
+        ledger.reportRequest(providerId, key)
+    }
+
+    /** 请求成功：记录 token 用量与响应头信息。 */
+    fun reportSuccess(
+        providerId: String,
+        key: String,
+        tokensIn: Long = 0L,
+        tokensOut: Long = 0L,
+        rateLimit: RateLimitInfo? = null
+    ) {
+        ledger.reportSuccess(providerId, key, tokensIn, tokensOut, rateLimit)
+    }
+
+    /**
+     * 上报一次可归因于 [key] 的失败：把 [key] 记入账本（冷却/统计），切到下一个可用 Key 并重绑会话。
      *
-     * [triedKeys] 为本次请求已试过的 Key（含 [key] 自身），用于避免同一次请求内重复试同一个 Key。
+     * 返回 null 表示没有可切换的候选（通常是全部冷却）——此时调用方应通过 [pickKey] 拿到恢复时间
+     * 后选择等待或给出明确提示，而不是直接报「全部失败」。
+     *
+     * [triedKeys] 为本次请求已试过的 Key（含 [key] 自身），避免同一次请求内重复试同一个 Key。
      */
     fun reportFailure(
         providerId: String,
         sessionId: String?,
         key: String,
-        triedKeys: Set<String> = emptySet()
+        triedKeys: Set<String> = emptySet(),
+        kind: KeyFailureKind = KeyFailureKind.RATE_LIMIT,
+        rateLimit: RateLimitInfo? = null,
+        profile: CooldownProfile = CooldownProfile.CONSERVATIVE
     ): KeySwitchResult? {
         synchronized(lock) {
-            val setup = setups[providerId] ?: return null
-            if (setup.keys.none { it.value == key }) return null
+            val setup = setups[providerId]
+            if (setup == null || setup.keys.none { it.value == key }) return null
 
-            // 先确认有可切换的候选，没有就别冷却——把最后一个可用 Key 冷却只会让用户在一段时间内完全不可用
-            val next = pick(providerId, setup.keys, setup.strategy, exclude = triedKeys + key) ?: return null
-            if (setup.cooldownMillis > 0) {
-                cooldownUntil[stateKey(providerId, key)] = System.currentTimeMillis() + setup.cooldownMillis
+            // 先把真实发生的失败记进账本：无论后面有没有候选，这个 Key 确实被限流/失效了
+            when (kind) {
+                KeyFailureKind.RATE_LIMIT -> ledger.reportRateLimit(providerId, key, rateLimit, setup.cooldownMillis, profile)
+                KeyFailureKind.AUTH -> ledger.reportAuthFailure(providerId, key, setup.cooldownMillis)
             }
+
+            val next = pick(providerId, setup.keys, setup.strategy, exclude = triedKeys + key) ?: return null
             sessionId?.let { sessionKeys[sessionBinding(providerId, it)] = next }
             lastSelected[providerId] = next
             val index = setup.keys.indexOfFirst { it.value == next } + 1
-            FileLogger.i(TAG, "Key 切换 provider=$providerId ${key.masked()} → ${next.masked()} (第 $index/${setup.keys.size} 个)")
+            FileLogger.i(
+                TAG,
+                "Key 切换 provider=$providerId ${key.masked()} → ${next.masked()} (第 $index/${setup.keys.size} 个，原因=$kind)"
+            )
             return KeySwitchResult(newKey = next, newIndex = index, total = setup.keys.size)
         }
     }
 
     /**
-     * 按策略挑一个可选 Key：排除 [exclude]（本次已试过）与处于冷却中的 Key，权重 ≤ 0 的也不参与；
-     * 没有可选时返回 null。不做「全冷却就退回最早到期者再试一遍」的回退——那等于拿已知不可用的 Key 硬打。
+     * 按策略挑一个可选 Key：排除 [exclude]（本次已试过）、处于冷却中的、权重 ≤ 0 的。
+     *
+     * ROUND_ROBIN 在健康候选内做负载均衡优化：惩罚等级低者优先、最近一分钟请求少者优先，
+     * 避免总把流量压在同一个「看起来健康但其实快到限」的 Key 上。SEQUENTIAL 保持严格顺序语义。
      */
     private fun pick(
         providerId: String,
@@ -137,7 +219,7 @@ class ProviderKeyRotator @Inject constructor() {
         exclude: Set<String>
     ): String? {
         val participants = keys.filter {
-            it.weight > 0 && it.value !in exclude && !isCoolingDown(providerId, it.value)
+            it.weight > 0 && it.value !in exclude && !ledger.isCoolingDown(providerId, it.value)
         }
         if (participants.isEmpty()) return null
         return when (strategy) {
@@ -149,16 +231,31 @@ class ProviderKeyRotator @Inject constructor() {
     /**
      * 平滑加权轮询（SWRR）：每轮给各候选加上自身权重、取当前权重最大者，再给选中者减去候选总权重。
      * 无需按权重展开成虚拟列表，权重可到百万级；分布均匀且不会一直落在同一个 Key 上。
+     *
+     * 同权重时的次序微调（惩罚等级/近一分钟请求量）通过给候选打一个极小的权重折扣实现，
+     * 不会破坏 SWRR 的长期比例性质。
      */
     private fun weightedRoundRobin(providerId: String, participants: List<ProviderKey>): String {
         val current = weightedState.getOrPut(providerId) { mutableMapOf() }
+        val snapshots = ledger.snapshots(providerId, participants.map { it.value })
+        val loadFactor = HashMap<String, Long>(participants.size)
+        for ((index, candidate) in participants.withIndex()) {
+            val snapshot = snapshots.getOrNull(index)
+            // 惩罚等级与近一分钟请求量各扣一点权重，让更健康的 Key 略占优势（最多扣 20% 权重）
+            val penalty = (snapshot?.penaltyLevel ?: 0) * 1L
+            val load = (snapshot?.recentRpm ?: 0) / 10L
+            val discount = (penalty + load).coerceAtMost(candidate.weight.toLong() * 2 / 10)
+            loadFactor[candidate.value] = (candidate.weight.toLong() - discount).coerceAtLeast(1L)
+        }
+
         var total = 0L
         var best = participants.first()
         var bestWeight = Long.MIN_VALUE
         for (candidate in participants) {
-            val next = (current[candidate.value] ?: 0L) + candidate.weight
+            val adjusted = loadFactor[candidate.value] ?: candidate.weight.toLong()
+            val next = (current[candidate.value] ?: 0L) + adjusted
             current[candidate.value] = next
-            total += candidate.weight
+            total += adjusted
             if (next > bestWeight) {
                 bestWeight = next
                 best = candidate
@@ -167,17 +264,6 @@ class ProviderKeyRotator @Inject constructor() {
         current[best.value] = (current[best.value] ?: 0L) - total
         return best.value
     }
-
-    private fun isCoolingDown(providerId: String, key: String): Boolean {
-        val until = cooldownUntil[stateKey(providerId, key)] ?: return false
-        if (System.currentTimeMillis() >= until) {
-            cooldownUntil.remove(stateKey(providerId, key))
-            return false
-        }
-        return true
-    }
-
-    private fun stateKey(providerId: String, key: String) = "$providerId\u0000$key"
 
     private fun sessionBinding(providerId: String, sessionId: String) = "$providerId\u0000$sessionId"
 

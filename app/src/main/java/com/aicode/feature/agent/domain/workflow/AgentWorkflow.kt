@@ -22,6 +22,8 @@ sealed class AgentEvent {
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
         val cachedInputTokens: Int = 0,
+        /** 本轮写入服务端缓存的 token 数（Anthropic cache_creation_input_tokens），会话级累计与展示需要。 */
+        val cacheCreationTokens: Int = 0,
         /** Anthropic thinking / redacted_thinking 内容块的原样快照（JSON 数组文本），随 reasoning 落库供后续轮原样回传。 */
         val thinkingBlocksJson: String = "",
         /** 模型直出图片（Gemini 图像模型）落盘后构造的文件卡片，随消息落库供 UI 渲染。 */

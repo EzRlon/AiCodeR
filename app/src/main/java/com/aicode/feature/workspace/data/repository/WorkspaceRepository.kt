@@ -33,7 +33,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -343,6 +346,7 @@ class WorkspaceRepository @Inject constructor(
                 FileLogger.e(TAG, "新建工作区失败：无法创建目录 ${dir.absolutePath}")
                 return@withContext null
             }
+            injectSubprogramBootstrap(dir, name)
             refreshWorkspaces()
             FileLogger.i(TAG, "新建工作区: $name")
             Workspace(name = name, path = dir.absolutePath)
@@ -363,6 +367,57 @@ class WorkspaceRepository @Inject constructor(
             refreshWorkspaces()
             FileLogger.i(TAG, "新建工作区(远程): $name")
             Workspace(name = name, path = remotePath, type = WorkspaceType.REMOTE)
+        }
+    }
+
+    /**
+     * 新建本地工作区时注入子程序 MCP 引导：模板复制到 `<ws>/.aicode/templates/subprogram-mcp/`
+     * （供 AI 按 README 集成到被开发项目），并预写 subprograms.json 默认条目——
+     * 端口/secret 由母程序分配，子程序侧启动参数必须用同一值；包名待集成后回填。
+     * 失败仅记日志，不影响工作区创建。
+     */
+    private fun injectSubprogramBootstrap(wsDir: File, name: String) {
+        runCatching {
+            val aicodeDir = File(wsDir, ".aicode")
+            val target = File(aicodeDir, "templates/subprogram-mcp")
+            target.mkdirs()
+            val assetDir = "templates/subprogram-mcp"
+            context.assets.list(assetDir).orEmpty().forEach { fileName ->
+                context.assets.open("$assetDir/$fileName").use { input ->
+                    File(target, fileName).outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+            val regFile = File(aicodeDir, "subprograms.json")
+            if (!regFile.isFile) {
+                val port = 41000 + java.util.Random().nextInt(1000)
+                val entry = JSONObject()
+                    .put("name", name)
+                    .put("packageName", "")
+                    .put("port", port)
+                    .put("token", UUID.randomUUID().toString().replace("-", ""))
+                regFile.writeText(JSONObject().put("subprograms", JSONArray().put(entry)).toString(2))
+            }
+            // 集成指南写入 notes：notes 会注入本工作区新会话的 AI 上下文，AI 无需探索即知待办与步骤。
+            val notesDir = File(aicodeDir, "notes")
+            notesDir.mkdirs()
+            val guide = File(notesDir, "子程序MCP集成指南.md")
+            if (!guide.isFile) {
+                guide.writeText(
+                    """# 子程序 MCP 集成指南（本项目）
+                    |
+                    |本项目创建时已自动注入子程序 MCP 调试通道资产：
+                    |
+                    |- 模板：`.aicode/templates/subprogram-mcp/`（README + SubprogramMcpServer/SubprogramMcpService/AppContextHolder）
+                    |- 注册条目：`.aicode/subprograms.json`（母程序已预分配 port 与 token，子程序侧启动参数必须用同一值）
+                    |
+                    |**待办**：用户要求集成子程序调试通道时，按模板 README 的步骤执行（复制模板源码进项目、用注册条目的 port/token 启动前台服务）；
+                    |完成后把子程序包名回填 `subprograms.json` 的 `packageName` 字段，并让用户在母程序诊断页点「检查」验证——探活在线后母程序会自动接入 MCP。
+                    |""".trimMargin()
+                )
+            }
+            FileLogger.i(TAG, "子程序 MCP 模板注入完成: $name")
+        }.onFailure {
+            FileLogger.e(TAG, "子程序 MCP 模板注入失败: $name", it)
         }
     }
 

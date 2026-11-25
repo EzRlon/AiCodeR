@@ -28,6 +28,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -383,7 +384,15 @@ class LinuxContainerEngine @Inject constructor(
                 }
             } finally {
                 cancellationHook?.dispose()
-                runCatching { process.destroy() }
+                // 命令正常拿到退出码后不立即杀 proot：ptrace 下后台任务（如本地模型服务
+                // 的 nohup 拉起）的 mkdir/重定向/exec 序列每个 syscall 都慢一个量级，
+                // 立即 destroy 会在后台任务 exec 前就连带清掉整棵子树（服务还没起就死）。
+                // bash 退出后 proot 会自行收尾，仅对未按期退出的实例兜底强杀。
+                val settled = runCatching { process.waitFor(2, TimeUnit.SECONDS) }.getOrDefault(false)
+                if (!settled) {
+                    runCatching { process.destroy() }
+                    runCatching { process.destroyForcibly() }
+                }
             }
 
             if (timedOut.get()) {

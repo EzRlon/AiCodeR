@@ -58,16 +58,18 @@ data class ChatSession(
     /** goal 自主循环已执行的续跑轮数（用于轮次上限）。 */
     val goalTurnCount: Int = 0,
     /** 设定 goal 时本会话累计输入 token 快照，用于计算 goal 期间的 token 消耗。 */
-    val goalStartInputTokens: Int = 0,
+    val goalStartInputTokens: Long = 0,
     /** 设定 goal 时本会话累计输出 token 快照。 */
-    val goalStartOutputTokens: Int = 0,
+    val goalStartOutputTokens: Long = 0,
     val reasoningEffort: ReasoningEffort = ReasoningEffort.MEDIUM,
     val providerId: String? = null,
     val model: String? = null,
-    val totalInputTokens: Int = 0,
-    val totalOutputTokens: Int = 0,
+    val totalInputTokens: Long = 0,
+    val totalOutputTokens: Long = 0,
     /** 累计缓存命中输入：是 [totalInputTokens] 的子集，只用于展示命中率，不参与总消耗。 */
-    val totalCachedInputTokens: Int = 0,
+    val totalCachedInputTokens: Long = 0,
+    /** 累计缓存写入输入：是 [totalInputTokens] 的子集，与上者互不重叠，按 1.25× 溢价计费，构成条单独展示。 */
+    val totalCacheCreationTokens: Long = 0,
     val lastInputTokens: Int = 0,
     val isPinned: Boolean = false,
     /** 子代理会话：父会话 id；null 表示普通根会话。 */

@@ -39,6 +39,10 @@ data class StoreSource(
     val enabled: Boolean = true,
     /** 是否为内置源；内置源不可删除。 */
     val builtIn: Boolean = false,
+    /** 是否为引擎官方渠道（anthropics/openai 官方仓库或官方 Registry）。 */
+    val official: Boolean = false,
+    /** 归属引擎（claude/codex/opencode/deepseek）；官方源必填，社区源可空。 */
+    val engine: String? = null,
 )
 
 /**
@@ -108,6 +112,26 @@ class StoreSourceConfig @Inject constructor(
         const val FILE_NAME = "store_sources.json"
 
         val DEFAULT_SOURCES = listOf(
+            StoreSource(
+                id = "anthropic-skills",
+                name = "Anthropic 官方技能",
+                baseUrl = "https://github.com/anthropics/skills",
+                priority = 110,
+                trusted = true,
+                builtIn = true,
+                official = true,
+                engine = "claude",
+            ),
+            StoreSource(
+                id = "openai-skills",
+                name = "OpenAI 官方技能",
+                baseUrl = "https://github.com/openai/skills",
+                priority = 105,
+                trusted = true,
+                builtIn = true,
+                official = true,
+                engine = "codex",
+            ),
             StoreSource(
                 id = "claudemarket",
                 name = "ClaudeMarket",

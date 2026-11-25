@@ -42,7 +42,9 @@ data class CliAgent(
             "echo '未检测到 Node.js/npm，正在自动安装 Node.js 环境…'; " +
             "if [ -f \"\$HOME/.aicode/lib/env-common.sh\" ]; then " +
                 ". \"\$HOME/.aicode/lib/env-common.sh\"; detect_pmgr; " +
-                "env_ensure_node 18.0.0 >/dev/null 2>&1 || true; " +
+                // 22 而非 18：claude-code 2.x 要求 node>=22，node18+npm9 会直接崩溃（Exit handler
+                // never called），镜像/官方源三次重试全灭，新用户容器怎么装都装不上。
+                "env_ensure_node 22.0.0 >/dev/null 2>&1 || true; " +
                 "command -v npm >/dev/null 2>&1 || { [ -n \"\$PMGR\" ] && pkg_add npm >/dev/null 2>&1 || true; }; " +
             "fi; " +
             "command -v npm >/dev/null 2>&1 && return 0; " +
@@ -55,15 +57,48 @@ data class CliAgent(
             "command -v npm >/dev/null 2>&1; " +
         "}; " +
         "ensure_npm || { echo 'Node.js 自动安装失败：请检查网络/代理后重试'; exit 127; }; " +
+        // 引擎包可能要求比发行版源更高的 Node（实例：dsh 0.2.2-rc.x 要求 >=24.9.0，Debian
+        // bookworm 自带 18/20）。低版本 npm 装这类包会报误导性的 "Invalid response body /
+        // ENOENT"（实为版本过低，双源同样报错，已实测），且旧逻辑在 npm 已存在时直接跳过
+        // 一切版本检查。这里安装前读包的 engines.node 并按需升级；取不到要求（无网络/包
+        // 无声明）时跳过，由安装本身的报错兜底。
+        "ensure_node_engines() { " +
+            "_pkg=\"\$1\"; " +
+            "_req=\$(npm view \"\$_pkg\" engines.node 2>/dev/null || true); " +
+            "[ -z \"\$_req\" ] && return 0; " +
+            "_need=\$(printf '%s' \"\$_req\" | grep -oE '[0-9]+(\\.[0-9]+)*' | head -1); " +
+            "[ -z \"\$_need\" ] && return 0; " +
+            "if [ ! -f \"\$HOME/.aicode/lib/env-common.sh\" ]; then return 0; fi; " +
+            ". \"\$HOME/.aicode/lib/env-common.sh\"; detect_pmgr; " +
+            "env_node_ok \"\$_need\" 2>/dev/null && return 0; " +
+            "echo \"当前 Node \$(node -v 2>/dev/null) 低于 \$_pkg 的 engines 要求（\$_req），正在自动升级 Node…\"; " +
+            "env_ensure_node \"\$_need\" || { echo \"Node 自动升级到 \$_need 失败：该包要求 \$_req。请在终端运行 aicode 菜单升级 Node 后重试\"; exit 126; }; " +
+            "hash -r 2>/dev/null || true; " +
+            "env_node_ok \"\$_need\" 2>/dev/null && return 0; " +
+            "echo \"Node 升级后仍不满足 \$_req（当前 \$(node -v 2>/dev/null)），请手动升级后重试\"; exit 126; " +
+        "}; " +
+        "ensure_node_engines \"$npmPackage\"; " +
         "echo \"Node: \$(node -v 2>/dev/null) / npm: \$(npm -v 2>/dev/null)\"; " +
+        "echo \"开始安装 $npmPackage：首次安装需下载较多依赖，视网络带宽约 1-5 分钟，请勿关闭页面\"; " +
         "REG=https://registry.npmmirror.com; " +
             "if command -v curl >/dev/null 2>&1; then " +
             "curl -fsI --max-time 4 \"\$REG/\" >/dev/null 2>&1 || REG=https://registry.npmjs.org; " +
             "elif command -v wget >/dev/null 2>&1; then " +
             "wget -q --spider -T 4 \"\$REG/\" || REG=https://registry.npmjs.org; fi; " +
             "echo \"npm registry: \$REG\"; " +
-            "NPM_ARGS='--fetch-retries=3 --fetch-timeout=600000 --no-audit --no-fund'; " +
+            // 缓存指向 ~/.aicode（绑定挂载、跨容器重建保留）：换发行版/重置环境后引擎重装不重新下载。
+            "NPM_ARGS='--cache=/root/.aicode/npm-cache --fetch-retries=3 --fetch-timeout=600000 --no-audit --no-fund'; " +
             "try_install() { npm install -g --registry=\"\$1\" \$NPM_ARGS $npmPackage@$version; }; " +
+            // 全新安装前先清掉中断残留的损坏安装：npm 装到一半的包命令不可用，
+            // 不卸载直接重装，残留文件会让新版本安装后依旧失效。
+            "npm uninstall -g $npmPackage >/dev/null 2>&1 || true; " +
+            // npm 中断还会残留 .包名-随机 临时目录（uninstall/install 均报 ENOTEMPTY）
+            // 与全局 bin 死链（install 报 EEXIST），残留后怎么重装都失败；用 node fs
+            // 程序化清掉包目录、scope 内残留与 bin 同名残留，保证重装自愈。
+            "NODE_ROOT=\$(npm root -g 2>/dev/null); " +
+            "if [ -n \"\$NODE_ROOT\" ]; then " +
+            "node -e 'const fs=require(\"fs\");const root=process.argv[1],pkg=process.argv[2],cmd=process.argv[3],bin=process.argv[4];const segs=pkg.split(\"/\");const name=segs[segs.length-1].split(\"@\")[0];try{fs.rmSync(root+\"/\"+segs.join(\"/\"),{recursive:true,force:true});}catch(e){}const scopeDir=segs.length>1?root+\"/\"+segs[0]:root;try{for(const d of fs.readdirSync(scopeDir)){if(d.startsWith(\".\")&&d.includes(name)){fs.rmSync(scopeDir+\"/\"+d,{recursive:true,force:true});}}}catch(e){}try{fs.unlinkSync(bin+\"/\"+cmd);}catch(e){}' \"\$NODE_ROOT\" \"$npmPackage\" \"$command\" \"\$(npm prefix -g 2>/dev/null)/bin\" >/dev/null 2>&1 || true; " +
+            "fi; " +
             // npmmirror 对平台二进制包（含 bin 的 optionalDependencies）返回 cnpm 风格 .l2s.* 硬链布局，
             // npm 装完后 bin 符号链接指向不存在的文件（命令 not found），npm 自身退出码却为 0；
             // 因此装完必须实测命令可执行，断链时卸载后回退官方源重装。
@@ -79,7 +114,9 @@ data class CliAgent(
             "try_install https://registry.npmjs.org; " +
             "fi; fi; " +
             "echo '───'; " +
-            "if command -v $command >/dev/null 2>&1; then " +
+            // 成功与否以版本命令实测为准：软链存在但原生二进制缺失（如 claude 的 install.cjs 未执行）
+            // 时命令并不可用，只看 command -v 会假报成功，让设置页复检必然失败。
+            "if $command --version >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
             "else P=\$(npm prefix -g 2>/dev/null)/bin; " +
             // npm 已报安装成功但 PATH 探测不到：全局 bin 目录不在 PATH。先尝试软链到
@@ -88,12 +125,21 @@ data class CliAgent(
             "if [ -x \"\$P/$command\" ]; then " +
             "ln -sf \"\$P/$command\" /usr/local/bin/$command 2>/dev/null; " +
             "hash -r 2>/dev/null; fi; " +
-            "if command -v $command >/dev/null 2>&1; then " +
+            // 部分包（如 claude-code）安装时原生二进制的 postinstall 未随 npm 执行，命令软链存在但本体缺失；
+            // 补跑包自带的 install.cjs 完成平台二进制下载，补完后再次实测版本。
+            "PKG_DIR=\$(npm root -g 2>/dev/null)/$npmPackage; " +
+            "if [ -f \"\$PKG_DIR/install.cjs\" ]; then " +
+            "echo '命令不可执行：补跑包原生二进制 postinstall（install.cjs）…'; " +
+            "node \"\$PKG_DIR/install.cjs\" 2>&1 || true; " +
+            "fi; " +
+            "if $command --version >/dev/null 2>&1; then " +
             "echo \"安装成功：\$($command --version 2>/dev/null | head -1)\"; " +
-            "else if [ -x \"\$P/$command\" ]; then " +
+            "elif command -v $command >/dev/null 2>&1; then " +
+            "echo '命令存在但版本检测失败：安装可能被中断，请检查网络后重试'; exit 1; " +
+            "elif [ -x \"\$P/$command\" ]; then " +
             "echo \"已安装但当前会话未检测到，请执行 export PATH=\$P:\$PATH（重启容器永久生效）\"; " +
             // 真失败必须返回非零，让设置页如实显示「安装失败」，而不是假成功。
-            "else echo '安装失败：未生成可执行命令，请检查网络/代理后重试'; exit 1; fi; fi; fi"
+            "else echo '安装失败：未生成可执行命令，请检查网络/代理后重试'; exit 1; fi; fi"
 
     /** 检测命令：已安装则输出首行版本号，未安装静默失败。 */
     val detectCommand: String =
@@ -129,6 +175,10 @@ private fun selfHealingLaunch(command: String): String =
 
 /** 内置智能体目录：三个容器实测跑通的 AI CLI。 */
 object CliAgentCatalog {
+
+    /** 按会话引擎 id（"claude"/"codex"/"opencode"）查找目录项；未知返回 null。 */
+    fun byEngine(engine: String): CliAgent? = ALL.firstOrNull { it.id == engine }
+
     val ALL: List<CliAgent> = listOf(
         CliAgent(
             id = "claude",
@@ -157,6 +207,15 @@ object CliAgentCatalog {
             command = "opencode",
             websiteUrl = "https://opencode.ai",
             loginUrl = "https://opencode.ai/auth"
+        ),
+        CliAgent(
+            id = "deepseek",
+            displayName = "DeepSeek",
+            npmPackage = "@deepseek-ai/dsh",
+            version = "0.2.2-rc.5",
+            command = "dsh",
+            websiteUrl = "https://github.com/deepseek-ai/deepseek-harness",
+            loginUrl = "https://platform.deepseek.com/api_keys"
         )
     )
 }

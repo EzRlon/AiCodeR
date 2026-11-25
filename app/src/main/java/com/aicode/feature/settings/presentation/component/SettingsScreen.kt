@@ -119,6 +119,7 @@ import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Box
 import compose.icons.feathericons.Cloud
 import compose.icons.feathericons.Code
+import compose.icons.feathericons.Activity
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Package
 import compose.icons.feathericons.Download
@@ -202,6 +203,8 @@ internal enum class SettingsSection(@param:StringRes val titleRes: Int) {
     Container(R.string.settings_container),
     ContainerDownloads(R.string.container_download_image),
     DevEnvironments(R.string.settings_dev_env),
+    LocalModels(R.string.settings_local_model),
+    Diagnostics(R.string.settings_diagnostics),
     Proxy(R.string.proxy_title),
     Log(R.string.settings_log),
     Permissions(R.string.settings_permissions),
@@ -247,7 +250,7 @@ private fun SettingsSection.depth(): Int = when (this) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     viewModel: SettingsViewModel,
     onNavigateBack: () -> Unit,
     onStopAllAndCloseTerminal: () -> Unit = {},
@@ -264,13 +267,17 @@ fun SettingsScreen(
     /** 授权记录「打开所在会话」：把会话 id 交给宿主页导航（null 则隐藏跳转）。 */
     onOpenSession: ((String) -> Unit)? = null,
     /** 开发环境一键搭建：场景确认后把（标题、任务提示词）交给宿主页开新会话执行。 */
-    onLaunchDevEnv: (title: String, prompt: String) -> Unit = { _, _ -> }
+    onLaunchDevEnv: (title: String, prompt: String) -> Unit = { _, _ -> },
+    /** 外部入口直达的初始分区（如悬浮球「诊断」）；null 则落在菜单页。仅首次组合生效。 */
+    initialSection: SettingsSection? = null
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
+    val decryptFailedProviderIds by viewModel.decryptFailedProviderIds.collectAsStateWithLifecycle()
     val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
     val logViewerState by viewModel.logViewerState.collectAsStateWithLifecycle()
     val mcpAuthState by viewModel.mcpAuthState.collectAsStateWithLifecycle()
     val mcpImportState by viewModel.mcpImportState.collectAsStateWithLifecycle()
+    val pendingRelayRisk by viewModel.pendingRelayRisk.collectAsStateWithLifecycle()
     val mcpEntries by viewModel.mcpEntries.collectAsStateWithLifecycle()
     val mcpStatuses by viewModel.mcpStatuses.collectAsStateWithLifecycle()
     val mcpReloading by viewModel.mcpReloading.collectAsStateWithLifecycle()
@@ -317,7 +324,6 @@ fun SettingsScreen(
     val handoffAutoEnabled by viewModel.handoffAutoEnabled.collectAsStateWithLifecycle()
     val handoffAutoPercent by viewModel.handoffAutoPercent.collectAsStateWithLifecycle()
     val floatBallEnabled by viewModel.floatBallEnabled.collectAsStateWithLifecycle()
-    val vncAutoPopupEnabled by viewModel.vncAutoPopupEnabled.collectAsStateWithLifecycle()
     val voiceEngine by viewModel.voiceEngine.collectAsStateWithLifecycle()
     val voiceModelState by viewModel.voiceModelState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -372,7 +378,7 @@ fun SettingsScreen(
     }
 
 
-    var section by remember { mutableStateOf(SettingsSection.Menu) }
+    var section by remember { mutableStateOf(initialSection ?: SettingsSection.Menu) }
     var logReturnSection by remember { mutableStateOf(SettingsSection.Menu) }
     var editingProvider by remember { mutableStateOf<AIProviderConfig?>(null) }
     var showAddProviderSheet by remember { mutableStateOf(false) }
@@ -654,6 +660,24 @@ fun SettingsScreen(
             },
             label = "settings-section"
         ) { current ->
+        // 中转站风险确认：官方密钥配到第三方 baseUrl 时提醒被盗用风险（用户可选仍要保存）。
+        pendingRelayRisk?.let { (risk, _) ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissRelayRisk() },
+                title = { Text(stringResource(R.string.relay_risk_title)) },
+                text = { Text(stringResource(R.string.relay_risk_body, risk.host, risk.keyOwner)) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.confirmSaveProviderRegardless() }) {
+                        Text(stringResource(R.string.relay_risk_save_anyway))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissRelayRisk() }) {
+                        Text(stringResource(R.string.relay_risk_go_back))
+                    }
+                }
+            )
+        }
         when {
             // 这两页自带顶栏，不能嵌进下面的 Scaffold（会双层顶栏）：窄窗占整屏，大屏占右栏。
             current == SettingsSection.ProviderEditor -> ProviderEditorScreen(
@@ -865,11 +889,13 @@ fun SettingsScreen(
                             onQueryChange = { storeViewModel.updateQuery(it) },
                             onSearch = { storeViewModel.search() },
                             onLoadMore = { storeViewModel.loadMore() },
-                            onInstall = { storeViewModel.install(it) },
-                            onInstallTeam = { storeViewModel.installTeam(it) },
+                            onInstall = { item, target -> storeViewModel.install(item, target) },
+                            onInstallTeam = { item, target -> storeViewModel.installTeam(item, target) },
                             onInstallPlugin = { item, target -> storeViewModel.installPlugin(item, target) },
                             onUninstallPlugin = { item, target -> storeViewModel.uninstallPlugin(item, target) },
                             onPluginEngineFilter = { storeViewModel.setPluginEngineFilter(it) },
+                            onSourceFilter = { storeViewModel.setSourceFilter(it) },
+                            onInstallPluginToAll = { storeViewModel.installPluginToAll(it) },
                             onConsumeMessage = { storeViewModel.consumeMessage() },
                             onRetryTranslation = { storeViewModel.retryTranslation() },
                             onConfirmScan = { storeViewModel.confirmPendingScan() },
@@ -1204,8 +1230,6 @@ fun SettingsScreen(
                     onSetHandoffAutoPercent = { viewModel.setHandoffAutoPercent(it) },
                     floatBallEnabled = floatBallEnabled,
                     onToggleFloatBallEnabled = { viewModel.setFloatBallEnabled(it) },
-                    vncAutoPopupEnabled = vncAutoPopupEnabled,
-                    onToggleVncAutoPopup = { viewModel.setVncAutoPopupEnabled(it) },
                     voiceEngine = voiceEngine,
                     voiceModelState = voiceModelState,
                     onSelectVoiceEngine = { viewModel.setVoiceEngine(it) },
@@ -1213,6 +1237,7 @@ fun SettingsScreen(
                 )
                 SettingsSection.Providers -> ProvidersSection(
                     providers = providers,
+                    decryptFailedIds = decryptFailedProviderIds,
                     onEdit = {
                         editingProvider = it
                         section = SettingsSection.ProviderEditor
@@ -1407,6 +1432,17 @@ fun SettingsScreen(
                         installedIds = devEnvInstalled,
                         onLaunch = onLaunchDevEnv
                     )
+                }
+                SettingsSection.LocalModels -> {
+                    val localModelViewModel: com.aicode.feature.settings.presentation.component.LocalModelViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    LaunchedEffect(Unit) { localModelViewModel.refresh() }
+                    LocalModelSection(viewModel = localModelViewModel)
+                }
+                SettingsSection.Diagnostics -> {
+                    val diagnosticsViewModel: com.aicode.feature.settings.presentation.component.DiagnosticsViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    DiagnosticsSection(viewModel = diagnosticsViewModel)
                 }
                 SettingsSection.Scripts -> {
                     val scriptsViewModel: com.aicode.feature.settings.presentation.ScriptsViewModel =
@@ -1834,9 +1870,15 @@ fun SettingsScreen(
             selected = themeMode,
             selectedPresetId = themePresetId,
             dynamicColorEnabled = dynamicColorEnabled,
+            scheduleStart = viewModel.themeScheduleStart.collectAsStateWithLifecycle().value,
+            scheduleEnd = viewModel.themeScheduleEnd.collectAsStateWithLifecycle().value,
             onSelected = { viewModel.setThemeMode(it) },
             onPresetSelected = { viewModel.setThemePreset(it) },
             onDynamicColorChanged = { viewModel.setDynamicColorEnabled(it) },
+            onScheduleChanged = { start, end ->
+                viewModel.setThemeScheduleStart(start)
+                viewModel.setThemeScheduleEnd(end)
+            },
             onDismiss = { showThemeSheet = false }
         )
     }
@@ -2307,6 +2349,18 @@ internal fun SettingsMenu(
                 icon = FeatherIcons.Tool,
                 title = stringResource(SettingsSection.DevEnvironments.titleRes),
                 onClick = { onOpen(SettingsSection.DevEnvironments) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Cpu,
+                title = stringResource(SettingsSection.LocalModels.titleRes),
+                onClick = { onOpen(SettingsSection.LocalModels) }
+            )
+            SettingsDivider()
+            SettingsRow(
+                icon = FeatherIcons.Activity,
+                title = stringResource(SettingsSection.Diagnostics.titleRes),
+                onClick = { onOpen(SettingsSection.Diagnostics) }
             )
             SettingsDivider()
             SettingsRow(

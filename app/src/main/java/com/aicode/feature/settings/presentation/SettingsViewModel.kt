@@ -56,6 +56,8 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionScope
 import com.aicode.feature.agent.domain.subagent.AgentSaveError
 import com.aicode.feature.agent.domain.subagent.InjectPart
 import com.aicode.feature.agent.domain.tool.ToolRegistry
+import com.aicode.feature.settings.data.RelayKeyRisk
+import com.aicode.feature.settings.data.RelayKeyRiskDetector
 import com.aicode.feature.settings.data.remote.ModelApiService
 import com.aicode.feature.store.data.StoreTranslationStore
 import com.aicode.feature.settings.data.remote.ContainerImageDownloader
@@ -103,6 +105,7 @@ import com.aicode.feature.settings.data.repository.ImageGenModelSettingsReposito
 import com.aicode.feature.settings.data.repository.VisionModelSettingsRepository
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.repository.RemoteRepository
+import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ModelMetadata
@@ -386,6 +389,7 @@ private fun padTrend(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val keyRotator: com.aicode.feature.settings.data.repository.ProviderKeyRotator,
     private val workspaceRepository: com.aicode.feature.workspace.data.repository.WorkspaceRepository,
     private val voiceSettingsRepository: VoiceSettingsRepository,
     private val voskModelManager: VoskModelManager,
@@ -539,6 +543,10 @@ class SettingsViewModel @Inject constructor(
     private val _providers = MutableStateFlow<List<AIProviderConfig>>(emptyList())
     val providers: StateFlow<List<AIProviderConfig>> = _providers.asStateFlow()
 
+    /** 密钥密文存在但解密失败的 provider id（Keystore 变更/卸载重装）；UI 显性提示以免误判为未填写。 */
+    private val _decryptFailedProviderIds = MutableStateFlow<Set<String>>(emptySet())
+    val decryptFailedProviderIds: StateFlow<Set<String>> = _decryptFailedProviderIds.asStateFlow()
+
     /** 新会话默认模型（主页空会话中选择后记忆），供未绑定会话回退。 */
     val defaultModelProviderId: StateFlow<String> = defaultModelSettingsRepository.providerIdFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
@@ -681,9 +689,6 @@ class SettingsViewModel @Inject constructor(
     private val _floatBallEnabled = MutableStateFlow(false)
     val floatBallEnabled: StateFlow<Boolean> = _floatBallEnabled.asStateFlow()
 
-    private val _vncAutoPopupEnabled = MutableStateFlow(false)
-    val vncAutoPopupEnabled: StateFlow<Boolean> = _vncAutoPopupEnabled.asStateFlow()
-
     private val _startupSessionMode = MutableStateFlow(StartupSessionMode.NEW_SESSION)
     val startupSessionMode: StateFlow<StartupSessionMode> = _startupSessionMode.asStateFlow()
 
@@ -719,6 +724,14 @@ class SettingsViewModel @Inject constructor(
 
     private val _themeMode = MutableStateFlow(AppThemeMode.AUTO)
     val themeMode: StateFlow<AppThemeMode> = _themeMode.asStateFlow()
+
+    /** 定时深浅的深色时段起点（HH:mm，跨午夜支持）。 */
+    private val _themeScheduleStart = MutableStateFlow(ThemeSettingsRepository.DEFAULT_DARK_START)
+    val themeScheduleStart: StateFlow<String> = _themeScheduleStart.asStateFlow()
+
+    /** 定时深浅的深色时段终点（HH:mm）。 */
+    private val _themeScheduleEnd = MutableStateFlow(ThemeSettingsRepository.DEFAULT_DARK_END)
+    val themeScheduleEnd: StateFlow<String> = _themeScheduleEnd.asStateFlow()
 
     private val _themePresetId = MutableStateFlow<String?>(null)
     val themePresetId: StateFlow<String?> = _themePresetId.asStateFlow()
@@ -1019,6 +1032,12 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
+                repository.observeDecryptFailures().collectLatest {
+                    _decryptFailedProviderIds.value = it
+                }
+            }
+
+            launch {
                 visionModelSettingsRepository.providerIdFlow.collectLatest {
                     _visionProviderId.value = it
                 }
@@ -1157,12 +1176,6 @@ class SettingsViewModel @Inject constructor(
             }
 
             launch {
-                generalSettingsRepository.vncAutoPopupEnabledFlow.collectLatest {
-                    _vncAutoPopupEnabled.value = it
-                }
-            }
-
-            launch {
                 generalSettingsRepository.startupSessionModeFlow.collectLatest {
                     _startupSessionMode.value = it
                 }
@@ -1237,6 +1250,18 @@ class SettingsViewModel @Inject constructor(
             launch {
                 themeSettingsRepository.themeModeFlow.collectLatest {
                     _themeMode.value = it
+                }
+            }
+
+            launch {
+                themeSettingsRepository.scheduleDarkStartFlow.collectLatest {
+                    _themeScheduleStart.value = it
+                }
+            }
+
+            launch {
+                themeSettingsRepository.scheduleDarkEndFlow.collectLatest {
+                    _themeScheduleEnd.value = it
                 }
             }
 
@@ -1474,6 +1499,14 @@ class SettingsViewModel @Inject constructor(
     /** 从标准 mcpServers JSON 批量导入到指定作用域；同名覆盖。 */
     fun importMcpServersFromJson(raw: String, scope: McpScope) =
         mcpState.importMcpServersFromJson(context, raw, scope)
+
+    /**
+     * 供应商每个 Key 的运行时画像（冷却/惩罚/用量），供 Key 管理页的「运行状态」卡展示。
+     * 按明文 Key 值对齐（编辑页里用户可能尚未保存配置）；每次进入页面调用一次，
+     * 停留期间不实时刷新（账本本身在后台持续记录）。
+     */
+    fun keySnapshots(providerId: String, keyValues: List<String>): List<com.aicode.feature.settings.data.repository.KeyRuntimeSnapshot> =
+        keyRotator.snapshots(providerId, keyValues)
 
     fun clearMcpImportState() = mcpState.clearMcpImportState()
 
@@ -2205,12 +2238,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setVncAutoPopupEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            generalSettingsRepository.setVncAutoPopupEnabled(enabled)
-        }
-    }
-
     /** 切换语音输入引擎（系统 / 离线；离线需模型就绪）。 */
     fun setVoiceEngine(engine: VoiceEngine) {
         viewModelScope.launch {
@@ -2309,6 +2336,18 @@ class SettingsViewModel @Inject constructor(
     fun setThemePreset(id: String) {
         viewModelScope.launch {
             themeSettingsRepository.setThemePresetId(id)
+        }
+    }
+
+    fun setThemeScheduleStart(value: String) {
+        viewModelScope.launch {
+            themeSettingsRepository.setScheduleDarkStart(value)
+        }
+    }
+
+    fun setThemeScheduleEnd(value: String) {
+        viewModelScope.launch {
+            themeSettingsRepository.setScheduleDarkEnd(value)
         }
     }
 
@@ -2784,6 +2823,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveProvider(provider: AIProviderConfig) {
+        // 中转站风险提醒：第三方 baseUrl + 官方密钥 → 中转站可完整读取并留存密钥，先弹窗确认。
+        // 用户确认后走 confirmSaveProviderRegardless；无风险直接保存。
+        val relayRisk = RelayKeyRiskDetector.detect(provider)
+        if (relayRisk != null && confirmedRelayRiskProviderId != provider.id) {
+            _pendingRelayRisk.value = relayRisk to provider
+            return
+        }
         viewModelScope.launch {
             val removedModels = (repository.getProviderById(provider.id)?.models ?: emptyList())
                 .toSet() - provider.models.toSet()
@@ -2792,6 +2838,30 @@ class SettingsViewModel @Inject constructor(
             // 保存后重置该提供商在内存中的面板状态，以便主页即时以最新脚本与配置重新加载
             _providerDashboards.update { it - provider.id }
         }
+    }
+
+    /** 中转站风险确认弹窗状态：非 null 时 UI 弹「仍要保存」确认。 */
+    private val _pendingRelayRisk = MutableStateFlow<Pair<RelayKeyRisk, AIProviderConfig>?>(null)
+    val pendingRelayRisk: StateFlow<Pair<RelayKeyRisk, AIProviderConfig>?> = _pendingRelayRisk.asStateFlow()
+
+    /** 本轮已确认过中转风险的 provider id（确认后允许直存）。 */
+    private var confirmedRelayRiskProviderId: String? = null
+
+    /** 用户确认在中转站使用官方密钥：仍保存。 */
+    fun confirmSaveProviderRegardless() {
+        val (_, provider) = _pendingRelayRisk.value ?: return
+        _pendingRelayRisk.value = null
+        confirmedRelayRiskProviderId = provider.id
+        try {
+            saveProvider(provider)
+        } finally {
+            confirmedRelayRiskProviderId = null
+        }
+    }
+
+    /** 取消中转站风险保存（用户回去改用中转站自己的密钥）。 */
+    fun dismissRelayRisk() {
+        _pendingRelayRisk.value = null
     }
 
     /**

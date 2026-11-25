@@ -17,6 +17,11 @@ APK_IN="app/build/outputs/apk/armsolo/release/app-armsolo-release.apk"
 APK_OUT="$ROOT/aicoder-armsolo-release.apk"
 
 # ── 阶段 1：只编 release Kotlin（KSP/Hilt/Room 生成也在这一步） ──
+echo "=== [0.5/3] 迁移与 schema 下限检查 ==="
+if ! python3 scripts/check_migrations.py; then
+    echo "迁移检查失败，停止构建"
+    exit 1
+fi
 echo "=== [1/3] compileArmsoloReleaseKotlin ==="
 sh tools/build-with-lock.sh compileArmsoloReleaseKotlin
 

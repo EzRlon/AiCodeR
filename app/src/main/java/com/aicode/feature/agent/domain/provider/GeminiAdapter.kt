@@ -29,6 +29,7 @@ class GeminiAdapter @Inject constructor(
 
     override var apiKey = ""
     override var keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? = null
+    override var usageReporter: ((key: String, tokensIn: Long, tokensOut: Long, rateLimitHeaders: List<Pair<String, String>>?) -> Unit)? = null
     override var baseUrl = "https://generativelanguage.googleapis.com/"
     override var useFullUrl = false
     override var useResponseApi = false
@@ -165,6 +166,7 @@ class GeminiAdapter @Inject constructor(
         // 响应结构损坏（解析过程抛异常）且没有可展示的正文/原因：返回明确的中止结果而非崩溃，
         // stopReason=failed 命中 isAborted，上层会展示错误文案。
         val aborted = parseFailure != null && finishReason == null
+        usageReporter?.invoke(apiKey, inputTokens.toLong(), outputTokens.toLong(), null)
         return AIResponse(
             content = contentText,
             toolCalls = toolCalls,
@@ -325,6 +327,7 @@ class GeminiAdapter @Inject constructor(
                     }
                 }
 
+                usageReporter?.invoke(apiKey, streamInputTokens.toLong(), streamOutputTokens.toLong(), null)
                 emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = currentFinishReason, thinkingBlocksJson = snapshotOf(snapshotParts), inputTokens = streamInputTokens, outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, images = images)))
                     }
                 },

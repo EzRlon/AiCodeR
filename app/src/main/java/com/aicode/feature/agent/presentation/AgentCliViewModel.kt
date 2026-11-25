@@ -10,6 +10,7 @@ import com.aicode.feature.agent.domain.cliagent.CliAgentCatalog
 import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.engine.ClaudeCodeBridge
 import com.aicode.feature.agent.domain.engine.CodexBridge
+import com.aicode.feature.agent.domain.engine.DeepSeekBridge
 import com.aicode.feature.agent.domain.engine.OpenCodeBridge
 import com.aicode.feature.terminal.domain.TerminalSessionProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -36,6 +37,7 @@ class AgentCliViewModel @Inject constructor(
     private val claudeCodeBridge: ClaudeCodeBridge,
     private val codexBridge: CodexBridge,
     private val openCodeBridge: OpenCodeBridge,
+    private val deepSeekBridge: DeepSeekBridge,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -140,6 +142,7 @@ class AgentCliViewModel @Inject constructor(
         return when (agent.id) {
             "claude" -> claudeCodeBridge.cliTabInjection(defaultProviderId)?.apply(agent.launchCommand)
             "codex" -> codexBridge.cliTabInjection(defaultProviderId)?.apply(agent.launchCommand)
+            "deepseek" -> deepSeekBridge.cliTabInjection(defaultProviderId)?.apply(agent.launchCommand)
             else -> null
         }
     }
@@ -159,6 +162,7 @@ class AgentCliViewModel @Inject constructor(
     private suspend fun authHintOf(agentId: String): String? = when (agentId) {
         "claude" -> claudeCodeBridge.authHint()
         "codex" -> codexBridge.authHint()
+        "deepseek" -> deepSeekBridge.authHint()
         else -> openCodeBridge.authHint()
     }
 

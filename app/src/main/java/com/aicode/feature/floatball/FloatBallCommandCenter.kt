@@ -15,6 +15,10 @@ object FloatBallCommandCenter {
     @Volatile
     var openApp: (() -> Unit)? = null
 
+    /** 打开 App 并直达诊断与自测分区；null 表示 ViewModel 未就绪。 */
+    @Volatile
+    var openDiagnostics: (() -> Unit)? = null
+
     /** 停止当前正在运行的任务；null 表示未注册。返回是否真正执行了停止。 */
     @Volatile
     var stop: (() -> Boolean)? = null
@@ -37,6 +41,9 @@ object FloatBallCommandCenter {
     /** FB2：悬浮窗输入 → App 草稿（同一份草稿，App 底栏与面板实时同步）。 */
     @Volatile
     var updateDraft: ((String) -> Unit)? = null
+
+    /** FB3：润色面板输入框文本（复用会话输入框润色链路）；null 表示 ViewModel 未就绪。 */
+    var polishText: (suspend (String) -> String?)? = null
 
     /** FB2：悬浮窗内嵌模型选择的数据快照（按需拉取，随 App 模型列表变化）。 */
     data class FloatModelPickerData(

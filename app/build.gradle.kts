@@ -433,6 +433,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     // MockK：Kotlin 原生 mock（coEvery/coVerify 协程支持），用于 ViewModel/Repository 依赖打桩
     testImplementation("io.mockk:mockk:1.14.11")
+    // 单测里的真实 JSON 解析：android.jar 的 org.json 是抛异常的 stub，
+    // KeyLedger/RateLimitBody/SubprogramRegistry 的 JSON 逻辑需要真实实现才能在 JVM 单测跑通
+    testImplementation("org.json:json:20240303")
 }
 
 ksp {

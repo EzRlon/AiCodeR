@@ -9,22 +9,30 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.aicode.feature.agent.presentation.component.engineBrandColor
+import com.aicode.feature.agent.presentation.component.engineShortLabel
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,6 +62,8 @@ import com.aicode.core.util.containsCjk
 import com.aicode.feature.store.data.TeamStoreItem
 import com.aicode.feature.store.data.StoreItem
 import com.aicode.feature.store.data.StoreKind
+import com.aicode.feature.store.data.StoreOrigin
+import com.aicode.feature.store.data.StoreSourceFilter
 import com.aicode.feature.store.data.PluginStoreItem
 import com.aicode.feature.store.data.EngineTarget
 import com.aicode.feature.store.data.StoreTranslation
@@ -81,11 +91,14 @@ internal fun StoreScreen(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onLoadMore: () -> Unit,
-    onInstall: (StoreItem) -> Unit,
-    onInstallTeam: (TeamStoreItem) -> Unit,
+    onInstall: (StoreItem, EngineTarget?) -> Unit,
+    onUninstallMcp: (StoreItem, EngineTarget) -> Unit = { _, _ -> },
+    onInstallTeam: (TeamStoreItem, EngineTarget?) -> Unit,
     onInstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onUninstallPlugin: (PluginStoreItem, EngineTarget) -> Unit = { _, _ -> },
     onPluginEngineFilter: (EngineTarget?) -> Unit = {},
+    onSourceFilter: (StoreSourceFilter) -> Unit = {},
+    onInstallPluginToAll: (PluginStoreItem) -> Unit = {},
     onConsumeMessage: () -> Unit,
     onRetryTranslation: () -> Unit = {},
     onConfirmScan: () -> Unit = {},
@@ -226,7 +239,9 @@ internal fun StoreScreen(
                 state = state,
                 onInstall = onInstallPlugin,
                 onUninstall = onUninstallPlugin,
-                onEngineFilter = onPluginEngineFilter
+                onEngineFilter = onPluginEngineFilter,
+                onSourceFilter = onSourceFilter,
+                onInstallToAll = onInstallPluginToAll
             )
 
             state.tab == StoreKind.EXPERT -> TeamList(
@@ -268,23 +283,41 @@ internal fun StoreScreen(
                 modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 24.dp)
             )
 
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = Spacing.lg,
-                    end = Spacing.lg,
-                    bottom = Spacing.xl
-                ),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(state.items, key = { "${it.kind}:${it.id}" }) { item ->
+            else -> Column(modifier = Modifier.fillMaxWidth()) {
+                SourceFilterRow(
+                    selected = state.sourceFilter,
+                    onSelect = onSourceFilter
+                )
+                val filteredItems = remember(state.items, state.sourceFilter) {
+                    when (state.sourceFilter) {
+                        StoreSourceFilter.ALL -> state.items
+                        StoreSourceFilter.OFFICIAL -> state.items.filter { it.origin == StoreOrigin.OFFICIAL }
+                        StoreSourceFilter.COMMUNITY -> state.items.filter { it.origin != StoreOrigin.OFFICIAL }
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = Spacing.lg,
+                        end = Spacing.lg,
+                        bottom = Spacing.xl
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                officialFirstGroups(
+                    items = filteredItems,
+                    isOfficial = { it.origin == StoreOrigin.OFFICIAL },
+                    key = { "${it.kind}:${it.id}" }
+                ) { item ->
                     StoreItemCard(
                         item = item,
                         translation = state.translations[item.storeTranslationKey()],
                         installed = item.id in state.installedIds,
                         installing = state.installingId == item.id,
                         installBusy = state.installingId != null,
-                        onInstall = { onInstall(item) },
+                        installedEngines = state.installedMcpEngines[item.id].orEmpty(),
+                        onInstall = { target -> onInstall(item, target) },
+                        onUninstall = { target -> onUninstallMcp(item, target) },
                         onOpen = { detailItem = item }
                     )
                 }
@@ -305,6 +338,7 @@ internal fun StoreScreen(
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -384,7 +418,7 @@ internal fun StoreScreen(
                     enabled = !installed && !installing && state.installingId == null,
                     loading = installing
                 ) {
-                    onInstall(item)
+                    onInstall(item, null)
                 }
             }
         }
@@ -449,7 +483,7 @@ internal fun StoreScreen(
                     enabled = !team.installed && state.installingId == null,
                     loading = state.installingId == team.fileName
                 ) {
-                    onInstallTeam(team)
+                    onInstallTeam(team, null)
                 }
             }
         }
@@ -597,6 +631,146 @@ private fun Button2(text: String, enabled: Boolean, loading: Boolean, onClick: (
     }
 }
 
+/**
+ * 商店列表统一分组渲染：官方精选在前、社区资源在后，各带分组头——
+ * 让「来自哪、可不可信」的层级在滚动一眼可辨（官方渠道用品牌色组头）。
+ */
+private fun <T> LazyListScope.officialFirstGroups(
+    items: List<T>,
+    isOfficial: (T) -> Boolean,
+    key: (T) -> String,
+    card: @Composable (T) -> Unit
+) {
+    val official = items.filter(isOfficial)
+    val community = items.filterNot(isOfficial)
+    if (official.isNotEmpty()) {
+        item(key = "hdr-official") {
+            StoreGroupHeader(
+                title = "官方精选",
+                subtitle = "来自引擎官方渠道，可信度最高",
+                accent = MaterialTheme.colorScheme.primary
+            )
+        }
+        official.forEach { item(key = key(it), contentType = "store-card") { card(it) } }
+    }
+    if (community.isNotEmpty()) {
+        item(key = "hdr-community") {
+            StoreGroupHeader(
+                title = "社区资源",
+                subtitle = "来自第三方市场与社区贡献，安装前请留意来源",
+                accent = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        community.forEach { item(key = key(it), contentType = "store-card") { card(it) } }
+    }
+}
+
+/** 商店分组头：小型色条 + 标题 + 说明。 */
+@Composable
+private fun StoreGroupHeader(title: String, subtitle: String, accent: Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp, bottom = 2.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(28.dp)
+                .background(accent, androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+        )
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** 来源筛选行：全部 / 官方 / 社区（引擎官方渠道优先展示）。 */
+@Composable
+private fun SourceFilterRow(
+    selected: StoreSourceFilter,
+    onSelect: (StoreSourceFilter) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StoreSourceFilter.entries.forEach { f ->
+            FilterChip(
+                selected = selected == f,
+                onClick = { onSelect(f) },
+                label = {
+                    Text(
+                        when (f) {
+                            StoreSourceFilter.ALL -> "全部"
+                            StoreSourceFilter.OFFICIAL -> "官方"
+                            StoreSourceFilter.COMMUNITY -> "社区"
+                        },
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            )
+        }
+    }
+}
+
+/**
+ * 来源标签行：官方渠道用引擎品牌色「官方·引擎名」，其余显示来源名（社区/自定义）——
+ * 让用户一眼区分资源来自哪个引擎生态、是否官方出品。
+ */
+@Composable
+private fun OriginSourceBadge(item: StoreItem) {
+    val isOfficial = item.origin == StoreOrigin.OFFICIAL
+    val engine = item.engineOrigin?.let { id -> EngineTarget.entries.firstOrNull { it.cli == id } }
+    if (!isOfficial && item.sourceName.isBlank()) return
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.padding(top = 2.dp)
+    ) {
+        val (label, accent) = when {
+            isOfficial && engine != null -> "官方·${engineShortLabel(engine)}" to engineBrandColor(engine)
+            isOfficial -> "官方" to Color(0xFF4CAF50)
+            else -> item.sourceName to MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        Text(
+            text = "●",
+            style = MaterialTheme.typography.labelSmall,
+            color = accent
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isOfficial) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** 插件卡来源标签（官方渠道用引擎品牌色）。 */
+@Composable
+private fun PluginOriginBadge(plugin: PluginStoreItem) {
+    val engine = plugin.engineOrigin?.let { id -> EngineTarget.entries.firstOrNull { it.cli == id } }
+    val (label, accent) = when {
+        plugin.origin == StoreOrigin.OFFICIAL && engine != null ->
+            "官方·${engineShortLabel(engine)}" to engineBrandColor(engine)
+        plugin.origin == StoreOrigin.OFFICIAL -> "官方" to Color(0xFF4CAF50)
+        else -> return
+    }
+    Text(
+        text = "● $label",
+        style = MaterialTheme.typography.labelSmall,
+        color = accent,
+        modifier = Modifier.padding(top = 2.dp)
+    )
+}
+
 /** 单条商店卡片：名称/作者/版本/描述 + 安装按钮 + 来源链接。 */
 @Composable
 private fun StoreItemCard(
@@ -605,7 +779,9 @@ private fun StoreItemCard(
     installed: Boolean,
     installing: Boolean,
     installBusy: Boolean,
-    onInstall: () -> Unit,
+    installedEngines: Set<EngineTarget> = emptySet(),
+    onInstall: (EngineTarget?) -> Unit,
+    onUninstall: (EngineTarget) -> Unit = {},
     onOpen: () -> Unit
 ) {
     val context = LocalContext.current
@@ -653,8 +829,10 @@ private fun StoreItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            OriginSourceBadge(item = item)
             val descriptionZh = translation?.descriptionZh.orEmpty()
             if (descriptionZh.isNotBlank()) {
+                // 中文界面本土化硬规则：有中文译文时不再追加英文原文，避免双语摘要混排。
                 Spacer(Modifier.size(4.dp))
                 Text(
                     text = descriptionZh,
@@ -663,15 +841,6 @@ private fun StoreItemCard(
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (item.description.isNotBlank()) {
-                    Text(
-                        text = item.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             } else if (item.description.isNotBlank()) {
                 Spacer(Modifier.size(4.dp))
                 Text(
@@ -683,6 +852,55 @@ private fun StoreItemCard(
                 )
             }
             Spacer(Modifier.size(6.dp))
+            // MCP：插件页同构的 per-engine 安装状态（每 chip = 该引擎的已装/安装/卸载）；
+            // 技能：单一存放点全引擎可用，不分引擎（不再展示目标选择 chips）；
+            // 专家团：仅内置与 CC 支持定义文件写入。
+            when {
+                item.stdinUnsupported() -> Unit
+                item.kind == StoreKind.MCP -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        PluginEngineChip(
+                            label = engineShortLabel(null),
+                            selected = installed,
+                            onClick = { if (!installed) onInstall(null) },
+                            enabled = !installBusy && !installed,
+                            accent = engineBrandColor(null)
+                        )
+                        EngineTarget.entries.forEach { engine ->
+                            val installedHere = engine in installedEngines
+                            PluginEngineChip(
+                                label = engineShortLabel(engine),
+                                selected = installedHere,
+                                onClick = {
+                                    if (installedHere) onUninstall(engine) else onInstall(engine)
+                                },
+                                enabled = !installBusy,
+                                accent = engineBrandColor(engine)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.size(2.dp))
+                }
+                item.kind == StoreKind.EXPERT -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        PluginEngineChip(
+                            label = engineShortLabel(null),
+                            selected = true,
+                            onClick = { if (!installed) onInstall(null) },
+                            enabled = !installBusy && !installed,
+                            accent = engineBrandColor(null)
+                        )
+                        PluginEngineChip(
+                            label = engineShortLabel(EngineTarget.CLAUDE_CODE),
+                            selected = false,
+                            onClick = { onInstall(EngineTarget.CLAUDE_CODE) },
+                            enabled = !installBusy,
+                            accent = engineBrandColor(EngineTarget.CLAUDE_CODE)
+                        )
+                    }
+                    Spacer(Modifier.size(2.dp))
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (item.detailUrl.isNotBlank()) {
                     TextButton(
@@ -709,7 +927,11 @@ private fun StoreItemCard(
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                     ) {
                         Text(
-                            text = stringResource(R.string.store_installed),
+                            text = if (item.kind == StoreKind.SKILL) {
+                                stringResource(R.string.store_installed_all_engines)
+                            } else {
+                                stringResource(R.string.store_installed)
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -722,7 +944,11 @@ private fun StoreItemCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    else -> TextButton(onClick = onInstall, enabled = !installBusy) {
+                    // MCP 由上方引擎 chips 直接安装，不再需要单独按钮；技能/专家团的「内置」需按钮入口
+                    else -> TextButton(
+                        onClick = { onInstall(null) },
+                        enabled = !installBusy && item.kind != StoreKind.MCP
+                    ) {
                         if (installing) {
                             CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(Spacing.xs))
@@ -746,7 +972,7 @@ private fun StoreItem.stdinUnsupported(): Boolean = kind == StoreKind.MCP && std
 @Composable
 private fun TeamList(
     state: StoreUiState,
-    onInstall: (TeamStoreItem) -> Unit,
+    onInstall: (TeamStoreItem, EngineTarget?) -> Unit,
     onOpen: (TeamStoreItem) -> Unit
 ) {
     if (state.teams.isEmpty()) {
@@ -835,11 +1061,28 @@ private fun TeamList(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        TextButton(
-                            onClick = { onInstall(team) },
-                            enabled = state.installingId == null
-                        ) {
-                            Text(stringResource(R.string.store_expert_install))
+                        var teamTarget by remember(team.fileName) { mutableStateOf<EngineTarget?>(null) }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                PluginEngineChip(
+                                    label = engineShortLabel(null),
+                                    selected = teamTarget == null,
+                                    onClick = { teamTarget = null },
+                                    accent = engineBrandColor(null)
+                                )
+                                PluginEngineChip(
+                                    label = engineShortLabel(EngineTarget.CLAUDE_CODE),
+                                    selected = teamTarget == EngineTarget.CLAUDE_CODE,
+                                    onClick = { teamTarget = EngineTarget.CLAUDE_CODE },
+                                    accent = engineBrandColor(EngineTarget.CLAUDE_CODE)
+                                )
+                            }
+                            TextButton(
+                                onClick = { onInstall(team, teamTarget) },
+                                enabled = state.installingId == null
+                            ) {
+                                Text(stringResource(R.string.store_expert_install))
+                            }
                         }
                     }
                 }
@@ -857,11 +1100,19 @@ private fun PluginList(
     state: StoreUiState,
     onInstall: (PluginStoreItem, EngineTarget) -> Unit,
     onUninstall: (PluginStoreItem, EngineTarget) -> Unit,
-    onEngineFilter: (EngineTarget?) -> Unit
+    onEngineFilter: (EngineTarget?) -> Unit,
+    onSourceFilter: (StoreSourceFilter) -> Unit,
+    onInstallToAll: (PluginStoreItem) -> Unit
 ) {
-    val filtered = state.pluginEngineFilter?.let { t ->
-        state.plugins.filter { t in it.engines }
-    } ?: state.plugins
+    val filtered = state.plugins
+        .filter { t -> state.pluginEngineFilter?.let { it in t.engines } ?: true }
+        .filter {
+            when (state.sourceFilter) {
+                StoreSourceFilter.ALL -> true
+                StoreSourceFilter.OFFICIAL -> it.origin == StoreOrigin.OFFICIAL
+                StoreSourceFilter.COMMUNITY -> it.origin != StoreOrigin.OFFICIAL
+            }
+        }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -877,12 +1128,17 @@ private fun PluginList(
             )
             EngineTarget.entries.forEach { target ->
                 PluginEngineChip(
-                    label = target.label,
+                    label = engineShortLabel(target),
                     selected = state.pluginEngineFilter == target,
-                    onClick = { onEngineFilter(target) }
+                    onClick = { onEngineFilter(target) },
+                    accent = engineBrandColor(target)
                 )
             }
         }
+        SourceFilterRow(
+            selected = state.sourceFilter,
+            onSelect = onSourceFilter
+        )
 
         if (filtered.isEmpty()) {
             Text(
@@ -904,7 +1160,11 @@ private fun PluginList(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(filtered, key = { it.id }) { plugin ->
+            officialFirstGroups(
+                items = filtered,
+                isOfficial = { it.origin == StoreOrigin.OFFICIAL },
+                key = { it.id }
+            ) { plugin ->
                 val translation = state.translations[
                     StoreItem(
                         id = plugin.id,
@@ -950,15 +1210,28 @@ private fun PluginList(
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
+                        if (plugin.origin == StoreOrigin.OFFICIAL) {
+                            PluginOriginBadge(plugin = plugin)
+                        }
                         Row(
                             modifier = Modifier.padding(top = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            if (plugin.engines.size >= 2 && state.installingId == null) {
+                                Text(
+                                    text = "装到全部（${plugin.engines.size}）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .clickable { onInstallToAll(plugin) }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                )
+                            }
                             plugin.engines.forEach { target ->
                                 val installed = target in state.installedPluginEngines[plugin.id].orEmpty()
                                 PluginEngineChip(
-                                    label = if (installed) "${target.label} ✓" else target.label,
+                                    label = if (installed) engineShortLabel(target) + " ✓" else engineShortLabel(target),
                                     selected = installed,
                                     onClick = {
                                         if (installed) {
@@ -967,7 +1240,8 @@ private fun PluginList(
                                             onInstall(plugin, target)
                                         }
                                     },
-                                    enabled = state.installingId == null
+                                    enabled = state.installingId == null,
+                                    accent = engineBrandColor(target)
                                 )
                             }
                         }
@@ -978,26 +1252,34 @@ private fun PluginList(
     }
 }
 
-/** 引擎胶囊：既做筛选也做安装入口（插件卡片内按引擎逐个给出按钮）。 */
+/** 引擎胶囊：既做筛选也做安装入口（插件卡片内按引擎逐个给出按钮）。选中态用引擎品牌色。 */
 @Composable
 private fun PluginEngineChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    accent: Color? = null
 ) {
+    val brand = accent ?: MaterialTheme.colorScheme.primary
     Surface(
         shape = RoundedCornerShape(50),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.semanticColors.cardSurface,
-        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-        else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = when {
+            selected && accent != null -> brand
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.semanticColors.cardSurface
+        },
+        contentColor = when {
+            selected && accent != null -> Color.White
+            selected -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
         modifier = Modifier.clickable(enabled = enabled) { onClick() }
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
         )
     }
 }

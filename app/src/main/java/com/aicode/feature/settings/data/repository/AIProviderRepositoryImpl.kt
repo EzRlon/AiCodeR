@@ -56,8 +56,17 @@ class AIProviderRepositoryImpl @Inject constructor(
             }
     }
 
+    /** 解密失败的 provider id（最近一次读取）；供 UI 显性提示「密文在但解不开」，避免用户误以为没填过。 */
+    private val decryptFailedIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+    override fun observeDecryptFailures(): Flow<Set<String>> = decryptFailedIds
+
     override fun getAllProviders(): Flow<List<AIProviderConfig>> {
         return aiProviderDao.getAllProviders().map { entities ->
+            val failed = entities.filter {
+                KeystoreCipher.isDecryptFailed(it.apiKey) || KeystoreCipher.isDecryptFailed(it.apiKeys)
+            }.map { it.id }.toSet()
+            decryptFailedIds.value = failed
             entities.map { it.toDomainModel() }
         }.flowOn(Dispatchers.IO)
     }

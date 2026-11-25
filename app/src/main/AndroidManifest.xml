@@ -39,16 +39,25 @@
              不重建 Activity 才能保住终端 TerminalView、编辑器未保存内容与聊天列表位置；
              深浅切换不重建也就不会闪启动窗或丢页面状态。故意不含 locale —— 语言切换仍走 MainActivity 里的 recreate 路径。 -->
         <activity
+            android:name=".BootstrapActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AICode.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".DatabaseRecoveryActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AICode" />
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode"
             android:theme="@style/Theme.AICode.Splash"
             android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
             <!-- 系统分享进：其他应用分享纯文本到 AiCode，填入当前会话输入框（MainActivity onNewIntent/onCreate 处理）。 -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

@@ -222,6 +222,8 @@
     <string name="settings_dev_keys">签名与凭据</string>
     <string name="settings_dev_keys_desc">发布签名、口令配置与就绪检查</string>
     <string name="settings_dev_env">开发环境</string>
+    <string name="settings_local_model">本地模型</string>
+    <string name="settings_diagnostics">诊断与自测</string>
     <string name="dev_env_intro">选择你想开发什么，确认后会新建会话并自动把搭建任务发给 AI：它会先检测当前容器的发行版与包管理器（apk / apt / dnf / pacman），再按实际情况安装工具链、跑验证命令并汇报版本。安装过程在会话里可中断、可追问。</string>
     <string name="dev_env_installed">已安装</string>
     <string name="dev_env_confirm_body">将新建一个会话，并自动发送搭建任务给 AI 执行。开始后你可以随时在会话里补充要求。</string>
@@ -270,6 +272,9 @@
     <string name="dev_keys_variant_release_x86">正式包 · x86solo（模拟器）</string>
     <string name="dev_keys_variant_debug">调试包 · debug</string>
     <string name="dev_keys_variant_needs">需要证书与口令配置，展开查看</string>
+    <string name="dev_keys_variant_ready">发布材料齐备，可直接打包</string>
+    <string name="dev_keys_variant_missing">缺少 %1$d 项发布材料，见上方清单</string>
+    <string name="dev_keys_variant_needs_check">点上方「重新检查」获取打包条件</string>
     <string name="dev_keys_variant_debug_desc">使用调试签名，无需发布材料</string>
     <string name="dev_keys_required_cert">签名证书（.jks / .keystore）</string>
     <string name="dev_keys_required_config">keystore.properties（口令配置）</string>
@@ -319,10 +324,15 @@
     <string name="dev_keys_readiness_detail_alias_unknown">别名「%1$s」无法自动验证（容器内没有 keytool）</string>
     <string name="dev_keys_readiness_next_alias_unknown">发布前在构建环境跑一次 assembleRelease 终检</string>
     <string name="dev_keys_readiness_detail_key_password">keyPassword 已填写，但 App 无法在构建前验证</string>
+    <string name="dev_keys_readiness_detail_key_password_ok">keyPassword 已用 keytool 验证通过</string>
+    <string name="dev_keys_readiness_detail_key_password_bad">keyPassword 与证书不匹配，签名会失败</string>
+    <string name="dev_keys_readiness_next_key_password_bad">核对 keyPassword，使其与证书实际口令一致</string>
     <string name="dev_keys_readiness_next_key_password">发布前跑一次 assembleRelease，确认签名阶段不报错</string>
     <string name="dev_keys_readiness_detail_signing_scheme">storeType / v1 / v2 未显式配置，按 Gradle 默认策略签名</string>
+    <string name="dev_keys_readiness_detail_signing_scheme_ok">证书签名算法：%1$s</string>
     <string name="dev_keys_readiness_next_signing_scheme">需要固定签名方案时，在项目 signingConfigs 显式声明 storeType 与 enableV1/V2Signing</string>
     <string name="dev_keys_readiness_detail_cert_meta">证书有效期 / 算法需要 keytool，App 未自动检查</string>
+    <string name="dev_keys_readiness_detail_cert_meta_ok">证书有效期至：%1$s</string>
     <string name="dev_keys_readiness_next_cert_meta">发布前用 keytool -list -v 确认证书未过期、算法与密钥长度符合要求</string>
     <string name="dev_keys_export_bundle">打包发布资产</string>
     <string name="dev_keys_export_bundle_desc">证书 + 口令配置 + 校验和 + 恢复说明，一个 zip 带走发布所需的全部</string>
@@ -426,6 +436,8 @@
     <string name="theme_dark">深色</string>
     <string name="theme_black">极黑</string>
     <string name="theme_light">浅色</string>
+    <string name="theme_scheduled">定时</string>
+    <string name="theme_schedule_desc">深色时段</string>
     <string name="theme_mode_section">明暗模式</string>
     <string name="theme_preset_section">配色方案</string>
     <string name="theme_preset_default">默认蓝</string>
@@ -433,6 +445,9 @@
     <string name="theme_preset_graphite">石墨</string>
     <string name="theme_preset_forest">森林</string>
     <string name="theme_preset_crimson">鲜红</string>
+    <string name="theme_preset_violet">紫罗兰</string>
+    <string name="theme_preset_ocean">海洋</string>
+    <string name="theme_preset_amber">琥珀</string>
     <string name="theme_dynamic_color">动态取色</string>
     <string name="theme_dynamic_color_desc">从系统壁纸提取配色，开启后配色方案不再生效</string>
     <string name="settings_background_image">背景图</string>
@@ -541,6 +556,7 @@
     <string name="float_panel_nothing_running">当前没有运行中的任务</string>
     <string name="float_panel_stop">停止任务</string>
     <string name="float_panel_open_app">回到 App</string>
+    <string name="float_panel_open_diagnostics">诊断</string>
     <string name="float_panel_collapse_panel">收起面板</string>
     <string name="float_panel_input_hint">给 AI 发指令…</string>
     <string name="float_panel_input">输入指令</string>
@@ -608,8 +624,15 @@
     <string name="cli_model_builtin_group">引擎模型</string>
     <string name="engine_codex_unavailable">Codex 引擎未就绪：请先在容器中安装 Codex（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
     <string name="engine_opencode_unavailable">OpenCode 引擎未就绪：请先在容器中安装 OpenCode（可在设置 → 智能体 CLI 中一键安装），或把会话切回内置引擎</string>
+    <string name="engine_deepseek_unavailable">DeepSeek 引擎未就绪：请先在容器中安装 DeepSeek Harness（可在设置 → 模型与引擎中一键安装），或把会话切回内置引擎</string>
     <string name="engine_mode_note_codex_build">Codex 引擎无逐次审批：构建模式在工作区内自动执行，区外被拦截</string>
     <string name="engine_mode_note_codex_plan">Codex 引擎以只读沙箱执行，任何写入都会被底层拒绝</string>
+    <string name="engine_mode_deepseek_read_only">只读沙箱（read-only 档，任何写入都被底层拒绝）</string>
+    <string name="engine_mode_deepseek_workspace_write">工作区内自动执行，区外调用被拒绝（headless 无逐次审批）</string>
+    <string name="engine_mode_deepseek_full_access">完整系统权限自动执行（danger-full-access 档，慎用）</string>
+    <string name="engine_mode_desc_deepseek_read_only">dsh 档位 read-only：只读沙箱执行，任何写入都会被底层拒绝</string>
+    <string name="engine_mode_desc_deepseek_workspace_write">dsh 档位 workspace-write：工作区路径内可写，区外写入与联网外呼被拒绝</string>
+    <string name="engine_mode_desc_deepseek_full_access">dsh 档位 danger-full-access：全系统可写，无边界防护，仅在明确需要时使用</string>
 
     <!-- Claude Code 原生权限档位（permission-mode 的六个取值） -->
     <string name="engine_mode_claude_manual">默认询问</string>
@@ -920,7 +943,7 @@
     <string name="about_upstream_desc">开发者：jieapi</string>
     <string name="about_acknowledgements">致谢</string>
     <string name="about_acknowledgements_desc">参考过的开源项目</string>
-    <string name="acknowledgements_intro">本项目站在这些开源项目的肩膀上，感谢它们：</string>
+    <string name="acknowledgements_intro">本项目站在这些开源项目的肩膀上，感谢他们：</string>
     <string name="ack_note_upstream">上游底座：容器化 AI 编程 App 的原始形态</string>
     <string name="ack_note_termux">终端模拟组件与 Android 上的 Linux 环境实践</string>
     <string name="ack_note_proot">容器内用户态根环境（PRoot）的运行基础</string>
@@ -1218,9 +1241,24 @@
     <string name="bottom_bar_rail_progress">%1$d/%2$d</string>
     <string name="bottom_bar_rail_queued">排队 %1$d</string>
     <string name="bottom_bar_rail_stop">停止任务</string>
+    <string name="ok">确定</string>
+    <string name="relay_risk_title">官方密钥用于第三方中转</string>
+    <string name="relay_risk_body">检测到中转站（%1$s）配置了 %2$s 官方密钥。中转站可以看到并保存您的完整密钥，存在被收集盗用的风险。建议改用该中转站自行发放的密钥。仍要保存吗？</string>
+    <string name="relay_risk_save_anyway">仍要保存</string>
+    <string name="relay_risk_go_back">返回修改</string>
+    <string name="cancel">取消</string>
+    <string name="chat_engine_install_title">%1$s 未安装</string>
+    <string name="chat_engine_install_body">当前会话还没有安装 %1$s，无法切换。是否联网下载安装？安装为全自动（自动补装 Node、镜像回退），装完会自动测试并切过去。</string>
+    <string name="chat_engine_install_container_busy">容器尚未初始化完成，暂时无法安装引擎，请稍后再试。</string>
+    <string name="chat_engine_install_one">仅安装此引擎</string>
+    <string name="chat_engine_install_all">安装全部</string>
+    <string name="chat_engine_installing">正在安装引擎</string>
+    <string name="chat_engine_installing_progress">正在安装 %1$s（第 %2$d/%3$d 个），可切到终端页看实时日志</string>
+    <string name="chat_engine_installed_title">引擎安装结果</string>
     <string name="chat_polish">润色</string>
     <string name="chat_polish_running">正在润色…</string>
     <string name="chat_polish_undo">撤销润色</string>
+    <string name="chat_polish_empty">输入为空，无需润色</string>
     <string name="chat_polish_done">已润色，长按可恢复原文</string>
     <string name="chat_polish_failed">润色失败，请稍后再试</string>
     <string name="bottom_bar_rail_stalled_seconds">已 %1$d 秒无输出</string>
@@ -1943,6 +1981,7 @@
     <string name="store_install">安装</string>
     <string name="store_installing">安装中…</string>
     <string name="store_installed">已安装</string>
+    <string name="store_installed_all_engines">已装 · 全引擎可用</string>
     <string name="store_load_more">加载更多</string>
     <string name="store_empty">没有找到内容，试试更换关键词</string>
     <string name="store_error_load">加载失败，请检查网络</string>
@@ -2697,8 +2736,6 @@
     <string name="handoff_continue_anyway">仍要继续（不推荐）</string>
     <string name="session_handoff_title_prefix">（接手）</string>
     <string name="settings_float_ball">悬浮球</string>
-    <string name="settings_vnc_auto_popup">VNC 浮窗自动弹出</string>
-    <string name="settings_vnc_auto_popup_desc">检测到容器图形服务运行时自动弹出 VNC 浮窗；默认关闭，仅手动打开浮窗</string>
     <string name="settings_float_ball_desc">跨应用显示任务小球：查看进度、快速发送、一键回会话（不读屏、不模拟操作）</string>
     <string name="settings_float_ball_no_permission">需要「显示在其他应用上层」权限；点此授权后即可开启</string>
     <string name="float_ball_notification_title">AiCodeR悬浮球</string>
@@ -2974,6 +3011,7 @@
     <string name="crash_fix_prompt">App 刚发生了崩溃。以下是完整崩溃报告，请分析崩溃根因（定位到具体文件与行号），制定修复方案并直接实施修复，完成后汇报改动内容。</string>
     <string name="crash_copied">错误信息已复制</string>
     <string name="crash_restart">重启应用</string>
+    <string name="crash_safe_restart">安全模式重启（跳过后台初始化）</string>
     <string name="crash_exit">退出应用</string>
     <string name="crash_log_hint">完整日志文件位置：%1$s</string>
     <string name="crash_report_title">AiCodeR崩溃报告</string>
@@ -3060,6 +3098,11 @@
     <string name="provider_multi_key_status_codes">自动切换状态码</string>
     <string name="provider_multi_key_status_codes_hint">逗号分隔，留空使用默认 401,402,403,429</string>
     <string name="provider_multi_key_cooldown">冷却时长</string>
+    <string name="provider_key_status_header">运行状态（最近真实请求）</string>
+    <string name="provider_key_status_ok">正常</string>
+    <string name="provider_key_status_cooling">冷却至 %1$s</string>
+    <string name="provider_key_status_auth_invalid">凭据失效</string>
+    <string name="provider_key_status_today">今日 %1$d 次</string>
     <string name="provider_multi_key_cooldown_desc">被切走的 Key 隔多久重新纳入候选</string>
     <string name="provider_multi_key_cooldown_value">%1$d 分钟</string>
     <string name="provider_multi_key_cooldown_off">不冷却</string>
@@ -3146,6 +3189,14 @@
     <string name="vnc_rotation_landscape">画面旋转：锁定横屏</string>
     <string name="vnc_rotation_portrait">画面旋转：锁定竖屏</string>
     <string name="vnc_show_keyboard">显示键盘</string>
+    <string name="vnc_bar_left">左键</string>
+    <string name="vnc_bar_middle">中键</string>
+    <string name="vnc_bar_right">右键</string>
+    <string name="vnc_bar_scroll_up">向上滚动</string>
+    <string name="vnc_bar_scroll_down">向下滚动</string>
+    <string name="vnc_bar_pointer_direct">直触</string>
+    <string name="vnc_bar_pointer_trackpad">触控板</string>
+    <string name="vnc_trackpad_hint">触控板：滑动移动指针 · 轻点=左键 · 双指点按=右键 · 双指滑动=滚轮</string>
     <string name="vnc_mouse_left">鼠标左键模式（点按切换为右键）</string>
     <string name="vnc_mouse_right">鼠标右键模式（点按切换回左键）</string>
     <string name="vnc_close">关闭小窗</string>

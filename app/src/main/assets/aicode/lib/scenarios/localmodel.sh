@@ -10,9 +10,9 @@ scenario_name_localmodel() { echo "本地模型（llama.cpp 离线推理）"; }
 
 LOCALMODEL_ROOT="$HOME/.aicode/local-llm"
 LOCALMODEL_MODEL_DIR="$LOCALMODEL_ROOT/models"
-# 引导用示例模型：Qwen2.5-0.5B-Instruct Q4_K_M（约 470MB，中英文皆可，小任务够用）
-LOCALMODEL_EXAMPLE_REPO="Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-LOCALMODEL_EXAMPLE_FILE="qwen2.5-0.5b-instruct-q4_k_m.gguf"
+# 引导用示例模型：Qwen3.5-0.8B Q4_K_M（约 508MB，多语言+推理，llama.cpp b12627 原生支持 qwen35 架构）
+LOCALMODEL_EXAMPLE_REPO="unsloth/Qwen3.5-0.8B-GGUF"
+LOCALMODEL_EXAMPLE_FILE="Qwen3.5-0.8B-Q4_K_M.gguf"
 LOCALMODEL_EXAMPLE_MIN_BYTES=400000000
 LOCALMODEL_OLLAMA_BIN="$LOCALMODEL_ROOT/ollama/bin/ollama"
 
@@ -90,7 +90,7 @@ localmodel_install_ollama() {
 # 可选引导：下载示例小模型（约 470MB，hf-mirror 优先、官方源兜底，断点续传）。
 # 不强制当场下载：默认跳过，装好引擎即可，模型路径由用户/AI 后续填。
 localmodel_offer_model() {
-    printf "是否现在下载示例模型（Qwen2.5-0.5B-Instruct Q4_K_M，约 470MB，默认跳过）？[y/N]: "
+    printf "是否现在下载示例模型（Qwen3.5-0.8B Q4_K_M，约 508MB，默认跳过）？[y/N]: "
     read ans
     case "$ans" in
         y|Y) ;;
@@ -119,9 +119,127 @@ localmodel_offer_model() {
     return 0
 }
 
+# ── glibc 系（Debian/Ubuntu/Fedora 等）路径 ──
+# llama.cpp 官方 release 提供预编译包（约 19MB，含全部依赖 .so），但其 glibc 基线随版本
+# 漂移（实测 b12627 需 GLIBC_2.38，Debian 12=2.36 不兼容），故解压后必须实测 --version，
+# 跑不起来即整包弃用；最终兜底是源码编译（本机工具链产物天然兼容，实测 -j6 约 5 分钟）。
+LOCALMODEL_PREBUILT_TAG=b12627
+
+localmodel_arch_tag() {
+    case "$(uname -m)" in
+        x86_64) echo x64 ;;
+        aarch64|arm64) echo arm64 ;;
+        *) return 1 ;;
+    esac
+}
+
+localmodel_install_bin() {
+    # $1 = 含 llama-server 与依赖 .so 的目录；装完必须过 command -v + --version 双校验
+    _src="$1"
+    _dst="$LOCALMODEL_ROOT/llama-cpp"
+    rm -rf "$_dst"
+    mkdir -p "$_dst" /usr/local/bin
+    cp -a "$_src/." "$_dst/" || return 1
+    chmod +x "$_dst/llama-server" 2>/dev/null
+    ln -sf "$_dst/llama-server" /usr/local/bin/llama-server
+    # 依赖 .so 与二进制同目录：写 ld.so 配置（不依赖产物 rpath，cp/symlink 后仍可靠）
+    if [ -d /etc/ld.so.conf.d ] && command -v ldconfig >/dev/null 2>&1; then
+        echo "$_dst" > /etc/ld.so.conf.d/zz-local-llama.conf
+        ldconfig >/dev/null 2>&1
+    fi
+    command -v llama-server >/dev/null 2>&1 && llama-server --version >/dev/null 2>&1
+}
+
+localmodel_install_prebuilt() {
+    _arch=$(localmodel_arch_tag) || return 1
+    name="llama-$LOCALMODEL_PREBUILT_TAG-bin-ubuntu-$_arch.tar.gz"
+    dest="$LOCALMODEL_ROOT/$name.tmp"
+    ext="$LOCALMODEL_ROOT/prebuilt"
+    mkdir -p "$LOCALMODEL_ROOT" "$ext"
+    echo "下载 llama.cpp 官方预编译包（$name，约 19MB，弱网较久）..."
+    ok=""
+    for base in \
+        "https://github.com/ggml-org/llama.cpp/releases/download/$LOCALMODEL_PREBUILT_TAG" \
+        "https://ghproxy.net/https://github.com/ggml-org/llama.cpp/releases/download/$LOCALMODEL_PREBUILT_TAG" \
+        "https://gh-proxy.com/https://github.com/ggml-org/llama.cpp/releases/download/$LOCALMODEL_PREBUILT_TAG"
+    do
+        echo "  尝试来源：$(echo "$base" | cut -d/ -f3)"
+        localmodel_fetch "$base/$name" "$dest" || { rm -f "$dest"; continue; }
+        rm -rf "$ext"
+        mkdir -p "$ext"
+        tar -xzf "$dest" -C "$ext" 2>/dev/null && ok=1
+        rm -f "$dest"
+        [ -n "$ok" ] && break
+    done
+    [ -z "$ok" ] && { rm -rf "$ext"; return 1; }
+    _srv=$(find "$ext" -type f -name llama-server | head -1)
+    if [ -z "$_srv" ]; then rm -rf "$ext"; return 1; fi
+    _dir=$(dirname "$_srv")
+    chmod +x "$_srv" 2>/dev/null
+    if ! env LD_LIBRARY_PATH="$_dir" "$_srv" --version >/dev/null 2>&1; then
+        plog "localmodel: 预编译包与本机 glibc 不兼容，弃用（回退源码编译）"
+        rm -rf "$ext"
+        return 1
+    fi
+    if localmodel_install_bin "$_dir"; then
+        rm -rf "$ext"
+        return 0
+    fi
+    rm -rf "$ext"
+    return 1
+}
+
+localmodel_install_compile() {
+    localmodel_arch_tag >/dev/null || return 1
+    # 编译依赖按发行版补齐（Debian: build-essential+cmake；已装则秒过）
+    if ! command -v cmake >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+        case "$PMGR" in
+            apt) pkg_add build-essential cmake pkg-config ;;
+            dnf|yum) pkg_add gcc-c++ cmake make ;;
+            pacman) pkg_add base-devel cmake ;;
+            *) return 1 ;;
+        esac
+    fi
+    command -v cmake >/dev/null 2>&1 || { plog "localmodel: cmake 不可用，无法编译"; return 1; }
+    src="$LOCALMODEL_ROOT/src"
+    if [ ! -f "$src/CMakeLists.txt" ]; then
+        dest="$LOCALMODEL_ROOT/src.tar.gz"
+        mkdir -p "$LOCALMODEL_ROOT"
+        echo "下载 llama.cpp 源码（$LOCALMODEL_PREBUILT_TAG，约 35MB，弱网较久）..."
+        ok=""
+        for base in \
+            "https://github.com/ggml-org/llama.cpp/archive/refs/tags" \
+            "https://ghproxy.net/https://github.com/ggml-org/llama.cpp/archive/refs/tags" \
+            "https://gh-proxy.com/https://github.com/ggml-org/llama.cpp/archive/refs/tags"
+        do
+            echo "  尝试来源：$(echo "$base" | cut -d/ -f3)"
+            localmodel_fetch "$base/$LOCALMODEL_PREBUILT_TAG.tar.gz" "$dest" || { rm -f "$dest"; continue; }
+            rm -rf "$src"
+            tar -xzf "$dest" -C "$LOCALMODEL_ROOT" 2>/dev/null \
+                && mv "$LOCALMODEL_ROOT/llama.cpp-$LOCALMODEL_PREBUILT_TAG" "$src" && ok=1
+            rm -f "$dest"
+            [ -n "$ok" ] && break
+        done
+        [ -z "$ok" ] && return 1
+    fi
+    build="$LOCALMODEL_ROOT/build"
+    echo "编译 llama-server（Release，$(nproc) 并行；实测约 5~15 分钟，请耐心等待，失败重跑可续编）..."
+    cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release \
+        -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_CURL=OFF \
+        >/dev/null 2>&1 || { plog "localmodel: cmake 配置失败"; return 1; }
+    cmake --build "$build" --target llama-server -j"$(nproc)" >/dev/null 2>&1 \
+        || { plog "localmodel: 编译失败（已保留 $build，重跑本场景可续编）"; return 1; }
+    [ -f "$build/bin/llama-server" ] || return 1
+    localmodel_install_bin "$build/bin"
+}
+
 install_scenario_localmodel() {
     # 幂等：llama.cpp server 可用即跳过
     if localmodel_server_ok; then
+        # App 状态页只认 .installed 完成标记：引擎就绪但标记丢失时（如容器重建后二进制仍在）
+        # 必须补写，否则「一键安装」永远幂等跳过而 UI 永远显示未安装
+        mkdir -p "$LOCALMODEL_ROOT"
+        date '+%Y-%m-%d %H:%M:%S' > "$LOCALMODEL_ROOT/.installed"
         plog "本地模型引擎已就绪，跳过"
         echo "${C_GREEN}✓ 本地模型引擎已就绪${C_RESET}（启动示例：llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080）"
         return 0
@@ -139,12 +257,15 @@ install_scenario_localmodel() {
                 localmodel_server_ok && break
             done
         fi
+    elif localmodel_install_prebuilt || localmodel_install_compile; then
+        # glibc 系（Debian 等）：官方预编译 → 源码编译兑底，产物已过 server_ok 校验
+        :
     fi
     if localmodel_server_ok; then
         plog "localmodel: llama-server 就绪（$(llama-server --version 2>/dev/null | head -1)）"
     else
         echo "${C_RED}llama.cpp 安装失败。${C_RESET}"
-        echo "  本场景主路径仅支持 Alpine 容器（llama.cpp 包在 Alpine 仓库）。"
+        echo "  Alpine：仓库/跨版本源装 musl 包；其它发行版：官方预编译 → 源码编译，均未成功。"
         plog "localmodel 安装失败：llama-server 不可用"
     fi
 

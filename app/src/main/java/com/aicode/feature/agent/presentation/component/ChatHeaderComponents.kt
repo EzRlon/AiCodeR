@@ -111,8 +111,8 @@ private fun headerInsets(): HeaderInsets {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatHeader(
-    inputTokens: Int,
-    outputTokens: Int,
+    inputTokens: Long,
+    outputTokens: Long,
     onOpenDrawer: () -> Unit,
     onNewChat: () -> Unit,
     /** 「新建会话」长按：弹新建类型选择层（新建/定时任务/定时 Plan）；null 时不响应长按。 */
@@ -329,9 +329,11 @@ internal fun buildStatusStripSegments(
         val percent = (contextTokens.toFloat() / compactionLineTokens * 100f)
             .coerceIn(0f, 999f)
             .toInt()
+        // 只留百分比（2026-11-18 用户反馈：原「30k/115k · 26%」里双数字像一长串）。
+        // 用户关心的是离压缩还有多远，百分比最直观；明细在长按状态条与 Token 统计页。
         segments += StatusStripSegment(
             label = labels.context,
-            value = "${formatStripTokens(contextTokens)}/${formatStripTokens(compactionLineTokens)} · $percent%"
+            value = "$percent%"
         )
     }
 

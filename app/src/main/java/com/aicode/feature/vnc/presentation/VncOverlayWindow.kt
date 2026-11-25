@@ -8,10 +8,18 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.PixelCopy
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +31,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -43,25 +53,43 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.focus.FocusRequester
@@ -79,6 +107,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.semanticColors
@@ -223,14 +253,16 @@ private fun FloatingVncWindow(
     parentWidth: Dp,
     parentHeight: Dp,
 ) {
-    // 默认尺寸更贴合屏幕：宽度占满（留 16dp 边），高度约占 62%，画面等比铺满。
-    // 远端分辨率会跟随这个宽高比，因此不会出现大片黑边。
-    val defaultWidth = (parentWidth - 16.dp).coerceAtMost(560.dp)
-    val defaultHeight = (parentHeight * 0.62f).coerceIn(240.dp, (parentHeight - 96.dp).coerceAtLeast(240.dp))
+    // 默认尺寸按「竖屏 3:4 的远端画面」推导：先定画面宽度，再按 3:4 算画面高度，
+    // 最后加上下方按键条的固定高度。这样默认打开与「重置位置」时画面天然贴合、
+    // 不会被拉伸；用户之后仍可任意拖拽缩放（这里只在未自定义过时给初值）。
+    val defaultWidth = (parentWidth - 16.dp).coerceAtMost(420.dp)
+    val defaultHeight = (defaultWidth / (3f / 4f) + 46.dp)
+        .coerceIn(240.dp, (parentHeight - 96.dp).coerceAtLeast(240.dp))
     LaunchedEffect(parentWidth, parentHeight) {
         viewModel.ensureGeometry(
             defaultXDp = ((parentWidth - defaultWidth) / 2).value,
-            defaultYDp = (parentHeight * 0.16f).value,
+            defaultYDp = ((parentHeight - defaultHeight) / 2).value,
             defaultWDp = defaultWidth.value,
             defaultHDp = defaultHeight.value,
         )
@@ -247,15 +279,23 @@ private fun FloatingVncWindow(
     val statusTopDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val minYDp = statusTopDp + 8.dp
     val maxYDp = (parentHeight - 56.dp).coerceAtLeast(minYDp)
-    val offY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight * 0.18f).value else window.offsetY)
+    val offY = (if (window.offsetY == Float.MIN_VALUE) ((parentHeight - winHeight) / 2).value else window.offsetY)
         .dp.coerceIn(minYDp, maxYDp)
     // 注意：不要在这里「发现 offsetY < minY 就 resetGeometry」——拖动过程中 raw 值
     // 会短暂低于最小值，自动重置会和用户拖动打架（真机反馈“位置挪不动”）。
     // 显示层已经用 coerceIn 把窗口夹在状态栏下方；手动兜底是标题栏的重置按钮。
 
+    // 拖动中的位移只走本地 graphicsLayer：每帧写 ViewModel 的 StateFlow 会让整窗
+    // （含 WebView 画面）随之重组，真机拖动掉帧。落点才一次性写回几何。
+    val dragOffsetState = remember { mutableStateOf(Offset.Zero) }
+
     Box(
         modifier = Modifier
             .offset { IntOffset(offX.roundToPx(), offY.roundToPx()) }
+            .graphicsLayer {
+                translationX = dragOffsetState.value.x
+                translationY = dragOffsetState.value.y
+            }
             .size(winWidth, winHeight)
             // 用户要求接近直角的窗体：只留 2dp，视觉上仍是圆角但不占空间。
             .shadow(6.dp, RoundedCornerShape(2.dp))
@@ -268,7 +308,42 @@ private fun FloatingVncWindow(
             connected = connected,
             fullscreen = false,
             modifier = Modifier.fillMaxSize(),
+            dragOffset = dragOffsetState,
         )
+    }
+
+    // ── 触控板：独立浮块，位于窗口之外（用户 2026-11-18 要求「在浮窗外面」）──
+    // 优先贴在窗口下方；下方空间不足时放到窗口上方。与窗口同样带阴影与描边，
+    // 视觉上是一个独立的小触摸板，不占据 VNC 画面、也不吃画面区的触摸。
+    val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
+    if (connected && pointerMode == "trackpad") {
+        val padHeight = 110.dp
+        val gap = 8.dp
+        val roomBelow = parentHeight - (offY + winHeight)
+        val placeAbove = roomBelow < padHeight + gap + 12.dp
+        val padY = if (placeAbove) {
+            (offY - padHeight - gap).coerceAtLeast(minYDp)
+        } else {
+            (offY + winHeight + gap).coerceIn(minYDp, (parentHeight - padHeight).coerceAtLeast(minYDp))
+        }
+        val padWidth = winWidth.coerceAtMost(parentWidth - 16.dp)
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(offX.roundToPx(), padY.roundToPx()) }
+                .size(padWidth, padHeight)
+                .shadow(6.dp, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(12.dp)),
+        ) {
+            VncTrackpadPad(
+                onMove = { dx, dy -> viewModel.trackpadMove(dx, dy) },
+                onGestureEnd = viewModel::trackpadReset,
+                onTap = { viewModel.clickMouse(0) },
+                onDoubleTap = { viewModel.clickMouse(0) },
+                onTwoFingerTap = { viewModel.clickMouse(2) },
+                onScroll = { dir -> viewModel.scrollMouse(dir) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -281,12 +356,16 @@ private fun VncWindowSurface(
     connected: Boolean,
     fullscreen: Boolean,
     modifier: Modifier = Modifier,
+    dragOffset: androidx.compose.runtime.MutableState<Offset>? = null,
 ) {
     val shape = RoundedCornerShape(if (fullscreen) 0.dp else 2.dp)
     val mouseButton by viewModel.mouseButton.collectAsStateWithLifecycle()
     var specialKeys by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier = modifier) {
+    // 横竖屏按「窗口自身形状」判断（不是屏幕方向）：窗口宽 > 高即为横屏排布。
+    val landscape = maxWidth > maxHeight
     Column(
-        modifier = modifier
+        modifier = Modifier
             .shadow(if (fullscreen) 0.dp else 8.dp, shape)
             .clip(shape)
             .background(MaterialTheme.semanticColors.cardSurface)
@@ -299,6 +378,7 @@ private fun VncWindowSurface(
             connected = connected,
             fullscreen = fullscreen,
             specialKeys = specialKeys,
+            dragOffset = dragOffset,
             onKeyboardClick = {
                 specialKeys = !specialKeys
                 if (specialKeys) viewModel.requestKeyboard()
@@ -307,76 +387,449 @@ private fun VncWindowSurface(
         if (specialKeys && connected) {
             VncSpecialKeyBar(onKey = viewModel::sendKeysym)
         }
-        Box(modifier = Modifier.weight(1f)) {
-            VncWebViewPanel(
-                serviceState = serviceState,
-                pasteRequests = viewModel.pasteRequests.collectAsStateWithLifecycle().value,
-                reconnectRequests = viewModel.reconnectRequests.collectAsStateWithLifecycle().value,
-                onConnectedChange = viewModel::setConnected,
-                onKeyboardRequest = viewModel::requestKeyboard,
-                onPageReady = { channel ->
-                    // 页面每次重载都要回填按键与鼠标按键模式通道。
-                    viewModel.sendKeysToPage = { text -> channel.sendKeys(text) }
-                    viewModel.sendKeysymToPage = { code, down -> channel.sendKeysym(code, down) }
-                    viewModel.sendMouseButtonMode = { b -> channel.setMouseButton(b) }
-                    viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
-                },
-                mouseButton = mouseButton,
-                modifier = Modifier.fillMaxSize(),
-            )
-            // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
-            // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
-            VncKeyboardSink(
-                viewModel = viewModel,
-                modifier = Modifier.align(Alignment.BottomStart),
-            )
-            // 键盘拉起按钮已收进标题栏（VncTitleBar 里锁定按钮左侧），不再做悬浮按钮。
-            if (!fullscreen && !window.pinned) {
-                ResizeCornerHandle(
-                    onResize = { dx, dy -> viewModel.resizeBy(dx, dy) },
-                    onResizeEnd = viewModel::persistGeometry,
-                    modifier = Modifier.align(Alignment.BottomEnd),
+        val pointerMode by viewModel.pointerMode.collectAsStateWithLifecycle()
+        // 横屏（宽 > 高）时把画面与按键分列两区：画面占大部分、按键占右侧窄栏，
+        // 避免横屏下画面被压扁变形（用户 2026-11-18 反馈）。
+        if (landscape) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                VncImageArea(
+                    viewModel = viewModel,
+                    serviceState = serviceState,
+                    connected = connected,
+                    fullscreen = fullscreen,
+                    window = window,
+                    mouseButton = mouseButton,
+                    modifier = Modifier.weight(1f),
                 )
+                if (connected) {
+                    VncControlColumn(
+                        viewModel = viewModel,
+                        pointerMode = pointerMode,
+                        modifier = Modifier.width(64.dp).fillMaxHeight(),
+                    )
+                }
             }
-            val failed = serviceState as? VncServiceState.Failed
-            val preparing = serviceState is VncServiceState.Preparing
-            if (failed != null || preparing) {
-                Column(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(MaterialTheme.semanticColors.pageBackground.copy(alpha = 0.94f)),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    if (failed == null) {
-                        // 安装/重试期间保留「准备中」覆盖：避免重试后露出空白 WebView（装包可达数分钟）。
-                        Text(
-                            text = stringResource(R.string.vnc_preparing_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            modifier = Modifier.padding(horizontal = Spacing.lg),
+        } else {
+            VncImageArea(
+                viewModel = viewModel,
+                serviceState = serviceState,
+                connected = connected,
+                fullscreen = fullscreen,
+                window = window,
+                mouseButton = mouseButton,
+                modifier = Modifier.weight(1f),
+            )
+            // 竖屏：画面 → 按键条 → 触控板（触控板在按键之下，用户 2026-11-18 指定顺序）
+            if (connected) {
+                VncMouseBar(viewModel = viewModel)
+            }
+        }
+
+
+    }
+    }
+}
+
+/**
+ * 原生鼠标按键条（窗口内、画面外）：左键 / 中键 / 右键 / 滚轮上下 / 指针模式。
+ *
+ * 这些动作以前画在 WebView 里，既压住 VNC 内容、又只有右键和中键两项。
+ * 现在改为原生浮窗控件，按钮语义与 DOM `MouseEvent.button` 对齐，
+ * 点击作用于「当前指针位置」（直触=最后触点，触控板=虚拟指针）。
+ */
+@Composable
+private fun VncMouseBar(
+    viewModel: VncOverlayViewModel,
+) {
+    val mode by viewModel.pointerMode.collectAsStateWithLifecycle()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.semanticColors.cardSurface)
+            .padding(horizontal = Spacing.xs, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MouseBarButton(
+            label = stringResource(R.string.vnc_bar_left),
+            active = false,
+            onClick = { viewModel.clickMouse(0) },
+        )
+        MouseBarButton(
+            label = stringResource(R.string.vnc_bar_middle),
+            active = false,
+            onClick = { viewModel.clickMouse(1) },
+        )
+        MouseBarButton(
+            label = stringResource(R.string.vnc_bar_right),
+            active = false,
+            onClick = { viewModel.clickMouse(2) },
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        MouseBarButton(
+            label = "▲",
+            contentDescription = stringResource(R.string.vnc_bar_scroll_up),
+            active = false,
+            onClick = { viewModel.scrollMouse(-1) },
+        )
+        MouseBarButton(
+            label = "▼",
+            contentDescription = stringResource(R.string.vnc_bar_scroll_down),
+            active = false,
+            onClick = { viewModel.scrollMouse(1) },
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        MouseBarButton(
+            label = stringResource(
+                if (mode == "trackpad") R.string.vnc_bar_pointer_trackpad else R.string.vnc_bar_pointer_direct
+            ),
+            active = mode == "trackpad",
+            onClick = { viewModel.setPointerMode(if (mode == "trackpad") "direct" else "trackpad") },
+        )
+    }
+}
+
+/**
+ * 笔记本式触控板：画面下沿的独立触控区（用户 2026-11-18 反馈第 2 条——
+ * 依赖手指直点画面太小根本点不中）。手势语义对齐笔记本触摸板：
+ * - 单指滑动：移动指针（相对位移交给页面换算+加速）
+ * - 单指轻点：左键
+ * - 双指点按：右键
+ * - 双指上下滑：滚轮
+ * 半透明底 + 细描边，能看见但不喧宾夺主。
+ */
+@Composable
+private fun VncTrackpadPad(
+    onMove: (Float, Float) -> Unit,
+    onGestureEnd: () -> Unit,
+    onTap: () -> Unit,
+    onDoubleTap: () -> Unit,
+    onTwoFingerTap: () -> Unit,
+    onScroll: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    // 滚动累积：noVNC 按 50px 一格，原生侧攒够 ~40dp 就发一格，跟手且不过敏。
+    val scrollStepPx = with(density) { 40.dp.toPx() }
+    // 轻点容差：真实手指点按普遍带几像素微动，零容差会把轻点大面积判成滑动，
+    // onTap 永远不触发（远端按钮点不动）；净位移超 12dp 才算滑动。
+    val tapSlopPx = with(density) { 12.dp.toPx() }
+    var scrollAcc by remember { mutableStateOf(0f) }
+    var activePointers by remember { mutableStateOf(0) }
+    var gestureStart by remember { mutableStateOf(0L) }
+    var moved by remember { mutableStateOf(false) }
+    var tapOrigin by remember { mutableStateOf(Offset.Zero) }
+    var twoOrigin by remember { mutableStateOf(Offset.Zero) }
+    var twoTracked by remember { mutableStateOf(false) }
+    var last by remember { mutableStateOf(Offset.Zero) }
+    var lastTapAt by remember { mutableLongStateOf(0L) }
+    val scope = rememberCoroutineScope()
+    val activity = LocalContext.current as? Activity
+    val window = activity?.window
+    var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
+    var lastCapture by remember { mutableLongStateOf(0L) }
+
+    Box(
+        modifier = modifier.onGloballyPositioned { coords ->
+            val now = SystemClock.uptimeMillis()
+            if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && now - lastCapture > 700) {
+                val rect = coords.boundsInWindow()
+                val width = rect.width.toInt()
+                val height = rect.height.toInt()
+                if (width > 0 && height > 0) {
+                    lastCapture = now
+                    runCatching {
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        PixelCopy.request(
+                            window,
+                            Rect(rect.left.toInt(), rect.top.toInt(), rect.right.toInt(), rect.bottom.toInt()),
+                            bitmap,
+                            { result -> if (result == PixelCopy.SUCCESS) backdrop = bitmap.asImageBitmap() },
+                            Handler(Looper.getMainLooper())
                         )
-                    } else {
-                        Text(
-                            text = stringResource(R.string.vnc_failed_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            modifier = Modifier.padding(horizontal = Spacing.lg),
-                        )
-                        Text(
-                            text = failed.message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.semanticColors.subtleText,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-                        )
-                        TextButton(onClick = viewModel::retryStart) {
-                            Text(text = stringResource(R.string.vnc_retry))
-                        }
                     }
                 }
             }
+        }
+    ) {
+        backdrop?.let {
+            Image(
+                bitmap = it,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize().blur(16.dp)
+            )
+        }
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.28f),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+            modifier = Modifier.matchParentSize().pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                activePointers = 1
+                moved = false
+                gestureStart = System.currentTimeMillis()
+                scrollAcc = 0f
+                last = down.position
+                tapOrigin = down.position
+                twoTracked = false
+                onGestureEnd()
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val pressed: List<androidx.compose.ui.input.pointer.PointerInputChange> =
+                        event.changes.filter { c -> c.pressed }
+                    val count = pressed.size
+                    if (count != activePointers) {
+                        // 手指数量变化：切换手势类型（单指↔双指）
+                        if (activePointers == 2 && count < 2) {
+                            // 双指中抬起一指：短且未动 = 双指点按（右键）
+                            if (!moved && System.currentTimeMillis() - gestureStart <= 250) {
+                                onTwoFingerTap()
+                            }
+                            scrollAcc = 0f
+                        }
+                        if (activePointers == 1 && count == 0) {
+                            // 单指抬起：短且未动 = 轻点左键；320ms 内第二下 = 双击
+                            if (!moved && System.currentTimeMillis() - gestureStart <= 250) {
+                                val now = SystemClock.uptimeMillis()
+                                if (now - lastTapAt <= 320) {
+                                    lastTapAt = 0L
+                                    onDoubleTap()
+                                } else {
+                                    lastTapAt = now
+                                    onTap()
+                                }
+                            }
+                            onGestureEnd()
+                        }
+                        activePointers = count
+                        if (count == 0) break
+                        last = pressed.firstOrNull()?.position ?: last
+                        continue
+                    }
+                    val change = pressed.first()
+                    if (activePointers == 1) {
+                        val dx = change.position.x - last.x
+                        val dy = change.position.y - last.y
+                        if (kotlin.math.abs(change.position.x - tapOrigin.x) +
+                            kotlin.math.abs(change.position.y - tapOrigin.y) > tapSlopPx
+                        ) moved = true
+                        onMove(dx, dy)
+                    } else {
+                        // 双指：中点纵向位移 → 滚动
+                        val midX = pressed.map { c -> c.position.x }.average().toFloat()
+                        val midY = pressed.map { c -> c.position.y }.average().toFloat()
+                        if (!twoTracked) {
+                            twoOrigin = Offset(midX, midY)
+                            twoTracked = true
+                        }
+                        val dy = midY - last.y
+                        scrollAcc += dy
+                        while (scrollAcc >= scrollStepPx) { onScroll(1); scrollAcc -= scrollStepPx }
+                        while (scrollAcc <= -scrollStepPx) { onScroll(-1); scrollAcc += scrollStepPx }
+                        if (kotlin.math.abs(midX - twoOrigin.x) +
+                            kotlin.math.abs(midY - twoOrigin.y) > tapSlopPx
+                        ) moved = true
+                        last = Offset(midX, midY)
+                        event.changes.forEach { c -> c.consume() }
+                        continue
+                    }
+                    last = change.position
+                    event.changes.forEach { c -> c.consume() }
+                }
+            }
+        },
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = stringResource(R.string.vnc_trackpad_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+            )
+        }
+        }
+    }
+}
+
+/**
+ * VNC 画面区（含各类覆盖层）。抽出来是因为横竖屏两种排布都要用它：
+ * 竖屏整宽、横屏与右侧按键栏并排。
+ */
+@Composable
+private fun VncImageArea(
+    viewModel: VncOverlayViewModel,
+    serviceState: VncServiceState,
+    connected: Boolean,
+    fullscreen: Boolean,
+    window: VncOverlayViewModel.WindowState,
+    mouseButton: Int,
+    modifier: Modifier = Modifier,
+) {
+    // 画面区尺寸变化时把宽高比同步给远端（xrandr）：远端帧与画面区同比例，
+    // 铺满窗口时既不留黑边也不拉伸。这不影响用户缩放——窗口大小仍完全由用户决定，
+    // 我们只让远端分辨率去适配它。
+    Box(modifier = modifier.onSizeChanged { size ->
+        viewModel.onImageAreaSize(size.width, size.height)
+    }) {
+                VncWebViewPanel(
+                    serviceState = serviceState,
+                    pasteRequests = viewModel.pasteRequests.collectAsStateWithLifecycle().value,
+                    reconnectRequests = viewModel.reconnectRequests.collectAsStateWithLifecycle().value,
+                    onConnectedChange = viewModel::setConnected,
+                    onKeyboardRequest = viewModel::requestKeyboard,
+                    onPageReady = { channel ->
+                        // 页面每次重载都要回填按键与鼠标按键模式通道。
+                        viewModel.sendKeysToPage = { text -> channel.sendKeys(text) }
+                        viewModel.sendKeysymToPage = { code, down -> channel.sendKeysym(code, down) }
+                        viewModel.sendMouseButtonMode = { b -> channel.setMouseButton(b) }
+                        viewModel.sendClickToPage = { b -> channel.click(b) }
+                        viewModel.sendScrollToPage = { d -> channel.scroll(d) }
+                        viewModel.sendPointerModeToPage = { m -> channel.setPointerMode(m) }
+                        viewModel.sendTrackpadMoveToPage = { dx, dy -> channel.trackpadMove(dx, dy) }
+                        viewModel.sendTrackpadResetToPage = { channel.trackpadReset() }
+                        viewModel.sendMouseButtonMode?.invoke(viewModel.mouseButton.value)
+                        viewModel.sendPointerModeToPage?.invoke(viewModel.pointerMode.value)
+                    },
+                    mouseButton = mouseButton,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 原生输入框：WebView 内的隐藏 input 拿不到真正的输入连接（日志里
+                // showSoftInput 返回 true 但键盘不弹），所以改由真正的原生 EditText 承接系统键盘。
+                VncKeyboardSink(
+                    viewModel = viewModel,
+                    modifier = Modifier.align(Alignment.BottomStart),
+                )
+                // 键盘拉起按钮已收进标题栏（VncTitleBar 里锁定按钮左侧），不再做悬浮按钮。
+                if (!fullscreen && !window.pinned) {
+                    ResizeCornerHandle(
+                        onResize = { dx, dy -> viewModel.resizeBy(dx, dy) },
+                        onResizeEnd = viewModel::persistGeometry,
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    )
+                }
+                val failed = serviceState as? VncServiceState.Failed
+                val preparing = serviceState is VncServiceState.Preparing
+                if (failed != null || preparing) {
+                    Column(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(MaterialTheme.semanticColors.pageBackground.copy(alpha = 0.94f)),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        if (failed == null) {
+                            // 安装/重试期间保留「准备中」覆盖：避免重试后露出空白 WebView（装包可达数分钟）。
+                            Text(
+                                text = stringResource(R.string.vnc_preparing_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.semanticColors.subtleText,
+                                modifier = Modifier.padding(horizontal = Spacing.lg),
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.vnc_failed_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.semanticColors.subtleText,
+                                modifier = Modifier.padding(horizontal = Spacing.lg),
+                            )
+                            Text(
+                                text = failed.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.semanticColors.subtleText,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                            )
+                            TextButton(onClick = viewModel::retryStart) {
+                                Text(text = stringResource(R.string.vnc_retry))
+                            }
+                        }
+                    }
+                }
+    
+    }
+}
+
+/**
+ * 横屏右侧按键栏：竖排左/中/右 + 滚轮上/下 + 触控板区。
+ * 横屏横向空间富余，把按键拆到画面右侧的窄栏里，画面保持原始纵横比不被压扁。
+ */
+@Composable
+private fun VncControlColumn(
+    viewModel: VncOverlayViewModel,
+    pointerMode: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.semanticColors.cardSurface)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        MouseBarButton(stringResource(R.string.vnc_bar_left), false, { viewModel.clickMouse(0) })
+        MouseBarButton(stringResource(R.string.vnc_bar_middle), false, { viewModel.clickMouse(1) })
+        MouseBarButton(stringResource(R.string.vnc_bar_right), false, { viewModel.clickMouse(2) })
+        MouseBarButton(
+            "▲", false, { viewModel.scrollMouse(-1) },
+            contentDescription = stringResource(R.string.vnc_bar_scroll_up)
+        )
+        MouseBarButton(
+            "▼", false, { viewModel.scrollMouse(1) },
+            contentDescription = stringResource(R.string.vnc_bar_scroll_down)
+        )
+        MouseBarButton(
+            label = stringResource(
+                if (pointerMode == "trackpad") R.string.vnc_bar_pointer_trackpad
+                else R.string.vnc_bar_pointer_direct
+            ),
+            active = pointerMode == "trackpad",
+            onClick = {
+                viewModel.setPointerMode(if (pointerMode == "trackpad") "direct" else "trackpad")
+            },
+        )
+    }
+}
+
+@Composable
+private fun MouseBarButton(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    contentDescription: String? = null,
+) {
+    // 紧凑固定尺寸：TextButton 的默认最小触控尺寸（48dp）+ 默认内边距会把这条
+    // 按键条撑得又高又宽，小窗里直接盖到 VNC 画面（用户 2026-11-18 反馈）。
+    // 这里用 Surface+clickable 完全自控尺寸，绕开 M3 的最小尺寸强制。
+    val shape = RoundedCornerShape(14.dp)
+    var m = Modifier
+        .size(width = 44.dp, height = 30.dp)
+        .clip(shape)
+        .clickable(onClick = onClick)
+    if (contentDescription != null) {
+        m = m.then(Modifier.semantics { this.contentDescription = contentDescription })
+    }
+    Surface(
+        shape = shape,
+        color = if (active) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = m,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (active) MaterialTheme.colorScheme.onPrimary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -389,45 +842,68 @@ private fun VncTitleBar(
     connected: Boolean,
     fullscreen: Boolean,
     specialKeys: Boolean,
+    dragOffset: androidx.compose.runtime.MutableState<Offset>? = null,
     onKeyboardClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .then(
-                if (fullscreen || window.pinned) {
-                    Modifier
-                } else {
-                    Modifier.pointerInput(Unit) {
-                        detectDragGestures(
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                viewModel.dragBy(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
-                            },
-                            onDragEnd = { viewModel.persistGeometry() },
-                        )
-                    }
-                }
-            )
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
+        // 拖动区只覆盖左侧标题：此前拖动手势盖住整条标题栏，点按钮时手指
+        // 微移就触发拖动并消费事件，关闭/缩小/放大按钮怎么点都没反应。
+        Row(
             modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(statusTint(serviceState, connected))
-        )
-        Spacer(modifier = Modifier.width(Spacing.sm))
-        Text(
-            text = stringResource(statusTextRes(serviceState, connected)),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+                .weight(1f)
+                .then(
+                    if (fullscreen || window.pinned) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(Unit) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    // 拖动只累计本地位移，落点一次写回（每帧写 StateFlow 整窗重组掉帧）。
+                                    // dragOffset 为 null（理论上仅全屏）时回退到逐帧写回。
+                                    val target = dragOffset
+                                    if (target != null) target.value += dragAmount
+                                    else viewModel.dragBy(dragAmount.x.toDp().value, dragAmount.y.toDp().value)
+                                },
+                                onDragEnd = {
+                                    val target = dragOffset ?: return@detectDragGestures
+                                    viewModel.dragBy(target.value.x.toDp().value, target.value.y.toDp().value)
+                                    viewModel.persistGeometry()
+                                    target.value = Offset.Zero
+                                },
+                                onDragCancel = {
+                                    val target = dragOffset ?: return@detectDragGestures
+                                    viewModel.dragBy(target.value.x.toDp().value, target.value.y.toDp().value)
+                                    target.value = Offset.Zero
+                                },
+                            )
+                        }
+                    }
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(statusTint(serviceState, connected))
+            )
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Text(
+                text = stringResource(statusTextRes(serviceState, connected)),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
         // 旋转是（全屏）画面专属控制，浮窗状态下不展示，避免误以为它会立刻转屏。
         if (fullscreen) {
             VncTitleAction(
@@ -549,7 +1025,8 @@ private fun MinimizedBall(
     parentWidth: Dp,
     parentHeight: Dp,
 ) {
-    val ballSize = 56.dp
+    // 44dp 紧配：56dp 的圆视觉过大，与 20dp 图标不匹配（用户反馈“底部的圆太大”）。
+    val ballSize = 44.dp
     val ballX = (if (window.offsetX == Float.MIN_VALUE) (parentWidth - ballSize - 12.dp).value else window.offsetX)
         .dp.coerceIn(0.dp, parentWidth - ballSize)
     // 球同样不允许进状态栏：否则最小化后也点不到，用户彻底失去入口。
@@ -557,22 +1034,56 @@ private fun MinimizedBall(
     val ballMinY = with(ballDensity) { WindowInsets.statusBars.getTop(this).toDp() } + 8.dp
     val ballY = (if (window.offsetY == Float.MIN_VALUE) (parentHeight - ballSize - 96.dp).value else window.offsetY)
         .dp.coerceIn(ballMinY, (parentHeight - ballSize).coerceAtLeast(ballMinY))
+    // 最小化后图标可任意拖动（2026-11-18 用户反馈）：与聊天顶栏/底栏重叠时能自己挪开。
+    var bx by remember(window.offsetX) { mutableStateOf(ballX) }
+    var byY by remember(window.offsetY) { mutableStateOf(ballY) }
+    // 拖动只更新 translation：阴影/裁剪在 graphicsLayer 里复用同一 RenderNode。
+    // 每帧只做两次 state 写：位置钳制移到落点一次性 clamp（每帧 coerceIn 的比较与
+    // Dp 运算在低端机上有可感知的拖拽发涩），awaitEachGesture+drag 去掉 touch slop
+    // 死区（down 即跟手），并取代 clickable 双层仲裁（点按/拖动同源判定）。
+    val ballShape = CircleShape
     Box(
         modifier = Modifier
-            .offset { IntOffset(ballX.roundToPx(), ballY.roundToPx()) }
             .size(ballSize)
-            .shadow(4.dp, CircleShape)
-            .clip(CircleShape)
-            .background(MaterialTheme.semanticColors.cardSurface)
-            .border(1.dp, MaterialTheme.semanticColors.subtleBorder, CircleShape)
-            .clickable { viewModel.setMinimized(false) },
+            .graphicsLayer {
+                translationX = bx.toPx()
+                translationY = byY.toPx()
+                shape = ballShape
+                clip = true
+                shadowElevation = 2.dp.toPx()
+            }
+            .background(MaterialTheme.semanticColors.cardSurface, ballShape)
+            .border(1.dp, MaterialTheme.semanticColors.subtleBorder, ballShape)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    var moved = false
+                    drag(down.id) { change ->
+                        val delta = change.positionChange()
+                        if (delta != Offset.Zero) {
+                            change.consume()
+                            moved = true
+                            bx += delta.x.toDp()
+                            byY += delta.y.toDp()
+                        }
+                    }
+                    bx = bx.coerceIn(0.dp, (parentWidth - ballSize).coerceAtLeast(0.dp))
+                    byY = byY.coerceIn(ballMinY, (parentHeight - ballSize).coerceAtLeast(ballMinY))
+                    if (moved) {
+                        viewModel.persistMinimizedBall(bx.value, byY.value)
+                    } else {
+                        viewModel.setMinimized(false)
+                    }
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = FeatherIcons.Monitor,
             contentDescription = stringResource(R.string.vnc_minimized_ball),
             tint = statusTint(serviceState, connected),
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(20.dp),
         )
     }
 }

@@ -174,9 +174,9 @@ data class AgentAttachment(
     val isImage: Boolean
 )
 
-enum class MessageRole {
-    USER, ASSISTANT, TOOL
-}
+/** 权威定义在 domain 层（[com.aicode.feature.agent.domain.model.MessageRole]），此处保留 typealias
+ *  免改 UI 层既有 import，同时让 domain/data 不再反向依赖 presentation。 */
+typealias MessageRole = com.aicode.feature.agent.domain.model.MessageRole
 
 /**
  * 后台任务完成通知的固定前缀。既是

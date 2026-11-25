@@ -1,15 +1,28 @@
 package com.aicode.feature.settings.data.repository
 
+import android.content.Context
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.KeyRotationStrategy
 import com.aicode.feature.settings.domain.model.ProviderKey
 import com.aicode.feature.settings.domain.model.ProviderType
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 class ProviderKeyRotatorTest {
+
+    /** v2 起构造需要 KeyLedger（跨进程持久化冷却状态）；测试里给每个实例配独立临时目录，互不串扰。 */
+    private fun newRotator(): ProviderKeyRotator {
+        val dir = Files.createTempDirectory("keyledger-test").toFile()
+        val context = mockk<Context>()
+        every { context.filesDir } returns dir
+        return ProviderKeyRotator(KeyLedger(context))
+    }
 
     private fun config(
         id: String = "provider-1",
@@ -55,7 +68,7 @@ class ProviderKeyRotatorTest {
     /** 单 Key 直接返回，无需任何选择逻辑。 */
     @Test
     fun activeKey_singleKey_returnsIt() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
 
         assertEquals("key-1", rotator.activeKey(config(), "session-1"))
     }
@@ -63,7 +76,7 @@ class ProviderKeyRotatorTest {
     /** 没有任何可用 Key（单 Key 为空、多 Key 未配置）时返回 null。 */
     @Test
     fun activeKey_emptyKeys_returnsNull() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
 
         assertNull(rotator.activeKey(config(apiKey = ""), "session-1"))
     }
@@ -71,7 +84,7 @@ class ProviderKeyRotatorTest {
     /** 顺序策略：同一会话多次调用粘住同一个 Key（服务端 prompt 缓存按 Key 隔离）。 */
     @Test
     fun activeKey_sequential_sameSessionIsSticky() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         val first = rotator.activeKey(cfg, "session-1")
@@ -83,7 +96,7 @@ class ProviderKeyRotatorTest {
     /** 顺序策略：不同会话都从第一个未冷却 Key 开始。 */
     @Test
     fun activeKey_sequential_newSessionStartsFromFirst() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         assertEquals("key-a", rotator.activeKey(cfg, "session-1"))
@@ -94,7 +107,7 @@ class ProviderKeyRotatorTest {
     /** 轮询策略：新会话轮流取起始 Key。 */
     @Test
     fun activeKey_roundRobin_rotatesStartingKeyPerNewSession() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(
             keys = listOf("key-a", "key-b", "key-c"),
             strategy = KeyRotationStrategy.ROUND_ROBIN
@@ -109,7 +122,7 @@ class ProviderKeyRotatorTest {
     /** 轮询策略下同一会话仍粘住同一个 Key，不随游标漂移。 */
     @Test
     fun activeKey_roundRobin_sameSessionStaysSticky() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(
             keys = listOf("key-a", "key-b"),
             strategy = KeyRotationStrategy.ROUND_ROBIN
@@ -126,7 +139,7 @@ class ProviderKeyRotatorTest {
     /** sessionId 为 null 时不建绑定：轮询策略每次调用都推进游标。 */
     @Test
     fun activeKey_nullSession_roundRobinAdvancesEveryCall() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(
             keys = listOf("key-a", "key-b"),
             strategy = KeyRotationStrategy.ROUND_ROBIN
@@ -140,7 +153,7 @@ class ProviderKeyRotatorTest {
     /** 冷却中的 Key 不被新会话选中。 */
     @Test
     fun activeKey_skipsCoolingDownKey() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"), cooldownMinutes = 60)
 
         // 先建立配置快照并选中 key-a，随后 key-a 连续失败达阈值进入冷却
@@ -157,7 +170,7 @@ class ProviderKeyRotatorTest {
     /** currentKey 返回最近一次 activeKey 选中的 Key。 */
     @Test
     fun currentKey_returnsLastSelectedKey() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         rotator.activeKey(cfg, "session-1") // 选中 key-a
@@ -168,7 +181,7 @@ class ProviderKeyRotatorTest {
     /** currentKey 不推进轮询游标：只读调用后第一个新会话仍从原游标位置起步。 */
     @Test
     fun currentKey_doesNotAdvanceRoundRobinCursor() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(
             keys = listOf("key-a", "key-b"),
             strategy = KeyRotationStrategy.ROUND_ROBIN
@@ -185,7 +198,7 @@ class ProviderKeyRotatorTest {
     /** 冷启动（无任何历史调用）时，currentKey 返回第一个未冷却 Key。 */
     @Test
     fun currentKey_noSelection_returnsFirstUsableKey() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         // currentKey 不依赖 activeKey 建立的配置快照，直接可用
@@ -197,7 +210,7 @@ class ProviderKeyRotatorTest {
     /** 失败即刻切换：不累计计数，首次上报即返回切换结果。 */
     @Test
     fun reportFailure_switchesImmediately() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         rotator.activeKey(cfg, "session-1") // 建立配置快照
@@ -213,7 +226,7 @@ class ProviderKeyRotatorTest {
     /** 失败切换后重绑会话到新 Key：同会话后续调用都用新 Key。 */
     @Test
     fun reportFailure_rebindsSessionToNewKey() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         rotator.activeKey(cfg, "session-1") // key-a
@@ -231,7 +244,7 @@ class ProviderKeyRotatorTest {
     /** 从未建立配置快照（没调用过 activeKey）时直接返回 null。 */
     @Test
     fun reportFailure_withoutPriorSetup_returnsNull() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         assertNull(rotator.reportFailure("provider-1", "session-1", "key-a"))
@@ -240,7 +253,7 @@ class ProviderKeyRotatorTest {
     /** 单 Key 配置无可切换目标：返回 null。 */
     @Test
     fun reportFailure_singleKey_returnsNull() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = config()
 
         rotator.activeKey(cfg, "session-1")
@@ -252,7 +265,7 @@ class ProviderKeyRotatorTest {
     /** 上报不属于该 provider 的 Key：返回 null。 */
     @Test
     fun reportFailure_unknownKey_returnsNull() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"))
 
         rotator.activeKey(cfg, "session-1")
@@ -263,7 +276,7 @@ class ProviderKeyRotatorTest {
     /** 失败切换后，原 Key 进入冷却（冷却时长非零时）。 */
     @Test
     fun reportFailure_switchAppliesCooldown() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"), cooldownMinutes = 60)
 
         rotator.activeKey(cfg, "session-1") // key-a
@@ -277,7 +290,7 @@ class ProviderKeyRotatorTest {
     /** 冷却时长为 0 表示不冷却：切换后原 Key 仍可被新会话选中。 */
     @Test
     fun reportFailure_cooldownZero_noCooldownApplied() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"), cooldownMinutes = 0)
 
         rotator.activeKey(cfg, "s1") // key-a
@@ -291,7 +304,7 @@ class ProviderKeyRotatorTest {
     /** 轮询策略下失败切换同样生效，且切换会继续推进轮询游标。 */
     @Test
     fun reportFailure_roundRobin_switchesAndAdvancesCursor() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(
             keys = listOf("key-a", "key-b", "key-c"),
             strategy = KeyRotationStrategy.ROUND_ROBIN
@@ -309,7 +322,7 @@ class ProviderKeyRotatorTest {
     /** 已试过的 Key 不再重复返回；候选全部试完时返回 null。 */
     @Test
     fun reportFailure_excludesTriedKeysAndReturnsNullWhenExhausted() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b", "key-c"))
 
         rotator.activeKey(cfg, "session-1")
@@ -320,18 +333,23 @@ class ProviderKeyRotatorTest {
         assertNull(switched)
     }
 
-    /** 没有可切换的候选时不冷却当前 Key，避免把最后一个可用 Key 锁死。 */
+    /** 没有可切换的候选时：返回 null，但仍把真实失败记账——key-b 进入冷却，pickKey 返回 AllCooling（v2 语义，避免对锁定中的 Key 续发请求）。 */
     @Test
-    fun reportFailure_noAlternative_doesNotCoolDownCurrentKey() {
-        val rotator = ProviderKeyRotator()
+    fun reportFailure_noAlternative_recordsFailureAndReturnsAllCooling() {
+        val rotator = newRotator()
         val cfg = multiKeyConfig(keys = listOf("key-a", "key-b"), cooldownMinutes = 60)
 
         rotator.activeKey(cfg, "s1") // key-a
         rotator.reportFailure("provider-1", "s1", "key-a") // 切到 key-b，key-a 冷却
 
-        // key-b 是最后一个可用候选：返回 null 且不冷却它
+        // key-b 是最后一个可用候选：无可切换目标返回 null，但失败已记账
         assertNull(rotator.reportFailure("provider-1", "s1", "key-b"))
-        assertEquals("key-b", rotator.activeKey(cfg, "s2"))
+
+        // v2：真实失败必须冷却。全冷却时不再返回 Key，由上层按最早恢复时间等待——
+        // 旧「不锁死最后一个 Key」的豁免会导致对已被限流的 Key 续发请求（NVIDIA 等会指数延长锁定）。
+        val pick = rotator.pickKey(cfg, "s2")
+        assertTrue("期望 AllCooling，实际 $pick", pick is KeyPick.AllCooling)
+        assertTrue((pick as KeyPick.AllCooling).earliestRecoveryAtMs > 0)
     }
 
     // ---------- 加权轮询 ----------
@@ -339,7 +357,7 @@ class ProviderKeyRotatorTest {
     /** 加权轮询：新会话按权重比例分配（1:3 时高权重 Key 约为低权重的三倍）。 */
     @Test
     fun activeKey_weightedRoundRobin_distributesByWeight() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = config(
             apiKeys = listOf(ProviderKey("key-a", 1), ProviderKey("key-b", 3)),
             multiKeyEnabled = true,
@@ -359,7 +377,7 @@ class ProviderKeyRotatorTest {
     /** 权重 ≤ 0 的 Key 不参与调度：轮询下始终不会被选中。 */
     @Test
     fun activeKey_nonPositiveWeightIsExcluded() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = config(
             apiKeys = listOf(ProviderKey("key-a", 0), ProviderKey("key-b", 1)),
             multiKeyEnabled = true,
@@ -374,7 +392,7 @@ class ProviderKeyRotatorTest {
     /** 所有 Key 权重都 ≤ 0 时没有可调度的 Key，返回 null。 */
     @Test
     fun activeKey_allNonPositiveWeights_returnsNull() {
-        val rotator = ProviderKeyRotator()
+        val rotator = newRotator()
         val cfg = config(
             apiKeys = listOf(ProviderKey("key-a", 0), ProviderKey("key-b", 0)),
             multiKeyEnabled = true

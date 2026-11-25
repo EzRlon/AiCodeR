@@ -320,7 +320,10 @@ class EngineProcessRegistry @Inject constructor(
     /** cmdline 形如 `… /bin/sh -c 'exec "$0" "$@"' <program> …`；取 program 位精确比对引擎名。 */
     private fun isEngineInvocation(argv: List<String>, engine: String): Boolean {
         val shellAt = argv.indexOf("/bin/sh")
-        return shellAt >= 0 && argv.getOrNull(shellAt + 3) == engine
+        if (shellAt < 0) return false
+        val program = argv.getOrNull(shellAt + 3) ?: return false
+        // dsh 是 DeepSeek Harness 的 CLI 二进制名，与引擎标识不同名；其余三桥同名
+        return program == engine || (engine == AgentEngines.DEEPSEEK && program == "dsh")
     }
 
     private fun killProcess(process: Process, sessionId: String) {

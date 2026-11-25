@@ -9,6 +9,7 @@ import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.domain.checkpoint.CheckpointManager
 import com.aicode.feature.agent.domain.command.SlashCommandRegistry
+import com.aicode.feature.agent.domain.cliagent.CliAgentManager
 import com.aicode.feature.agent.domain.container.LinuxContainerEngine
 import com.aicode.feature.agent.domain.container.ContainerOsDetector
 import com.aicode.feature.agent.domain.mcp.McpManager
@@ -72,6 +73,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
     private val toolPermissionManager: ToolPermissionManager,
     private val askUserQuestionManager: AskUserQuestionManager,
     private val containerEngine: LinuxContainerEngine,
+    private val cliAgentManager: CliAgentManager,
     private val sessionUseCase: SessionUseCase,
     private val messagePersistenceUseCase: MessagePersistenceUseCase,
     private val planApprovalManager: PlanApprovalManager,
@@ -138,6 +140,7 @@ class ScheduledAgentViewModelProvider @Inject constructor(
         toolPermissionManager,
         askUserQuestionManager,
         containerEngine,
+        cliAgentManager,
         sessionUseCase,
         messagePersistenceUseCase,
         planApprovalManager,

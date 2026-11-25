@@ -503,7 +503,8 @@ object AgentModule {
         eventInjector: AgentEventInjector,
         hookRunner: HookRunner,
         fileAccess: FileAccessProvider,
-        auditRecorder: PermissionAuditRecorder
+        auditRecorder: PermissionAuditRecorder,
+        buildArtifactDelivery: com.aicode.feature.agent.domain.tool.container.BuildArtifactDelivery
     ): AgentWorkflow {
         return StatefulAgentWorkflow(
             toolRegistry,
@@ -531,7 +532,8 @@ object AgentModule {
             eventInjector,
             hookRunner,
             fileAccess,
-            auditRecorder
+            auditRecorder,
+            buildArtifactDelivery
         )
     }
 

@@ -119,7 +119,9 @@ class StatefulAgentWorkflow @Inject constructor(
     private val eventInjector: AgentEventInjector,
     private val hookRunner: HookRunner,
     private val fileAccess: FileAccessProvider,
-    private val auditRecorder: PermissionAuditRecorder
+    private val auditRecorder: PermissionAuditRecorder,
+    /** Bash 命令产出 APK/AAB 时自动构造交付附件（内置机制，不再依赖模型记得调 send_file）。 */
+    private val buildArtifactDelivery: com.aicode.feature.agent.domain.tool.container.BuildArtifactDelivery
 ) : AgentWorkflow {
 
     /**
@@ -130,6 +132,10 @@ class StatefulAgentWorkflow @Inject constructor(
 
     private companion object {
         const val TAG = "StatefulAgentWorkflow"
+
+        /** 本地小模型（llama.cpp）专用极简系统提示：预填充需控制在秒级。 */
+        const val LOCAL_MODEL_SYSTEM_PROMPT =
+            "你是 AiCodeR 的本地助手，运行在用户手机的容器内。用中文简洁回答。你无法调用工具或访问文件，只能基于对话内容回答。"
         const val LIVE_TAIL_CHARS = 4_000
         const val PROGRESS_INTERVAL_MS = 250L
         const val USER_REJECTED_CODE = "USER_REJECTED"
@@ -759,15 +765,25 @@ class StatefulAgentWorkflow @Inject constructor(
         // 当前模型名与上下文窗口在此注入运行时上下文：会话内稳定（换模型才变），不打断 KV Cache。
         val promptStartedNs = System.nanoTime()
         FileLogger.memoryCheckpoint(TAG, "prompt.start", details = "operation=$promptStartedNs")
-        val systemPrompt = withContext(Dispatchers.IO) {
-            promptProvider.build(
-                currentContext.copy(
-                    modelName = aiProvider.model,
-                    modelContextTokens = metadata.contextTokens,
-                    // 本轮输入尚未进入 history，显式传入供世界书等按输入召回的来源使用。
-                    currentUserRequest = userRequest
+        // 本地小模型（llama.cpp，127.0.0.1/localhost）：完整系统提示约 2.6 万字符，实测预填充
+        // 仅 ~68 tok/s（0.8B Q4）需数分钟，且小模型无工具调用能力，工具定义只会增加无效预填充——
+        // 走极简提示并禁用工具。
+        val isLocalProvider = aiProvider.baseUrl.startsWith("http://127.0.0.1") ||
+            aiProvider.baseUrl.startsWith("http://localhost")
+        if (isLocalProvider) currentTools = emptyList()
+        val systemPrompt = if (isLocalProvider) {
+            LOCAL_MODEL_SYSTEM_PROMPT
+        } else {
+            withContext(Dispatchers.IO) {
+                promptProvider.build(
+                    currentContext.copy(
+                        modelName = aiProvider.model,
+                        modelContextTokens = metadata.contextTokens,
+                        // 本轮输入尚未进入 history，显式传入供世界书等按输入召回的来源使用。
+                        currentUserRequest = userRequest
+                    )
                 )
-            )
+            }
         }
         FileLogger.memoryCheckpoint(
             TAG,
@@ -950,6 +966,7 @@ class StatefulAgentWorkflow @Inject constructor(
                                         aiResponse.inputTokens,
                                         aiResponse.outputTokens,
                                         aiResponse.cachedInputTokens,
+                                        aiResponse.cacheCreationTokens,
                                         aiResponse.thinkingBlocksJson ?: "",
                                         attachments = attachments,
                                         messageId = responseMessageId,
@@ -1868,10 +1885,16 @@ class StatefulAgentWorkflow @Inject constructor(
                     }
                 }
                 val result = finalResult ?: ToolResult.Error("流式工具未返回结果", "MISSING_STREAM_RESULT")
+                // 命令类工具：输出里出现构建产物（APK/AAB）即自动构造附件挂到消息上，
+                // 用户在聊天区直接拿到包，不依赖模型再调 send_file。
+                val artifactAttachments = if (toolCall.name == "Bash" && result is ToolResult.Success) {
+                    val outputText = (result.data as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                    buildArtifactDelivery.extract(outputText)
+                } else emptyList()
                 val processed = toolOutputStore.process(toolCall.name, toolCall.id, result)
                 val images = if (result is ToolResult.Success) result.images else emptyList()
                 logToolDuration(toolCall.name, startedAt, processed is ToolResult.Error)
-                ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, images = images)
+                ToolRunResult(processed.toTransportString(), processed is ToolResult.Error, artifactAttachments, images)
             }
         } catch (e: CancellationException) {
             throw e
