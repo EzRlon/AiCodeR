@@ -54,29 +54,31 @@ object KeystoreCipher {
             throw IllegalStateException("keystore 服务不可用：无法确认密钥存在性，拒绝重建", e)
         }
         if (aliasPresent) {
-            // 真实密钥还在：短暂重试扛服务瞬时异常；重试耗尽仍失败则向上抛。
-            // 宁可本次解密失败（密文完好保留在库里，服务恢复后即可解），绝不重建覆盖。
+            // 别名存在 = 真实密钥还在。此时**任何**读取失败（抛异常或返回 null）都只能向上抛，
+            // 绝不允许走到 regenerate——那会覆盖真实密钥、让全部存量密文永久解不开。
+            // 宁可本次解密失败（密文完好保留在库里，keystore 服务恢复后即可解）。
             var lastError: Exception? = null
             repeat(GET_ENTRY_RETRY) { attempt ->
                 try {
-                    return when (val entry = keyStore.getEntry(ALIAS, null)) {
-                        is KeyStore.SecretKeyEntry -> entry.secretKey
-                        // 条目在但不是 AES 密钥（真坏条目，存量密文本就无对应密钥可解）：此时重建无损
-                        else -> {
-                            FileLogger.w(TAG, "alias=$ALIAS 条目类型异常(${entry?.javaClass?.simpleName})，重建密钥")
-                            regenerate(keyStore)
-                        }
-                    }
+                    val entry = keyStore.getEntry(ALIAS, null)
+                    if (entry is KeyStore.SecretKeyEntry) return entry.secretKey
+                    // 返回 null 或非 SecretKeyEntry：视为读取失败（不是「真坏条目可重建」）。
+                    // 历史上正是「按坏条目重建」这一步销毁了用户全部供应商密钥。
+                    lastError = IllegalStateException(
+                        "alias=$ALIAS 已存在但读取结果为 ${entry?.javaClass?.simpleName ?: "null"}，拒绝重建"
+                    )
                 } catch (e: Exception) {
                     lastError = e
-                    runCatching { Thread.sleep(RETRY_DELAY_MS shl attempt) }
                 }
+                FileLogger.w(TAG, "密钥读取第 ${attempt + 1} 次失败：${lastError?.message}")
+                runCatching { Thread.sleep(RETRY_DELAY_MS shl attempt) }
             }
             throw IllegalStateException(
-                "密钥读取连续 $GET_ENTRY_RETRY 次失败（keystore 服务瞬时异常），拒绝重建以免销毁真实密钥",
+                "密钥读取连续 $GET_ENTRY_RETRY 次失败（keystore 服务异常），拒绝重建以免销毁真实密钥",
                 lastError
             )
         }
+        // 走到这里只有一种情况：别名确实不存在（首次安装/用户已清数据），生成新密钥是安全的。
         regenerate(keyStore)
     }
 
