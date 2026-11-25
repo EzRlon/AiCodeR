@@ -106,12 +106,17 @@ class AIProviderRepositoryImpl @Inject constructor(
     }
 
     /**
-     * 解密失败保留策略：新值为空且旧值是「解密失败」的密文时返回旧密文（原样落库），
-     * 否则返回新值。带 [field] 名打 ERROR 日志便于事后定位凭据异常。
+     * 敏感字段覆盖保护（防凭据静默丢失）：
+     * 新值为空、旧值非空 → **一律保留旧密文**，不再区分旧值能否解密。
+     *
+     * 历史教训：旧实现只在「旧值解密失败」时保留。若某一刻 Keystore 解密失败使域模型变空，
+     * 用户只改了名字就保存，而此时 Keystore 恰好恢复（旧密文本可解），空值就会被写回库里，
+     * 明文密钥永久丢失——且失败路径极隐蔽（用户只是改了名称）。
+     * 宁可让「清空密钥」这种极罕见诉求走删除供应商，也不能让一次普通保存销毁凭据。
      */
     private fun preserveUndecryptable(oldValue: String, newValue: String, field: String): String =
-        if (newValue.isEmpty() && KeystoreCipher.isDecryptFailed(oldValue)) {
-            FileLogger.e(TAG, "provider 敏感字段 $field 解密失败且被保存为空：保留原密文不覆盖")
+        if (newValue.isEmpty() && oldValue.isNotEmpty()) {
+            FileLogger.w(TAG, "provider 敏感字段 $field 收到空值而库中有存量密文：保留旧值不覆盖")
             oldValue
         } else {
             newValue
