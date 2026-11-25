@@ -24,6 +24,11 @@
         </intent>
     </queries>
 
+    <!-- 子程序诊断专用权限（signature 级）：同签名子程序自动持有，用于崩溃主动上报的发送方校验。 -->
+    <permission
+        android:name="com.aicoder.permission.SUBPROGRAM_DIAGNOSTIC"
+        android:protectionLevel="signature" />
+
     <application
         android:name=".AIEditorApp"
         android:allowBackup="false"
@@ -124,6 +129,16 @@
         <receiver
             android:name=".feature.agent.presentation.notification.AgentApprovalActionReceiver"
             android:exported="false" />
+
+        <!-- 子程序崩溃主动上报接收器（L2 契约）：android:permission 要求发送方持有下方 signature 权限，第三方 App 伪造广播会被系统拒绝。 -->
+        <receiver
+            android:name=".feature.settings.data.SubprogramCrashReceiver"
+            android:exported="true"
+            android:permission="com.aicoder.permission.SUBPROGRAM_DIAGNOSTIC">
+            <intent-filter>
+                <action android:name="com.aicoder.action.SUBPROGRAM_CRASH" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

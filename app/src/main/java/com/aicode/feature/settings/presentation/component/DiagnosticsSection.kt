@@ -108,6 +108,11 @@ class DiagnosticsViewModel @Inject constructor(
     val subprograms: StateFlow<List<com.aicode.feature.settings.domain.SubprogramRegistry.Subprogram>> =
         _subprograms.asStateFlow()
 
+    /** 子程序崩溃上报统计（包名 → 次数/最近时间），由 SubprogramCrashReceiver 写入。 */
+    private val _crashStats = MutableStateFlow<Map<String, com.aicode.feature.settings.data.SubprogramCrashStore.Stats>>(emptyMap())
+    val crashStats: StateFlow<Map<String, com.aicode.feature.settings.data.SubprogramCrashStore.Stats>> =
+        _crashStats.asStateFlow()
+
     private val _subHealth = mutableStateMapOf<String, Boolean?>()
     val subHealth: Map<String, Boolean?> get() = _subHealth
 
@@ -116,6 +121,7 @@ class DiagnosticsViewModel @Inject constructor(
 
     fun refreshSubprograms() {
         _subprograms.value = subprogramRegistry.load()
+        _crashStats.value = com.aicode.feature.settings.data.SubprogramCrashStore.load(appContext)
     }
 
     /**
@@ -475,6 +481,7 @@ fun DiagnosticsSection(viewModel: DiagnosticsViewModel) {
 @Composable
 private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
     val subprograms by viewModel.subprograms.collectAsStateWithLifecycle()
+    val crashStats by viewModel.crashStats.collectAsStateWithLifecycle()
     val subOpMessage by viewModel.subOpMessage.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -493,12 +500,14 @@ private fun SubprogramDebugCard(viewModel: DiagnosticsViewModel) {
         } else {
             subprograms.forEach { sub ->
                 val health = viewModel.subHealth[sub.name]
+                val crash = crashStats[sub.packageName]
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(sub.name, style = MaterialTheme.typography.bodyMedium)
                         Text(
                             "${sub.packageName} · 端口 ${sub.port}" +
-                                (health?.let { if (it) " · 在线" else " · 不在线" } ?: ""),
+                                (health?.let { if (it) " · 在线" else " · 不在线" } ?: "") +
+                                (crash?.let { " · 上次崩溃 " + crashAge(it.lastAtMs) + "（共" + it.count + "次）" } ?: ""),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -606,5 +615,20 @@ private fun SelfTestReportActions(text: String, context: Context) {
         }) {
             Text("发到会话")
         }
+    }
+}
+
+/** 崩溃相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期。 */
+private fun crashAge(atMs: Long): String {
+    val diff = System.currentTimeMillis() - atMs
+    val minute = 60_000L
+    val hour = 3_600_000L
+    val day = 86_400_000L
+    return when {
+        diff < minute -> "刚刚"
+        diff < hour -> "${diff / minute}分钟前"
+        diff < day -> "${diff / hour}小时前"
+        diff < 30 * day -> "${diff / day}天前"
+        else -> java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()).format(java.util.Date(atMs))
     }
 }

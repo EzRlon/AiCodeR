@@ -6,18 +6,20 @@
 
 1. **依赖**：子程序 `app/build.gradle.kts` 加
    `implementation("org.nanohttpd:nanohttpd:2.3.1")`
-2. **文件**：复制 `SubprogramMcpServer.kt`、`SubprogramMcpService.kt`、`AppContextHolder.kt` 到子程序源码（改包名为子程序包名）
+2. **文件**：复制 `SubprogramMcpServer.kt`、`SubprogramMcpService.kt`、`SubprogramCrashReporter.kt`、`AppContextHolder.kt` 到子程序源码（改包名为子程序包名）
 3. **Manifest**：
    - `<uses-permission android:name="android.permission.INTERNET"/>`
    - `<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>`
    - `<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>`（targetSdk ≥ 34 时必需）
+   - `<uses-permission android:name="com.aicoder.permission.SUBPROGRAM_DIAGNOSTIC"/>`（崩溃主动上报用；signature 级，仅与母程序同签名时自动授予）
    - `<service android:name=".mcp.SubprogramMcpService" android:foregroundServiceType="specialUse" android:exported="true"/>`
      —— exported 必须为 true：母程序「检查」前会跨 App startForegroundService 自动拉起被系统后台管控杀掉的服务；
      服务仅绑 127.0.0.1 且连接受 Bearer token 保护。正式子程序（与母程序同签名）可另加 signature 级自定义 permission 收紧。
 4. **取分配值**：读工作区 `.aicode/subprograms.json`，取母程序预分配的 `port` 与 `token`
 5. **启动**：宿主 Application `onCreate` 调
    `SubprogramMcpService.start(context, port = <分配的port>, token = "<分配的token>")`
-6. **回填**：集成完成后把子程序包名写回 `.aicode/subprograms.json` 对应条目的 `packageName` 字段（母程序体检与工具调用依赖它）
+6. **崩溃上报**：宿主 Application `onCreate` 里调 `SubprogramCrashReporter.install(this)`（覆盖启动期崩溃；不装也会在服务拉起时兕底安装）。崩溃时向母程序发 signature 级广播并落本地 `last-crash.json`，母程序诊断页显示「上次崩溃时间/累计次数」
+7. **回填**：集成完成后把子程序包名写回 `.aicode/subprograms.json` 对应条目的 `packageName` 字段（母程序体检与工具调用依赖它）
 
 ## 安全规则（不可省略）
 

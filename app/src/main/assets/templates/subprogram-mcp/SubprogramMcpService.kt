@@ -24,6 +24,8 @@ class SubprogramMcpService : Service() {
             return START_NOT_STICKY
         }
         AppContextHolder.init(applicationContext)
+        // 兕底：宿主没建 Application 子类时，服务拉起也把崩溃上报装上（幂等）
+        SubprogramCrashReporter.install(applicationContext)
         runCatching {
             server = SubprogramMcpServer(port, token, SubprogramMcpServer.Info(
                 packageName = packageName,
