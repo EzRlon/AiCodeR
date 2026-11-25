@@ -44,6 +44,7 @@ class GeneralSettingsRepository @Inject constructor(
         val FIRST_BYTE_TIMEOUT_SEC_KEY = intPreferencesKey("first_byte_timeout_sec")
         val STREAM_IDLE_TIMEOUT_SEC_KEY = intPreferencesKey("stream_idle_timeout_sec")
         val MAX_NETWORK_RETRIES_KEY = intPreferencesKey("max_network_retries")
+        val ALL_COOLING_WAIT_SEC_KEY = intPreferencesKey("all_cooling_wait_sec")
         val ENTER_TO_SEND_KEY = booleanPreferencesKey("enter_to_send")
         val COMPACTION_THRESHOLD_PERCENT_KEY = intPreferencesKey("compaction_threshold_percent")
         val TOKEN_BUDGET_KEY = intPreferencesKey("token_budget")
@@ -76,6 +77,9 @@ class GeneralSettingsRepository @Inject constructor(
 
         /** 网络重试次数默认 6，与原硬编码值一致。 */
         const val DEFAULT_MAX_NETWORK_RETRIES = 6
+
+        /** 全 Key 冷却时的默认等待上限（秒）。 */
+        const val DEFAULT_ALL_COOLING_WAIT_SEC = 30
 
         /** 自动压缩阈值默认 70%：先于交接触发，靠「保留最近消息 + 摘要」续命，避免动辄换会话变笨。 */
         const val DEFAULT_COMPACTION_THRESHOLD_PERCENT = 70
@@ -182,6 +186,20 @@ class GeneralSettingsRepository @Inject constructor(
 
     /** 装配 provider 前读取一次最大重试次数。 */
     suspend fun maxNetworkRetries(): Int = maxNetworkRetriesFlow.first()
+
+    /**
+     * 供应商全部 Key 冷却时的最长等待（秒）；默认 30。跑后台任务（goal/定时/子代理）
+     * 的用户可调大到 600 以内，避免长任务因「全冷却」报错中断。
+     */
+    val allCoolingWaitSecFlow: Flow<Int> =
+        context.generalDataStore.data.map { it[ALL_COOLING_WAIT_SEC_KEY] ?: DEFAULT_ALL_COOLING_WAIT_SEC }
+
+    suspend fun allCoolingWaitMs(): Long =
+        allCoolingWaitSecFlow.first().coerceIn(0, 3_600).toLong() * 1_000L
+
+    suspend fun setAllCoolingWaitSec(seconds: Int) {
+        context.generalDataStore.edit { it[ALL_COOLING_WAIT_SEC_KEY] = seconds.coerceIn(0, 3_600) }
+    }
 
     /** 备份快照：最大重试次数。 */
     suspend fun maxNetworkRetriesSnapshot(): Int = maxNetworkRetriesFlow.first()

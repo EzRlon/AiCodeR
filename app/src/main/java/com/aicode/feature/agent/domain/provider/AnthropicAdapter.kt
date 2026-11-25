@@ -38,6 +38,7 @@ class AnthropicAdapter @Inject constructor(
 
     override var apiKey = ""
     override var keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? = null
+    override var usageReporter: ((key: String, tokensIn: Long, tokensOut: Long, rateLimitHeaders: List<Pair<String, String>>?) -> Unit)? = null
     override var baseUrl = "https://api.anthropic.com/"
     override var useFullUrl = false
     override var useResponseApi = false
@@ -148,6 +149,7 @@ class AnthropicAdapter @Inject constructor(
         }
 
         reasoningWireUsed = thinkingPlan.effectiveEffort
+        usageReporter?.invoke(apiKey, response.usage.input_tokens.toLong(), response.usage.output_tokens.toLong(), null)
         return AIResponse(content = contentText, toolCalls = toolCalls, stopReason = response.stop_reason, stopDetail = response.stop_details?.explanation, reasoning = thinkingText.ifEmpty { null }, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks), inputTokens = UsageNormalizer.anthropic(response.usage.input_tokens, response.usage.cache_read_input_tokens, response.usage.cache_creation_input_tokens, response.usage.output_tokens).inputTokens, outputTokens = response.usage.output_tokens, cachedInputTokens = response.usage.cache_read_input_tokens ?: 0, cacheCreationTokens = response.usage.cache_creation_input_tokens ?: 0)
     }
 
@@ -383,6 +385,7 @@ class AnthropicAdapter @Inject constructor(
                 ToolCall(id = acc.id, name = acc.name, arguments = parseArgs(acc.args.toString()))
             }
             reasoningWireUsed = thinkingPlan.effectiveEffort
+            usageReporter?.invoke(apiKey, streamInputTokens.toLong(), streamOutputTokens.toLong(), null)
             emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = stopReason, stopDetail = stopDetail, signature = signature, thinkingBlocksJson = encodeThinkingBlocks(thinkingBlocks.values.map { it.toBlock() }), inputTokens = UsageNormalizer.anthropic(streamInputTokens, streamCachedInputTokens, streamCacheCreationTokens, streamOutputTokens).inputTokens, outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, cacheCreationTokens = streamCacheCreationTokens)))
                     }
                 },

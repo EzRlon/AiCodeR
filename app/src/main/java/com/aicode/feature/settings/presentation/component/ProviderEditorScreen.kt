@@ -4,6 +4,7 @@ import com.aicode.core.ui.rememberSheetFlingFix
 import com.aicode.core.ui.settings.ModelSearchField
 import com.aicode.core.ui.settings.SettingsGroup
 import com.aicode.core.ui.settings.SettingsGroupHeader
+import com.aicode.feature.settings.data.repository.KeyRuntimeSnapshot
 import com.aicode.core.ui.settings.SettingsRow
 import com.aicode.core.ui.settings.SettingsDivider
 import com.aicode.core.ui.settings.settingsPageBackground
@@ -105,6 +106,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
@@ -1136,6 +1140,7 @@ fun ProviderEditorScreen(
             strategy = keyRotationStrategy,
             cooldownMinutes = keyCooldownMinutes,
             switchStatusCodes = keySwitchStatusCodes,
+            snapshots = viewModel.keySnapshots(providerId, apiKeys.map { it.value }),
             onBack = { showKeysPage = false },
             onSetStrategy = { keyRotationStrategy = it },
             onSetCooldownMinutes = { keyCooldownMinutes = it },
@@ -2172,6 +2177,7 @@ private fun ProviderKeysPage(
     strategy: KeyRotationStrategy,
     cooldownMinutes: Int,
     switchStatusCodes: String,
+    snapshots: List<KeyRuntimeSnapshot> = emptyList(),
     onBack: () -> Unit,
     onSetStrategy: (KeyRotationStrategy) -> Unit,
     onSetCooldownMinutes: (Int) -> Unit,
@@ -2237,6 +2243,12 @@ private fun ProviderKeysPage(
         ) {
             item {
                 SettingsGroupHeader(text = stringResource(R.string.provider_multi_key_list))
+            }
+
+            if (snapshots.any { it.totalRequests > 0 || it.coolingDown }) {
+                item {
+                    ProviderKeyStatusCard(snapshots)
+                }
             }
 
             if (keys.isEmpty()) {
@@ -2467,6 +2479,75 @@ private fun String.maskedKeyPreview(): String = when {
     isBlank() -> ""
     length <= 8 -> "******"
     else -> "${take(2)}*****..."
+}
+
+/**
+ * Key 运行状态卡：每个 Key 一行，展示冷却状态、今日请求/Token 与 429 次数。
+ * 数据来自内存账本快照（进入页面时取一次），只在有真实运行数据时展示；
+ * Key 只露账本里的 hash 尾号，不回显明文。
+ */
+@Composable
+private fun ProviderKeyStatusCard(snapshots: List<KeyRuntimeSnapshot>) {
+    val clock = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    SettingsGroup {
+        Text(
+            text = stringResource(R.string.provider_key_status_header),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+        )
+        snapshots.forEachIndexed { index, snapshot ->
+            if (index > 0) SettingsDivider()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Key #${index + 1} · …${snapshot.keyHash.takeLast(6)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = buildString {
+                            append(stringResource(R.string.provider_key_status_today, snapshot.dayRequests))
+                            if (snapshot.dayTokensIn > 0 || snapshot.dayTokensOut > 0) {
+                                append(" · ")
+                                append(formatKeyTokenCount(snapshot.dayTokensIn + snapshot.dayTokensOut))
+                            }
+                            if (snapshot.day429 > 0) append(" · 429×${snapshot.day429}")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = when {
+                        snapshot.authFailed -> stringResource(R.string.provider_key_status_auth_invalid)
+                        snapshot.coolingDown -> stringResource(
+                            R.string.provider_key_status_cooling,
+                            clock.format(Date(snapshot.coolUntilMs))
+                        )
+                        else -> stringResource(R.string.provider_key_status_ok)
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = when {
+                        snapshot.authFailed -> MaterialTheme.colorScheme.error
+                        snapshot.coolingDown -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.primary
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun formatKeyTokenCount(tokens: Long): String = when {
+    tokens >= 1_000_000 -> "${tokens / 1_000_000}M tok"
+    tokens >= 1_000 -> "${tokens / 1_000}k tok"
+    else -> "${tokens} tok"
 }
 
 /** 分组内数字步进行：标题 + 副标题，右侧「− 值 +」。 */

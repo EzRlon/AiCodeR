@@ -1,15 +1,28 @@
 package com.aicode.feature.agent.domain.provider
 
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.remote.anthropic.AnthropicApi
 import com.aicode.feature.agent.data.remote.gemini.GeminiApi
 import com.aicode.feature.agent.data.remote.openai.OpenAIApi
 import com.aicode.feature.settings.data.remote.ModelMetadataService
 import com.aicode.feature.settings.data.repository.GeneralSettingsRepository
+import com.aicode.feature.settings.data.repository.CooldownProfile
+import com.aicode.feature.settings.data.repository.KeyFailureKind
+import com.aicode.feature.settings.data.repository.KeyPick
 import com.aicode.feature.settings.data.repository.ProviderKeyRotator
+import com.aicode.feature.settings.data.repository.RateLimitBody
+import com.aicode.feature.settings.data.repository.RateLimitHeaders
+import com.aicode.feature.settings.data.repository.RateLimitInfo
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.ProviderType
+import kotlinx.coroutines.delay
+import retrofit2.HttpException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.random.Random
 
 /**
  * 独立的 [AIProvider] 实例工厂。
@@ -43,8 +56,17 @@ class AIProviderFactory @Inject constructor(
         }
         // 多 Key 模式下由轮换器决定本次用哪个 Key（会话内粘住，Key 不可用时切下一个并重发）。
         val activeKeys = config.effectiveApiKeys
-        provider.apiKey = keyRotator.activeKey(config, sessionId)
-            ?: throw IllegalStateException("「${config.name}」的 Key 均在冷却中，请稍后重试")
+        provider.apiKey = awaitHealthyKey(config, sessionId)
+        // 成功请求的用量/限速头记账：Key 账本据此维护冷却、剩余额度预判与统计。
+        provider.usageReporter = { key, tokensIn, tokensOut, headers ->
+            keyRotator.reportSuccess(
+                config.id,
+                key,
+                tokensIn,
+                tokensOut,
+                headers?.let { RateLimitHeaders.parse(it) }
+            )
+        }
         // 只有真正的多 Key 才需要自动切换：单 Key 冷却后没有可切换目标，只会把用户锁死一段时间。
         val keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? =
             if (activeKeys.size > 1) {
@@ -52,14 +74,43 @@ class AIProviderFactory @Inject constructor(
                     if (!error.isKeySwitchFailure(config.effectiveKeySwitchStatusCodes)) {
                         null
                     } else {
-                        val switched = keyRotator.reportFailure(config.id, sessionId, failedKey, triedKeys)
-                        if (switched == null) {
-                            throw AllKeysFailedException(
-                                "「${config.name}」的 ${activeKeys.size} 个 Key 均失败：${error.message ?: error.javaClass.simpleName}",
-                                error
-                            )
+                        val switched = keyRotator.reportFailure(
+                            config.id,
+                            sessionId,
+                            failedKey,
+                            triedKeys,
+                            kind = keyFailureKindOf(error),
+                            rateLimit = extractRateLimit(error),
+                            profile = cooldownProfileOf(config.baseUrl)
+                        )
+                        if (switched != null) {
+                            KeySwitchOutcome(switched.newKey, switched.newIndex, switched.total)
+                        } else {
+                            // 没有健康候选：区分「全部冷却」（等最早恢复后重试）与「没得等」（直接报全部失败）。
+                            // 不能把控制权交回退避重试——那会对冷却中的 Key 继续发请求，
+                            // 在 NVIDIA 这类账号上会让锁定时间指数延长。
+                            val earliest = keyRotator.earliestRecovery(config, triedKeys + failedKey)
+                            if (earliest <= 0L) {
+                                throw AllKeysFailedException(
+                                    "「${config.name}」的 ${activeKeys.size} 个 Key 均失败：${error.message ?: error.javaClass.simpleName}",
+                                    error
+                                )
+                            }
+                            waitForRecovery(config, earliest)
+                            when (val retryPick = keyRotator.pickKey(config, sessionId)) {
+                                is KeyPick.Available -> {
+                                    FileLogger.i(
+                                        WAIT_TAG,
+                                        "「${config.name}」全 Key 冷却，等待后恢复：改用第 ${retryPick.index}/${retryPick.total} 个 Key"
+                                    )
+                                    KeySwitchOutcome(retryPick.key, retryPick.index, retryPick.total)
+                                }
+                                is KeyPick.AllCooling -> throw AllKeysFailedException(
+                                    allCoolingMessage(config, retryPick.earliestRecoveryAtMs),
+                                    error
+                                )
+                            }
                         }
-                        KeySwitchOutcome(switched.newKey, switched.newIndex, switched.total)
                     }
                 }
             } else {
@@ -82,5 +133,136 @@ class AIProviderFactory @Inject constructor(
         provider.streamIdleTimeoutMs = generalSettingsRepository.streamIdleTimeoutMs()
         provider.maxNetworkRetries = generalSettingsRepository.maxNetworkRetries()
         return provider
+    }
+
+    /**
+     * 取一个健康的 Key；全部冷却时等最早恢复的那个（有上限），到点后重选一次。
+     * 恢复不了就带「最早恢复时间」报错，而不是含糊的「稍后重试」。
+     */
+    private suspend fun awaitHealthyKey(config: AIProviderConfig, sessionId: String?): String {
+        when (val pick = keyRotator.pickKey(config, sessionId)) {
+            is KeyPick.Available -> return pick.key
+            is KeyPick.AllCooling -> {
+                if (pick.total <= 0) {
+                    throw IllegalStateException("「${config.name}」没有可用的 API Key")
+                }
+                if (pick.earliestRecoveryAtMs <= 0L) {
+                    throw IllegalStateException("「${config.name}」的 Key 均在冷却中，请稍后重试")
+                }
+                waitForRecovery(config, pick.earliestRecoveryAtMs)
+                when (val retry = keyRotator.pickKey(config, sessionId)) {
+                    is KeyPick.Available -> {
+                        FileLogger.i(
+                            WAIT_TAG,
+                            "「${config.name}」全 Key 冷却，等待后恢复：改用第 ${retry.index}/${retry.total} 个 Key"
+                        )
+                        return retry.key
+                    }
+                    is KeyPick.AllCooling -> throw IllegalStateException(
+                        allCoolingMessage(config, retry.earliestRecoveryAtMs)
+                    )
+                }
+            }
+        }
+    }
+
+    /** 等到恢复点再错开一点随机抖动，避免多会话同时醒来集中打同一个刚恢复的 Key。 */
+    private suspend fun waitForRecovery(config: AIProviderConfig, earliestRecoveryAtMs: Long) {
+        val cap = runCatching { generalSettingsRepository.allCoolingWaitMs() }
+            .getOrDefault(ALL_COOLING_WAIT_CAP_MS)
+        val waitMs = (earliestRecoveryAtMs - System.currentTimeMillis()).coerceIn(0L, cap)
+        if (waitMs <= 0L) return
+        val jitter = Random.nextLong(200L, 1_200L)
+        FileLogger.i(
+            WAIT_TAG,
+            "「${config.name}」全部 Key 冷却中，等待恢复 ${waitMs}ms（最早 ${formatClock(earliestRecoveryAtMs)}）"
+        )
+        delay(waitMs + jitter)
+    }
+
+    private fun allCoolingMessage(config: AIProviderConfig, earliestRecoveryAtMs: Long): String {
+        val remainMin = ((earliestRecoveryAtMs - System.currentTimeMillis()).coerceAtLeast(0L) + 59_999) / 60_000
+        return "「${config.name}」的全部 Key 都在限流冷却中，最早 ${formatClock(earliestRecoveryAtMs)} 恢复（约 $remainMin 分钟后）"
+    }
+
+    private fun formatClock(epochMs: Long): String =
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
+
+    /**
+     * 从异常链里的 HttpException 提取限速信号：响应头（OpenAI/Anthropic 类）优先，
+     * 错误体补充（Gemini 的 RetryDelay、DeepSeek/中转站的 JSON 字段与消息文本）。
+     * 头缺失时错误体往往拿得到——这是「广泛适配」的主力信号。
+     */
+    private fun extractRateLimit(error: Throwable): RateLimitInfo? {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 5) {
+            if (current is HttpException) {
+                val raw = current.response()?.raw()
+                val headerInfo = raw?.headers?.let { RateLimitHeaders.parse(it.toList()) } ?: RateLimitInfo()
+                val bodyInfo = runCatching { raw?.peekBody(BODY_PEEK_BYTES)?.string() }
+                    .getOrNull()
+                    ?.let { RateLimitBody.parse(it) }
+                    ?: RateLimitInfo()
+                val merged = RateLimitInfo(
+                    retryAfterMs = headerInfo.retryAfterMs ?: bodyInfo.retryAfterMs,
+                    remainingRequests = headerInfo.remainingRequests ?: bodyInfo.remainingRequests,
+                    resetAfterMs = headerInfo.resetAfterMs,
+                    remainingTokens = headerInfo.remainingTokens
+                )
+                return if (merged.isEmpty) null else merged
+            }
+            current = current.cause
+            depth++
+        }
+        return null
+    }
+
+    /**
+     * 按 baseUrl 识别限速画像：官方分钟窗口型域用 AGGRESSIVE（短冷却起步靠样本收敛），
+     * NVIDIA 类惩罚延长型与未知中转站用 CONSERVATIVE（保守序列，宁可多等）。
+     * 识别只影响「无服务端信号时的起点」；有头/体信号时一律用精确值。
+     */
+    private fun cooldownProfileOf(baseUrl: String): CooldownProfile {
+        val host = runCatching { java.net.URI(baseUrl).host?.lowercase(Locale.US) }
+            .getOrNull()
+            ?: return CooldownProfile.CONSERVATIVE
+        return if (AGGRESSIVE_HOSTS.any { host == it || host.endsWith(".$it") }) {
+            CooldownProfile.AGGRESSIVE
+        } else {
+            CooldownProfile.CONSERVATIVE
+        }
+    }
+
+    /** 401/403 归因为凭据失效；其余（429/quota）按限流处理。 */
+    private fun keyFailureKindOf(error: Throwable): KeyFailureKind {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 5) {
+            if (current is HttpException && (current.code() == 401 || current.code() == 403)) {
+                return KeyFailureKind.AUTH
+            }
+            current = current.cause
+            depth++
+        }
+        return KeyFailureKind.RATE_LIMIT
+    }
+
+    private companion object {
+        const val WAIT_TAG = "ProviderKeyWait"
+
+        /** 全冷却等待上限：交互会话不宜无限挂起；后台任务同样先以该值为准。 */
+        const val ALL_COOLING_WAIT_CAP_MS = 30_000L
+
+        /** 429 错误体最多读 16KB 足够覆盖 JSON 关键字段。 */
+        const val BODY_PEEK_BYTES = 16 * 1024L
+
+        /** 分钟窗口型官方域：无头信号时用短冷却起步（其余域保守）。 */
+        val AGGRESSIVE_HOSTS = setOf(
+            "openai.com",
+            "anthropic.com",
+            "generativelanguage.googleapis.com",
+            "deepseek.com"
+        )
     }
 }

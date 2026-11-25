@@ -13,7 +13,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.HttpException
-import retrofit2.await
+import retrofit2.awaitResponse
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.ConnectException
@@ -59,10 +59,20 @@ class FirstContentGuard {
         if (closed) closeBody()
     }
 
-    suspend fun awaitBody(call: retrofit2.Call<okhttp3.ResponseBody>): okhttp3.ResponseBody {
+    /**
+     * 执行流式调用并返回 body。[onResponseHeaders] 在收到响应后立即回调（Key 轮换的限速头记账用），
+     * 此时响应头已完整可读、body 尚未消费。
+     */
+    suspend fun awaitBody(
+        call: retrofit2.Call<okhttp3.ResponseBody>,
+        onResponseHeaders: ((okhttp3.Headers) -> Unit)? = null
+    ): okhttp3.ResponseBody {
         cancelCall = { call.cancel() }
         if (closed) call.cancel()
-        return call.await()
+        val response = call.awaitResponse()
+        onResponseHeaders?.invoke(response.headers())
+        if (!response.isSuccessful) throw HttpException(response)
+        return response.body() ?: throw HttpException(response)
     }
 
     fun receivedContent() {

@@ -105,6 +105,7 @@ import com.aicode.feature.settings.data.repository.ImageGenModelSettingsReposito
 import com.aicode.feature.settings.data.repository.VisionModelSettingsRepository
 import com.aicode.feature.workspace.domain.model.RemoteConnection
 import com.aicode.feature.workspace.domain.repository.RemoteRepository
+import com.aicode.feature.settings.data.repository.ProviderKeyRotator
 import com.aicode.feature.settings.domain.model.AIProviderConfig
 import com.aicode.feature.settings.domain.model.DashboardContext
 import com.aicode.feature.settings.domain.model.ModelMetadata
@@ -388,6 +389,7 @@ private fun padTrend(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val keyRotator: com.aicode.feature.settings.data.repository.ProviderKeyRotator,
     private val workspaceRepository: com.aicode.feature.workspace.data.repository.WorkspaceRepository,
     private val voiceSettingsRepository: VoiceSettingsRepository,
     private val voskModelManager: VoskModelManager,
@@ -1497,6 +1499,14 @@ class SettingsViewModel @Inject constructor(
     /** 从标准 mcpServers JSON 批量导入到指定作用域；同名覆盖。 */
     fun importMcpServersFromJson(raw: String, scope: McpScope) =
         mcpState.importMcpServersFromJson(context, raw, scope)
+
+    /**
+     * 供应商每个 Key 的运行时画像（冷却/惩罚/用量），供 Key 管理页的「运行状态」卡展示。
+     * 按明文 Key 值对齐（编辑页里用户可能尚未保存配置）；每次进入页面调用一次，
+     * 停留期间不实时刷新（账本本身在后台持续记录）。
+     */
+    fun keySnapshots(providerId: String, keyValues: List<String>): List<com.aicode.feature.settings.data.repository.KeyRuntimeSnapshot> =
+        keyRotator.snapshots(providerId, keyValues)
 
     fun clearMcpImportState() = mcpState.clearMcpImportState()
 

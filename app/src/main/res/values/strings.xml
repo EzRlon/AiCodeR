@@ -3098,6 +3098,11 @@
     <string name="provider_multi_key_status_codes">自动切换状态码</string>
     <string name="provider_multi_key_status_codes_hint">逗号分隔，留空使用默认 401,402,403,429</string>
     <string name="provider_multi_key_cooldown">冷却时长</string>
+    <string name="provider_key_status_header">运行状态（最近真实请求）</string>
+    <string name="provider_key_status_ok">正常</string>
+    <string name="provider_key_status_cooling">冷却至 %1$s</string>
+    <string name="provider_key_status_auth_invalid">凭据失效</string>
+    <string name="provider_key_status_today">今日 %1$d 次</string>
     <string name="provider_multi_key_cooldown_desc">被切走的 Key 隔多久重新纳入候选</string>
     <string name="provider_multi_key_cooldown_value">%1$d 分钟</string>
     <string name="provider_multi_key_cooldown_off">不冷却</string>

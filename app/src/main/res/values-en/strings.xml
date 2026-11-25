@@ -3062,6 +3062,11 @@
     <string name="provider_multi_key_status_codes">Auto-Switch Status Codes</string>
     <string name="provider_multi_key_status_codes_hint">Comma-separated; leave empty for default 401,402,403,429</string>
     <string name="provider_multi_key_cooldown">Cooldown</string>
+    <string name="provider_key_status_header">Runtime status (recent real requests)</string>
+    <string name="provider_key_status_ok">OK</string>
+    <string name="provider_key_status_cooling">Cooling until %1$s</string>
+    <string name="provider_key_status_auth_invalid">Auth invalid</string>
+    <string name="provider_key_status_today">Today %1$d req</string>
     <string name="provider_multi_key_cooldown_desc">How long a switched-away key stays out of the pool</string>
     <string name="provider_multi_key_cooldown_value">%1$d min</string>
     <string name="provider_multi_key_cooldown_off">None</string>
