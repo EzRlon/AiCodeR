@@ -41,7 +41,15 @@ class SubprogramMcpServer(
         if (session.method != Method.POST) {
             return json(405, error("method_not_allowed", "POST only"))
         }
-        val body = session.inputStream.readBytes().toString(Charsets.UTF_8)
+        // 必须用 parseBody：按 Content-Length 读 body；直接读 inputStream 会等 EOF，
+        // keep-alive 连接等不到，阻塞至 NanoHTTPD 读超时后连接被静默关闭（空回复）
+        val files = HashMap<String, String>()
+        val body = runCatching {
+            session.parseBody(files)
+            files["postData"].orEmpty()
+        }.getOrElse {
+            return json(400, error("parse_error", "invalid body"))
+        }
         val req = runCatching { JSONObject(body) }.getOrElse {
             return json(400, error("parse_error", "invalid json"))
         }
