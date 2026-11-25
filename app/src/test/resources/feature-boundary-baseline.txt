@@ -10,7 +10,6 @@ app/src/main/java/com/aicode/feature/agent/presentation/component/ChatHeaderComp
 app/src/main/java/com/aicode/feature/agent/presentation/component/ChatInputBar.kt|import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 app/src/main/java/com/aicode/feature/agent/presentation/component/ChatInputBar.kt|import com.aicode.feature.workspace.presentation.component.WorkspaceIconButton
 app/src/main/java/com/aicode/feature/agent/presentation/component/ChatModelSheet.kt|import com.aicode.feature.settings.presentation.component.ModelLogoIcon
-app/src/main/java/com/aicode/feature/agent/presentation/component/ChatModelSheet.kt|import com.aicode.feature.settings.presentation.component.ModelSelectionContent
 app/src/main/java/com/aicode/feature/agent/presentation/component/EngineUi.kt|import com.aicode.feature.settings.presentation.component.ModelLogoIcon
 app/src/main/java/com/aicode/feature/annotation/presentation/component/AnnotationCanvasScreen.kt|import com.aicode.feature.fixledger.presentation.FixLedgerViewModel
 app/src/main/java/com/aicode/feature/annotation/presentation/component/AnnotationLedgerPanel.kt|import com.aicode.feature.fixledger.presentation.FixLedgerViewModel
@@ -26,6 +25,7 @@ app/src/main/java/com/aicode/feature/schedule/presentation/component/ScheduleShe
 app/src/main/java/com/aicode/feature/settings/presentation/component/AboutSection.kt|import com.aicode.feature.disclaimer.presentation.DisclaimerDialog
 app/src/main/java/com/aicode/feature/settings/presentation/component/AboutSection.kt|import com.aicode.feature.disclaimer.presentation.DisclaimerMode
 app/src/main/java/com/aicode/feature/settings/presentation/component/DefaultModelsSection.kt|import com.aicode.feature.agent.presentation.AgentCliViewModel
+app/src/main/java/com/aicode/feature/settings/presentation/component/DiagnosticsSection.kt|import com.aicode.feature.agent.presentation.AIAgentViewModel
 app/src/main/java/com/aicode/feature/settings/presentation/component/EnginePluginsSection.kt|import com.aicode.feature.store.presentation.StoreViewModel
 app/src/main/java/com/aicode/feature/settings/presentation/component/NativePluginsSection.kt|import com.aicode.feature.plugin.presentation.PluginViewModel
 app/src/main/java/com/aicode/feature/settings/presentation/component/PluginDetailSection.kt|import com.aicode.feature.plugin.presentation.PluginViewModel
@@ -38,3 +38,5 @@ app/src/main/java/com/aicode/feature/settings/presentation/component/SettingsScr
 app/src/main/java/com/aicode/feature/settings/presentation/component/SettingsScreen.kt|import com.aicode.feature.schedule.presentation.component.ScheduledTasksSection
 app/src/main/java/com/aicode/feature/settings/presentation/component/SettingsScreen.kt|import com.aicode.feature.terminal.presentation.component.TerminalSettingsSheet
 app/src/main/java/com/aicode/feature/settings/presentation/component/StorageSection.kt|import com.aicode.feature.agent.presentation.component.openLocalFile
+app/src/main/java/com/aicode/feature/store/presentation/component/StoreScreen.kt|import com.aicode.feature.agent.presentation.component.engineBrandColor
+app/src/main/java/com/aicode/feature/store/presentation/component/StoreScreen.kt|import com.aicode.feature.agent.presentation.component.engineShortLabel
