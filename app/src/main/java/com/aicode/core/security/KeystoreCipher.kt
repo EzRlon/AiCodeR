@@ -38,7 +38,13 @@ object KeystoreCipher {
 
     private fun secretKey(): SecretKey = synchronized(lock) {
         val keyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
-        (keyStore.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey ?: run {
+        // 部分 Android 版本（实测 API 37 设备）在 keystore 服务异常时，getEntry 会把密钥条目
+        // 误判为证书条目并构造 TrustedCertificateEntry(null) 抛 NPE，直接炸崩调用线程；
+        // 这里按「密钥不可用」处理，走下方重建路径。
+        val existing = runCatching {
+            (keyStore.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+        }.getOrNull()
+        existing ?: run {
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER)
             generator.init(
                 KeyGenParameterSpec.Builder(
@@ -50,7 +56,11 @@ object KeystoreCipher {
                     .setKeySize(256)
                     .build()
             )
-            generator.generateKey()
+            runCatching { generator.generateKey() }.getOrElse {
+                // alias 被坏条目占用时生成会失败：清掉后重试一次
+                runCatching { keyStore.deleteEntry(ALIAS) }
+                generator.generateKey()
+            }
         }
     }
 
