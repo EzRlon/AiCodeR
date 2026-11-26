@@ -1904,9 +1904,8 @@ private const val TEAM_AUTO_SCROLL_INTERVAL_MS = 3_000L
 /** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
 private const val VOICE_BRANCH_DX_DP = 50f
 
-/** 底部扇形舞台高度与弧带线宽（dp）：半径 = 舞台高度，圆心在屏幕角落；对照微信翼尺寸取小弧带。 */
-private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 104
-private const val VOICE_STAGE_SECTOR_STROKE_DP = 34
+/** 底部双翼舞台高度（dp）：翼高为它的 68%（激活 92%），翼宽 = 屏宽 46%。 */
+private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 160
 
 /** 长按语音的手势分支：SEND=原地松手发送；CANCEL=取消丢弃；TRANSCRIBE=识别结果填回输入框不发送。 */
 internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
@@ -2020,65 +2019,76 @@ internal fun VoiceHoldStage(
                 )
             }
 
-            // 底部扇形：左取消（滑左）、右转文字（滑右/上滑）；高亮跟随手势分支。
-            // 几何：圆心在屏幕左下/右下角，半径 = 舞台高度，弧带自角落向内上括；
-            // 文字落在弧带中线 45° 处（微信同款）。
+            // 底部双翼（微信同款）：不是圆环弧带，是填充曲面楔形——从侧边高处起、
+            // 凸弧扫向底部中间、底边贴屏幕底；激活侧放大提亮，文字黑字落在翼内。
             Canvas(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
                     .height(VOICE_STAGE_SECTOR_HEIGHT_DP.dp)
             ) {
-                val stroke = VOICE_STAGE_SECTOR_STROKE_DP.dp.toPx()
-                val radius = size.height
-                val leftActive = dragTarget == VoiceDragTarget.CANCEL
-                val rightActive = dragTarget == VoiceDragTarget.TRANSCRIBE
-                val sectorColor = { active: Boolean ->
-                    if (active) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f)
+                val h = if (dragTarget == VoiceDragTarget.CANCEL) {
+                    size.height * 0.92f
+                } else {
+                    size.height * 0.68f
                 }
-                // 左翼：圆心 (0, H)，弧段 270°→360°（自顶部到右下）
-                drawArc(
-                    color = sectorColor(leftActive),
-                    startAngle = 270f,
-                    sweepAngle = 90f,
-                    useCenter = false,
-                    topLeft = Offset(-radius, size.height - radius),
-                    size = Size(radius * 2f, radius * 2f),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round)
-                )
-                // 右翼：圆心 (W, H)，弧段 180°→270°（自左下到顶部），镜像
-                drawArc(
-                    color = sectorColor(rightActive),
-                    startAngle = 180f,
-                    sweepAngle = 90f,
-                    useCenter = false,
-                    topLeft = Offset(size.width - radius, size.height - radius),
-                    size = Size(radius * 2f, radius * 2f),
-                    style = Stroke(width = stroke, cap = StrokeCap.Round)
-                )
-                // 文字锚在弧带中线 45° 方向：midRadius·sin45，基线下移半行使视觉居中
-                val midRadius = radius - stroke / 2f
-                val dx = midRadius * 0.7071f
+                val hR = if (dragTarget == VoiceDragTarget.TRANSCRIBE) {
+                    size.height * 0.92f
+                } else {
+                    size.height * 0.68f
+                }
+                val span = size.width * 0.46f
+                val leftColor = if (dragTarget == VoiceDragTarget.CANCEL) {
+                    Color.White.copy(alpha = 0.95f)
+                } else {
+                    Color.White.copy(alpha = 0.38f)
+                }
+                val rightColor = if (dragTarget == VoiceDragTarget.TRANSCRIBE) {
+                    Color.White.copy(alpha = 0.95f)
+                } else {
+                    Color.White.copy(alpha = 0.38f)
+                }
+                // 左翼：左缘 (0, H−h) 起，凸弧（控制点在中部上方）扫到底部 (span, H)，沿底边闭合
+                val leftPath = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(0f, size.height - h)
+                    quadraticBezierTo(
+                        span * 0.45f, size.height - h,
+                        span, size.height
+                    )
+                    lineTo(0f, size.height)
+                    close()
+                }
+                drawPath(leftPath, leftColor)
+                // 右翼镜像：右缘 (W, H−hR) 起，凸弧扫到底部 (W−span, H)
+                val rightPath = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(size.width, size.height - hR)
+                    quadraticBezierTo(
+                        size.width - span * 0.45f, size.height - hR,
+                        size.width - span, size.height
+                    )
+                    lineTo(size.width, size.height)
+                    close()
+                }
+                drawPath(rightPath, rightColor)
+                // 黑字落在翼内偏外侧（微信同款：文字在翼的上部三分之一处）
                 drawIntoCanvas { canvas ->
                     val paint = android.graphics.Paint().apply {
                         textSize = 15.sp.toPx()
                         isAntiAlias = true
                         textAlign = android.graphics.Paint.Align.CENTER
+                        color = android.graphics.Color.argb(235, 20, 20, 20)
+                        isFakeBoldText = true
                     }
-                    paint.color = if (leftActive) android.graphics.Color.WHITE else android.graphics.Color.argb(210, 255, 255, 255)
-                    paint.isFakeBoldText = leftActive
                     canvas.nativeCanvas.drawText(
                         cancelLabel,
-                        dx,
-                        size.height - dx + paint.textSize * 0.35f,
+                        span * 0.42f,
+                        size.height - h * 0.42f + paint.textSize * 0.35f,
                         paint
                     )
-                    paint.color = if (rightActive) android.graphics.Color.WHITE else android.graphics.Color.argb(210, 255, 255, 255)
-                    paint.isFakeBoldText = rightActive
                     canvas.nativeCanvas.drawText(
                         transcribeLabel,
-                        size.width - dx,
-                        size.height - dx + paint.textSize * 0.35f,
+                        size.width - span * 0.42f,
+                        size.height - hR * 0.42f + paint.textSize * 0.35f,
                         paint
                     )
                 }
