@@ -34,8 +34,9 @@ data class AIProviderEntity(
     val useResponseApi: Boolean = false,
     /** Anthropic 显式缓存断点（cache_control）。仅 ANTHROPIC 类型使用，默认开启。 */
     val anthropicCacheBreakpoints: Boolean = true,
-    /** Chat Completion 路径发送 prompt_cache_key（shard 路由）。仅 OPENAI 类型使用，默认关闭（官方 API 不接受该字段）。 */
-    val openaiChatCacheKey: Boolean = false,
+    /** Chat Completion 路径发送 prompt_cache_key（shard 路由，提高前缀缓存命中）。仅 OPENAI 类型使用；
+     *  只影响新建供应商（存量行保留落库值）；严格校验未知字段的第三方服务可能报 400，编辑器内可关。 */
+    val openaiChatCacheKey: Boolean = true,
     /** 自定义面板脚本路径。列名沿用历史命名以兼容已发布数据库。 */
     @ColumnInfo(name = "balanceScriptPath")
     val dashboardScriptPath: String = "",

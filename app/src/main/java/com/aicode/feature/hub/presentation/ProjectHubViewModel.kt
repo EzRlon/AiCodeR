@@ -13,15 +13,21 @@ import com.aicode.core.io.FileAccessProvider
 import com.aicode.core.ui.floating.FloatingWindowGeometry
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.credentials.domain.repository.CredentialRepository
+import com.aicode.feature.terminal.domain.TabFinishedEvent
+import com.aicode.feature.terminal.domain.TerminalSessionProvider
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
+import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,6 +36,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
@@ -43,7 +50,9 @@ class ProjectHubViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val credentialRepository: CredentialRepository,
     private val workspaceRepository: WorkspaceRepository,
-    private val fileAccess: FileAccessProvider
+    private val fileAccess: FileAccessProvider,
+    private val terminal: TerminalSessionProvider,
+    private val pathMapper: WorkspacePathMapper
 ) : ViewModel() {
 
     data class RepoInfo(
@@ -86,8 +95,23 @@ class ProjectHubViewModel @Inject constructor(
         val isOpen: Boolean
     )
 
-    /** 构建方式：远端 CI / 本地容器（执行器下一批接入）。 */
+    /** 构建方式：远端 CI / 本地容器。 */
     enum class BuildMode { REMOTE, LOCAL }
+
+    data class LocalArtifact(val name: String, val path: String, val sizeBytes: Long)
+
+    data class LocalBuildState(
+        val running: Boolean = false,
+        val task: String = DEFAULT_LOCAL_TASK,
+        val startedAt: Long = 0L,
+        val finishedAt: Long = 0L,
+        val exitCode: Int? = null,
+        val logTail: List<String> = emptyList(),
+        val artifacts: List<LocalArtifact> = emptyList()
+    ) {
+        val elapsedMs: Long
+            get() = if (running) System.currentTimeMillis() - startedAt else if (finishedAt > 0) finishedAt - startedAt else 0L
+    }
 
     data class UiState(
         val repo: String = "",
@@ -106,11 +130,16 @@ class ProjectHubViewModel @Inject constructor(
         val buildMode: BuildMode = BuildMode.REMOTE,
         val buildModeIsDefault: Boolean = true,
         val mirrorActive: Boolean = false,
+        val localBuild: LocalBuildState = LocalBuildState(),
         val message: String = ""
     )
 
+    @Volatile private var activeBuildTab: String? = null
+    private var buildPollJob: Job? = null
+
     private companion object {
         const val TAG = "ProjectHub"
+        const val DEFAULT_LOCAL_TASK = ":app:assembleDebug"
         const val PREFS = "project_hub"
         const val KEY_X = "geom_x"
         const val KEY_Y = "geom_y"
@@ -137,6 +166,16 @@ class ProjectHubViewModel @Inject constructor(
         )
     )
     val state: StateFlow<UiState> = _state
+
+    init {
+        viewModelScope.launch {
+            terminal.tabFinishedEvents.collect { ev ->
+                val tab = activeBuildTab ?: return@collect
+                if (ev.tabId != tab) return@collect
+                onLocalBuildFinished(ev)
+            }
+        }
+    }
 
     var geometry: FloatingWindowGeometry by mutableStateOf(loadGeometry())
         private set
@@ -431,14 +470,141 @@ class ProjectHubViewModel @Inject constructor(
         }
     }
 
-    /** 构建：远端→workflow_dispatch；本地→容器执行器下一批接入（当前明确提示）。 */
+    /** 构建：远端→workflow_dispatch；本地→容器内 gradle。 */
     fun startBuild() {
         when (_state.value.buildMode) {
             BuildMode.REMOTE -> dispatchBuild()
-            BuildMode.LOCAL -> _state.update {
-                it.copy(message = "本地构建执行器下一批接入；现在可先用远端 CI")
+            BuildMode.LOCAL -> startLocalBuild()
+        }
+    }
+
+    fun setLocalBuildTask(task: String) {
+        _state.update { it.copy(localBuild = it.localBuild.copy(task = task)) }
+    }
+
+    fun cancelLocalBuild() {
+        val tab = activeBuildTab ?: return
+        if (terminal.writeBytesToTab(tab, 3)) {
+            _state.update { it.copy(message = "已发送中断，等待 gradle 退出…") }
+        }
+    }
+
+    private fun startLocalBuild() {
+        val info = _state.value.info
+        if (info == null || info.localPath.isBlank()) {
+            _state.update { it.copy(message = "未识别到本地项目目录，无法本地构建") }
+            return
+        }
+        if (_state.value.localBuild.running || activeBuildTab != null) return
+        viewModelScope.launch {
+            val containerDir = pathMapper.toContainerPath(info.localPath)
+            if (containerDir.isNullOrBlank()) {
+                _state.update { it.copy(message = "无法定位项目容器路径") }
+                return@launch
+            }
+            val script = buildLocalGradleScript(containerDir, _state.value.localBuild.task)
+            val tabId = try {
+                terminal.startBackgroundCommand(
+                    script,
+                    title = "本地构建 ${info.fullName}",
+                    notify = true
+                )
+            } catch (t: Throwable) {
+                _state.update { it.copy(message = "启动本地构建失败：${t.message.orEmpty()}".trim()) }
+                return@launch
+            }
+            activeBuildTab = tabId
+            _state.update {
+                it.copy(
+                    localBuild = LocalBuildState(
+                        running = true,
+                        task = _state.value.localBuild.task,
+                        startedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            pollLocalBuildOutput(tabId)
+        }
+    }
+
+    private fun pollLocalBuildOutput(tabId: String) {
+        buildPollJob?.cancel()
+        buildPollJob = viewModelScope.launch {
+            while (isActive && activeBuildTab == tabId) {
+                delay(1_500)
+                val out = withContext(Dispatchers.IO) { terminal.getTabOutput(tabId) }
+                if (out != null) {
+                    val tail = out.lines().filter { it.isNotBlank() }.takeLast(16)
+                    _state.update { s ->
+                        if (s.localBuild.running) s.copy(localBuild = s.localBuild.copy(logTail = tail)) else s
+                    }
+                }
             }
         }
+    }
+
+    private suspend fun onLocalBuildFinished(ev: TabFinishedEvent) {
+        activeBuildTab = null
+        buildPollJob?.cancel()
+        buildPollJob = null
+        val tail = ev.tailOutput?.lines()?.filter { it.isNotBlank() }?.takeLast(30)
+            ?: emptyList()
+        val artifacts = if (ev.exitCode == 0) scanLocalArtifacts() else emptyList()
+        _state.update {
+            it.copy(
+                localBuild = it.localBuild.copy(
+                    running = false,
+                    exitCode = ev.exitCode,
+                    finishedAt = System.currentTimeMillis(),
+                    logTail = tail.ifEmpty { it.localBuild.logTail },
+                    artifacts = artifacts
+                )
+            )
+        }
+        if (ev.exitCode == 0) {
+            _state.update { it.copy(message = "本地构建完成，产物 ${artifacts.size} 个") }
+        } else {
+            _state.update { it.copy(message = "本地构建失败（退出码 ${ev.exitCode}），详见日志") }
+        }
+    }
+
+    private suspend fun scanLocalArtifacts(): List<LocalArtifact> = withContext(Dispatchers.IO) {
+        val localPath = _state.value.info?.localPath.orEmpty()
+        if (localPath.isBlank()) return@withContext emptyList()
+        val outputs = File(localPath, "app/build/outputs")
+        if (!outputs.isDirectory) return@withContext emptyList()
+        outputs.walkTopDown()
+            .filter { f -> f.isFile && (f.extension == "apk" || f.extension == "aab") }
+            .sortedByDescending { it.lastModified() }
+            .take(10)
+            .map { LocalArtifact(name = it.name, path = it.absolutePath, sizeBytes = it.length()) }
+            .toList()
+    }
+
+    /** 容器内构建脚本：cd 项目目录，解析 JDK/SDK 后跑 gradlew；路径均已预校验存在。 */
+    private fun buildLocalGradleScript(containerDir: String, task: String): String {
+        val trimmedTask = task.trim().ifBlank { DEFAULT_LOCAL_TASK }
+        val jvm = listOf(
+            "/usr/lib/jvm/default-jvm",
+            "/usr/lib/jvm/java-17-openjdk-arm64",
+            "/usr/lib/jvm/java-17-openjdk",
+            "/usr/lib/jvm/java-17-openjdk-amd64"
+        ).firstOrNull { p -> pathMapper.toHostFile(p)?.isDirectory == true }
+        val sdk = listOf(
+            "/root/android/sdk",
+            "/opt/android-sdk",
+            "~/Android/Sdk"
+        ).firstOrNull { p -> pathMapper.toHostFile(p)?.isDirectory == true }
+        val envPrefix = buildString {
+            if (jvm != null) append("JAVA_HOME=")
+            if (jvm != null) append(jvm)
+            if (sdk != null) append(if (isEmpty()) "" else " ")
+            if (sdk != null) append("ANDROID_HOME=")
+            if (sdk != null) append(if (sdk == "~/Android/Sdk") "\$HOME/Android/Sdk" else sdk)
+        }
+        return "cd $containerDir && " +
+            (if (envPrefix.isNotEmpty()) "$envPrefix " else "") +
+            "sh ./gradlew -p . $trimmedTask --no-configuration-cache --no-watch-fs --console=plain"
     }
 
     fun setBuildMode(mode: BuildMode, makeDefault: Boolean) {

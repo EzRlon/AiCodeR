@@ -20,10 +20,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -38,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -425,15 +430,131 @@ private fun BuildPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel
                         ProjectHubViewModel.BuildMode.REMOTE ->
                             "触发 GitHub Actions · android-release.yml（默认分支）。进度在 CI 页查看。"
                         ProjectHubViewModel.BuildMode.LOCAL ->
-                            "在容器内直接 gradle 打包。执行器下一批接入，现在请用远端 CI。"
+                            "在容器内直接 gradle 打包，跑在手机上，不影响远端 CI。"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = Spacing.sm)
                 )
+                if (state.buildMode == ProjectHubViewModel.BuildMode.LOCAL) {
+                    LocalBuildSection(viewModel, state)
+                }
             }
         }
     }
+}
+
+@Composable
+private fun LocalBuildSection(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.UiState) {
+    val lb = state.localBuild
+    OutlinedTextField(
+        value = lb.task,
+        onValueChange = viewModel::setLocalBuildTask,
+        label = { Text("Gradle 任务") },
+        singleLine = true,
+        enabled = !lb.running,
+        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.sm)
+    )
+    if (!lb.running && lb.exitCode == null) return
+    if (lb.running) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = Spacing.sm)
+        ) {
+            LinearProgressIndicator(modifier = Modifier.weight(1f))
+            Text(
+                formatDuration(lb.elapsedMs),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = Spacing.sm)
+            )
+        }
+        Box(modifier = Modifier.padding(top = Spacing.sm)) {
+            HubSecondaryButton("取消构建") { viewModel.cancelLocalBuild() }
+        }
+    } else if (lb.exitCode != null) {
+        val ok = lb.exitCode == 0
+        Text(
+            (if (ok) "构建成功" else "构建失败") +
+                " · 退出码 " + lb.exitCode +
+                " · 耗时 " + formatDuration(lb.elapsedMs),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = Spacing.sm)
+        )
+    }
+    if (lb.logTail.isNotEmpty()) LocalLogTail(lb.logTail)
+    if (lb.artifacts.isNotEmpty()) {
+        Text(
+            "产物（新到旧，最多 10 个）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = Spacing.sm)
+        )
+        lb.artifacts.forEach { a ->
+            Column(modifier = Modifier.padding(top = Spacing.xs)) {
+                Text(
+                    a.name + " · " + formatBytes(a.sizeBytes),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    a.path,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalLogTail(lines: List<String>) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(lines.size) {
+        if (scroll.maxValue > 0) scroll.animateScrollTo(scroll.maxValue)
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.sm)
+            .height(140.dp)
+            .clip(RoundedCornerShape(Radius.sm))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            .verticalScroll(scroll)
+            .padding(Spacing.sm)
+    ) {
+        Column {
+            lines.forEach { line ->
+                Text(
+                    line,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun formatDuration(ms: Long): String {
+    val s = ms / 1000
+    return if (s >= 60) "${s / 60}分${s % 60}秒" else "${s}秒"
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1 shl 20 -> "%.1f MB".format(bytes / 1048576.0)
+    bytes >= 1 shl 10 -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable

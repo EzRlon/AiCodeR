@@ -31,8 +31,8 @@ data class AIProviderConfig(
     val useResponseApi: Boolean = false,
     /** Anthropic 显式缓存断点（cache_control）。仅 ANTHROPIC 类型生效，默认开启。 */
     val anthropicCacheBreakpoints: Boolean = true,
-    /** Chat Completion 路径发送 prompt_cache_key（shard 路由）。仅 OPENAI 类型生效，默认关闭。 */
-    val openaiChatCacheKey: Boolean = false,
+    /** Chat Completion 路径发送 prompt_cache_key（shard 路由）。仅 OPENAI 类型生效，新供应商默认开启。 */
+    val openaiChatCacheKey: Boolean = true,
     /** 自定义面板脚本路径（位于 ~/.aicode/scripts/，或绝对路径/自定义命令）。 */
     val dashboardScriptPath: String = "",
     /** 自定义面板自动刷新间隔（分钟），0 表示仅进入时/手动刷新，支持 1, 3, 5, 10 等。默认 5 分钟。 */
