@@ -1,5 +1,6 @@
 package com.aicode.feature.settings.domain
 
+import com.aicode.core.util.shellQuote
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import io.mockk.coEvery
@@ -171,5 +172,67 @@ class SubprogramRegistryTest {
 
         assertTrue("命令应指向回环端口 /mcp：$captured", captured.contains("http://127.0.0.1:41100/mcp"))
         assertTrue("命令应带 Bearer token：$captured", captured.contains("Authorization: Bearer tok-1"))
+    }
+
+    /** token 含单引号/双引号/反斜杠/换行/$()/反引号时必须被 shellQuote 整体转义，无法逃逸引号注入命令。 */
+    @Test
+    fun check_hostileTokens_cannotEscapeQuoting() = runTest {
+        val cases = listOf(
+            "tok'one" to "单引号",
+            "tok\"two" to "双引号",
+            "tok\\three" to "反斜杠",
+            "tok\nfour" to "换行",
+            "tok\$(curl evil)five" to "命令替换",
+            "tok`id`six" to "反引号"
+        )
+        cases.forEach { (token, label) ->
+            val (registry, _, commandEngine) = newRegistry()
+            var captured = ""
+            coEvery {
+                commandEngine.runCommandSyncWithExit(any(), any(), any())
+            } answers {
+                captured = firstArg()
+                com.aicode.feature.agent.domain.container.CommandResult(
+                    output = """{"result":{}}""",
+                    exitCode = 0
+                )
+            }
+
+            registry.check(sub.copy(token = token))
+
+            val expected = shellQuote("Authorization: Bearer $token")
+            assertTrue(
+                "[$label] token 应整体安全转义（含 shellQuote 精确输出）：$captured",
+                captured.contains(expected)
+            )
+            if (token.contains("'")) {
+                assertTrue(
+                    "[$label] 单引号必须被转义为 '\''，否则可逃逸引号注入：$captured",
+                    captured.contains("Bearer tok'\\''one")
+                )
+                assertFalse(
+                    "[$label] 不允许出现未转义的引号闭合：$captured",
+                    captured.contains("Bearer tok'one")
+                )
+            }
+            assertTrue(
+                "[$label] body 应为 JSON 序列化（含协议版本）：$captured",
+                captured.contains("\"protocolVersion\":\"2026-07-28\"")
+            )
+        }
+    }
+
+    /** 恶意 token 存在时探活仍应返回 true（转义不得改变诊断功能外部行为）。 */
+    @Test
+    fun check_hostileToken_stillDetectsOnline() = runTest {
+        val (registry, _, commandEngine) = newRegistry()
+        coEvery {
+            commandEngine.runCommandSyncWithExit(any(), any(), any())
+        } returns com.aicode.feature.agent.domain.container.CommandResult(
+            output = """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2026-07-28"}}""",
+            exitCode = 0
+        )
+
+        assertTrue(registry.check(sub.copy(token = "tok'one\"two\$three")))
     }
 }
