@@ -285,7 +285,9 @@ class ProjectHubViewModel @Inject constructor(
             val token = token() ?: return@launch
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val arr = JSONArray(get("/repos/$repo/actions/runs?per_page=12", token))
+                    // GitHub 该端点返回对象 {"total_count":..,"workflow_runs":[..]}，不是裸数组
+                    val arr = JSONObject(get("/repos/$repo/actions/runs?per_page=12", token))
+                        .optJSONArray("workflow_runs") ?: JSONArray()
                     (0 until arr.length()).mapNotNull { i ->
                         arr.optJSONObject(i)?.let { r ->
                             RunItem(
