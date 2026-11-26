@@ -92,9 +92,9 @@ fun ProjectHubOverlay(viewModel: ProjectHubViewModel, onClose: () -> Unit) {
     }
     LaunchedEffect(pagerState.currentPage) {
         when (pagerState.currentPage) {
-            2 -> if (!state.runsLoaded) viewModel.refreshRuns()
-            3 -> if (!state.releasesLoaded) viewModel.refreshReleases()
-            4 -> if (!state.opsLoaded) viewModel.refreshOps()
+            2 -> if (!state.runsLoaded || state.runs.isEmpty()) viewModel.refreshRuns()
+            3 -> if (!state.releasesLoaded || state.releases.isEmpty()) viewModel.refreshReleases()
+            4 -> if (!state.opsLoaded || state.ops.isEmpty()) viewModel.refreshOps()
         }
     }
 
@@ -514,11 +514,15 @@ private fun CiPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.Ui
             }
             if (state.runsLoaded && state.runs.isEmpty()) {
                 item {
-                    Text(
-                        "暂无 workflow 运行记录",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    HubCard(modifier = Modifier.clickable { viewModel.refreshRuns() }) {
+                        Text("暂无运行记录", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "可能网络抖动或仓库尚无 CI 记录。点此重试，或下拉刷新。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
             }
         }
@@ -650,7 +654,7 @@ private fun OpsPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.U
                             modifier = Modifier.weight(1f).padding(horizontal = Spacing.sm)
                         )
                         Text(
-                            item.user,
+                            if (item.isOpen) item.user else "${item.user} · 已关闭",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -659,11 +663,15 @@ private fun OpsPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.U
             }
             if (state.opsLoaded && state.ops.isEmpty()) {
                 item {
-                    Text(
-                        "没有打开的 Issue / PR",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    HubCard(modifier = Modifier.clickable { viewModel.refreshOps() }) {
+                        Text("暂无 Issue / PR", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "点此重试，或下拉刷新。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
             }
         }

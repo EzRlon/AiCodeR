@@ -82,7 +82,8 @@ class ProjectHubViewModel @Inject constructor(
         val isPull: Boolean,
         val user: String,
         val updatedAt: Long,
-        val htmlUrl: String
+        val htmlUrl: String,
+        val isOpen: Boolean
     )
 
     /** 构建方式：远端 CI / 本地容器（执行器下一批接入）。 */
@@ -406,7 +407,7 @@ class ProjectHubViewModel @Inject constructor(
             val token = token() ?: return@launch
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val issuesArr = JSONArray(get("/repos/$repo/issues?state=open&per_page=30", token))
+                    val issuesArr = JSONArray(get("/repos/$repo/issues?state=all&per_page=30", token))
                     (0 until issuesArr.length()).mapNotNull { i ->
                         issuesArr.optJSONObject(i)?.let { o ->
                             OpsItem(
@@ -415,10 +416,11 @@ class ProjectHubViewModel @Inject constructor(
                                 isPull = o.has("pull_request"),
                                 user = o.optJSONObject("user")?.optString("login").orEmpty(),
                                 updatedAt = parseIsoMs(o.optString("updated_at")),
-                                htmlUrl = o.optString("html_url")
+                                htmlUrl = o.optString("html_url"),
+                                isOpen = o.optString("state") == "open"
                             )
                         }
-                    }.sortedByDescending { it.updatedAt }
+                    }.sortedWith(compareByDescending<OpsItem> { it.isOpen }.thenByDescending { it.updatedAt })
                 }
             }.onSuccess { ops ->
                 _state.update { it.copy(ops = ops, opsLoaded = true) }
