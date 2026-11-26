@@ -169,7 +169,11 @@ class ProjectHubViewModel @Inject constructor(
                 return@launch
             }
             val config = withContext(Dispatchers.IO) {
-                runCatching { fileAccess.readFile("${workspace.path}/.git/config") }.getOrNull()
+                // 本地工作区 path 是真实绝对路径（WorkspaceRepository 用 File.absolutePath），
+                // 优先直读；远程工作区再走 FileAccessProvider；最后兜底容器 ~ 路径。
+                runCatching { java.io.File(workspace.path, ".git/config").readText() }.getOrNull()
+                    ?: runCatching { fileAccess.readFile("${workspace.path}/.git/config") }.getOrNull()
+                    ?: runCatching { fileAccess.readFile("~/workspace/${workspace.name}/.git/config") }.getOrNull()
             }
             val repo = parseRepoFromGitConfig(config)
             if (repo == null) {
@@ -179,7 +183,11 @@ class ProjectHubViewModel @Inject constructor(
                         detected = true,
                         info = RepoInfo(
                             fullName = workspace.name,
-                            description = "当前工作区未配置 GitHub 远端（.git/config 无 github.com URL）",
+                            description = if (config == null) {
+                                "未识别到 GitHub 远端：.git/config 读取失败（路径 ${workspace.path}）"
+                            } else {
+                                "未识别到 GitHub 远端：.git/config 中没有 github.com 地址（已读取 ${config.length} 字符）"
+                            },
                             defaultBranch = "-",
                             localPath = workspace.path
                         ),
@@ -530,20 +538,27 @@ class ProjectHubViewModel @Inject constructor(
     private suspend fun token(): String? =
         credentialRepository.findForHost("github.com")?.token?.takeIf { it.isNotBlank() }
 
-    /** 从 .git/config 解析 github.com 的 owner/repo（兼容 ssh 与 https 两种 remote）。 */
+    /** 从 .git/config 解析 github.com 的 owner/repo（兼容 ssh 与 https）。 */
     private fun parseRepoFromGitConfig(config: String?): String? {
         if (config.isNullOrBlank()) return null
-        val urlRegex = Regex("""url\s*=\s*(\S+)""")
-        urlRegex.findAll(config).forEach { match ->
-            val url = match.groupValues[1]
-            val repo = when {
-                url.startsWith("git@github.com:") ->
-                    url.removePrefix("git@github.com:").removeSuffix(".git")
-                url.contains("github.com/") ->
-                    url.substringAfter("github.com/").removeSuffix(".git")
-                else -> null
-            }
-            if (!repo.isNullOrBlank() && repo.count { it == '/' } == 1) return repo
+        fun toRepo(url: String): String? = when {
+            url.startsWith("git@github.com:") ->
+                url.removePrefix("git@github.com:").removeSuffix(".git")
+            url.contains("github.com/") ->
+                url.substringAfter("github.com/").removeSuffix(".git")
+            else -> null
+        }
+        fun valid(repo: String?) = repo != null && repo.isNotBlank() && repo.count { it == '/' } == 1
+
+        // 优先 [remote "origin"] 段（避免上游/镜像 remote 抢占，如 jieapi/AiCode）
+        val originBlock = Regex("""\[remote\s+"origin"\]([\s\S]*?)(?=\n\[|\z)""")
+            .find(config)?.groupValues?.get(1)
+        val originUrl = originBlock?.let { Regex("""url\s*=\s*(\S+)""").find(it)?.groupValues?.get(1) }
+        toRepo(originUrl.orEmpty())?.let { if (valid(it)) return it }
+
+        Regex("""url\s*=\s*(\S+)""").findAll(config).forEach { match ->
+            val repo = toRepo(match.groupValues[1])
+            if (valid(repo)) return repo
         }
         return null
     }

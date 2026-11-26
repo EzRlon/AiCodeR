@@ -252,6 +252,20 @@ private fun HubCard(modifier: Modifier = Modifier, content: @Composable () -> Un
     }
 }
 
+/** 未识别到仓库时的空态引导卡：任何页面都不应「纯白」。 */
+@Composable
+private fun NotConnectedCard() {
+    HubCard {
+        Text("未识别到仓库", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            "项目中心会自动读取当前工作区的 GitHub 远端；若刚克隆/切换了工作区，下拉刷新重试。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
 @Composable
 private fun HubPullRefresh(
     refreshing: Boolean,
@@ -450,6 +464,9 @@ private fun CiPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.Ui
             modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
+            if (state.info == null) {
+                item { NotConnectedCard() }
+            }
             items(state.runs) { run ->
                 HubCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -515,6 +532,9 @@ private fun ReleasesPage(viewModel: ProjectHubViewModel, state: ProjectHubViewMo
             modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
+            if (state.info == null) {
+                item { NotConnectedCard() }
+            }
             val official = state.releases.filter { !it.prerelease }
             val pre = state.releases.filter { it.prerelease }
             if (official.isNotEmpty()) {
@@ -608,6 +628,9 @@ private fun OpsPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.U
             modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
+            if (state.info == null) {
+                item { NotConnectedCard() }
+            }
             items(state.ops) { item ->
                 HubCard(modifier = Modifier.clickable {
                     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.htmlUrl))) }
