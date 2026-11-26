@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.aicode.core.ui.floating.FloatingWindowGeometry
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.credentials.domain.repository.CredentialRepository
+import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -26,25 +27,27 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 /**
  * 项目中心浮窗的 VM：直连 GitHub REST API（手机流量，零模型 token）。
- * 凭据复用 git 凭据仓库（host=github.com 的 token）；仓库全名由用户一次性填写后持久化。
+ * 仓库来源全自动：读取当前工作区 .git/config 的 remote 解析 owner/repo，不再让用户手填。
+ * 国内网络直连 api.github.com 失败时自动切换镜像（api.kkgithub.com），资产下载走 gh-proxy。
  */
 @HiltViewModel
 class ProjectHubViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val credentialRepository: CredentialRepository
+    private val credentialRepository: CredentialRepository,
+    private val workspaceRepository: WorkspaceRepository
 ) : ViewModel() {
 
     data class RepoInfo(
         val fullName: String,
         val description: String,
-        val stars: Int,
-        val openIssues: Int,
-        val defaultBranch: String
+        val defaultBranch: String,
+        val localPath: String
     )
 
     data class CommitItem(val sha: String, val message: String, val author: String)
@@ -59,8 +62,6 @@ class ProjectHubViewModel @Inject constructor(
     ) {
         val running: Boolean get() = status != "completed"
     }
-
-    data class RunJob(val name: String, val status: String, val conclusion: String?)
 
     data class AssetItem(val id: Long, val name: String, val sizeBytes: Long, val url: String)
 
@@ -81,9 +82,14 @@ class ProjectHubViewModel @Inject constructor(
         val htmlUrl: String
     )
 
+    /** 构建方式：远端 CI / 本地容器（执行器下一批接入）。 */
+    enum class BuildMode { REMOTE, LOCAL }
+
     data class UiState(
         val repo: String = "",
+        val detected: Boolean = false,
         val loading: Boolean = false,
+        val quietRefreshing: Boolean = false,
         val info: RepoInfo? = null,
         val commits: List<CommitItem> = emptyList(),
         val readmeSnippet: String = "",
@@ -93,32 +99,47 @@ class ProjectHubViewModel @Inject constructor(
         val releasesLoaded: Boolean = false,
         val ops: List<OpsItem> = emptyList(),
         val opsLoaded: Boolean = false,
+        val buildMode: BuildMode = BuildMode.REMOTE,
+        val buildModeIsDefault: Boolean = true,
+        val mirrorActive: Boolean = false,
         val message: String = ""
     )
 
     private companion object {
         const val TAG = "ProjectHub"
         const val PREFS = "project_hub"
-        const val KEY_REPO = "repo"
         const val KEY_X = "geom_x"
         const val KEY_Y = "geom_y"
         const val KEY_W = "geom_w"
         const val KEY_H = "geom_h"
-        const val API = "https://api.github.com"
+        const val KEY_BUILD_MODE = "build_mode"
+        const val DIRECT_API = "https://api.github.com"
+        const val MIRROR_API = "https://api.kkgithub.com"
+        const val GH_PROXY = "https://gh-proxy.com/"
         const val RELEASE_WORKFLOW = "android-release.yml"
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    private val _state = MutableStateFlow(UiState(repo = prefs.getString(KEY_REPO, "").orEmpty()))
+    private val _state = MutableStateFlow(
+        UiState(
+            buildMode = runCatching {
+                BuildMode.valueOf(prefs.getString(KEY_BUILD_MODE, BuildMode.REMOTE.name).orEmpty())
+            }.getOrDefault(BuildMode.REMOTE)
+        )
+    )
     val state: StateFlow<UiState> = _state
 
     var geometry: FloatingWindowGeometry by mutableStateOf(loadGeometry())
         private set
+
+    init {
+        viewModelScope.launch { detectRepoAndLoad() }
+    }
 
     fun updateGeometry(geometry: FloatingWindowGeometry) {
         this.geometry = geometry
@@ -130,15 +151,54 @@ class ProjectHubViewModel @Inject constructor(
             .apply()
     }
 
-    fun setRepo(repo: String) {
-        val normalized = repo.trim().removePrefix("https://github.com/").trim('/')
-        prefs.edit().putString(KEY_REPO, normalized).apply()
-        _state.update { it.copy(repo = normalized) }
-        if (normalized.isNotBlank()) {
+    /** 自动识别当前工作区仓库（.git/config remote），然后并行加载各页数据。 */
+    fun detectRepoAndLoad() {
+        viewModelScope.launch {
+            _state.update { it.copy(loading = true, message = "") }
+            val workspace = workspaceRepository.current.value
+            if (workspace == null) {
+                _state.update { it.copy(loading = false, detected = true, message = "当前没有可用工作区") }
+                return@launch
+            }
+            val config = withContext(Dispatchers.IO) {
+                runCatching { File(workspace.path, ".git/config").readText() }.getOrNull()
+            }
+            val repo = parseRepoFromGitConfig(config)
+            if (repo == null) {
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        detected = true,
+                        info = RepoInfo(
+                            fullName = workspace.name,
+                            description = "当前工作区未配置 GitHub 远端（.git/config 无 github.com URL）",
+                            defaultBranch = "-",
+                            localPath = workspace.path
+                        ),
+                        message = ""
+                    )
+                }
+                return@launch
+            }
+            _state.update { it.copy(repo = repo, detected = true) }
             refresh()
-            refreshRuns()
+            refreshRuns(silent = true)
             refreshReleases()
             refreshOps()
+        }
+    }
+
+    /** 下拉刷新（与记忆图谱同交互）：全量静默刷新，1.2s 后收起。 */
+    fun pullRefresh() {
+        if (_state.value.quietRefreshing) return
+        _state.update { it.copy(quietRefreshing = true) }
+        viewModelScope.launch {
+            refresh()
+            refreshRuns(silent = true)
+            refreshReleases()
+            refreshOps()
+            kotlinx.coroutines.delay(1200)
+            _state.update { it.copy(quietRefreshing = false) }
         }
     }
 
@@ -153,8 +213,8 @@ class ProjectHubViewModel @Inject constructor(
             }
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val info = JSONObject(get("$API/repos/$repo", token))
-                    val commitsArr = JSONArray(get("$API/repos/$repo/commits?per_page=8", token))
+                    val info = JSONObject(get("/repos/$repo", token))
+                    val commitsArr = JSONArray(get("/repos/$repo/commits?per_page=8", token))
                     val commits = (0 until commitsArr.length()).mapNotNull { i ->
                         commitsArr.optJSONObject(i)?.let { c ->
                             CommitItem(
@@ -167,19 +227,19 @@ class ProjectHubViewModel @Inject constructor(
                         }
                     }
                     val readmeRaw = runCatching {
-                        JSONObject(get("$API/repos/$repo/readme", token))
+                        JSONObject(get("/repos/$repo/readme", token))
                             .optString("content").replace("\n", "")
                     }.getOrDefault("")
                     val readme = if (readmeRaw.isBlank()) "" else runCatching {
                         String(android.util.Base64.decode(readmeRaw, android.util.Base64.DEFAULT)).take(1600)
                     }.getOrDefault("")
+                    val localPath = workspaceRepository.current.value?.path.orEmpty()
                     Triple(
                         RepoInfo(
                             fullName = info.optString("full_name", repo),
                             description = info.optString("description"),
-                            stars = info.optInt("stargazers_count", 0),
-                            openIssues = info.optInt("open_issues_count", 0),
-                            defaultBranch = info.optString("default_branch", "main")
+                            defaultBranch = info.optString("default_branch", "main"),
+                            localPath = localPath
                         ),
                         commits,
                         readme
@@ -191,12 +251,11 @@ class ProjectHubViewModel @Inject constructor(
                 }
             }.onFailure { e ->
                 FileLogger.w(TAG, "拉取仓库总览失败", e)
-                _state.update { it.copy(loading = false, message = "拉取失败：${e.message.orEmpty().take(80)}") }
+                _state.update { it.copy(loading = false, message = friendlyError("拉取", e)) }
             }
         }
     }
 
-    /** CI 页：最近 workflow runs（轮询由 UI 按可见性驱动）。 */
     fun refreshRuns(silent: Boolean = false) {
         val repo = _state.value.repo
         if (repo.isBlank()) return
@@ -205,13 +264,12 @@ class ProjectHubViewModel @Inject constructor(
             val token = token() ?: return@launch
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val arr = JSONArray(get("$API/repos/$repo/actions/runs?per_page=12", token))
+                    val arr = JSONArray(get("/repos/$repo/actions/runs?per_page=12", token))
                     (0 until arr.length()).mapNotNull { i ->
                         arr.optJSONObject(i)?.let { r ->
                             RunItem(
                                 id = r.optLong("id"),
-                                title = r.optString("display_title")
-                                    .ifBlank { r.optString("name") },
+                                title = r.optString("display_title").ifBlank { r.optString("name") },
                                 branch = r.optString("head_branch"),
                                 status = r.optString("status"),
                                 conclusion = r.optString("conclusion").takeIf { it.isNotBlank() },
@@ -224,7 +282,7 @@ class ProjectHubViewModel @Inject constructor(
                 _state.update { it.copy(loading = false, runs = runs, runsLoaded = true) }
             }.onFailure { e ->
                 FileLogger.w(TAG, "拉取 CI 状态失败", e)
-                _state.update { it.copy(loading = false, runsLoaded = true, message = "CI 拉取失败：${e.message.orEmpty().take(60)}") }
+                _state.update { it.copy(loading = false, runsLoaded = true, message = friendlyError("CI", e)) }
             }
         }
     }
@@ -239,26 +297,20 @@ class ProjectHubViewModel @Inject constructor(
             val token = token() ?: return@launch
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val req = Request.Builder()
-                        .url("$API/repos/$repo/actions/runs/$id/$action")
-                        .header("Authorization", "Bearer $token")
-                        .header("Accept", "application/vnd.github+json")
-                        .post(ByteArray(0).toRequestBody("application/json".toMediaType()))
-                        .build()
-                    client.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
-                    }
+                    post("/repos/$repo/actions/runs/$id/$action", token)
                 }
             }.onSuccess {
                 _state.update { it.copy(message = okMessage) }
-                viewModelScope.launch { kotlinx.coroutines.delay(1500); refreshRuns(silent = true) }
+                viewModelScope.launch {
+                    kotlinx.coroutines.delay(1500)
+                    refreshRuns(silent = true)
+                }
             }.onFailure { e ->
-                _state.update { it.copy(message = "操作失败：${e.message.orEmpty().take(60)}") }
+                _state.update { it.copy(message = friendlyError("操作", e)) }
             }
         }
     }
 
-    /** 产物页：Releases（含预发布）与资产列表。 */
     fun refreshReleases() {
         val repo = _state.value.repo
         if (repo.isBlank()) return
@@ -266,7 +318,7 @@ class ProjectHubViewModel @Inject constructor(
             val token = token() ?: return@launch
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val arr = JSONArray(get("$API/repos/$repo/releases?per_page=10", token))
+                    val arr = JSONArray(get("/repos/$repo/releases?per_page=10", token))
                     (0 until arr.length()).mapNotNull { i ->
                         arr.optJSONObject(i)?.let { r ->
                             val assetsArr = r.optJSONArray("assets")
@@ -284,7 +336,7 @@ class ProjectHubViewModel @Inject constructor(
                                             url = a.optString("browser_download_url")
                                         )
                                     }
-                                }
+                                }.sortedByDescending { it.name.endsWith(".apk") }
                             )
                         }
                     }
@@ -293,12 +345,11 @@ class ProjectHubViewModel @Inject constructor(
                 _state.update { it.copy(releases = releases, releasesLoaded = true) }
             }.onFailure { e ->
                 FileLogger.w(TAG, "拉取 Releases 失败", e)
-                _state.update { it.copy(releasesLoaded = true, message = "Releases 拉取失败：${e.message.orEmpty().take(60)}") }
+                _state.update { it.copy(releasesLoaded = true, message = friendlyError("Releases", e)) }
             }
         }
     }
 
-    /** 资产下载：系统 DownloadManager + Authorization 头（私有仓库可用），完成后通知栏点开安装。 */
     fun downloadAsset(asset: AssetItem) {
         viewModelScope.launch { downloadAssetInternal(asset) }
     }
@@ -311,7 +362,8 @@ class ProjectHubViewModel @Inject constructor(
         }
         runCatching {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val request = DownloadManager.Request(Uri.parse(asset.url))
+            val url = if (_state.value.mirrorActive) GH_PROXY + asset.url else asset.url
+            val request = DownloadManager.Request(Uri.parse(url))
                 .addRequestHeader("Authorization", "Bearer $token")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, asset.name)
@@ -324,7 +376,6 @@ class ProjectHubViewModel @Inject constructor(
         }
     }
 
-    /** 事务页：打开的 Issues 与 PR（一次拉取合并展示）。 */
     fun refreshOps() {
         val repo = _state.value.repo
         if (repo.isBlank()) return
@@ -332,14 +383,13 @@ class ProjectHubViewModel @Inject constructor(
             val token = token() ?: return@launch
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val issuesArr = JSONArray(get("$API/repos/$repo/issues?state=open&per_page=30", token))
+                    val issuesArr = JSONArray(get("/repos/$repo/issues?state=open&per_page=30", token))
                     (0 until issuesArr.length()).mapNotNull { i ->
                         issuesArr.optJSONObject(i)?.let { o ->
-                            val isPull = o.has("pull_request")
                             OpsItem(
                                 number = o.optInt("number"),
                                 title = o.optString("title"),
-                                isPull = isPull,
+                                isPull = o.has("pull_request"),
                                 user = o.optJSONObject("user")?.optString("login").orEmpty(),
                                 updatedAt = parseIsoMs(o.optString("updated_at")),
                                 htmlUrl = o.optString("html_url")
@@ -351,13 +401,29 @@ class ProjectHubViewModel @Inject constructor(
                 _state.update { it.copy(ops = ops, opsLoaded = true) }
             }.onFailure { e ->
                 FileLogger.w(TAG, "拉取 Issues/PR 失败", e)
-                _state.update { it.copy(opsLoaded = true, message = "事务拉取失败：${e.message.orEmpty().take(60)}") }
+                _state.update { it.copy(opsLoaded = true, message = friendlyError("事务", e)) }
             }
         }
     }
 
-    /** 远端构建：触发 android-release.yml（workflow_dispatch，ref 默认分支）。 */
-    fun dispatchBuild() {
+    /** 构建：远端→workflow_dispatch；本地→容器执行器下一批接入（当前明确提示）。 */
+    fun startBuild() {
+        when (_state.value.buildMode) {
+            BuildMode.REMOTE -> dispatchBuild()
+            BuildMode.LOCAL -> _state.update {
+                it.copy(message = "本地构建执行器下一批接入；现在可先用远端 CI")
+            }
+        }
+    }
+
+    fun setBuildMode(mode: BuildMode, makeDefault: Boolean) {
+        _state.update { it.copy(buildMode = mode, buildModeIsDefault = makeDefault) }
+        if (makeDefault) {
+            prefs.edit().putString(KEY_BUILD_MODE, mode.name).apply()
+        }
+    }
+
+    private fun dispatchBuild() {
         val repo = _state.value.repo
         if (repo.isBlank()) return
         viewModelScope.launch {
@@ -370,40 +436,103 @@ class ProjectHubViewModel @Inject constructor(
                 withContext(Dispatchers.IO) {
                     val ref = _state.value.info?.defaultBranch ?: "main"
                     val body = JSONObject().put("ref", ref).toString()
-                        .toRequestBody("application/json".toMediaType())
-                    val request = Request.Builder()
-                        .url("$API/repos/$repo/actions/workflows/$RELEASE_WORKFLOW/dispatches")
-                        .header("Authorization", "Bearer $token")
-                        .header("Accept", "application/vnd.github+json")
-                        .post(body)
-                        .build()
-                    client.newCall(request).execute().use { resp ->
-                        if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code} ${resp.message}")
-                    }
+                    post("/repos/$repo/actions/workflows/$RELEASE_WORKFLOW/dispatches", token, body)
                 }
             }.onSuccess {
-                _state.update { it.copy(loading = false, message = "已触发远端构建（Android Release），稍后可在 CI 页查看进度") }
-                viewModelScope.launch { kotlinx.coroutines.delay(4000); refreshRuns(silent = true) }
+                _state.update {
+                    it.copy(loading = false, message = "已触发远端构建（Android Release），CI 页可看进度")
+                }
+                viewModelScope.launch {
+                    kotlinx.coroutines.delay(4000)
+                    refreshRuns(silent = true)
+                }
             }.onFailure { e ->
                 FileLogger.w(TAG, "触发远端构建失败", e)
-                _state.update { it.copy(loading = false, message = "触发失败：${e.message.orEmpty().take(80)}") }
+                _state.update { it.copy(loading = false, message = friendlyError("触发构建", e)) }
             }
+        }
+    }
+
+    private fun apiUrl(path: String): String =
+        (if (_state.value.mirrorActive) MIRROR_API else DIRECT_API) + path
+
+    /** POST 与 GET 同策略：直连失败自动切镜像重试一次。 */
+    private fun post(path: String, token: String, body: String? = null) {
+        val bases = if (_state.value.mirrorActive) listOf(MIRROR_API) else listOf(DIRECT_API, MIRROR_API)
+        var lastError: Throwable? = null
+        bases.forEach { base ->
+            runCatching {
+                val request = Request.Builder()
+                    .url(base + path)
+                    .header("Authorization", "Bearer $token")
+                    .header("Accept", "application/vnd.github+json")
+                    .post((body ?: "").toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code} ${resp.message}")
+                }
+                if (base == MIRROR_API && !_state.value.mirrorActive) {
+                    _state.update { it.copy(mirrorActive = true) }
+                }
+                return
+            }.onFailure { lastError = it }
+        }
+        throw (lastError ?: IllegalStateException("网络不可用"))
+    }
+
+    /** 直连失败自动切镜像重试一次（国内网络无法直连 api.github.com 的兜底）。 */
+    private fun get(path: String, token: String): String {
+        val bases = if (_state.value.mirrorActive) listOf(MIRROR_API) else listOf(DIRECT_API, MIRROR_API)
+        var lastError: Throwable? = null
+        bases.forEach { base ->
+            runCatching {
+                val request = Request.Builder()
+                    .url(base + path)
+                    .header("Authorization", "Bearer $token")
+                    .header("Accept", "application/vnd.github+json")
+                    .build()
+                return client.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                    if (base == MIRROR_API && !_state.value.mirrorActive) {
+                        _state.update { it.copy(mirrorActive = true) }
+                    }
+                    resp.body?.string().orEmpty()
+                }
+            }.onFailure { lastError = it }
+        }
+        throw (lastError ?: IllegalStateException("网络不可用"))
+    }
+
+    private fun friendlyError(action: String, e: Throwable): String {
+        val msg = e.message.orEmpty()
+        return if (msg.contains("failed to connect", true) || msg.contains("timeout", true) ||
+            msg.contains("UnknownHost", true) || msg.contains("connect", true)
+        ) {
+            "${action}失败：网络无法连接 GitHub（已尝试直连与镜像），请检查网络/代理"
+        } else {
+            "${action}失败：${msg.take(60)}"
         }
     }
 
     private suspend fun token(): String? =
         credentialRepository.findForHost("github.com")?.token?.takeIf { it.isNotBlank() }
 
-    private fun get(url: String, token: String): String {
-        val request = Request.Builder()
-            .url(url)
-            .header("Authorization", "Bearer $token")
-            .header("Accept", "application/vnd.github+json")
-            .build()
-        return client.newCall(request).execute().use { resp ->
-            if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
-            resp.body?.string().orEmpty()
+    /** 从 .git/config 解析 github.com 的 owner/repo（兼容 ssh 与 https 两种 remote）。 */
+    private fun parseRepoFromGitConfig(config: String?): String? {
+        if (config.isNullOrBlank()) return null
+        val urlRegex = Regex("""url\s*=\s*(\S+)""")
+        urlRegex.findAll(config).forEach { match ->
+            val url = match.groupValues[1]
+            val repo = when {
+                url.startsWith("git@github.com:") ->
+                    url.removePrefix("git@github.com:").removeSuffix(".git")
+                url.contains("github.com/") ->
+                    url.substringAfter("github.com/").removeSuffix(".git")
+                else -> null
+            }
+            if (!repo.isNullOrBlank() && repo.count { it == '/' } == 1) return repo
         }
+        return null
     }
 
     private fun parseIsoMs(iso: String): Long =
