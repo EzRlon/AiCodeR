@@ -194,6 +194,9 @@ class StoreViewModel @Inject constructor(
         const val OFFICIAL_CODEX_MARKET_URL =
             GH_PROXY + "https://raw.githubusercontent.com/openai/plugins/main/.agents/plugins/marketplace.json"
         const val PLUGIN_API_BASE = GH_PROXY + "https://api.github.com/repos/wshobson/agents/contents/"
+
+        /** DSH 开放市场（DeepSeek/dsh 生态社区索引，官方 index.json 格式）。 */
+        const val DSHOPEN_INDEX_URL = "https://dshopen.org/index.json"
     }
 
     private val _state = MutableStateFlow(StoreUiState())
@@ -790,6 +793,15 @@ class StoreViewModel @Inject constructor(
                 }
             }
 
+            // DSH 开放市场（dshopen，DeepSeek/dsh 生态社区索引）：同 id 去重，失败不干扰已有清单
+            val dshOpen = withContext(Dispatchers.IO) { fetchDshOpenPlugins() }
+            if (dshOpen.isNotEmpty()) {
+                _state.update { s ->
+                    val merged = dshOpen.filter { o -> s.plugins.none { it.id == o.id } } + s.plugins
+                    s.copy(plugins = merged.sortedBy { it.name.lowercase() })
+                }
+            }
+
             val installedByEngine = withContext(Dispatchers.IO) {
                 EngineTarget.entries.associateWith { target ->
                     runCatching { pluginInstaller.listInstalled(target) }.getOrDefault(emptySet())
@@ -900,6 +912,57 @@ class StoreViewModel @Inject constructor(
                 }
             }.onFailure { e -> FileLogger.w(TAG, "官方插件市场拉取失败：$repo", e) }
         }
+        return out
+    }
+
+    /**
+     * DSH 开放市场（dshopen index.json）：dsh 生态社区插件索引，官方 index.json 格式。
+     * installRef 直接用 npm 包名（dsh plugin add 转发 pnpm add 安装，无需 marketplace 步骤）。
+     */
+    private fun fetchDshOpenPlugins(): List<PluginStoreItem> {
+        val out = ArrayList<PluginStoreItem>()
+        runCatching {
+            val request = okhttp3.Request.Builder().url(DSHOPEN_INDEX_URL).build()
+            storeClient.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@runCatching
+                val root = org.json.JSONObject(resp.body?.string().orEmpty())
+                val arr = root.optJSONArray("plugins") ?: return@runCatching
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val name = obj.optString("name").takeIf { it.isNotBlank() } ?: continue
+                    val titleObj = obj.optJSONObject("title")
+                    val display = titleObj?.optString("zh")?.takeIf { it.isNotBlank() }
+                        ?: titleObj?.optString("en")?.takeIf { it.isNotBlank() }
+                        ?: name
+                    val version = obj.optJSONArray("versions")?.optJSONObject(0)
+                        ?.optString("version").orEmpty()
+                    val labels = obj.optJSONObject("metadata")?.optJSONArray("labels")
+                        ?.let { a -> (0 until a.length()).mapNotNull { idx -> if (a.isNull(idx)) null else a.optString(idx) } }
+                        .orEmpty()
+                    val desc = buildString {
+                        append(obj.optString("description"))
+                        if (labels.isNotEmpty()) {
+                            if (isNotEmpty()) append("\n")
+                            append(labels.joinToString(" · "))
+                        }
+                    }
+                    out.add(
+                        PluginStoreItem(
+                            id = "dshopen/$name",
+                            name = display,
+                            description = desc,
+                            version = version,
+                            engines = listOf(EngineTarget.DEEPSEEK),
+                            installRef = name,
+                            marketplaceSource = null,
+                            marketplaceName = null,
+                            origin = StoreOrigin.COMMUNITY,
+                            engineOrigin = "deepseek"
+                        )
+                    )
+                }
+            }
+        }.onFailure { e -> FileLogger.w(TAG, "DSH 开放市场拉取失败", e) }
         return out
     }
 
