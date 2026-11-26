@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aicode.core.io.FileAccessProvider
 import com.aicode.core.ui.floating.FloatingWindowGeometry
 import com.aicode.core.util.FileLogger
 import com.aicode.feature.credentials.domain.repository.CredentialRepository
@@ -18,6 +19,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,7 +30,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
@@ -40,7 +42,8 @@ import javax.inject.Inject
 class ProjectHubViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val credentialRepository: CredentialRepository,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val fileAccess: FileAccessProvider
 ) : ViewModel() {
 
     data class RepoInfo(
@@ -137,9 +140,6 @@ class ProjectHubViewModel @Inject constructor(
     var geometry: FloatingWindowGeometry by mutableStateOf(loadGeometry())
         private set
 
-    init {
-        viewModelScope.launch { detectRepoAndLoad() }
-    }
 
     fun updateGeometry(geometry: FloatingWindowGeometry) {
         this.geometry = geometry
@@ -151,17 +151,25 @@ class ProjectHubViewModel @Inject constructor(
             .apply()
     }
 
+    /** 浮窗打开时调用：已加载过则跳过；否则等当前工作区就绪后自动识别仓库并拉数据。 */
+    fun ensureLoaded() {
+        if (_state.value.info != null || _state.value.loading) return
+        detectRepoAndLoad()
+    }
+
     /** 自动识别当前工作区仓库（.git/config remote），然后并行加载各页数据。 */
     fun detectRepoAndLoad() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, message = "") }
-            val workspace = workspaceRepository.current.value
-            if (workspace == null) {
+            // WorkspaceRepository.current 在应用启动阶段可能尚未就绪（DB/DataStore 异步），
+            // 这里挂起等待首个非空值，避免 VM 早创建时一次识别失败后页面永久空白。
+            val workspace = workspaceRepository.current.filterNotNull().first()
+            if (workspace.path.isBlank()) {
                 _state.update { it.copy(loading = false, detected = true, message = "当前没有可用工作区") }
                 return@launch
             }
             val config = withContext(Dispatchers.IO) {
-                runCatching { File(workspace.path, ".git/config").readText() }.getOrNull()
+                runCatching { fileAccess.readFile("${workspace.path}/.git/config") }.getOrNull()
             }
             val repo = parseRepoFromGitConfig(config)
             if (repo == null) {
@@ -191,6 +199,11 @@ class ProjectHubViewModel @Inject constructor(
     /** 下拉刷新（与记忆图谱同交互）：全量静默刷新，1.2s 后收起。 */
     fun pullRefresh() {
         if (_state.value.quietRefreshing) return
+        // 仓库尚未识别时（工作区加载晚于本 VM、或首次识别失败）下拉即重走自动识别
+        if (_state.value.repo.isBlank()) {
+            detectRepoAndLoad()
+            return
+        }
         _state.update { it.copy(quietRefreshing = true) }
         viewModelScope.launch {
             refresh()

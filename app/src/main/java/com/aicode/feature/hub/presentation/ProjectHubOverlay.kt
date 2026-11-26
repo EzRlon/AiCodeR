@@ -80,6 +80,9 @@ fun ProjectHubOverlay(viewModel: ProjectHubViewModel, onClose: () -> Unit) {
     val windowState = rememberWindowState(viewModel)
     val pagerState = rememberPagerState(initialPage = 0) { HUB_TAB_COUNT }
 
+    // 浮窗打开：自动识别当前工作区仓库并加载各页（幂等，已加载则跳过）
+    LaunchedEffect(Unit) { viewModel.ensureLoaded() }
+
     // CI 页可见且存在进行中 run 时才轮询（15s；离开即停，纯手机流量）
     LaunchedEffect(pagerState.currentPage, state.runs) {
         if (pagerState.currentPage == 2 && state.runs.any { it.running }) {
