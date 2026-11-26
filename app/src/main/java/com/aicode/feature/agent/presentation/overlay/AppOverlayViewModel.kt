@@ -30,4 +30,15 @@ class AppOverlayViewModel @Inject constructor() : ViewModel() {
     fun closeNotebook() {
         _notebookOpen.value = false
     }
+
+    private val _hubOpen = MutableStateFlow(false)
+    val hubOpen: StateFlow<Boolean> = _hubOpen.asStateFlow()
+
+    fun toggleHub() {
+        _hubOpen.value = !_hubOpen.value
+    }
+
+    fun closeHub() {
+        _hubOpen.value = false
+    }
 }

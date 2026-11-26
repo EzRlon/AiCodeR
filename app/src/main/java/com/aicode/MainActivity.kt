@@ -520,6 +520,7 @@ fun AppNavigation(
     // 随记浮窗：顶栏按钮与浮窗渲染共用 Activity 级实例（与 VNC 同一纪律）
     val appOverlayViewModel: AppOverlayViewModel = hiltViewModel()
     val notebookViewModel: NotebookViewModel = hiltViewModel()
+    val projectHubViewModel: com.aicode.feature.hub.presentation.ProjectHubViewModel = hiltViewModel()
     val workspaceViewModel: WorkspaceViewModel = hiltViewModel()
 
     // ── 首次启动引导 ──
@@ -575,6 +576,7 @@ fun AppNavigation(
     }
 
     val notebookOpen by appOverlayViewModel.notebookOpen.collectAsStateWithLifecycle()
+    val hubOpen by appOverlayViewModel.hubOpen.collectAsStateWithLifecycle()
     val sessions by agentViewModel.sessions.collectAsStateWithLifecycle()
     val currentSessionId by agentViewModel.currentSessionId.collectAsStateWithLifecycle()
     val agentStates by agentViewModel.agentStates.collectAsStateWithLifecycle()
@@ -1378,6 +1380,14 @@ fun AppNavigation(
     // 留在 navBody 里就只能铺满内容区，侧栏依然占着横向空间（横屏下画面被挤成竖条）。
     // 非全屏时它仍是一个跟随拖动的小窗，行为与之前一致。
     VncOverlayWindow(viewModel = vncOverlayViewModel)
+
+    // 项目中心浮窗：与随记同层挂载（可拖拽/缩放/最小化），盖住导航内容与侧栏。
+    if (hubOpen) {
+        com.aicode.feature.hub.presentation.ProjectHubOverlay(
+            viewModel = projectHubViewModel,
+            onClose = appOverlayViewModel::closeHub
+        )
+    }
 
     // 随记浮窗：与 VNC 同层挂载，盖住导航内容与侧栏；不会打断会话可见性。
     // 润色与发送由 Activity 级 agentViewModel 提供，浮窗本身不跨 feature 引用 AI 能力。

@@ -215,6 +215,7 @@ internal fun ChatHeader(
                     onClick = onNavigateToTerminal
                 )
                 NotebookHeaderIconButton()
+                ProjectHubHeaderIconButton()
                 Box(
                     modifier = Modifier
                         .size(HEADER_ICON_BUTTON_SIZE)
@@ -562,6 +563,43 @@ private fun NotebookHeaderIconButton() {
         Icon(
             FeatherIcons.FileText,
             contentDescription = stringResource(R.string.notebook_toggle),
+            modifier = Modifier.size(HEADER_ICON_SIZE),
+            tint = if (open) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+    }
+}
+
+/** 项目中心：仓库总览/构建/CI/发行/事务一体化悬浮小程序（第二批继续接入剩余页签）。 */
+@Composable
+private fun ProjectHubHeaderIconButton() {
+    val context = LocalContext.current
+    val owner = remember(context) { context.findActivityOwner() }
+    val viewModel: AppOverlayViewModel = hiltViewModel(
+        viewModelStoreOwner = owner ?: checkNotNull(LocalViewModelStoreOwner.current)
+    )
+    val open by viewModel.hubOpen.collectAsStateWithLifecycle()
+    Box(
+        modifier = Modifier
+            .size(HEADER_ICON_BUTTON_SIZE)
+            .then(
+                if (open) {
+                    Modifier
+                        .clip(RoundedCornerShape(Radius.sm))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                } else {
+                    Modifier
+                }
+            )
+            .combinedClickable(onClick = viewModel::toggleHub),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            FeatherIcons.GitBranch,
+            contentDescription = "项目中心",
             modifier = Modifier.size(HEADER_ICON_SIZE),
             tint = if (open) {
                 MaterialTheme.colorScheme.primary
