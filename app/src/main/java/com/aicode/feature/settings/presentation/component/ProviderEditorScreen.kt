@@ -211,6 +211,9 @@ fun ProviderEditorScreen(
     var apiKey by remember { mutableStateOf(initialProvider?.apiKey ?: "") }
     var apiKeyVisible by remember { mutableStateOf(false) }
     var multiKeyEnabled by remember { mutableStateOf(initialProvider?.multiKeyEnabled ?: false) }
+    var keyNetworkFailoverEnabled by remember {
+        mutableStateOf(initialProvider?.keyNetworkFailoverEnabled ?: true)
+    }
     val apiKeys = remember { mutableStateListOf<ProviderKey>().apply { addAll(initialProvider?.apiKeys ?: emptyList()) } }
     var keyRotationStrategy by remember { mutableStateOf(initialProvider?.keyRotationStrategy ?: KeyRotationStrategy.SEQUENTIAL) }
     var keyCooldownMinutes by remember { mutableIntStateOf(initialProvider?.keyCooldownMinutes ?: 5) }
@@ -322,6 +325,7 @@ fun ProviderEditorScreen(
         type = type,
         apiKey = apiKey,
         multiKeyEnabled = multiKeyEnabled,
+        keyNetworkFailoverEnabled = keyNetworkFailoverEnabled,
         apiKeys = apiKeys.toList(),
         keyRotationStrategy = keyRotationStrategy,
         keyCooldownMinutes = keyCooldownMinutes,
@@ -643,6 +647,13 @@ fun ProviderEditorScreen(
                             }
                         )
                         if (multiKeyEnabled) {
+                            SettingsDivider()
+                            ProviderSwitchRow(
+                                title = "网络中断自动换 Key",
+                                subtitle = "断流/超时/连接中断时自动切换下一个 Key；关闭后仅限流与鉴权错误切换",
+                                checked = keyNetworkFailoverEnabled,
+                                onCheckedChange = { keyNetworkFailoverEnabled = it }
+                            )
                             SettingsDivider()
                             SettingsRow(
                                 icon = null,

@@ -76,6 +76,7 @@ import compose.icons.feathericons.FileText
 import compose.icons.feathericons.GitBranch
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.Monitor
+import compose.icons.feathericons.Package
 import compose.icons.feathericons.Share2
 import compose.icons.feathericons.Users
 import compose.icons.feathericons.Terminal
@@ -598,7 +599,7 @@ private fun ProjectHubHeaderIconButton() {
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            FeatherIcons.GitBranch,
+            FeatherIcons.Package,
             contentDescription = "项目中心",
             modifier = Modifier.size(HEADER_ICON_SIZE),
             tint = if (open) {
