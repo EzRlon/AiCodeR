@@ -1904,9 +1904,9 @@ private const val TEAM_AUTO_SCROLL_INTERVAL_MS = 3_000L
 /** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
 private const val VOICE_BRANCH_DX_DP = 50f
 
-/** 底部扇形舞台高度与弧带线宽（dp）。 */
-private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 150
-private const val VOICE_STAGE_SECTOR_STROKE_DP = 64
+/** 底部扇形舞台高度与弧带线宽（dp）：半径 = 舞台高度，圆心在屏幕角落。 */
+private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 160
+private const val VOICE_STAGE_SECTOR_STROKE_DP = 56
 
 /** 长按语音的手势分支：SEND=原地松手发送；CANCEL=取消丢弃；TRANSCRIBE=识别结果填回输入框不发送。 */
 internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
@@ -1972,9 +1972,9 @@ internal fun VoiceHoldStage(
                     ) {
                         Text(
                             text = partialText,
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                         )
                     }
                 }
@@ -1983,7 +1983,7 @@ internal fun VoiceHoldStage(
                     // 光晕
                     Box(
                         modifier = Modifier
-                            .size(150.dp)
+                            .size(84.dp)
                             .graphicsLayer {
                                 scaleX = orbScale * 1.15f
                                 scaleY = orbScale * 1.15f
@@ -1992,10 +1992,10 @@ internal fun VoiceHoldStage(
                             .clip(CircleShape)
                             .background(Color(0xFF34C759))
                     )
-                    // 光球本体
+                    // 光球本体（对照微信：小而醒目）
                     Box(
                         modifier = Modifier
-                            .size(96.dp)
+                            .size(56.dp)
                             .graphicsLayer {
                                 scaleX = orbScale
                                 scaleY = orbScale
@@ -2020,7 +2020,9 @@ internal fun VoiceHoldStage(
                 )
             }
 
-            // 底部扇形：左取消（滑左/上左）、右转文字（滑右/上右）；高亮跟随手势分支
+            // 底部扇形：左取消（滑左）、右转文字（滑右/上滑）；高亮跟随手势分支。
+            // 几何：圆心在屏幕左下/右下角，半径 = 舞台高度，弧带自角落向内上括；
+            // 文字落在弧带中线 45° 处（微信同款）。
             Canvas(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -2028,48 +2030,55 @@ internal fun VoiceHoldStage(
                     .height(VOICE_STAGE_SECTOR_HEIGHT_DP.dp)
             ) {
                 val stroke = VOICE_STAGE_SECTOR_STROKE_DP.dp.toPx()
-                val radius = stroke
+                val radius = size.height
                 val leftActive = dragTarget == VoiceDragTarget.CANCEL
                 val rightActive = dragTarget == VoiceDragTarget.TRANSCRIBE
-                // 左翼：圆心在左下角，弧段 270°→360°；右翼镜像。激活时提亮微扩。
+                val sectorColor = { active: Boolean ->
+                    if (active) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.45f)
+                }
+                // 左翼：圆心 (0, H)，弧段 270°→360°（自顶部到右下）
                 drawArc(
-                    color = if (leftActive) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.45f),
+                    color = sectorColor(leftActive),
                     startAngle = 270f,
                     sweepAngle = 90f,
                     useCenter = false,
-                    topLeft = Offset(-radius * 0.15f, size.height - radius * 0.15f),
-                    size = Size(radius * 2.3f, radius * 2.3f),
+                    topLeft = Offset(-radius, size.height - radius),
+                    size = Size(radius * 2f, radius * 2f),
                     style = Stroke(width = stroke, cap = StrokeCap.Round)
                 )
+                // 右翼：圆心 (W, H)，弧段 180°→270°（自左下到顶部），镜像
                 drawArc(
-                    color = if (rightActive) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.45f),
+                    color = sectorColor(rightActive),
                     startAngle = 180f,
                     sweepAngle = 90f,
                     useCenter = false,
-                    topLeft = Offset(size.width - radius * 2.15f, size.height - radius * 0.15f),
-                    size = Size(radius * 2.3f, radius * 2.3f),
+                    topLeft = Offset(size.width - radius, size.height - radius),
+                    size = Size(radius * 2f, radius * 2f),
                     style = Stroke(width = stroke, cap = StrokeCap.Round)
                 )
+                // 文字锚在弧带中线 45° 方向：midRadius·sin45，基线下移半行使视觉居中
+                val midRadius = radius - stroke / 2f
+                val dx = midRadius * 0.7071f
                 drawIntoCanvas { canvas ->
                     val paint = android.graphics.Paint().apply {
-                        textSize = 18.sp.toPx()
+                        textSize = 16.sp.toPx()
                         isAntiAlias = true
                         textAlign = android.graphics.Paint.Align.CENTER
                     }
-                    paint.color = if (leftActive) android.graphics.Color.WHITE else android.graphics.Color.argb(200, 255, 255, 255)
+                    paint.color = if (leftActive) android.graphics.Color.WHITE else android.graphics.Color.argb(210, 255, 255, 255)
                     paint.isFakeBoldText = leftActive
                     canvas.nativeCanvas.drawText(
                         cancelLabel,
-                        size.width * 0.24f,
-                        size.height * 0.72f,
+                        dx,
+                        size.height - dx + paint.textSize * 0.35f,
                         paint
                     )
-                    paint.color = if (rightActive) android.graphics.Color.WHITE else android.graphics.Color.argb(200, 255, 255, 255)
+                    paint.color = if (rightActive) android.graphics.Color.WHITE else android.graphics.Color.argb(210, 255, 255, 255)
                     paint.isFakeBoldText = rightActive
                     canvas.nativeCanvas.drawText(
                         transcribeLabel,
-                        size.width * 0.76f,
-                        size.height * 0.72f,
+                        size.width - dx,
+                        size.height - dx + paint.textSize * 0.35f,
                         paint
                     )
                 }
