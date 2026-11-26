@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -137,6 +138,61 @@ fun ProjectHubOverlay(viewModel: ProjectHubViewModel, onClose: () -> Unit) {
     }
 }
 
+/** 一级按钮（主操作）：全 Hub 唯一规格——高 40dp、圆角 8dp、labelLarge 半粗、水平内距 16dp。 */
+@Composable
+private fun HubPrimaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(Radius.sm))
+            .background(
+                if (enabled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+        )
+    }
+}
+
+/** 二级按钮（次操作）：高 28dp、圆角 8dp、labelSmall。 */
+@Composable
+private fun HubSecondaryButton(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(Radius.sm))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.sm),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/** 未连接仓库时的空态引导卡片。 */
+@Composable
+private fun NotConnectedCard() {
+    HubCard {
+        Text("未连接仓库", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            "先到「总览」页填写 owner/repo 并连接，这里会显示对应数据。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
 /** 与记忆图谱 SessionLaneCard 同款的卡片泳道。 */
 @Composable
 private fun HubCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -166,15 +222,8 @@ private fun OverviewPage(viewModel: ProjectHubViewModel, state: ProjectHubViewMo
                     label = { Text("owner/repo", style = MaterialTheme.typography.bodySmall) },
                     modifier = Modifier.weight(1f)
                 )
-                Box(
-                    modifier = Modifier
-                        .padding(start = Spacing.sm)
-                        .clip(RoundedCornerShape(Radius.sm))
-                        .background(MaterialTheme.colorScheme.primary)
-                        .clickable { viewModel.setRepo(repoInput) }
-                        .padding(horizontal = Spacing.md, vertical = 10.dp)
-                ) {
-                    Text("连接", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.SemiBold)
+                Box(modifier = Modifier.padding(start = Spacing.sm)) {
+                    HubPrimaryButton("连接") { viewModel.setRepo(repoInput) }
                 }
             }
         }
@@ -260,29 +309,11 @@ private fun BuildPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
             )
-            Box(
-                modifier = Modifier
-                    .padding(top = Spacing.sm)
-                    .clip(RoundedCornerShape(Radius.sm))
-                    .background(
-                        if (state.repo.isBlank() || state.loading) {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        }
-                    )
-                    .clickable(enabled = state.repo.isNotBlank() && !state.loading) { viewModel.dispatchBuild() }
-                    .padding(horizontal = Spacing.lg, vertical = 10.dp)
-            ) {
-                Text(
-                    if (state.loading) "触发中…" else "触发远端构建",
-                    color = if (state.repo.isBlank()) {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                    } else {
-                        MaterialTheme.colorScheme.onPrimary
-                    },
-                    fontWeight = FontWeight.SemiBold
-                )
+            Box(modifier = Modifier.padding(top = Spacing.sm)) {
+                HubPrimaryButton(
+                    label = if (state.loading) "触发中…" else "触发远端构建",
+                    enabled = state.repo.isNotBlank() && !state.loading
+                ) { viewModel.dispatchBuild() }
             }
         }
         HubCard(modifier = Modifier.padding(top = Spacing.sm)) {
@@ -303,12 +334,15 @@ private fun CiPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.Ui
         modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        if (state.repo.isBlank()) {
+            item { NotConnectedCard() }
+        }
         items(state.runs) { run ->
             HubCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         run.title.take(28),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f)
                     )
@@ -336,9 +370,9 @@ private fun CiPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.Ui
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), modifier = Modifier.padding(top = 6.dp)) {
                     if (run.running) {
-                        MiniAction("取消") { viewModel.cancelRun(run.id) }
+                        HubSecondaryButton("取消") { viewModel.cancelRun(run.id) }
                     } else if (run.conclusion == "failure") {
-                        MiniAction("重跑失败任务") { viewModel.rerunFailed(run.id) }
+                        HubSecondaryButton("重跑失败任务") { viewModel.rerunFailed(run.id) }
                     }
                 }
             }
@@ -353,7 +387,7 @@ private fun CiPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.Ui
             }
         }
         item {
-            MiniAction("刷新") { viewModel.refreshRuns() }
+            HubSecondaryButton("刷新") { viewModel.refreshRuns() }
         }
     }
 }
@@ -365,12 +399,15 @@ private fun ReleasesPage(viewModel: ProjectHubViewModel, state: ProjectHubViewMo
         modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        if (state.repo.isBlank()) {
+            item { NotConnectedCard() }
+        }
         items(state.releases) { release ->
             HubCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         release.tag,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f)
                     )
@@ -422,7 +459,7 @@ private fun ReleasesPage(viewModel: ProjectHubViewModel, state: ProjectHubViewMo
             }
         }
         item {
-            MiniAction("刷新") { viewModel.refreshReleases() }
+            HubSecondaryButton("刷新") { viewModel.refreshReleases() }
         }
     }
     // 供未来「打开网页」入口复用（当前仅资产下载走 DownloadManager）
@@ -437,6 +474,9 @@ private fun OpsPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.U
         modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
+        if (state.repo.isBlank()) {
+            item { NotConnectedCard() }
+        }
         items(state.ops) { item ->
             HubCard(modifier = Modifier.clickable {
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.htmlUrl))) }
@@ -472,21 +512,8 @@ private fun OpsPage(viewModel: ProjectHubViewModel, state: ProjectHubViewModel.U
             }
         }
         item {
-            MiniAction("刷新") { viewModel.refreshOps() }
+            HubSecondaryButton("刷新") { viewModel.refreshOps() }
         }
-    }
-}
-
-@Composable
-private fun MiniAction(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(Radius.sm))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.sm, vertical = 6.dp)
-    ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
