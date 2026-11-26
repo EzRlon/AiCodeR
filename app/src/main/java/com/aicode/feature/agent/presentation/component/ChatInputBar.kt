@@ -121,8 +121,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import com.aicode.R
@@ -252,8 +250,11 @@ internal fun ChatInputBar(
     voiceProcessing: Boolean = false,
     /** 识别中间结果：长按期间实时驱动浮层文字气泡。 */
     voicePartialText: String = "",
-    /** 长按语音浮层显隐上报：外层据此对内容层加实时高斯模糊。 */
+    /** 长按语音浮层显隐上报：外层据此对内容层加实时高斯模糊并铺全屏舞台。 */
     onVoiceHoldActiveChange: (Boolean) -> Unit = {},
+    /** 长按手势分支状态（外层持有）：SendButton 写、全屏舞台读。 */
+    voiceDragTarget: androidx.compose.runtime.MutableState<VoiceDragTarget> =
+        androidx.compose.runtime.mutableStateOf(VoiceDragTarget.SEND),
     workspaceViewModel: WorkspaceViewModel?,
     hasRunningSessions: () -> Boolean,
     onSwitchWorkspaceConfirmed: () -> Unit = {},
@@ -414,8 +415,12 @@ internal fun ChatInputBar(
 
     // ── 语音「按住说话」：长按发送键录音，松手识别并发送；上滑取消。──
     var voiceHoldActive by remember { mutableStateOf(false) }
-    // 长按语音的手势分支，实时驱动浮层分支提示（微信式）；传对象引用给 SendButton 写、浮层读
-    val voiceDragTarget = remember { mutableStateOf(VoiceDragTarget.SEND) }
+    // 长按语音的手势分支，实时驱动全屏舞台分支高亮（微信式）：状态在外层（AIChatPanel），
+    // SendButton 写、舞台读，这里只透传引用
+    LaunchedEffect(voiceHoldActive, voiceProcessing) {
+        // 舞台可见期 = 按住中或识别收尾中；外层据此铺全屏舞台并对内容层加实时高斯模糊
+        onVoiceHoldActiveChange(voiceHoldActive || voiceProcessing)
+    }
     val recordPermissionLauncher = rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -657,14 +662,6 @@ internal fun ChatInputBar(
                         }
                     }
                 }
-            }
-
-            if (voiceHoldActive || voiceProcessing) {
-                VoiceHoldStage(
-                    processing = voiceProcessing,
-                    dragTarget = voiceDragTarget.value,
-                    partialText = voicePartialText
-                )
             }
 
             if (queuedRequests.isNotEmpty()) {
@@ -1919,7 +1916,8 @@ internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
  * 屏幕中央绿色呼吸光球、实时识别文字气泡，以及底部两个扇形按钮（左取消/右转文字）。
  * 高亮随 [dragTarget] 手势分支切换；识别中间结果实时显示在 [partialText] 气泡里。
  *
- * 用 Popup 而非普通子项：浮层必须盖住整屏（含顶栏），不受输入栏父容器裁剪。
+ * 由 AIChatPanel 作为根 Box 的末位子项全屏铺开：不用 Popup——Popup 以输入栏为锚点定位
+ * 再钳制到窗口，全屏内容会被顶出屏幕外，只剩遮罩可见。
  */
 @Composable
 internal fun VoiceHoldStage(
@@ -1927,11 +1925,7 @@ internal fun VoiceHoldStage(
     dragTarget: VoiceDragTarget,
     partialText: String
 ) {
-    Popup(
-        alignment = Alignment.TopStart,
-        properties = PopupProperties(focusable = false, clippingEnabled = false)
-    ) {
-        val orbPulse = rememberInfiniteTransition(label = "voice-orb")
+    val orbPulse = rememberInfiniteTransition(label = "voice-orb")
         val orbScale by orbPulse.animateFloat(
             initialValue = 0.92f,
             targetValue = 1.12f,
@@ -2081,7 +2075,6 @@ internal fun VoiceHoldStage(
                 }
             }
         }
-    }
 }
 
 @Composable

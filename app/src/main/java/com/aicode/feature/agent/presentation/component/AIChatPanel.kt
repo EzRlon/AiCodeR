@@ -1630,8 +1630,10 @@ fun AIChatPanel(
     val sendRef = remember { mutableStateOf<(() -> Unit)?>(null) }
     // 识别中间结果：长按期间实时驱动浮层文字气泡（微信式「边说边出字」）
     var voicePartial by remember { mutableStateOf("") }
-    // 长按语音进行中：内容层据此加实时高斯模糊（ChatInputBar 上报）
+    // 长按语音进行中：内容层据此加实时高斯模糊并铺全屏舞台（ChatInputBar 上报）
     val voiceHoldStage = remember { mutableStateOf(false) }
+    // 长按手势分支：SendButton 写、全屏舞台读
+    val voiceDragTarget = remember { mutableStateOf(VoiceDragTarget.SEND) }
     // 主动取消标记：系统识别器在 cancel() 后可能补一次 ERROR_CLIENT，据此静默吞掉
     var voiceCancelled by remember { mutableStateOf(false) }
     val onVoiceResult = rememberUpdatedState<(String) -> Unit>({ text ->
@@ -2599,6 +2601,7 @@ fun AIChatPanel(
                 voiceProcessing = voiceProcessing,
                 voicePartialText = voicePartial,
                 onVoiceHoldActiveChange = { voiceHoldStage.value = it },
+                voiceDragTarget = voiceDragTarget,
                 enterToSend = settingsViewModel?.enterToSend?.collectAsStateWithLifecycle()?.value ?: false,
                 onStop = { viewModel.stopAgent() },
                 isBusy = isBusy,
@@ -2718,6 +2721,15 @@ fun AIChatPanel(
                     .onboardingTarget(OnboardingStep.SEND_MESSAGE)
             )
             } // 悬浮层结束
+
+            // 长按语音全屏舞台（微信式）：末位子项盖住整屏（含顶栏）；内容层已 blur，这里叠遮罩/光球/扇形
+            if (voiceHoldStage.value) {
+                VoiceHoldStage(
+                    processing = voiceProcessing,
+                    dragTarget = voiceDragTarget.value,
+                    partialText = voicePartial
+                )
+            }
 
             // 悬浮授权弹窗：独立于底栏排版流，悬浮于输入框上方，避免撑大底栏高度导致消息列表被顶上去。
             // 用户上下滑动消息列表时跟随透明弱化，不遮挡阅读视线。

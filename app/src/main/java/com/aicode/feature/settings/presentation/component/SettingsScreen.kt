@@ -1017,13 +1017,23 @@ internal fun SettingsScreen(
                             IconButton(onClick = {
                                 importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
                             }) {
-                                Icon(FeatherIcons.Upload, contentDescription = stringResource(R.string.provider_import))
+                                Icon(
+                                    FeatherIcons.Upload,
+                                    contentDescription = stringResource(R.string.provider_import),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                             IconButton(onClick = {
                                 val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
                                 exportLauncher.launch("aicoder-providers-$stamp.json")
                             }) {
-                                Icon(FeatherIcons.Download, contentDescription = stringResource(R.string.provider_export))
+                                Icon(
+                                    FeatherIcons.Download,
+                                    contentDescription = stringResource(R.string.provider_export),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                             IconButton(
                                 onClick = {
@@ -1032,7 +1042,12 @@ internal fun SettingsScreen(
                                 },
                                 modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_ADD)
                             ) {
-                                Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.settings_add_provider))
+                                Icon(
+                                    FeatherIcons.Plus,
+                                    contentDescription = stringResource(R.string.settings_add_provider),
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                         }
                         SettingsSection.Mcp -> {
