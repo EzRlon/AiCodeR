@@ -93,10 +93,14 @@
   .modal input:focus { border-color: var(--accent); }
   .modal .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .drop-mask {
-    position: fixed; inset: 0; background: rgba(37,99,235,.18); border: 3px dashed var(--accent);
-    z-index: 25; display: flex; align-items: center; justify-content: center;
-    color: var(--accent); font-size: 18px; font-weight: 600; pointer-events: none;
+    position: fixed; inset: 0; background: rgba(37,99,235,.08); border: 3px dashed var(--accent);
+    z-index: 25; display: flex; align-items: flex-start; justify-content: center;
+    padding-top: 12vh; box-sizing: border-box;
+    color: var(--accent); font-size: 15px; font-weight: 600; pointer-events: none;
   }
+  /* 关键：声明了 display 的元素会覆盖 hidden 属性的浏览器默认 display:none，
+     导致 modal-mask 恒显（拖拽时假弹窗+灰屏）。必须显式补回 hidden 语义。 */
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -284,24 +288,34 @@
     a.click();
     document.body.removeChild(a);
   }
+  // 显隐一律走内联 style：部分内核里 hidden 属性的 UA display:none 会被自定义
+  // display:flex 覆盖，导致弹窗/拖拽浮层恒显且关不掉；内联 style 优先级最高。
+  function setModal(open) {
+    modalEl.hidden = !open;
+    modalEl.style.display = open ? 'flex' : 'none';
+  }
+  function setDrop(open) {
+    dropEl.hidden = !open;
+    dropEl.style.display = open ? 'flex' : 'none';
+  }
   function openModal(title, showInput, initial, okText, onOk) {
     modalTitle.textContent = title;
     modalInput.style.display = showInput ? '' : 'none';
     modalInput.value = initial || '';
     modalOk.textContent = okText || '确定';
-    modalEl.hidden = false;
+    setModal(true);
     if (showInput) { modalInput.focus(); modalInput.select(); }
     modalOk.onclick = function () {
       var v = modalInput.value.trim();
-      modalEl.hidden = true;
+      setModal(false);
       onOk(v);
     };
-    modalCancel.onclick = function () { modalEl.hidden = true; };
+    modalCancel.onclick = function () { setModal(false); };
   }
   document.addEventListener('keydown', function (ev) {
     if (modalEl.hidden) return;
     if (ev.key === 'Enter') modalOk.click();
-    if (ev.key === 'Escape') modalEl.hidden = true;
+    if (ev.key === 'Escape') setModal(false);
   });
   function renameEntry(e) {
     openModal('重命名「' + e.name + '」', true, e.name, '重命名', async function (v) {
@@ -408,15 +422,15 @@
 
   var dragDepth = 0;
   document.addEventListener('dragenter', function (ev) {
-    ev.preventDefault(); dragDepth++; dropEl.hidden = false;
+    ev.preventDefault(); dragDepth++; setDrop(true);
   });
   document.addEventListener('dragover', function (ev) { ev.preventDefault(); });
   document.addEventListener('dragleave', function (ev) {
     ev.preventDefault(); dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) dropEl.hidden = true;
+    if (dragDepth === 0) setDrop(false);
   });
   document.addEventListener('drop', function (ev) {
-    ev.preventDefault(); dragDepth = 0; dropEl.hidden = true;
+    ev.preventDefault(); dragDepth = 0; setDrop(false);
     uploadFiles(ev.dataTransfer ? ev.dataTransfer.files : null);
   });
 
