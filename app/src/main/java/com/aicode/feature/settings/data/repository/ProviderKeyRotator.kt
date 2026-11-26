@@ -21,7 +21,10 @@ enum class KeyFailureKind {
     RATE_LIMIT,
 
     /** 401/403：凭据失效，固定冷却并标记，等待用户更换。 */
-    AUTH
+    AUTH,
+
+    /** 网络断流/超时/连接中断：短冷却后即可再用（不按限流惩罚）。 */
+    NETWORK
 }
 
 /** 选 Key 的结果。全冷却时不再返回 null，而是带着「最早何时恢复」交给上层决定等多久。 */
@@ -192,6 +195,7 @@ class ProviderKeyRotator @Inject constructor(
             when (kind) {
                 KeyFailureKind.RATE_LIMIT -> ledger.reportRateLimit(providerId, key, rateLimit, setup.cooldownMillis, profile)
                 KeyFailureKind.AUTH -> ledger.reportAuthFailure(providerId, key, setup.cooldownMillis)
+                KeyFailureKind.NETWORK -> ledger.reportNetworkFailure(providerId, key)
             }
 
             val next = pick(providerId, setup.keys, setup.strategy, exclude = triedKeys + key) ?: return null

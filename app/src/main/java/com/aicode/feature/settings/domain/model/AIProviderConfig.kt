@@ -17,6 +17,9 @@ data class AIProviderConfig(
     val keyCooldownMinutes: Int = 5,
     /** 命中即触发多 Key 自动切换的 HTTP 状态码；留空时回退 [DEFAULT_KEY_SWITCH_STATUS_CODES]。 */
     val keySwitchStatusCodes: List<Int> = emptyList(),
+
+    /** 多 Key 时网络断流/超时/连接中断也自动切换下一个 Key（默认开）；关掉则只在 HTTP 状态码命中时切换。 */
+    val keyNetworkFailoverEnabled: Boolean = true,
     val baseUrl: String,
     val defaultModel: String,
     /** 该提供商已添加的可用模型列表（拉取或手动添加）。 */

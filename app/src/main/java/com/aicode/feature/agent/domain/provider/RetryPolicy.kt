@@ -520,11 +520,13 @@ suspend fun <T> retryStaircase(
             throw e
         } catch (e: Throwable) {
             coroutineContext.ensureActive()
+            // 先问 Key 切换：网络断流/超时也要能换 Key（多 Key 且未关闭时切成功立即重发，
+            // 不等退避）；单 Key/不可切时回调返回 false，行为与原逻辑一致。
+            if (onKeyFailure?.invoke(e, true) == true) {
+                attempt = 0
+                continue
+            }
             if (!isRetriableNetworkError(e)) {
-                if (onKeyFailure?.invoke(e, true) == true) {
-                    attempt = 0
-                    continue
-                }
                 // 无 Key 可切（单 Key）时的限流退避重试：429 是瞬时限流，等待后重试优于直接失败
                 if (!isRateLimitError(e)) throw e
             }
@@ -576,11 +578,18 @@ suspend fun streamWithStaircaseRetry(
             throw e
         } catch (e: Throwable) {
             coroutineContext.ensureActive()
+            // 未吐字：任何错误（含网络断流/超时）都先试换 Key，切成功立即重发；
+            // 已吐字：网络类失败不询问切换（避免重复输出），非网络错误保持原询问行为。
+            val switched = if (!receivedContent) {
+                onKeyFailure?.invoke(e, true) == true
+            } else {
+                !isRetriableNetworkError(e) && onKeyFailure?.invoke(e, false) == true
+            }
+            if (switched) {
+                attempt = 0
+                continue
+            }
             if (!isRetriableNetworkError(e)) {
-                if (onKeyFailure?.invoke(e, !receivedContent) == true) {
-                    attempt = 0
-                    continue
-                }
                 // 限流且尚未吐字、又无 Key 可切（单 Key）→ 退避重试；已吐字不重发，保持原行为
                 if (!(isRateLimitError(e) && !receivedContent)) throw e
             }

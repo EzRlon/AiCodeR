@@ -71,7 +71,11 @@ class AIProviderFactory @Inject constructor(
         val keySwitcher: (suspend (Throwable, String, Set<String>) -> KeySwitchOutcome?)? =
             if (activeKeys.size > 1) {
                 { error, failedKey, triedKeys ->
-                    if (!error.isKeySwitchFailure(config.effectiveKeySwitchStatusCodes)) {
+                    val codeMatched = error.isKeySwitchFailure(config.effectiveKeySwitchStatusCodes)
+                    // 多 Key 时网络断流/超时也自动切下一个 Key（用户可显式关掉保命中率）；
+                    // triedKeys 去重保证同一请求至多每个 Key 试一遍，不会死循环。
+                    val networkFailed = config.keyNetworkFailoverEnabled && error.isNetworkFailure()
+                    if (!codeMatched && !networkFailed) {
                         null
                     } else {
                         val switched = keyRotator.reportFailure(
@@ -79,7 +83,11 @@ class AIProviderFactory @Inject constructor(
                             sessionId,
                             failedKey,
                             triedKeys,
-                            kind = keyFailureKindOf(error),
+                            kind = if (!codeMatched && networkFailed) {
+                                KeyFailureKind.NETWORK
+                            } else {
+                                keyFailureKindOf(error)
+                            },
                             rateLimit = extractRateLimit(error),
                             profile = cooldownProfileOf(config.baseUrl)
                         )

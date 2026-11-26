@@ -55,6 +55,7 @@ object ProviderBackupCodec {
         put("keyFailoverThreshold", p.keyFailoverThreshold)
         put("keyCooldownMinutes", p.keyCooldownMinutes)
         put("keySwitchStatusCodes", JSONArray(p.keySwitchStatusCodes))
+        put("keyNetworkFailoverEnabled", p.keyNetworkFailoverEnabled)
         put("baseUrl", p.baseUrl)
         put("defaultModel", p.defaultModel)
         put("models", JSONArray(p.models))
@@ -109,6 +110,7 @@ object ProviderBackupCodec {
             keySwitchStatusCodes = o.optJSONArray("keySwitchStatusCodes")?.let { a ->
                 (0 until a.length()).mapNotNull { i -> if (a.isNull(i)) null else a.optInt(i) }
             } ?: emptyList(),
+            keyNetworkFailoverEnabled = o.optBoolean("keyNetworkFailoverEnabled", true),
             baseUrl = o.optString("baseUrl"),
             defaultModel = o.optString("defaultModel"),
             models = o.optJSONArray("models")?.let { a ->

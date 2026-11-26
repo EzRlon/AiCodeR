@@ -57,3 +57,35 @@ private val KEY_FAILURE_MESSAGES = listOf(
     "authentication_error",
     "permission_denied"
 )
+
+/**
+ * 网络类失败（连接中断/重置、读写超时、断流 EOF、DNS 解析失败等）判定：沿 cause 链检查。
+ * 与 [isKeySwitchFailure] 不同——这类失败与 Key 本身无关，默认由退避重试消化；
+ * 多 Key 且用户开启「网络中断自动切换」时，调用方用它触发换 Key（triedKeys 去重保证
+ * 每个请求至多把每个 Key 试一遍，不会死循环）。
+ */
+fun Throwable.isNetworkFailure(): Boolean {
+    var cur: Throwable? = this
+    var depth = 0
+    while (cur != null && depth < 6) {
+        when (cur) {
+            is java.net.SocketTimeoutException,
+            is java.net.SocketException,
+            is java.net.UnknownHostException,
+            is java.io.EOFException,
+            is java.io.InterruptedIOException -> return true
+            is java.io.IOException -> {
+                val msg = cur.message.orEmpty()
+                if (msg.contains("connection reset", true) ||
+                    msg.contains("connection closed", true) ||
+                    msg.contains("unexpected end of stream", true) ||
+                    msg.contains("broken pipe", true) ||
+                    msg.contains("stream was reset", true)
+                ) return true
+            }
+        }
+        cur = cur.cause
+        depth++
+    }
+    return false
+}

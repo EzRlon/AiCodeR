@@ -269,6 +269,21 @@ class KeyLedger @Inject constructor(
         return maxOf(estimate ?: floor, floor).coerceAtMost(2 * 60 * 60_000L)
     }
 
+    /**
+     * 网络断流/超时/连接中断：只做短冷却（30s），不累加限流惩罚等级、不标记失效——
+     * 这类失败多半与 Key 无关，过度惩罚会把健康 Key 拉黑。
+     */
+    fun reportNetworkFailure(providerId: String, key: String) {
+        synchronized(lock) {
+            val now = now()
+            val state = stateOf(providerId, key)
+            noteRequest(state, now)
+            state.lastErrorKind = "NETWORK"
+            state.coolUntilMs = maxOf(state.coolUntilMs, now + NETWORK_COOLDOWN_MS)
+            markDirty(providerId)
+        }
+    }
+
     /** 鉴权失败（401/403）：凭据本身有问题，固定冷却并标记，等待用户处理。 */
     fun reportAuthFailure(providerId: String, key: String, baseCooldownMs: Long) {
         synchronized(lock) {
@@ -503,6 +518,7 @@ class KeyLedger @Inject constructor(
         const val FILE_VERSION = 1
         const val RPM_WINDOW_MS = 60_000L
         const val AUTH_COOLDOWN_MS = 60 * 60_000L
+        const val NETWORK_COOLDOWN_MS = 30_000L
         const val DECAY_INTERVAL_MS = 30 * 60_000L
         const val MAX_COOLDOWN_MS = 24 * 60 * 60_000L
 
