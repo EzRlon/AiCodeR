@@ -20,6 +20,7 @@ import android.speech.SpeechRecognizer
 internal class VoiceInputController(private val context: Context) : VoiceSession {
 
     override var onResult: ((String) -> Unit)? = null
+    override var onPartial: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
 
     private var recognizer: SpeechRecognizer? = null
@@ -78,7 +79,13 @@ internal class VoiceInputController(private val context: Context) : VoiceSession
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
-        override fun onPartialResults(partialResults: Bundle?) {}
+        override fun onPartialResults(partialResults: Bundle?) {
+            val text = partialResults
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                .orEmpty()
+            onPartial?.invoke(text)
+        }
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 }

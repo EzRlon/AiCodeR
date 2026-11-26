@@ -3,11 +3,16 @@ package com.aicode.feature.agent.presentation.component
 import android.content.ClipData
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Canvas
@@ -80,6 +85,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -110,9 +117,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import com.aicode.R
@@ -212,27 +222,15 @@ private const val MODE_INFO_AUTO_COLLAPSE_MS = 6_000L
  */
 private val INPUT_FIELD_CONTENT_PADDING = 16.dp
 
-/** 内嵌麦克风的热区尺寸。 */
-private val INPUT_FIELD_MIC_SLOT = 32.dp
-
-/** 文字末尾到麦克风的最小间隔，避免两者视觉相贴。 */
-private val INPUT_FIELD_MIC_GAP = 6.dp
-
-/** 「展开为全屏输入」热区：与麦克风并排放在同一右侧尾槽里，两者右边缘与竖直基线一致。 */
+/** 「展开为全屏输入」热区：右侧尾槽里，空闲时不进布局。 */
 private val INPUT_FIELD_EXPAND_SLOT = 28.dp
 
-/** 尾槽内两个热区之间的间隔。 */
-private val INPUT_FIELD_ACTION_GAP = 4.dp
-
 /**
- * 右侧尾槽总宽 = 展开键与麦克风的较宽者 + 文字间隔。
- *
- * 展开键叠在麦克风**正上方**（同一竖直中轴），不再横向并排，所以不额外占宽；
- * 空闲时它完全不进布局。尾槽宽度与「是否显示展开键」无关，输入框可占字数因此恒定，
+ * 右侧尾槽总宽（录音入口已统一为长按发送键，槽内只剩展开键）。
+ * 宽度与「是否显示展开键」无关，输入框可占字数因此恒定，
  * 不会出现按钮一出现文字区就跳窄一截的问题。
  */
-private val INPUT_FIELD_TRAILING_WIDTH =
-    maxOf(INPUT_FIELD_EXPAND_SLOT, INPUT_FIELD_MIC_SLOT) + INPUT_FIELD_MIC_GAP
+private val INPUT_FIELD_TRAILING_WIDTH = INPUT_FIELD_EXPAND_SLOT
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -252,10 +250,10 @@ internal fun ChatInputBar(
     onVoiceHoldCancel: () -> Unit = {},
     /** 识别处理中（浮层显示「正在识别…」）。 */
     voiceProcessing: Boolean = false,
-    /** 点击麦克风的应用内聆听进行中（浮层显示「正在聆听…再点一下结束」）。 */
-    voiceTapActive: Boolean = false,
-    /** 点击聆听浮层上的关闭按钮：放弃本次识别、不产生结果。 */
-    onVoiceTapCancel: () -> Unit = {},
+    /** 识别中间结果：长按期间实时驱动浮层文字气泡。 */
+    voicePartialText: String = "",
+    /** 长按语音浮层显隐上报：外层据此对内容层加实时高斯模糊。 */
+    onVoiceHoldActiveChange: (Boolean) -> Unit = {},
     workspaceViewModel: WorkspaceViewModel?,
     hasRunningSessions: () -> Boolean,
     onSwitchWorkspaceConfirmed: () -> Unit = {},
@@ -303,7 +301,6 @@ internal fun ChatInputBar(
     onUploadFile: () -> Unit,
     onUploadImage: () -> Unit,
     onTakePhoto: () -> Unit,
-    onVoiceInput: () -> Unit = {},
     slashCommands: List<SlashCommand> = emptyList(),
     fileMentionState: FileMentionState = FileMentionState.Idle,
     onFileMentionOpen: () -> Unit = {},
@@ -662,13 +659,11 @@ internal fun ChatInputBar(
                 }
             }
 
-            if (voiceHoldActive || voiceProcessing || voiceTapActive) {
-                VoiceHoldOverlay(
+            if (voiceHoldActive || voiceProcessing) {
+                VoiceHoldStage(
                     processing = voiceProcessing,
-                    tapMode = voiceTapActive && !voiceHoldActive,
-                    dragTarget = voiceDragTarget,
-                    // 长按说话由松手结束，无需关闭按钮；点击聆听需要显式关闭
-                    onCancel = if (voiceTapActive) onVoiceTapCancel else null
+                    dragTarget = voiceDragTarget.value,
+                    partialText = voicePartialText
                 )
             }
 
@@ -908,62 +903,23 @@ internal fun ChatInputBar(
                                     inner()
                                 }
                             )
-                            // 右侧尾槽：录音键贴底；卡片因文本变高向上延伸时，全屏键出现在
-                            // 录音键**正上方**（同一竖直中轴）。空闲/未换行时全屏键完全不进布局，
-                            // 也不占宽——尾槽宽度只由麦克风决定，输入框可占字数恒定。
-                            val voiceActive = voiceTapActive || voiceHoldActive
-                            Column(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(bottom = 2.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(INPUT_FIELD_ACTION_GAP)
-                            ) {
-                                if (inputGrew) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(INPUT_FIELD_EXPAND_SLOT)
-                                            .clip(CircleShape)
-                                            .clickable { showFullScreenInput = true },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            FeatherIcons.Maximize,
-                                            contentDescription = stringResource(R.string.chat_input_expand),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-                                // 内嵌麦克风：点击进入聆听模式；激活时亮起变色（primaryContainer 圆形底，
-                                // 各主题下与输入框底色对比都足够）。
-                                // 用 Box 而非 IconButton：后者有 48dp 最小交互尺寸，会把右侧占位撑大。
+                            // 右侧尾槽：全屏键在卡片因文本变高时出现；空闲/未换行时不进布局、不占宽
+                            //（录音入口已统一为长按发送键，无独立麦克风）。
+                            if (inputGrew) {
                                 Box(
                                     modifier = Modifier
-                                        .size(INPUT_FIELD_MIC_SLOT)
+                                        .align(Alignment.BottomEnd)
+                                        .padding(bottom = 2.dp)
+                                        .size(INPUT_FIELD_EXPAND_SLOT)
                                         .clip(CircleShape)
-                                        .clickable(onClick = onVoiceInput)
-                                        .then(
-                                            if (voiceActive) {
-                                                Modifier.background(
-                                                    MaterialTheme.colorScheme.primaryContainer,
-                                                    CircleShape
-                                                )
-                                            } else {
-                                                Modifier
-                                            }
-                                        ),
+                                        .clickable { showFullScreenInput = true },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        FeatherIcons.Mic,
-                                        contentDescription = stringResource(R.string.chat_voice_input),
-                                        tint = if (voiceActive) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                        modifier = Modifier.size(20.dp)
+                                        FeatherIcons.Maximize,
+                                        contentDescription = stringResource(R.string.chat_input_expand),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -1896,11 +1852,12 @@ internal fun SendButton(
                                     val dy = change.position.y - down.position.y
                                     val dx = change.position.x - down.position.x
                                     // 方向主判据：左右滑动直接决定分支，不要求先向下移出底边（发送键贴底，下方没有可滑空间）。
-                                    // 上滑取消，回中发送；实时写入 dragTarget 供语音浮层高亮当前分支。
+                                    // 左滑取消，右滑/上滑转文字（与扇形按钮：左取消、右转文字一致），回中发送；
+                                    // 实时写入 dragTarget 供语音浮层高亮当前分支。
                                     target = when {
                                         dx > VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.TRANSCRIBE
                                         dx < -VOICE_BRANCH_DX_DP.dp.toPx() -> VoiceDragTarget.CANCEL
-                                        dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx() -> VoiceDragTarget.CANCEL
+                                        dy < -VOICE_CANCEL_SLIDE_DP.dp.toPx() -> VoiceDragTarget.TRANSCRIBE
                                         else -> VoiceDragTarget.SEND
                                     }
                                     dragTarget?.value = target
@@ -1950,93 +1907,178 @@ private const val TEAM_AUTO_SCROLL_INTERVAL_MS = 3_000L
 /** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
 private const val VOICE_BRANCH_DX_DP = 50f
 
+/** 底部扇形舞台高度与弧带线宽（dp）。 */
+private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 150
+private const val VOICE_STAGE_SECTOR_STROKE_DP = 64
+
 /** 长按语音的手势分支：SEND=原地松手发送；CANCEL=取消丢弃；TRANSCRIBE=识别结果填回输入框不发送。 */
 internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
 
-/** 语音浮层：长按「按住说话」与点击聆听共用；识别期间文案切换，点击模式提示再点一下结束。 */
+/**
+ * 长按语音全屏舞台（微信式）：背后内容层已由外层加实时高斯模糊，这里叠半透明遮罩、
+ * 屏幕中央绿色呼吸光球、实时识别文字气泡，以及底部两个扇形按钮（左取消/右转文字）。
+ * 高亮随 [dragTarget] 手势分支切换；识别中间结果实时显示在 [partialText] 气泡里。
+ *
+ * 用 Popup 而非普通子项：浮层必须盖住整屏（含顶栏），不受输入栏父容器裁剪。
+ */
 @Composable
-internal fun VoiceHoldOverlay(
+internal fun VoiceHoldStage(
     processing: Boolean,
-    tapMode: Boolean = false,
-    dragTarget: androidx.compose.runtime.State<VoiceDragTarget>? = null,
-    onCancel: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    dragTarget: VoiceDragTarget,
+    partialText: String
 ) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(Radius.md),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    Popup(
+        alignment = Alignment.TopStart,
+        properties = PopupProperties(focusable = false, clippingEnabled = false)
     ) {
-        // Surface 的内容槽是 Box 语义：多个子项会叠在同一坐标，分行必须显式 Column。
-        val target = dragTarget?.value ?: VoiceDragTarget.SEND
-        val accent = when {
-            processing -> MaterialTheme.colorScheme.tertiary
-            tapMode -> MaterialTheme.semanticColors.success
-            target == VoiceDragTarget.CANCEL -> MaterialTheme.colorScheme.error
-            target == VoiceDragTarget.TRANSCRIBE -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.semanticColors.success
-        }
-        Column {
-            Row(
-                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        val orbPulse = rememberInfiniteTransition(label = "voice-orb")
+        val orbScale by orbPulse.animateFloat(
+            initialValue = 0.92f,
+            targetValue = 1.12f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(650, easing = androidx.compose.animation.core.EaseInOutSine),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "voice-orb-scale"
+        )
+        val orbAlpha by orbPulse.animateFloat(
+            initialValue = 0.75f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(650),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "voice-orb-alpha"
+        )
+        val cancelLabel = stringResource(R.string.common_cancel)
+        val transcribeLabel = stringResource(R.string.chat_voice_transcribe_label)
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 遮罩：内容层已被 blur，再压一层暗色让前景更突出
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+            )
+
+            // 中央：实时文字气泡 + 呼吸光球 + 状态提示
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(28.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(accent)
-                )
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = partialText.isNotBlank(),
+                    enter = fadeIn() + scaleIn(initialScale = 0.9f),
+                    exit = fadeOut()
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Text(
+                            text = partialText,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                        )
+                    }
+                }
+
+                Box(contentAlignment = Alignment.Center) {
+                    // 光晕
+                    Box(
+                        modifier = Modifier
+                            .size(150.dp)
+                            .graphicsLayer {
+                                scaleX = orbScale * 1.15f
+                                scaleY = orbScale * 1.15f
+                                alpha = 0.25f * orbAlpha
+                            }
+                            .clip(CircleShape)
+                            .background(Color(0xFF34C759))
+                    )
+                    // 光球本体
+                    Box(
+                        modifier = Modifier
+                            .size(96.dp)
+                            .graphicsLayer {
+                                scaleX = orbScale
+                                scaleY = orbScale
+                                alpha = orbAlpha
+                            }
+                            .clip(CircleShape)
+                            .background(Color(0xFF34C759))
+                    )
+                }
+
                 Text(
                     text = stringResource(
                         when {
                             processing -> R.string.chat_voice_processing
-                            tapMode -> R.string.chat_voice_listening_hint
-                            target == VoiceDragTarget.CANCEL -> R.string.chat_voice_release_cancel
-                            target == VoiceDragTarget.TRANSCRIBE -> R.string.chat_voice_release_transcribe
+                            dragTarget == VoiceDragTarget.CANCEL -> R.string.chat_voice_release_cancel
+                            dragTarget == VoiceDragTarget.TRANSCRIBE -> R.string.chat_voice_release_transcribe
                             else -> R.string.chat_voice_release_send
                         }
                     ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = accent,
-                    modifier = Modifier.weight(1f)
-                )
-                if (onCancel != null) {
-                    IconButton(
-                        onClick = onCancel,
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(R.string.common_close),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-                Icon(
-                    imageVector = FeatherIcons.Mic,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
                 )
             }
-            // 只在还没滑到任何分支时提示手势：滑中后状态文字已说明结果，再写一遍就是两套显示。
-            if (!processing && !tapMode && dragTarget != null && target == VoiceDragTarget.SEND) {
-                Text(
-                    text = stringResource(R.string.chat_voice_gesture_hint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.md)
-                        .padding(bottom = Spacing.sm)
+
+            // 底部扇形：左取消（滑左/上左）、右转文字（滑右/上右）；高亮跟随手势分支
+            Canvas(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(VOICE_STAGE_SECTOR_HEIGHT_DP.dp)
+            ) {
+                val stroke = VOICE_STAGE_SECTOR_STROKE_DP.dp.toPx()
+                val radius = stroke
+                val leftActive = dragTarget == VoiceDragTarget.CANCEL
+                val rightActive = dragTarget == VoiceDragTarget.TRANSCRIBE
+                // 左翼：圆心在左下角，弧段 270°→360°；右翼镜像。激活时提亮微扩。
+                drawArc(
+                    color = if (leftActive) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.45f),
+                    startAngle = 270f,
+                    sweepAngle = 90f,
+                    useCenter = false,
+                    topLeft = Offset(-radius * 0.15f, size.height - radius * 0.15f),
+                    size = Size(radius * 2.3f, radius * 2.3f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
                 )
+                drawArc(
+                    color = if (rightActive) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.45f),
+                    startAngle = 180f,
+                    sweepAngle = 90f,
+                    useCenter = false,
+                    topLeft = Offset(size.width - radius * 2.15f, size.height - radius * 0.15f),
+                    size = Size(radius * 2.3f, radius * 2.3f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+                drawIntoCanvas { canvas ->
+                    val paint = android.graphics.Paint().apply {
+                        textSize = 18.sp.toPx()
+                        isAntiAlias = true
+                        textAlign = android.graphics.Paint.Align.CENTER
+                    }
+                    paint.color = if (leftActive) android.graphics.Color.WHITE else android.graphics.Color.argb(200, 255, 255, 255)
+                    paint.isFakeBoldText = leftActive
+                    canvas.nativeCanvas.drawText(
+                        cancelLabel,
+                        size.width * 0.24f,
+                        size.height * 0.72f,
+                        paint
+                    )
+                    paint.color = if (rightActive) android.graphics.Color.WHITE else android.graphics.Color.argb(200, 255, 255, 255)
+                    paint.isFakeBoldText = rightActive
+                    canvas.nativeCanvas.drawText(
+                        transcribeLabel,
+                        size.width * 0.76f,
+                        size.height * 0.72f,
+                        paint
+                    )
+                }
             }
         }
     }

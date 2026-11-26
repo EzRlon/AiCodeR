@@ -51,10 +51,10 @@ class LayoutDumpTest {
     fun `导出语音浮层-长按态`() = dump("voice-hold") {
         compose.setContent {
             AIEditorTheme(darkTheme = false) {
-                VoiceHoldOverlay(
+                VoiceHoldStage(
                     processing = false,
-                    tapMode = false,
-                    dragTarget = androidx.compose.runtime.mutableStateOf(VoiceDragTarget.SEND)
+                    dragTarget = VoiceDragTarget.SEND,
+                    partialText = ""
                 )
             }
         }
@@ -64,10 +64,10 @@ class LayoutDumpTest {
     fun `导出语音浮层-识别中`() = dump("voice-processing") {
         compose.setContent {
             AIEditorTheme(darkTheme = false) {
-                VoiceHoldOverlay(
+                VoiceHoldStage(
                     processing = true,
-                    tapMode = false,
-                    dragTarget = androidx.compose.runtime.mutableStateOf(VoiceDragTarget.SEND)
+                    dragTarget = VoiceDragTarget.SEND,
+                    partialText = ""
                 )
             }
         }

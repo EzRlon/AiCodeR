@@ -7,10 +7,12 @@ import com.aicode.feature.settings.data.repository.VoiceEngine
  * 语音识别会话的统一接口：系统识别（[VoiceInputController]）与离线识别（[OfflineVoiceSession]）
  * 两个实现共用同一套「按住说话」交互（start → finish / cancel）。
  *
- * 回调均在主线程触发：成功 [onResult] 给最终文本；失败 [onError] 给错误码。
+ * 回调均在主线程触发：成功 [onResult] 给最终文本；[onPartial] 在识别过程中持续给出
+ * 中间文本（可能为空串，UI 用它驱动实时文字气泡）；失败 [onError] 给错误码。
  */
 internal interface VoiceSession {
     var onResult: ((String) -> Unit)?
+    var onPartial: ((String) -> Unit)?
     var onError: ((Int) -> Unit)?
 
     /** 当前引擎是否可用（系统：设备有识别服务；离线：模型已就绪）。 */

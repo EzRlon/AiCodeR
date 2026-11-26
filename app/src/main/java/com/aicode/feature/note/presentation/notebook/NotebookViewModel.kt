@@ -266,6 +266,11 @@ class NotebookViewModel @Inject constructor(
         if (!hasEdits) return
         val text = currentContent()
         hasEdits = false
+        // 种子必须同步成已落盘内容：否则快速关开浮窗时 reloadCurrent 因 hasEdits==false
+        // 短路，编辑器会用旧种子（新笔记即空白）重建，用户刚敲的内容看似全丢
+        if (text != _state.value.editorSeed) {
+            _state.update { it.copy(editorSeed = text) }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { fileAccess.writeFile(path, text, overwrite = true) }
                 .onFailure { FileLogger.w(TAG, "关闭前落盘失败: $path", it) }

@@ -136,6 +136,7 @@ import compose.icons.feathericons.Edit2
 import compose.icons.feathericons.PieChart
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Upload
 import compose.icons.feathericons.Save
 import compose.icons.feathericons.Server
 import compose.icons.feathericons.Shield
@@ -149,6 +150,10 @@ import compose.icons.feathericons.Zap
 import com.aicode.core.ui.onboarding.OnboardingStep
 import com.aicode.core.ui.onboarding.onboardingTarget
 import com.aicode.feature.settings.data.local.ProviderPreset
+import com.aicode.feature.settings.domain.model.ProviderBackupCodec
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.aicode.feature.terminal.data.repository.TerminalSettings
 import com.aicode.feature.terminal.presentation.component.TerminalSettingsSheet
 
@@ -970,14 +975,65 @@ internal fun SettingsScreen(
                 },
                 actions = {
                     when (current) {
-                        SettingsSection.Providers -> IconButton(
-                            onClick = {
-                                providerPresetPrefill = null
-                                showAddProviderSheet = true
-                            },
-                            modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_ADD)
-                        ) {
-                            Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.settings_add_provider))
+                        SettingsSection.Providers -> {
+                            val context = LocalContext.current
+                            val exportLauncher = rememberLauncherForActivityResult(
+                                ActivityResultContracts.CreateDocument(ProviderBackupCodec.MIME_TYPE)
+                            ) { uri ->
+                                if (uri != null) {
+                                    val ok = runCatching {
+                                        context.contentResolver.openOutputStream(uri)?.use {
+                                            it.write(viewModel.exportProvidersJson().toByteArray())
+                                        } != null
+                                    }.getOrDefault(false)
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(if (ok) R.string.provider_export_done else R.string.provider_export_failed),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                            val importLauncher = rememberLauncherForActivityResult(
+                                ActivityResultContracts.OpenDocument()
+                            ) { uri ->
+                                if (uri != null) {
+                                    val text = runCatching {
+                                        context.contentResolver.openInputStream(uri)?.use {
+                                            it.readBytes().toString(Charsets.UTF_8)
+                                        }
+                                    }.getOrNull()
+                                    if (text == null) {
+                                        Toast.makeText(context, context.getString(R.string.provider_import_failed), Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val (count, error) = viewModel.importProvidersJson(text)
+                                        Toast.makeText(
+                                            context,
+                                            if (error != null) error else context.getString(R.string.provider_import_done, count),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            }
+                            IconButton(onClick = {
+                                importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
+                            }) {
+                                Icon(FeatherIcons.Upload, contentDescription = stringResource(R.string.provider_import))
+                            }
+                            IconButton(onClick = {
+                                val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                                exportLauncher.launch("aicoder-providers-$stamp.json")
+                            }) {
+                                Icon(FeatherIcons.Download, contentDescription = stringResource(R.string.provider_export))
+                            }
+                            IconButton(
+                                onClick = {
+                                    providerPresetPrefill = null
+                                    showAddProviderSheet = true
+                                },
+                                modifier = Modifier.onboardingTarget(OnboardingStep.PROVIDER_ADD)
+                            ) {
+                                Icon(FeatherIcons.Plus, contentDescription = stringResource(R.string.settings_add_provider))
+                            }
                         }
                         SettingsSection.Mcp -> {
                             IconButton(onClick = { viewModel.reloadMcp() }) {

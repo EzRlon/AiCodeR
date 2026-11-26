@@ -114,6 +114,7 @@ import com.aicode.feature.settings.domain.model.ProviderDashboardResult
 import com.aicode.feature.settings.domain.model.ProviderDashboardState
 import com.aicode.feature.settings.domain.service.ModelCostCalculator
 import com.aicode.feature.settings.domain.service.ProviderDashboardRunner
+import com.aicode.feature.settings.domain.model.ProviderBackupCodec
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.ProxyType
 import com.aicode.R
@@ -2846,6 +2847,37 @@ class SettingsViewModel @Inject constructor(
 
     /** 本轮已确认过中转风险的 provider id（确认后允许直存）。 */
     private var confirmedRelayRiskProviderId: String? = null
+
+    /** 导出全部供应商为备份 JSON（含 API Key 明文，交由 SAF 写用户选定文件）。 */
+    fun exportProvidersJson(): String = ProviderBackupCodec.encode(providers.value)
+
+    /**
+     * 导入供应商备份：同 id 覆盖（保留原排序号），新 id 追加到列表末尾。
+     * 返回（成功导入条数，错误提示）；失败时不改动任何现有配置。
+     * 直接落库、不走中转站确认弹窗——导入是用户主动的恢复操作，逐条弹确认无法用。
+     */
+    fun importProvidersJson(text: String): Pair<Int, String?> {
+        val imported = try {
+            ProviderBackupCodec.decode(text)
+        } catch (e: IllegalArgumentException) {
+            return 0 to (e.message ?: "备份文件解析失败")
+        }
+        val existingById = _providers.value.associateBy { it.id }
+        val maxSort = existingById.values.maxOfOrNull { it.sortOrder } ?: -1
+        var appended = maxSort + 1
+        viewModelScope.launch {
+            imported.forEach { p ->
+                val merged = if (existingById.containsKey(p.id)) {
+                    p.copy(sortOrder = existingById.getValue(p.id).sortOrder)
+                } else {
+                    p.copy(sortOrder = appended++)
+                }
+                repository.saveProvider(merged)
+                _providerDashboards.update { it - merged.id }
+            }
+        }
+        return imported.size to null
+    }
 
     /** 用户确认在中转站使用官方密钥：仍保存。 */
     fun confirmSaveProviderRegardless() {

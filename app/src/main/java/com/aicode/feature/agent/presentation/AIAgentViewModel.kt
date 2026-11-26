@@ -4419,9 +4419,9 @@ class AIAgentViewModel @Inject constructor(
         FileLogger.d(TAG, "stopAgent: sid=$sessionId runningTools=${stoppedState?.runningTools?.size ?: 0} pendingPerm=${stoppedState?.pendingPermission?.id} pendingNotifs=$pendingNotifs state=${_agentStates.value[sessionId]}")
         // 先置「停止中」闸门，再取消/杀进程：期间新消息只入队、队列不消费，
         // 直到旧进程真正退出、finally 清掉闸门后才允许下一轮。
-        stoppingSessions.add(sessionId)
-        // 不走「等 Job 完成」的钩子：CLI 回合常阻塞在 readLine，Job 可能迟迟不完成。
-        // registry 直接关流 + SIGTERM，让旧进程立刻死，彻底消除同会话双进程。
+        // 连点停止幂等：闸门已在说明上一击的停止正在收尾，重入只会产生重复
+        // 「已停止」消息与多余看门狗，直接忽略。
+        if (!stoppingSessions.add(sessionId)) return
         engineProcessRegistry.kill(sessionId)
         // cancel() 在 Dispatchers.Main.immediate 上可能立即恢复挂起协程
         // （如 awaitApproval 的 CompletableDeferred.await），旧 job 的 finally →

@@ -30,6 +30,7 @@ import org.vosk.Recognizer
 internal class OfflineVoiceSession(private val context: Context) : VoiceSession {
 
     override var onResult: ((String) -> Unit)? = null
+    override var onPartial: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -73,6 +74,9 @@ internal class OfflineVoiceSession(private val context: Context) : VoiceSession 
                 audioRecord.startRecording()
                 val shorts = ShortArray(2048)
                 val bytes = ByteArray(shorts.size * 2)
+                // 部分结果轮询节流：Vosk partialResult 每块都查太频，约 4Hz 足够气泡实时感
+                var ticks = 0
+                var lastPartial = ""
                 while (running) {
                     val read = audioRecord.read(shorts, 0, shorts.size)
                     if (read > 0) {
@@ -83,6 +87,15 @@ internal class OfflineVoiceSession(private val context: Context) : VoiceSession 
                             bytes[j++] = ((v shr 8) and 0xFF).toByte()
                         }
                         rec.acceptWaveForm(bytes, j)
+                        if (++ticks % PARTIAL_POLL_EVERY == 0) {
+                            val partial = runCatching {
+                                JSONObject(rec.partialResult).optString("partial").trim()
+                            }.getOrDefault("")
+                            if (partial.isNotEmpty() && partial != lastPartial) {
+                                lastPartial = partial
+                                withContext(Dispatchers.Main) { onPartial?.invoke(partial) }
+                            }
+                        }
                     }
                 }
                 audioRecord.runCatching { stop() }
@@ -157,5 +170,6 @@ internal class OfflineVoiceSession(private val context: Context) : VoiceSession 
     private companion object {
         const val TAG = "OfflineVoice"
         const val SAMPLE_RATE = 16000
+        const val PARTIAL_POLL_EVERY = 8
     }
 }

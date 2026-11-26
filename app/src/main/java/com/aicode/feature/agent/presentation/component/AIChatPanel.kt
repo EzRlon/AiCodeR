@@ -71,6 +71,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -1627,40 +1628,15 @@ fun AIChatPanel(
     val pendingAutoSend = remember { mutableStateOf(false) }
     // 供 onVoiceResult（定义在前）间接调用 sendMessage：自动发送复用完整发送链路（队列/清草稿/贴底）
     val sendRef = remember { mutableStateOf<(() -> Unit)?>(null) }
-    // 点击聆听进行中（从开始持续到结果/错误到达；结果分流靠它区分点击与长按两种来源）
-    var voiceTapActive by remember { mutableStateOf(false) }
+    // 识别中间结果：长按期间实时驱动浮层文字气泡（微信式「边说边出字」）
+    var voicePartial by remember { mutableStateOf("") }
+    // 长按语音进行中：内容层据此加实时高斯模糊（ChatInputBar 上报）
+    val voiceHoldStage = remember { mutableStateOf(false) }
     // 主动取消标记：系统识别器在 cancel() 后可能补一次 ERROR_CLIENT，据此静默吞掉
     var voiceCancelled by remember { mutableStateOf(false) }
-    val voicePermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            Toast.makeText(context, context.getString(R.string.chat_voice_permission_granted_tap), Toast.LENGTH_SHORT).show()
-        }
-    }
-    fun launchVoiceInput() {
-        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            voicePermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-            return
-        }
-        if (voiceTapActive) {
-            // 再点一下结束：结果处理中重复点击忽略，等 onResult/onError 复位
-            if (!voiceProcessing) {
-                voiceProcessing = true
-                voiceController.finish()
-            }
-        } else if (!voiceProcessing) {
-            // 先立标记再启动：无识别服务时 start() 会同步回调 onError，标记随复位不残留
-            voiceTapActive = true
-            voiceCancelled = false
-            voiceController.start()
-        }
-    }
     val onVoiceResult = rememberUpdatedState<(String) -> Unit>({ text ->
         voiceProcessing = false
-        voiceTapActive = false
+        voicePartial = ""
         if (voiceCancelled) {
             // 主动取消后迟到的结果（系统 stopListening 已发出的、离线已排队的结果）一律丢弃
             voiceCancelled = false
@@ -1683,7 +1659,7 @@ fun AIChatPanel(
     })
     val onVoiceError = rememberUpdatedState<(Int) -> Unit>({ code ->
         voiceProcessing = false
-        voiceTapActive = false
+        voicePartial = ""
         if (voiceCancelled) {
             // 用户主动结束的本次识别，不再提示失败
             voiceCancelled = false
@@ -1707,6 +1683,7 @@ fun AIChatPanel(
     })
     DisposableEffect(voiceController) {
         voiceController.onResult = { text -> onVoiceResult.value(text) }
+        voiceController.onPartial = { voicePartial = it }
         voiceController.onError = { code -> onVoiceError.value(code) }
         onDispose { voiceController.destroy() }
     }
@@ -2116,8 +2093,13 @@ fun AIChatPanel(
                 .widthIn(max = readableContentMaxWidth())
                 .fillMaxSize()
         ) {
-            // 内容层：消息列表延伸到屏幕底部，输入框悬浮其上，滚动时卡片可滑入输入框后面
-            Column(modifier = Modifier.fillMaxSize()) {
+            // 内容层：消息列表延伸到屏幕底部，输入框悬浮其上，滚动时卡片可滑入输入框后面。
+            // 语音长按期间对整层实时高斯模糊（微信式背景虚化）；blur 在 API<31 上是无操作（优雅降级）。
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(if (voiceHoldStage.value) 18.dp else 0.dp)
+            ) {
             Box(modifier = Modifier.weight(1f)) {
                 if (!messagesReady) {
                     // 远程模式连接未就绪时显示连接状态占位，避免空白或旧工作区记录闪烁
@@ -2600,8 +2582,7 @@ fun AIChatPanel(
                 onVoiceHoldStart = {
                     voiceProcessing = false
                     voiceCancelled = false
-                    // 长按接管：清掉未完成的点击聆听标记，识别结果统一按长按路径直接发送
-                    voiceTapActive = false
+                    voicePartial = ""
                     voiceController.start()
                 },
                 onVoiceHoldFinish = { transcribe ->
@@ -2616,13 +2597,8 @@ fun AIChatPanel(
                     voiceController.cancel()
                 },
                 voiceProcessing = voiceProcessing,
-                voiceTapActive = voiceTapActive,
-                onVoiceTapCancel = {
-                    voiceProcessing = false
-                    voiceTapActive = false
-                    voiceCancelled = true
-                    voiceController.cancel()
-                },
+                voicePartialText = voicePartial,
+                onVoiceHoldActiveChange = { voiceHoldStage.value = it },
                 enterToSend = settingsViewModel?.enterToSend?.collectAsStateWithLifecycle()?.value ?: false,
                 onStop = { viewModel.stopAgent() },
                 isBusy = isBusy,
@@ -2672,7 +2648,6 @@ fun AIChatPanel(
                     )
                 },
                 onTakePhoto = ::takePhoto,
-                onVoiceInput = { launchVoiceInput() },
                 slashCommands = slashCommands,
                 fileMentionState = fileMentionState,
                 onFileMentionOpen = viewModel::requestFileMention,

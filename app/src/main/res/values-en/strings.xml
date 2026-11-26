@@ -419,6 +419,12 @@
     <string name="common_prev">Previous</string>
     <string name="common_next">Next</string>
     <string name="settings_add_provider">Add vendor</string>
+    <string name="provider_import">Import providers</string>
+    <string name="provider_export">Export providers</string>
+    <string name="provider_export_done">All providers exported (includes API keys, keep the file safe)</string>
+    <string name="provider_export_failed">Export failed</string>
+    <string name="provider_import_done">Imported %1$d providers</string>
+    <string name="provider_import_failed">Import failed: not a valid backup file</string>
     <string name="settings_reconnect">Reconnect</string>
     <string name="settings_add_mcp_server">Add MCP server</string>
     <string name="settings_refresh_logs">Refresh logs</string>    <string name="settings_vision_follow_chat">Follow current chat model</string>
@@ -759,6 +765,7 @@
     <string name="common_create">Create</string>
     <string name="common_delete">Delete</string>
     <string name="common_cancel">Cancel</string>
+    <string name="chat_voice_transcribe_label">Transcribe</string>
     <string name="common_retry">Retry</string>
     <string name="common_confirm">Confirm</string>
     <string name="common_go_to_settings">Go to Settings</string>
