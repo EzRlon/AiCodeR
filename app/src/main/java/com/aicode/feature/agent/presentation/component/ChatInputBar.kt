@@ -1904,9 +1904,9 @@ private const val TEAM_AUTO_SCROLL_INTERVAL_MS = 3_000L
 /** 分支区内水平偏移超过该距离才判定为对应分支，避免误触。 */
 private const val VOICE_BRANCH_DX_DP = 50f
 
-/** 底部扇形舞台高度与弧带线宽（dp）：半径 = 舞台高度，圆心在屏幕角落。 */
-private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 160
-private const val VOICE_STAGE_SECTOR_STROKE_DP = 56
+/** 底部扇形舞台高度与弧带线宽（dp）：半径 = 舞台高度，圆心在屏幕角落；对照微信翼尺寸取小弧带。 */
+private const val VOICE_STAGE_SECTOR_HEIGHT_DP = 104
+private const val VOICE_STAGE_SECTOR_STROKE_DP = 34
 
 /** 长按语音的手势分支：SEND=原地松手发送；CANCEL=取消丢弃；TRANSCRIBE=识别结果填回输入框不发送。 */
 internal enum class VoiceDragTarget { SEND, CANCEL, TRANSCRIBE }
@@ -2061,7 +2061,7 @@ internal fun VoiceHoldStage(
                 val dx = midRadius * 0.7071f
                 drawIntoCanvas { canvas ->
                     val paint = android.graphics.Paint().apply {
-                        textSize = 16.sp.toPx()
+                        textSize = 15.sp.toPx()
                         isAntiAlias = true
                         textAlign = android.graphics.Paint.Align.CENTER
                     }
