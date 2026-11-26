@@ -2277,7 +2277,7 @@ internal fun ToolPermissionPanel(
                             text = stringResource(R.string.common_allow),
                             onClick = { onChoice(PermissionChoice.ONCE) },
                             modifier = Modifier.weight(1f),
-                            tone = AgentActionTone.Success
+                            tone = AgentActionTone.Primary
                         )
                     }
                 }
@@ -2482,7 +2482,7 @@ internal fun PlanApprovalPanel(
                             text = stringResource(R.string.chat_approve_and_implement),
                             onClick = onApprove,
                             modifier = Modifier.weight(1f),
-                            tone = AgentActionTone.Success
+                            tone = AgentActionTone.Primary
                         )
                     }
                 }

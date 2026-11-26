@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,9 +101,9 @@ fun AskUserQuestionPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(Radius.md),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(Radius.xl),
+        shadowElevation = 3.dp
     ) {
         Column(
             modifier = Modifier.padding(Spacing.md)
@@ -195,7 +196,7 @@ fun AskUserQuestionPanel(
                                 onConfirm(UserQuestionAnswer(answers))
                             },
                             modifier = Modifier.weight(1f),
-                            tone = AgentActionTone.Success
+                            tone = AgentActionTone.Primary
                         )
                     }
                 }
@@ -258,7 +259,14 @@ private fun QuestionCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(Radius.xs))
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                        } else {
+                            Color.Transparent
+                        }
+                    )
                     .clickable {
                         val newSelection = if (item.multiSelect) {
                             if (isSelected) selected - label else selected + label
@@ -267,7 +275,7 @@ private fun QuestionCard(
                         }
                         onSelectionChanged(newSelection)
                     }
-                    .padding(vertical = Spacing.xs, horizontal = Spacing.xs),
+                    .padding(vertical = Spacing.xs, horizontal = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (item.multiSelect) {

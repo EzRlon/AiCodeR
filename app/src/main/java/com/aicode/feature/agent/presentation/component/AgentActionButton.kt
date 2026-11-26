@@ -22,6 +22,8 @@ import com.aicode.core.theme.semanticColors
 
 internal enum class AgentActionTone {
     Neutral,
+    /** 高强调主操作（M3：一屏只应有一个），容器用 primary。 */
+    Primary,
     Success,
     Danger
 }
@@ -34,40 +36,54 @@ internal fun AgentActionButton(
     enabled: Boolean = true,
     tone: AgentActionTone = AgentActionTone.Neutral
 ) {
+    // M3 按钮层级靠容器色阶表达，不再描边：Primary=高强调，Neutral/Success/Danger=tonal
     val shape = RoundedCornerShape(Radius.sm)
     val success = MaterialTheme.semanticColors.success
-    val (container, content, border) = when (tone) {
-        AgentActionTone.Success -> Triple(
-            if (enabled) success else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            if (enabled) MaterialTheme.semanticColors.onSuccess else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-            if (enabled) success else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-        )
-        AgentActionTone.Danger -> Triple(
-            if (enabled) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            if (enabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-            if (enabled) MaterialTheme.colorScheme.error.copy(alpha = 0.22f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-        )
-        AgentActionTone.Neutral -> Triple(
-            if (enabled) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-            if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
-            if (enabled) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
-        )
+    val (container, content) = when (tone) {
+        AgentActionTone.Primary ->
+            if (enabled) {
+                MaterialTheme.colorScheme.primary to MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) to
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            }
+        AgentActionTone.Success ->
+            if (enabled) {
+                success to MaterialTheme.semanticColors.onSuccess
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) to
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            }
+        AgentActionTone.Danger ->
+            if (enabled) {
+                MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) to
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            }
+        AgentActionTone.Neutral ->
+            if (enabled) {
+                MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) to
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            }
     }
 
     Box(
         modifier = modifier
-            .height(44.dp)
+            .height(40.dp)
             .clip(shape)
             .background(container)
-            .border(1.dp, border, shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = Spacing.xs),
+            .padding(horizontal = Spacing.sm),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
+            style = MaterialTheme.typography.labelLarge,
             color = content,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1
         )
     }

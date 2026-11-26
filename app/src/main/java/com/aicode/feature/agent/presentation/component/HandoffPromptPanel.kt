@@ -50,9 +50,9 @@ internal fun HandoffPromptPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(Radius.md),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(Radius.xl),
+        shadowElevation = 3.dp
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -102,7 +102,7 @@ internal fun HandoffPromptPanel(
                     onClick = onConfirm,
                     modifier = Modifier.weight(1f),
                     enabled = !generating && !preparingCopy,
-                    tone = AgentActionTone.Success
+                    tone = AgentActionTone.Primary
                 )
             }
             if (paused) {

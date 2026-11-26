@@ -59,9 +59,9 @@ internal fun BudgetApprovalPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(Radius.md),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(Radius.xl),
+        shadowElevation = 3.dp
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
             Row(
@@ -122,7 +122,7 @@ internal fun BudgetApprovalPanel(
                             text = stringResource(R.string.chat_budget_continue),
                             onClick = onContinue,
                             modifier = Modifier.weight(1f),
-                            tone = AgentActionTone.Success
+                            tone = AgentActionTone.Primary
                         )
                     }
                 }
