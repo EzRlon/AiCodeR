@@ -579,7 +579,7 @@ private fun LocalBackupTab(
         SettingsGroupHeader(text = stringResource(R.string.backup_actions))
         SettingsGroup {
             SettingsRow(
-                icon = FeatherIcons.Download,
+                icon = FeatherIcons.Upload,
                 title = stringResource(R.string.backup_export_title),
                 subtitle = stringResource(R.string.backup_export_subtitle),
                 enabled = !working,
@@ -587,7 +587,7 @@ private fun LocalBackupTab(
             )
             SettingsDivider()
             SettingsRow(
-                icon = FeatherIcons.Upload,
+                icon = FeatherIcons.Download,
                 title = stringResource(R.string.backup_import_title),
                 subtitle = stringResource(R.string.backup_import_subtitle),
                 enabled = !working,
