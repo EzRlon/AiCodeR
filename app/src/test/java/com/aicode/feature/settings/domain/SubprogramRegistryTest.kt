@@ -66,6 +66,64 @@ class SubprogramRegistryTest {
         assertEquals(listOf(second), loaded)
     }
 
+    // ---------- save 的 gitignore 防护（C2 方案 A） ----------
+
+    private fun gitignoreOf(workspace: java.io.File): String {
+        val f = java.io.File(workspace, ".aicode/.gitignore")
+        return if (f.isFile) f.readText() else ""
+    }
+
+    /** 无 .gitignore 时 save 自动创建并含规则行。 */
+    @Test
+    fun save_createsGitignoreWithTokenRule() {
+        val (registry, workspace, _) = newRegistry()
+
+        registry.save(listOf(sub))
+
+        assertTrue(java.io.File(workspace, ".aicode/.gitignore").exists())
+        assertTrue(gitignoreOf(workspace).lines().any { it.trim() == "subprograms.json" })
+    }
+
+    /** 已有 .gitignore：原内容逐字保留，只在末尾追加规则行。 */
+    @Test
+    fun save_appendsGitignoreRule_keepingExistingContent() {
+        val (registry, workspace, _) = newRegistry()
+        val dir = java.io.File(workspace, ".aicode").apply { mkdirs() }
+        val existing = "# my rules\n*.log\n"
+        java.io.File(dir, ".gitignore").writeText(existing)
+
+        registry.save(listOf(sub))
+
+        val after = gitignoreOf(workspace)
+        assertTrue(after.startsWith(existing))
+        assertTrue(after.lines().any { it.trim() == "subprograms.json" })
+    }
+
+    /** 已含规则行时不重复追加：文件内容与用户预置完全一致。 */
+    @Test
+    fun save_doesNotDuplicateGitignoreRule() {
+        val (registry, workspace, _) = newRegistry()
+        val dir = java.io.File(workspace, ".aicode").apply { mkdirs() }
+        val existing = "*.log\nsubprograms.json\n"
+        java.io.File(dir, ".gitignore").writeText(existing)
+
+        registry.save(listOf(sub))
+
+        assertEquals(existing, gitignoreOf(workspace))
+    }
+
+    /** 用户文件末尾无换行时补分隔换行，原行不被粘连。 */
+    @Test
+    fun save_handlesGitignoreWithoutTrailingNewline() {
+        val (registry, workspace, _) = newRegistry()
+        val dir = java.io.File(workspace, ".aicode").apply { mkdirs() }
+        java.io.File(dir, ".gitignore").writeText("*.log")
+
+        registry.save(listOf(sub))
+
+        assertEquals("*.log\nsubprograms.json\n", gitignoreOf(workspace))
+    }
+
     /** 文件里端口非正/名称空白的脏条目在 load 时被过滤，不污染注册表。 */
     @Test
     fun load_filtersInvalidEntries() {

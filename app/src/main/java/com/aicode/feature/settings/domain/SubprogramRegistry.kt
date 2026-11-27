@@ -59,6 +59,26 @@ class SubprogramRegistry @Inject constructor(
             val f = file()
             f.parentFile?.mkdirs()
             f.writeText(JSONObject().put("subprograms", arr).toString(2))
+            ensureGitignoreRule(f.parentFile)
+        }
+    }
+
+    /**
+     * 确保工作区 .aicode/.gitignore 忽略 subprograms.json（内含明文令牌），防止随项目提交推送。
+     * 只在文件不存在时创建、存在但缺规则行时追加；用户已有内容逐字保留、绝不重写。
+     *
+     * 局限：若用户曾 `git add -f` 强制跟踪该文件，gitignore 不生效，
+     * 需用户自行执行 `git rm --cached .aicode/subprograms.json`。
+     */
+    private fun ensureGitignoreRule(dir: File) {
+        runCatching {
+            val ignore = File(dir, ".gitignore")
+            val rule = "subprograms.json"
+            val existing = if (ignore.isFile) ignore.readText() else ""
+            if (existing.lines().any { it.trim() == rule }) return
+            val sep = if (existing.isEmpty() || existing.endsWith("\n")) "" else "\n"
+            ignore.parentFile?.mkdirs()
+            ignore.writeText(existing + sep + rule + "\n")
         }
     }
 
