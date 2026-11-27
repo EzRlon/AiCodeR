@@ -177,7 +177,7 @@ internal fun DevKeysSection(
         SettingsGroupHeader(text = stringResource(R.string.dev_keys_actions_prepare))
         SettingsGroup {
             SettingsRow(
-                icon = FeatherIcons.Upload,
+                icon = FeatherIcons.Download,
                 title = stringResource(R.string.dev_keys_import),
                 subtitle = stringResource(
                     if (state.importing) R.string.dev_keys_import_running else R.string.dev_keys_import_desc
@@ -190,7 +190,7 @@ internal fun DevKeysSection(
             SettingsGroupHeader(text = stringResource(R.string.dev_keys_actions_backup))
             SettingsGroup {
                 SettingsRow(
-                    icon = FeatherIcons.Download,
+                    icon = FeatherIcons.Upload,
                     title = stringResource(R.string.dev_keys_export_all),
                     subtitle = stringResource(
                         if (state.exporting) R.string.dev_keys_export_running else R.string.dev_keys_export_all_desc

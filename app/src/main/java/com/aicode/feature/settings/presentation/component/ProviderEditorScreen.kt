@@ -2317,6 +2317,7 @@ private fun ProviderKeysPage(
                                     expanded = rowId in expandedIds,
                                     onValueChange = { keys[index] = keys[index].copy(value = it) },
                                     onWeightChange = { keys[index] = keys[index].copy(weight = it) },
+                                    onBaseUrlOverrideChange = { keys[index] = keys[index].copy(baseUrlOverride = it.trim()) },
                                     dragModifier = Modifier.longPressDraggableHandle(
                                         onDragStarted = {
                                             hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
@@ -2403,6 +2404,7 @@ private fun ProviderKeyCard(
     expanded: Boolean,
     onValueChange: (String) -> Unit,
     onWeightChange: (Int) -> Unit,
+    onBaseUrlOverrideChange: (String) -> Unit,
     dragModifier: Modifier
 ) {
     var valueVisible by remember { mutableStateOf(false) }
@@ -2476,6 +2478,18 @@ private fun ProviderKeyCard(
                 )
                 Text(
                     text = stringResource(R.string.provider_multi_key_weight_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = Spacing.lg, end = Spacing.lg, bottom = Spacing.sm)
+                )
+                ProviderTextFieldRow(
+                    label = stringResource(R.string.provider_multi_key_base_url_override),
+                    value = key.baseUrlOverride,
+                    onValueChange = onBaseUrlOverrideChange,
+                    keyboardType = KeyboardType.Uri
+                )
+                Text(
+                    text = stringResource(R.string.provider_multi_key_base_url_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = Spacing.lg, end = Spacing.lg, bottom = Spacing.md)

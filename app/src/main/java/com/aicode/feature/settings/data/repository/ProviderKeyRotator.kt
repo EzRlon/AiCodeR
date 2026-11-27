@@ -12,7 +12,9 @@ data class KeySwitchResult(
     val newKey: String,
     /** 1 起的新 Key 序号。 */
     val newIndex: Int,
-    val total: Int
+    val total: Int,
+    /** 新 Key 的专属 Base URL 覆盖；空 = 跟随供应商全局 baseUrl。 */
+    val newBaseUrlOverride: String = ""
 )
 
 /** 失败的归因，决定用哪套冷却策略。 */
@@ -29,7 +31,13 @@ enum class KeyFailureKind {
 
 /** 选 Key 的结果。全冷却时不再返回 null，而是带着「最早何时恢复」交给上层决定等多久。 */
 sealed interface KeyPick {
-    data class Available(val key: String, val index: Int, val total: Int) : KeyPick
+    data class Available(
+        val key: String,
+        val index: Int,
+        val total: Int,
+        /** 该 Key 的专属 Base URL 覆盖；空 = 跟随供应商全局 baseUrl。 */
+        val baseUrlOverride: String = ""
+    ) : KeyPick
 
     /**
      * 所有 Key 都在冷却。上层可按 [earliestRecoveryAtMs] 等待（有上限），
@@ -102,7 +110,8 @@ class ProviderKeyRotator @Inject constructor(
             val bindKey = sessionId?.let { sessionBinding(config.id, it) }
             val bound = bindKey?.let { sessionKeys[it] }
             if (bound != null && keys.any { it.value == bound } && !ledger.isCoolingDown(config.id, bound)) {
-                return KeyPick.Available(bound, keys.indexOfFirst { it.value == bound } + 1, keys.size)
+                val boundKey = keys.first { it.value == bound }
+                return KeyPick.Available(bound, keys.indexOfFirst { it.value == bound } + 1, keys.size, boundKey.baseUrlOverride)
             }
 
             val chosen = pick(config.id, keys, config.keyRotationStrategy, exclude = emptySet())
@@ -110,9 +119,9 @@ class ProviderKeyRotator @Inject constructor(
                 val earliest = ledger.earliestRecoveryMs(config.id, keys.map { it.value })
                 return KeyPick.AllCooling(earliest, keys.size)
             }
-            if (bindKey != null) sessionKeys[bindKey] = chosen
-            lastSelected[config.id] = chosen
-            return KeyPick.Available(chosen, keys.indexOfFirst { it.value == chosen } + 1, keys.size)
+            if (bindKey != null) sessionKeys[bindKey] = chosen.value
+            lastSelected[config.id] = chosen.value
+            return KeyPick.Available(chosen.value, keys.indexOfFirst { it.value == chosen.value } + 1, keys.size, chosen.baseUrlOverride)
         }
     }
 
@@ -122,6 +131,10 @@ class ProviderKeyRotator @Inject constructor(
      */
     fun activeKey(config: AIProviderConfig, sessionId: String?): String? =
         (pickKey(config, sessionId) as? KeyPick.Available)?.key
+
+    /** 该 provider 当前选中 Key 的专属 Base URL 覆盖；空 = 跟随全局。 */
+    fun activeBaseUrlOverride(config: AIProviderConfig, sessionId: String?): String? =
+        (pickKey(config, sessionId) as? KeyPick.Available)?.baseUrlOverride
 
     /**
      * 只读地取该 provider 当前活动的 Key：不建会话绑定、不推进轮询游标。
@@ -199,14 +212,19 @@ class ProviderKeyRotator @Inject constructor(
             }
 
             val next = pick(providerId, setup.keys, setup.strategy, exclude = triedKeys + key) ?: return null
-            sessionId?.let { sessionKeys[sessionBinding(providerId, it)] = next }
-            lastSelected[providerId] = next
-            val index = setup.keys.indexOfFirst { it.value == next } + 1
+            sessionId?.let { sessionKeys[sessionBinding(providerId, it)] = next.value }
+            lastSelected[providerId] = next.value
+            val index = setup.keys.indexOfFirst { it.value == next.value } + 1
             FileLogger.i(
                 TAG,
-                "Key 切换 provider=$providerId ${key.masked()} → ${next.masked()} (第 $index/${setup.keys.size} 个，原因=$kind)"
+                "Key 切换 provider=$providerId ${key.masked()} → ${next.value.masked()} (第 $index/${setup.keys.size} 个，原因=$kind)"
             )
-            return KeySwitchResult(newKey = next, newIndex = index, total = setup.keys.size)
+            return KeySwitchResult(
+                newKey = next.value,
+                newIndex = index,
+                total = setup.keys.size,
+                newBaseUrlOverride = next.baseUrlOverride
+            )
         }
     }
 
@@ -221,13 +239,13 @@ class ProviderKeyRotator @Inject constructor(
         keys: List<ProviderKey>,
         strategy: KeyRotationStrategy,
         exclude: Set<String>
-    ): String? {
+    ): ProviderKey? {
         val participants = keys.filter {
             it.weight > 0 && it.value !in exclude && !ledger.isCoolingDown(providerId, it.value)
         }
         if (participants.isEmpty()) return null
         return when (strategy) {
-            KeyRotationStrategy.SEQUENTIAL -> participants.first().value
+            KeyRotationStrategy.SEQUENTIAL -> participants.first()
             KeyRotationStrategy.ROUND_ROBIN -> weightedRoundRobin(providerId, participants)
         }
     }
@@ -239,7 +257,7 @@ class ProviderKeyRotator @Inject constructor(
      * 同权重时的次序微调（惩罚等级/近一分钟请求量）通过给候选打一个极小的权重折扣实现，
      * 不会破坏 SWRR 的长期比例性质。
      */
-    private fun weightedRoundRobin(providerId: String, participants: List<ProviderKey>): String {
+    private fun weightedRoundRobin(providerId: String, participants: List<ProviderKey>): ProviderKey {
         val current = weightedState.getOrPut(providerId) { mutableMapOf() }
         val snapshots = ledger.snapshots(providerId, participants.map { it.value })
         val loadFactor = HashMap<String, Long>(participants.size)
@@ -266,7 +284,7 @@ class ProviderKeyRotator @Inject constructor(
             }
         }
         current[best.value] = (current[best.value] ?: 0L) - total
-        return best.value
+        return best
     }
 
     private fun sessionBinding(providerId: String, sessionId: String) = "$providerId\u0000$sessionId"

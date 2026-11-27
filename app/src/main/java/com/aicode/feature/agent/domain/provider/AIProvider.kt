@@ -87,7 +87,13 @@ data class AIResponse(
 /**
  * 一次 Key 切换的结果：新 Key 与其在候选列表中的序号（1 起），供 adapter 改写凭据并通知 UI。
  */
-data class KeySwitchOutcome(val newKey: String, val newIndex: Int, val total: Int)
+data class KeySwitchOutcome(
+    val newKey: String,
+    val newIndex: Int,
+    val total: Int,
+    /** 切换后应使用的完整 baseUrl（含全局兜底）；null = 不改 baseUrl（如旧版工作流未计算）。 */
+    val effectiveBaseUrl: String? = null
+)
 
 /**
  * 所有候选 Key 都失败时抛出。文案已包含原始失败原因，交由上层原样展示。
@@ -309,6 +315,8 @@ suspend fun AIProvider.switchKeyOnFailure(error: Throwable, triedKeys: MutableSe
     val switcher = keySwitcher ?: return null
     val outcome = switcher(error, apiKey, triedKeys) ?: return null
     apiKey = outcome.newKey
+    // 每 Key 可覆盖 baseUrl：outcome 总是携带计算好的最终值，避免上一个 Key 的覆盖残留
+    outcome.effectiveBaseUrl?.takeIf { it.isNotBlank() }?.let { baseUrl = it }
     triedKeys += outcome.newKey
     return outcome
 }

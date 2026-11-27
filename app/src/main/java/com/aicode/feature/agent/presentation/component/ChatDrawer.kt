@@ -2071,7 +2071,7 @@ private fun SessionActionSheet(
                 }
             )
             SheetActionRow(
-                icon = FeatherIcons.Download,
+                icon = FeatherIcons.Upload,
                 label = stringResource(R.string.chat_export_session),
                 tint = MaterialTheme.colorScheme.onSurface,
                 onClick = {
@@ -2080,7 +2080,7 @@ private fun SessionActionSheet(
                 }
             )
             SheetActionRow(
-                icon = FeatherIcons.Upload,
+                icon = FeatherIcons.Download,
                 label = stringResource(R.string.chat_import_session),
                 tint = MaterialTheme.colorScheme.onSurface,
                 onClick = {

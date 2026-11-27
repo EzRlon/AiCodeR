@@ -42,17 +42,18 @@ class AIProviderRepositoryImpl @Inject constructor(
             if (raw.isBlank()) emptyMap()
             else runCatching { json.decodeFromString<Map<String, String>>(raw) }.getOrDefault(emptyMap())
 
-        /** 解析多 Key 存储串：每行 `值|权重`；旧数据无 `|` 时权重取默认值。 */
+        /** 解析多 Key 存储串：每行最多三段 `值|权重|baseUrl覆盖`；
+         *  兼容旧格式（无 `|` = 仅值，两段 = 值+权重），baseUrl 覆盖为空段 = 跟随全局。 */
         private fun parseProviderKeys(raw: String): List<ProviderKey> =
             raw.split("\n").mapNotNull { line ->
                 val trimmed = line.trim()
                 if (trimmed.isEmpty()) return@mapNotNull null
-                val sep = trimmed.lastIndexOf('|')
-                if (sep < 0) return@mapNotNull ProviderKey(trimmed)
-                val value = trimmed.substring(0, sep).trim()
+                val segments = trimmed.split('|')
+                val value = segments[0].trim()
                 if (value.isEmpty()) return@mapNotNull null
-                val weight = trimmed.substring(sep + 1).trim().toIntOrNull() ?: DEFAULT_KEY_WEIGHT
-                ProviderKey(value, weight.coerceIn(0, MAX_KEY_WEIGHT))
+                val weight = segments.getOrNull(1)?.trim()?.toIntOrNull() ?: DEFAULT_KEY_WEIGHT
+                val baseUrlOverride = segments.getOrNull(2)?.trim().orEmpty()
+                ProviderKey(value, weight.coerceIn(0, MAX_KEY_WEIGHT), baseUrlOverride)
             }
     }
 
@@ -198,7 +199,12 @@ class AIProviderRepositoryImpl @Inject constructor(
             type = type.name,
             apiKey = KeystoreCipher.encryptString(apiKey),
             multiKeyEnabled = multiKeyEnabled,
-            apiKeys = KeystoreCipher.encryptString(apiKeys.joinToString("\n") { "${it.value}|${it.weight}" }),
+            apiKeys = KeystoreCipher.encryptString(
+                apiKeys.joinToString("\n") { key ->
+                    if (key.baseUrlOverride.isBlank()) "${key.value}|${key.weight}"
+                    else "${key.value}|${key.weight}|${key.baseUrlOverride}"
+                }
+            ),
             keyRotationStrategy = keyRotationStrategy.name,
             keyFailoverThreshold = keyFailoverThreshold,
             keyCooldownMinutes = keyCooldownMinutes,

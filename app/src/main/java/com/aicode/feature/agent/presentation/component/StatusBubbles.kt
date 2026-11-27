@@ -16,6 +16,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -678,6 +679,8 @@ internal fun ReasoningBubble(
                 Spacer(Modifier.height(Spacing.sm))
                 // 展开态用懒渲染（LazyMarkdownSuccess）：超长思考只组合可见块，不再一次性
                 // 组合全部节点把 Compose ChangeList 撑爆（OOM 根因）。高度上限交给内层 LazyColumn 自行滚动。
+                // SelectionContainer：长按思考正文可选中复制（对齐上游 f541ef5e）。
+                SelectionContainer {
                 MarkdownContent(
                     text = renderText,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -695,6 +698,7 @@ internal fun ReasoningBubble(
                             )
                         }
                 )
+                }
             }
         }
     }
