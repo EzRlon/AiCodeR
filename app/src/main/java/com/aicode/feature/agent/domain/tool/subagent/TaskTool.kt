@@ -165,19 +165,32 @@ class TaskTool @Inject constructor(
 
         val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()
         if (prompt.isNullOrBlank()) {
-            // 临时探针：把工具实际收到的 args 原样落到工作区 .aicode/debug/（容器可达），
-            // 用于定位流式链路丢参发生在哪一层；定位后移除。
-            runCatching {
-                val dir = File(File(context.projectRoot, ".aicode"), "debug").apply { mkdirs() }
-                val payload = buildJsonObject {
-                    put("ts", System.currentTimeMillis())
-                    put("sessionId", context.sessionId ?: "")
-                    put("stage", "task_tool_entry")
-                    args.forEach { (k, v) -> put(k, v) }
+            // 临时探针 v2：诊断直接随错误消息回传（模型侧可见），同时双路径落盘工作区
+            // .aicode/debug/（容器可达）；定位后移除。
+            val diag = buildString {
+                append("argKeys=")
+                append(args.keys.joinToString(","))
+                args.forEach { (k, v) ->
+                    append(" | ")
+                    append(k)
+                    append("=")
+                    append(v.toString().take(400))
                 }
-                File(dir, "task-invalid-args.json").writeText(payload.toString())
-            }.onFailure { e -> FileLogger.w(TAG, "探针落盘失败: ${e.message}") }
-            return ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
+            }
+            val probeRoot1 = File(File(context.projectRoot, ".aicode"), "debug")
+            val probeRoot2 = File("/data/user/0/com.aicoder/files/projects/AiCodeR/.aicode/debug")
+            val dumpState = listOf(probeRoot1, probeRoot2).joinToString(";") { dir ->
+                runCatching {
+                    dir.mkdirs()
+                    File(dir, "task-invalid-args.json").writeText(diag)
+                    "ok:${dir.absolutePath}"
+                }.getOrElse { "fail(${dir.absolutePath}):${it.message ?: it.javaClass.simpleName}" }
+            }
+            FileLogger.w(TAG, "task 空 prompt 探针: $diag dump=$dumpState projectRoot=${context.projectRoot}")
+            return ToolResult.Error(
+                "参数无效：prompt 不能为空 probe{projectRoot=${context.projectRoot} dump=$dumpState $diag}",
+                "INVALID_ARGS"
+            )
         }
 
         // 任务书模板（可选）：把模板正文前置到任务书，省得每次重写五要素；
