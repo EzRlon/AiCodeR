@@ -121,6 +121,7 @@ class ProviderKeyRotator @Inject constructor(
             }
             if (bindKey != null) sessionKeys[bindKey] = chosen.value
             lastSelected[config.id] = chosen.value
+            ledger.recordSelected(config.id, chosen.value)
             return KeyPick.Available(chosen.value, keys.indexOfFirst { it.value == chosen.value } + 1, keys.size, chosen.baseUrlOverride)
         }
     }
@@ -146,6 +147,10 @@ class ProviderKeyRotator @Inject constructor(
         synchronized(lock) {
             val last = lastSelected[config.id]
             if (last != null && keys.any { it.value == last } && !ledger.isCoolingDown(config.id, last)) return last
+            // 内存无记录（如刚重启）：回退到持久化的「上次选中 Key」，让旁路请求看到真实的活动 Key
+            val persisted = ledger.lastSelectedHash(config.id)
+                ?.let { hash -> keys.firstOrNull { ledger.keyHash(it.value) == hash } }
+            if (persisted != null && !ledger.isCoolingDown(config.id, persisted.value)) return persisted.value
             return keys.firstOrNull { !ledger.isCoolingDown(config.id, it.value) }?.value ?: keys.first().value
         }
     }
@@ -214,6 +219,7 @@ class ProviderKeyRotator @Inject constructor(
             val next = pick(providerId, setup.keys, setup.strategy, exclude = triedKeys + key) ?: return null
             sessionId?.let { sessionKeys[sessionBinding(providerId, it)] = next.value }
             lastSelected[providerId] = next.value
+            ledger.recordSelected(providerId, next.value)
             val index = setup.keys.indexOfFirst { it.value == next.value } + 1
             FileLogger.i(
                 TAG,
@@ -245,9 +251,31 @@ class ProviderKeyRotator @Inject constructor(
         }
         if (participants.isEmpty()) return null
         return when (strategy) {
-            KeyRotationStrategy.SEQUENTIAL -> participants.first()
+            KeyRotationStrategy.SEQUENTIAL -> sequentialAfterLastSelected(providerId, keys, participants)
             KeyRotationStrategy.ROUND_ROBIN -> weightedRoundRobin(providerId, participants)
         }
+    }
+
+    /**
+     * SEQUENTIAL 选 Key：内存里有本进程的最近选中记录时保持严格顺序语义——从第一个健康 Key
+     * 开始，不因持久化记录而漂移；内存无记录但账本持久化了「上次选中 Key」（进程重启接续）时，
+     * 从它的下一个位置环形找第一个健康参与者，避免重启后永远从头薅第一个 Key。环形扫描只在
+     * 参与者（已滤冷却）内命中，刚限速的 Key 自动跳过；找不到持久化 Key 或候选时回退第一个。
+     */
+    private fun sequentialAfterLastSelected(
+        providerId: String,
+        keys: List<ProviderKey>,
+        participants: List<ProviderKey>
+    ): ProviderKey {
+        if (lastSelected[providerId] != null) return participants.first()
+        val lastHash = ledger.lastSelectedHash(providerId) ?: return participants.first()
+        val lastIdx = keys.indexOfFirst { ledger.keyHash(it.value) == lastHash }
+        if (lastIdx < 0) return participants.first()
+        for (step in 1..keys.size) {
+            val candidate = keys[(lastIdx + step) % keys.size]
+            participants.firstOrNull { it.value == candidate.value }?.let { return it }
+        }
+        return participants.first()
     }
 
     /**
