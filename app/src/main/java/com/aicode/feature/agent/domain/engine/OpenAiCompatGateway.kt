@@ -617,9 +617,21 @@ object OpenAiCompatGateway {
                     put("type", "tool_use")
                     put("id", call["id"]?.jsonPrimitive?.content ?: "toolu_${UUID.randomUUID()}")
                     put("name", fn?.get("name")?.jsonPrimitive?.content ?: "")
+                    // arguments 解析失败绝不能静默吞成空参：那会让工具报「某字段不能为空」
+                    // 这种误导性错误，AI 永远无法自纠。带 __parseError/__rawArguments 原样上送。
                     put("input", runCatching {
                         json.parseToJsonElement(fn?.get("arguments")?.jsonPrimitive?.content ?: "{}").jsonObject
-                    }.getOrDefault(JsonObject(emptyMap())))
+                    }.getOrElse { e ->
+                        val raw = fn?.get("arguments")?.jsonPrimitive?.content ?: ""
+                        com.aicode.core.util.FileLogger.w(
+                            TAG,
+                            "tool call arguments JSON 解析失败 name=${fn?.get("name")?.jsonPrimitive?.content} len=${raw.length}: ${e.message}"
+                        )
+                        buildJsonObject {
+                            put("__parseError", (e.message ?: "arguments 解析失败"))
+                            put("__rawArguments", raw.take(2000))
+                        }
+                    })
                 })
             }
         }
