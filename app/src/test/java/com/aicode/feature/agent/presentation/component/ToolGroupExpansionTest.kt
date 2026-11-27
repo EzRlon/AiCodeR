@@ -283,17 +283,21 @@ class ToolGroupExpansionTest {
         )
         val chatItems = items(messages, activeTurnKey = null)
         val nodes = buildTimelineNodes(messages, chatItems)
+        // 提问/结果锚消息 item；TOOL 锚过程区入口（折叠轮头/工具分组/常显工具行），产出在其所属结果之后
         assertEquals(
             listOf(
                 TimelineNodeType.USER,
                 TimelineNodeType.ASSISTANT_RESULT,
+                TimelineNodeType.TOOL,
                 TimelineNodeType.USER,
                 TimelineNodeType.ASSISTANT_RESULT,
             ),
             nodes.map { it.type }
         )
         nodes.forEach { node ->
-            assertTrue("节点不能锚在轮头 item 上", chatItems[node.itemIndex].turnHeader == null)
+            if (node.type != TimelineNodeType.TOOL) {
+                assertTrue("提问/结果节点不能锚在轮头 item 上", chatItems[node.itemIndex].turnHeader == null)
+            }
         }
         assertEquals("u0", chatItems[nodes[0].itemIndex].key)
         assertEquals("a1", chatItems[nodes[1].itemIndex].key)
