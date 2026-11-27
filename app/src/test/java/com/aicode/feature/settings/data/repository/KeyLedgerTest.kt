@@ -21,17 +21,6 @@ class KeyLedgerTest {
     }
 
     /** 账本落盘是异步单飞写：轮询等 ledger 目录下文件出现，超时返回 null。 */
-    private fun awaitLedgerFile(dir: File, timeoutMs: Long = 10_000L): File? {
-        val ledgerDir = File(dir, "keyledger")
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            ledgerDir.listFiles()
-                ?.firstOrNull { it.name.startsWith("ledger_") && it.name.endsWith(".json") }
-                ?.let { return it }
-            Thread.sleep(100)
-        }
-        return null
-    }
 
     private fun ledgerFileName(dir: File, providerId: String): File {
         val hash = MessageDigest.getInstance("SHA-256")
@@ -204,8 +193,21 @@ class KeyLedgerTest {
 
         writer.reportRateLimit("persist-p1", "key-x", baseCooldownMs = 600_000L)
         writer.reportSuccess("persist-p1", "key-x", tokensIn = 10, tokensOut = 5)
-        val file = awaitLedgerFile(dir)
-        assertTrue("账本文件未在超时内落盘", file != null && file.length() > 0)
+
+        // 等待文件存在≠两次异步单飞写全部完成：轮询新实例快照，
+        // 直到本用例断言的字段同时达到期望值；超时抛错并带上最后一次读到的值。
+        val deadline = System.currentTimeMillis() + 10_000L
+        var last: KeyRuntimeSnapshot? = null
+        while (System.currentTimeMillis() < deadline) {
+            val (probe, _) = newLedger(dir)
+            last = probe.snapshot("persist-p1", "key-x")
+            if (last.total429 == 1L && last.totalSuccess == 1L) break
+            Thread.sleep(100)
+        }
+        assertTrue(
+            "两次写未在超时内全部落盘（最后快照 total429=${last?.total429}, totalSuccess=${last?.totalSuccess}）",
+            last != null && last.total429 == 1L && last.totalSuccess == 1L
+        )
 
         val (reader, _) = newLedger(dir)
         assertTrue("新实例应读到冷却状态", reader.isCoolingDown("persist-p1", "key-x"))
