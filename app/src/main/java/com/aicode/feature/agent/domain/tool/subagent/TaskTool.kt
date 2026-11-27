@@ -25,6 +25,7 @@ import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepositor
 import com.aicode.feature.settings.data.repository.ModelCapabilityRepository
 import com.aicode.feature.settings.data.repository.ModelRoutingTable
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
+import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -164,6 +165,18 @@ class TaskTool @Inject constructor(
 
         val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()
         if (prompt.isNullOrBlank()) {
+            // 临时探针：把工具实际收到的 args 原样落到工作区 .aicode/debug/（容器可达），
+            // 用于定位流式链路丢参发生在哪一层；定位后移除。
+            runCatching {
+                val dir = File(File(context.projectRoot, ".aicode"), "debug").apply { mkdirs() }
+                val payload = buildJsonObject {
+                    put("ts", System.currentTimeMillis())
+                    put("sessionId", context.sessionId ?: "")
+                    put("stage", "task_tool_entry")
+                    args.forEach { (k, v) -> put(k, v) }
+                }
+                File(dir, "task-invalid-args.json").writeText(payload.toString())
+            }.onFailure { e -> FileLogger.w(TAG, "探针落盘失败: ${e.message}") }
             return ToolResult.Error("参数无效：prompt 不能为空", "INVALID_ARGS")
         }
 
