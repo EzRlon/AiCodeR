@@ -59,7 +59,7 @@ internal fun parseResponsesOutput(output: JsonArray?): ResponsesOutput {
                     ToolCall(
                         id = item.str("call_id") ?: item.str("id").orEmpty(),
                         name = item.str("name").orEmpty(),
-                        arguments = parseToolArguments(item.str("arguments").orEmpty())
+                        arguments = parseToolArguments(item.str("arguments").orEmpty(), item.str("name").orEmpty())
                     )
                 )
 
@@ -208,7 +208,14 @@ internal class ResponsesStreamAccumulator {
                     ResponsesItem.FUNCTION_CALL -> {
                         val acc = calls.getOrPut(event.callKey()) { CallAcc() }
                         item.str("call_id")?.takeIf { it.isNotEmpty() }?.let { acc.callId = it }
-                        item.str("arguments")?.takeIf { it.isNotEmpty() }?.let { budget.add(it); acc.args = StringBuilder(it) }
+                        item.str("arguments")?.takeIf { it.isNotEmpty() }?.let {
+                            budget.add(it)
+                            // 部分兼容实现在 output_item.added 就携带全量参数，此时不可再叠加后续增量，
+                            // 否则拼出损坏 JSON；output_item.done 是权威终值，无条件覆盖（防 delta 丢帧）。
+                            if (event.str("type") == ResponsesEvent.OUTPUT_ITEM_DONE || acc.args.isEmpty()) {
+                                acc.args = StringBuilder(it)
+                            }
+                        }
                         item.str("name")?.takeIf { it.isNotEmpty() }?.let { name ->
                             val first = acc.name.isEmpty()
                             acc.name = name
@@ -282,9 +289,16 @@ internal class ResponsesStreamAccumulator {
     fun toResponse(): AIResponse {
         val streamed = calls.values
             .filter { it.callId.isNotEmpty() || it.name.isNotEmpty() }
-            .map { ToolCall(id = it.callId, name = it.name, arguments = parseToolArguments(it.args.toString())) }
-        val toolCalls = streamed + finalCalls.filter { call ->
-            streamed.none { it.id == call.id && call.id.isNotEmpty() }
+            .map { ToolCall(id = it.callId, name = it.name, arguments = parseToolArguments(it.args.toString(), it.name)) }
+        // 终止事件顶层 output 是协议权威（流中增量可能拼坏/丢帧）：final 优先，流中仅补 final
+        // 没有的调用。旧方向 streamed 优先会把拼坏的流中条目顶掉同 id 的完整 final 条目，
+        // 工具层只见空参数报「参数不能为空」。
+        val toolCalls = if (finalCalls.isEmpty()) {
+            streamed
+        } else {
+            finalCalls + streamed.filter { s ->
+                s.id.isNotEmpty() && finalCalls.none { it.id == s.id }
+            }
         }
         return AIResponse(
             content = text.toString(),

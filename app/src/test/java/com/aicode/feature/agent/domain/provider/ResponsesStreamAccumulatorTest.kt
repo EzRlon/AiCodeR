@@ -244,6 +244,53 @@ class ResponsesStreamAccumulatorTest {
     }
 
     @Test
+    fun corrupted_streamed_arguments_are_replaced_by_terminal_output() {
+        // 兼容实现缺陷现场：流中增量丢帧拼出半截 JSON，终止事件 output 携带完整参数。
+        // 合并必须 final 优先，否则坏条目顶掉同 id 的权威参数，工具层只见空参数。
+        val acc = ResponsesStreamAccumulator()
+
+        acc.accept(itemEvent(ResponsesEvent.OUTPUT_ITEM_ADDED, 0, functionCallItem("c1", "task")))
+        acc.accept(argsDelta(0, "{\"prompt\": \"你好\""))
+        val output = JsonArray().apply {
+            add(functionCallItem("c1", "task", "{\"prompt\": \"你好\"}"))
+        }
+        acc.accept(terminalEvent(ResponsesEvent.COMPLETED, "completed", output = output))
+
+        val call = acc.toResponse().toolCalls.single()
+        assertEquals("c1", call.id)
+        assertEquals(JsonPrimitive("你好"), call.arguments["prompt"])
+    }
+
+    @Test
+    fun added_event_with_prefixed_arguments_continues_with_delta() {
+        // 部分兼容实现在 output_item.added 携带参数前缀、后续增量续传：
+        // added 只允许填空，不得覆盖或阻断续传。
+        val acc = ResponsesStreamAccumulator()
+
+        acc.accept(itemEvent(ResponsesEvent.OUTPUT_ITEM_ADDED, 0, functionCallItem("c1", "task", "{\"prompt\"")))
+        acc.accept(argsDelta(0, ": \"hello\"}"))
+        acc.accept(terminalEvent(ResponsesEvent.COMPLETED, "completed"))
+
+        val call = acc.toResponse().toolCalls.single()
+        assertEquals(JsonPrimitive("hello"), call.arguments["prompt"])
+    }
+
+    @Test
+    fun added_with_full_arguments_then_duplicated_delta_resolved_by_done() {
+        // 供应商双发场景：added 已带全量参数又发增量重复，无 final output 可隑底时
+        // 依靠 output_item.done 的权威终值覆盖恢复。
+        val acc = ResponsesStreamAccumulator()
+
+        acc.accept(itemEvent(ResponsesEvent.OUTPUT_ITEM_ADDED, 0, functionCallItem("c1", "task", "{\"prompt\": \"a\"}")))
+        acc.accept(argsDelta(0, ",\"extra\":1"))
+        acc.accept(itemEvent(ResponsesEvent.OUTPUT_ITEM_DONE, 0, functionCallItem("c1", "task", "{\"prompt\": \"a\"}")))
+        acc.accept(terminalEvent(ResponsesEvent.COMPLETED, "completed"))
+
+        val call = acc.toResponse().toolCalls.single()
+        assertEquals(JsonPrimitive("a"), call.arguments["prompt"])
+    }
+
+    @Test
     fun incomplete_by_max_output_tokens_maps_to_length() {
         val acc = ResponsesStreamAccumulator()
 
