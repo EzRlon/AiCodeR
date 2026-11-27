@@ -56,7 +56,10 @@ class AIProviderFactory @Inject constructor(
         }
         // 多 Key 模式下由轮换器决定本次用哪个 Key（会话内粘住，Key 不可用时切下一个并重发）。
         val activeKeys = config.effectiveApiKeys
-        provider.apiKey = awaitHealthyKey(config, sessionId)
+        val initialPick = awaitHealthyKey(config, sessionId)
+        provider.apiKey = initialPick.key
+        // 每 Key 可覆盖 Base URL：初始装配就按选中 Key 生效（空覆盖则用全局）。
+        provider.baseUrl = initialPick.baseUrlOverride.ifBlank { config.baseUrl }
         // 成功请求的用量/限速头记账：Key 账本据此维护冷却、剩余额度预判与统计。
         provider.usageReporter = { key, tokensIn, tokensOut, headers ->
             keyRotator.reportSuccess(
@@ -92,7 +95,12 @@ class AIProviderFactory @Inject constructor(
                             profile = cooldownProfileOf(config.baseUrl)
                         )
                         if (switched != null) {
-                            KeySwitchOutcome(switched.newKey, switched.newIndex, switched.total)
+                            KeySwitchOutcome(
+                                switched.newKey,
+                                switched.newIndex,
+                                switched.total,
+                                effectiveBaseUrl = switched.newBaseUrlOverride.ifBlank { config.baseUrl }
+                            )
                         } else {
                             // 没有健康候选：区分「全部冷却」（等最早恢复后重试）与「没得等」（直接报全部失败）。
                             // 不能把控制权交回退避重试——那会对冷却中的 Key 继续发请求，
@@ -111,7 +119,12 @@ class AIProviderFactory @Inject constructor(
                                         WAIT_TAG,
                                         "「${config.name}」全 Key 冷却，等待后恢复：改用第 ${retryPick.index}/${retryPick.total} 个 Key"
                                     )
-                                    KeySwitchOutcome(retryPick.key, retryPick.index, retryPick.total)
+                                    KeySwitchOutcome(
+                                        retryPick.key,
+                                        retryPick.index,
+                                        retryPick.total,
+                                        effectiveBaseUrl = retryPick.baseUrlOverride.ifBlank { config.baseUrl }
+                                    )
                                 }
                                 is KeyPick.AllCooling -> throw AllKeysFailedException(
                                     allCoolingMessage(config, retryPick.earliestRecoveryAtMs),
@@ -147,9 +160,9 @@ class AIProviderFactory @Inject constructor(
      * 取一个健康的 Key；全部冷却时等最早恢复的那个（有上限），到点后重选一次。
      * 恢复不了就带「最早恢复时间」报错，而不是含糊的「稍后重试」。
      */
-    private suspend fun awaitHealthyKey(config: AIProviderConfig, sessionId: String?): String {
+    private suspend fun awaitHealthyKey(config: AIProviderConfig, sessionId: String?): KeyPick.Available {
         when (val pick = keyRotator.pickKey(config, sessionId)) {
-            is KeyPick.Available -> return pick.key
+            is KeyPick.Available -> return pick
             is KeyPick.AllCooling -> {
                 if (pick.total <= 0) {
                     throw IllegalStateException("「${config.name}」没有可用的 API Key")
@@ -164,7 +177,7 @@ class AIProviderFactory @Inject constructor(
                             WAIT_TAG,
                             "「${config.name}」全 Key 冷却，等待后恢复：改用第 ${retry.index}/${retry.total} 个 Key"
                         )
-                        return retry.key
+                        return retry
                     }
                     is KeyPick.AllCooling -> throw IllegalStateException(
                         allCoolingMessage(config, retry.earliestRecoveryAtMs)

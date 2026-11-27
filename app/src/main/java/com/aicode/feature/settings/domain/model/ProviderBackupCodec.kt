@@ -48,7 +48,10 @@ object ProviderBackupCodec {
         put("multiKeyEnabled", p.multiKeyEnabled)
         put("apiKeys", JSONArray().apply {
             p.apiKeys.forEach { k ->
-                put(JSONObject().put("value", k.value).put("weight", k.weight))
+                put(
+                    JSONObject().put("value", k.value).put("weight", k.weight)
+                        .put("baseUrlOverride", k.baseUrlOverride)
+                )
             }
         })
         put("keyRotationStrategy", p.keyRotationStrategy.name)
@@ -84,7 +87,8 @@ object ProviderBackupCodec {
                 array.optJSONObject(i)?.let {
                     ProviderKey(
                         value = it.optString("value"),
-                        weight = it.optInt("weight", DEFAULT_KEY_WEIGHT)
+                        weight = it.optInt("weight", DEFAULT_KEY_WEIGHT),
+                        baseUrlOverride = it.optString("baseUrlOverride")
                     )
                 }
             }

@@ -97,7 +97,9 @@ data class AIProviderConfig(
  */
 data class ProviderKey(
     val value: String,
-    val weight: Int = DEFAULT_KEY_WEIGHT
+    val weight: Int = DEFAULT_KEY_WEIGHT,
+    /** 该 Key 专属 Base URL 覆盖；空/空白 = 跟随供应商全局 baseUrl。存储格式第三段。 */
+    val baseUrlOverride: String = ""
 )
 
 /** 调度权重默认值与上限。 */
