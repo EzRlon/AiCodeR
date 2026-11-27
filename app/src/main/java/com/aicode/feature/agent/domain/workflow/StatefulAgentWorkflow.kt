@@ -75,8 +75,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -1427,20 +1425,6 @@ class StatefulAgentWorkflow @Inject constructor(
         val name = toolCall.name
         if (tool == null) {
             return ToolRunResult(ToolResult.Error("工具 $name 不存在", "TOOL_NOT_FOUND").toTransportString(), true)
-        }
-        // 临时探针：task 调用在统一执行入口的原始 toolCall（聚合层出口断面），与 TaskTool
-        // 入口断面对比定位丢参层；定位后移除。
-        if (name == "task") {
-            runCatching {
-                val dir = java.io.File(java.io.File(context.projectRoot, ".aicode"), "debug").apply { mkdirs() }
-                val payload = buildJsonObject {
-                    put("ts", System.currentTimeMillis())
-                    put("stage", "workflow_entry")
-                    put("toolCallId", toolCall.id)
-                    put("argumentsRaw", JsonObject(toolCall.arguments).toString().take(4000))
-                }
-                java.io.File(dir, "task-call-raw.json").writeText(payload.toString())
-            }.onFailure { e -> FileLogger.w(TAG, "探针落盘失败: ${e.message}") }
         }
         // 工具耗时指标（B4）：只在执行体结束后统一结算；慢工具（≥1s）与失败必须留下痕迹，
         // 日常琐碎工具（todo 等）不打日志防刷屏。含 PreToolUse 前的排队时间无意义，从执行体起算。

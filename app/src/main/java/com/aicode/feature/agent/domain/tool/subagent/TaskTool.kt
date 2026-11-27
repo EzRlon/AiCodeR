@@ -25,7 +25,6 @@ import com.aicode.feature.settings.data.repository.DefaultModelSettingsRepositor
 import com.aicode.feature.settings.data.repository.ModelCapabilityRepository
 import com.aicode.feature.settings.data.repository.ModelRoutingTable
 import com.aicode.feature.settings.domain.repository.AIProviderRepository
-import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -115,7 +114,7 @@ class TaskTool @Inject constructor(
         "prompt" to ToolParameter(
             name = "prompt",
             type = ParameterType.STRING,
-            description = "给子代理的完整指令（create 必填），将作为它的第一条用户消息；子代理看到的是全新上下文",
+            description = "create 必填：子代理的任务指令正文，作为它的第一条用户消息（子代理看到全新上下文）。注意字段名是 prompt 不是 message——message 只用于 send 向已存在的子代理追加消息",
             required = false
         ),
         "agent" to ToolParameter(
@@ -163,32 +162,16 @@ class TaskTool @Inject constructor(
         val parentSession = sessionUseCase.getSessionById(parentSessionId)
             ?: return ToolResult.Error("当前会话不存在", "SESSION_NOT_FOUND")
 
-        val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()
-        if (prompt.isNullOrBlank()) {
-            // 临时探针 v2：诊断直接随错误消息回传（模型侧可见），同时双路径落盘工作区
-            // .aicode/debug/（容器可达）；定位后移除。
-            val diag = buildString {
-                append("argKeys=")
-                append(args.keys.joinToString(","))
-                args.forEach { (k, v) ->
-                    append(" | ")
-                    append(k)
-                    append("=")
-                    append(v.toString().take(400))
-                }
-            }
-            val probeRoot1 = File(File(context.projectRoot, ".aicode"), "debug")
-            val probeRoot2 = File("/data/user/0/com.aicoder/files/projects/AiCodeR/.aicode/debug")
-            val dumpState = listOf(probeRoot1, probeRoot2).joinToString(";") { dir ->
-                runCatching {
-                    dir.mkdirs()
-                    File(dir, "task-invalid-args.json").writeText(diag)
-                    "ok:${dir.absolutePath}"
-                }.getOrElse { "fail(${dir.absolutePath}):${it.message ?: it.javaClass.simpleName}" }
-            }
-            FileLogger.w(TAG, "task 空 prompt 探针: $diag dump=$dumpState projectRoot=${context.projectRoot}")
+        // 模型在 create 场景常把指令写进 message（那是 send 的参数名）：意图无歧义，
+        // 按 prompt 采纳。不容错的话，模型一旦落入这个参数模式就会反复失败且无法自纠
+        // （实测同一错误模式连钟六轮，报错里不回显实际参数时模型完全意识不到）。
+        val prompt = (args["prompt"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+            ?: (args["message"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+        if (prompt == null) {
+            val received = args.keys.joinToString(",").ifEmpty { "（无任何参数）" }
             return ToolResult.Error(
-                "参数无效：prompt 不能为空 probe{projectRoot=${context.projectRoot} dump=$dumpState $diag}",
+                "参数无效：create 需要 prompt（子代理的任务指令）。本次收到参数：$received；" +
+                    "prompt 与 message 均为空，请把指令文本放进 prompt 重试。",
                 "INVALID_ARGS"
             )
         }
