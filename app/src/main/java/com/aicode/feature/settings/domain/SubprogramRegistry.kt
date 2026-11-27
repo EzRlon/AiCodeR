@@ -1,5 +1,6 @@
 package com.aicode.feature.settings.domain
 
+import com.aicode.core.util.shellQuote
 import com.aicode.feature.agent.domain.container.CommandEngine
 import com.aicode.feature.workspace.data.repository.WorkspaceRepository
 import java.io.File
@@ -61,15 +62,25 @@ class SubprogramRegistry @Inject constructor(
         }
     }
 
-    /** 探活：POST initialize（JSON-RPC），响应含 result 即在线。 */
+    /** 探活：POST initialize（JSON-RPC），响应含 result 即在线。
+     *  token 与 body 经全库唯一转义实现 shellQuote 后拼入，防止单引号逃逸注入命令。 */
     suspend fun check(sub: Subprogram): Boolean = withContext(Dispatchers.IO) {
-        val body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"," +
-            "\"params\":{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{}," +
-            "\"clientInfo\":{\"name\":\"aicoder\",\"version\":\"1.0\"}}}"
+        val body = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 1)
+            .put("method", "initialize")
+            .put(
+                "params",
+                JSONObject()
+                    .put("protocolVersion", "2026-07-28")
+                    .put("capabilities", JSONObject())
+                    .put("clientInfo", JSONObject().put("name", "aicoder").put("version", "1.0"))
+            )
+            .toString()
         val cmd = "curl -s -m 6 -X POST http://127.0.0.1:${sub.port}/mcp " +
             "-H 'Content-Type: application/json' " +
-            "-H 'Authorization: Bearer ${sub.token}' " +
-            "-d '${body.replace("'", "")}'"
+            "-H ${shellQuote("Authorization: Bearer ${sub.token}")} " +
+            "-d ${shellQuote(body)}"
         val result = commandEngine.runCommandSyncWithExit(cmd, timeoutMs = 15_000L)
         result.exitCode == 0 && result.output.contains("\"result\"")
     }

@@ -224,7 +224,7 @@ fun ProviderEditorScreen(
     var useFullUrl by remember { mutableStateOf(initialProvider?.useFullUrl ?: false) }
     var useResponseApi by remember { mutableStateOf(initialProvider?.useResponseApi ?: false) }
     var anthropicCacheBreakpoints by remember { mutableStateOf(initialProvider?.anthropicCacheBreakpoints ?: true) }
-    var openaiChatCacheKey by remember { mutableStateOf(initialProvider?.openaiChatCacheKey ?: false) }
+    var openaiChatCacheKey by remember { mutableStateOf(initialProvider?.openaiChatCacheKey ?: true) }
     var dashboardScriptPath by remember { mutableStateOf(initialProvider?.dashboardScriptPath ?: "") }
     val scriptParams = remember {
         mutableStateListOf<Pair<String, String>>().apply {
