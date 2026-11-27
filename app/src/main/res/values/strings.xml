@@ -202,6 +202,7 @@
     <string name="settings_token_stats_col_cache_hit_rate">命中率</string>
     <string name="settings_token_stats_col_ttfb">首字节</string>
     <string name="settings_token_stats_col_duration">耗时</string>
+    <string name="settings_token_stats_col_output_rate">输出速率</string>
     <string name="settings_token_stats_col_time">时间</string>
     <string name="settings_token_stats_col_status">状态</string>
     <string name="settings_token_stats_col_cost">费用</string>
