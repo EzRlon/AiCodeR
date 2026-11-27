@@ -585,7 +585,6 @@ fun AppNavigation(
     val runningSubSessionIds by agentViewModel.runningSubSessionIds.collectAsStateWithLifecycle()
     val teamMemberNames by agentViewModel.teamMemberNames.collectAsStateWithLifecycle()
     val expandedPaths by agentViewModel.expandedPaths.collectAsStateWithLifecycle()
-    val expandingPath by agentViewModel.expandingPath.collectAsStateWithLifecycle()
     val fileOpPaths by agentViewModel.fileOpPaths.collectAsStateWithLifecycle()
     val browseState by agentViewModel.browseState.collectAsStateWithLifecycle()
     val deliverables by agentViewModel.deliverables.collectAsStateWithLifecycle()
@@ -848,7 +847,6 @@ fun AppNavigation(
             // 侧栏子代理行按成员标识查显示名（与输入栏横幅同源，见 teamMemberNames）。
             memberNameOf = { id -> teamMemberNames[id] ?: id },
             expandedPaths = expandedPaths,
-            expandingPath = expandingPath,
             fileOpPaths = fileOpPaths,
             clipboard = browseClipboard,
             pasteConflict = pasteConflict,

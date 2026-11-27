@@ -50,6 +50,8 @@ data class FileTreeNode(
     val isExpanded: Boolean,
     /** 展开该目录时读取子项失败（如权限不足）；工作区根读取失败走 [FileBrowseState.Error]。 */
     val hasError: Boolean = false,
+    /** 已展开但子项尚未就绪（后台补齐中）：UI 在该行显示等待动画。 */
+    val isLoading: Boolean = false,
     /** 被工作区根 .gitignore 命中：UI 以橙色弱化显示（类 VSCode）。 */
     val ignored: Boolean = false
 )

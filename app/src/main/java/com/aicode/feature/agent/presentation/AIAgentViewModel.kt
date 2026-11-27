@@ -80,8 +80,12 @@ import com.aicode.feature.agent.domain.subagent.AgentDefinitionRepository
 import com.aicode.feature.agent.domain.subagent.SubAgentDigester
 import com.aicode.feature.agent.domain.subagent.SubAgentEvent
 import com.aicode.feature.agent.domain.subagent.SubAgentEventBus
+import com.aicode.core.watch.ChangeKind as WatchChangeKind
+import com.aicode.core.watch.FileChangeBatch
 import com.aicode.core.watch.FileChangeHub
-import com.aicode.core.watch.asDirtySignal
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.channelFlow
 import com.aicode.feature.agent.domain.subagent.SubAgentEventType
 import com.aicode.feature.agent.domain.workflow.AgentWorkflow
 import com.aicode.feature.agent.domain.workflow.BudgetApprovalChoice
@@ -673,6 +677,11 @@ class AIAgentViewModel @Inject constructor(
         if (path.isBlank() || _currentWorkspace.value == path) return
         _currentWorkspace.value = path
         // 切到新工作区：恢复该工作区上次持久化的展开状态（无记录则只展开根）。
+        // 子项缓存一并作废：切走期间旧工作区无人监听，可能已过期；切回时现读保证新鲜。
+        browseChildrenCache.clear()
+        failedBrowse.clear()
+        pendingBrowse.clear()
+        rootGitignoreCache = null
         _expandedPaths.value = loadExpansion(path)
         // 搜索限定当前工作区，切区后旧结果无意义，一并清空。
         chatSearchStateHolder.updateQuery("")
@@ -736,12 +745,18 @@ class AIAgentViewModel @Inject constructor(
     }
     val expandedPaths: StateFlow<Set<String>> = _expandedPaths.asStateFlow()
 
-    /** 正在展开、等待列目录返回的目录路径（远程 SSH 下 listFiles 可能耗时数秒）；UI 在该行显示等待动画。 */
-    private val _expandingPath = MutableStateFlow<String?>(null)
-    val expandingPath: StateFlow<String?> = _expandingPath.asStateFlow()
+    /** 文件树子项缓存：已展开目录 → 最近一次列到的子条目。树按它增量重建，展开/折叠/重排不再整树重读；折叠、失效与刷新时作废。 */
+    private val browseChildrenCache = ConcurrentHashMap<String, List<FileEntry>>()
 
-    /** 展开等待态的兑底清除任务（每次展开重置，避免连点时协程堆积）。 */
-    private var expandMarkerTimeout: Job? = null
+    /** 已展开但子项尚未就绪的目录（后台协程逐个读取中）；树构建时收集，也是 toggleExpand 防连点的判据。 */
+    private val pendingBrowse: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** 列目录失败的目录（权限不足/已消失等）：行上标红不转圈，等变动信号或手动刷新后重试。 */
+    private val failedBrowse: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** 根 .gitignore 缓存：每次重排都重读浪费（远程是两次往返），失效与手动刷新时作废。 */
+    @Volatile
+    private var rootGitignoreCache: List<String>? = null
 
     /** 正在执行写操作（新建/重命名/删除/复制/移动）的条目路径集合；UI 在对应行与工具栏显示等待动画。 */
     private val _fileOpPaths = MutableStateFlow<Set<String>>(emptySet())
@@ -766,36 +781,92 @@ class AIAgentViewModel @Inject constructor(
 
     /**
      * 扁平化的可见文件树。listFiles 在本地是阻塞 IO、远程是网络调用，必须跑 IO 调度器。
-     * 监听工作区根与所有已展开目录：任一发生变动（不限 AI，终端与其它 App 同样算）或手动刷新都会重建树。
-     * 只监听展开中的目录、不递归整棵树，避免大仓库开出大量 inotify 句柄。
+     * 监听工作区根与所有已展开目录：任一发生变动（不限 AI，终端与其它 App 同样算）或手动刷新都会重排树。
+     * 大仓库增量加载：每次重排只现读工作区根与容器根各一层，已展开目录的子项走 [browseChildrenCache]，
+     * 未命中的由 [pendingBrowse] 后台逐个补齐（[FileTreeNode.isLoading] 的行先占位），首屏与展开不再等全树。
      */
     val browseState: StateFlow<FileBrowseState> = combine(_expandedPaths, containerRootNode) { expanded, root -> expanded to root }
         .flatMapLatest { (expanded, root) ->
             val watched = expanded + WorkspacePathMapper.CONTAINER_ROOT
-            val triggers = merge(
-                watched.map { fileChangeHub.watchWorkspace(it).asDirtySignal() }.merge().debounce(BROWSE_DEBOUNCE_MS),
-                // drop(1) 丢掉 StateFlow 重建时的当前值，否则刚展开就会多读一次
-                _browseRefresh.drop(1).map { }
-            )
-            flow {
+            // CONFLATED：变动/补齐信号来得再密也只保留最新一份，重排按需合并（不再需要 debounce）。
+            // channelFlow 而非 flow：补齐协程需要 ProducerScope.launch，且 send 天然可跨协程（emit 不能）。
+            val rerun = Channel<Unit>(Channel.CONFLATED)
+            channelFlow {
                 // 首次产出前由 stateIn 初值 Loading 占位；后续展开/折叠/刷新不再回到 Loading，
                 // StateFlow 保留上一份 Success 直到新树就绪，避免闪加载动画与滚动位置丢失。
-                emit(buildBrowseTree(expanded, root))
-                triggers.collect { emit(buildBrowseTree(expanded, root)) }
+                send(buildBrowseTree(expanded, root))
+                launch {
+                    merge(
+                        watched.map { fileChangeHub.watchWorkspace(it) }.merge(),
+                        // drop(1) 丢掉 StateFlow 重建时的当前值，否则刚展开就会多读一次
+                        _browseRefresh.drop(1).map { null }
+                    )
+                        .collect { batch ->
+                            // 失效必须逐事件即时做（丢中间事件会残留脏缓存）；重排信号交给 CONFLATED 合并。
+                            batch?.let(::invalidateBrowseCache)
+                            rerun.send(Unit)
+                        }
+                }
+                while (true) {
+                    rerun.receive()
+                    do {
+                        send(buildBrowseTree(expanded, root))
+                        // 已展开但子项未就绪的目录逐个补齐：每补一个重排一次，树逐段长出来
+                        // （远程 SSH 下列目录是网络往返，串行控制压力；补完一个下一轮构建自然带出子行）。
+                        var next = pendingBrowse.firstOrNull()
+                        if (next != null) {
+                            pendingBrowse.remove(next)
+                            val children = runCatching { fileAccess.listFiles(next) }
+                                .onFailure { FileLogger.w(TAG, "列目录失败: $next", it) }
+                                .getOrNull()
+                            if (children != null) {
+                                browseChildrenCache[next] = children
+                                failedBrowse.remove(next)
+                            } else {
+                                failedBrowse.add(next)
+                            }
+                        }
+                    } while (next != null)
+                }
             }.flowOn(Dispatchers.IO)
         }
-        // 新树已就绪：清掉展开等待态（无论成功/出错都清，避免转圈卡死）。
-        .onEach { _expandingPath.value = null }
         .catch { e ->
             FileLogger.e(TAG, "构建文件树失败", e)
-            // catch 在 onEach 下游，上游异常时 onEach 不会执行，必须在这里也清：
-            // 否则 _expandingPath 停留在该目录，toggleExpand 的「重复点击」判断会拒绝再次展开。
-            _expandingPath.value = null
+            // 防连点卡死：flow 已终止，未完成的展开判据要清掉，否则 toggleExpand 会拒绝再次展开。
+            pendingBrowse.clear()
             emit(FileBrowseState.Error(e.message ?: "读取目录失败"))
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FileBrowseState.Loading)
 
-    /** 读取工作区根与当前容器根，按 [expanded] 递归展开，产出扁平的可见节点列表；工作区根读取失败则整体报错。 */
+    /** 按变动事件精准失效子项缓存：文件增删影响所在目录的列表，目录被删时自身与后代一并作废；批量截断退化为全失效。 */
+    private fun invalidateBrowseCache(batch: FileChangeBatch) {
+        if (batch.truncated) {
+            browseChildrenCache.clear()
+            failedBrowse.clear()
+            pendingBrowse.clear()
+            rootGitignoreCache = null
+            return
+        }
+        val gitignore = childPathPrefix(WorkspacePathMapper.CONTAINER_ROOT) + ".gitignore"
+        for (change in batch.changes) {
+            if (change.containerPath == gitignore) rootGitignoreCache = null
+            if (change.kind == WatchChangeKind.MODIFIED) continue // 内容变化不影响目录列表
+            // 变动条目的父目录列表变了：作废父目录缓存（下次重排现读）。路径在容器根下时父目录就是 "/"。
+            val lastSlash = change.containerPath.lastIndexOf('/')
+            val parent = if (lastSlash <= 0) "/" else change.containerPath.substring(0, lastSlash)
+            browseChildrenCache.remove(parent)
+            if (change.kind == WatchChangeKind.DELETED) {
+                val prefix = childPathPrefix(change.containerPath)
+                browseChildrenCache.keys.removeAll { it == change.containerPath || it.startsWith(prefix) }
+                failedBrowse.removeAll { it == change.containerPath || it.startsWith(prefix) }
+                pendingBrowse.removeAll { it == change.containerPath || it.startsWith(prefix) }
+            }
+        }
+    }
+
+    /** 读取工作区根与当前容器根，按 [expanded] 递归展开，产出扁平的可见节点列表；工作区根读取失败则整体报错。
+     *  两个根每次现读一层（树首屏与手动刷新的新鲜度兜底）；其余已展开目录走 [browseChildrenCache]，
+     *  未命中的占位（isLoading）交给后台补齐，构建本身不再整树阻塞。 */
     private fun buildBrowseTree(expanded: Set<String>, containerRoot: FileTreeRoot.Container): FileBrowseState {
         val workspaceRoot = WorkspacePathMapper.CONTAINER_ROOT
         val workspaceEntries = runCatching { fileAccess.listFiles(workspaceRoot) }.getOrElse { e ->
@@ -807,7 +878,7 @@ class AIAgentViewModel @Inject constructor(
         if (workspaceRoot in expanded) {
             appendBrowseChildren(
                 workspaceRoot, workspaceEntries, depth = 1, expanded = expanded,
-                ignorePatterns = loadRootGitignore(workspaceRoot), relParts = emptyList(), out = nodes
+                ignorePatterns = cachedRootGitignore(workspaceRoot), relParts = emptyList(), out = nodes
             )
         }
         // 当前容器根：读不到（容器未安装、远程未连接）时只把该行标红，不影响工作区那棵。
@@ -848,6 +919,10 @@ class AIAgentViewModel @Inject constructor(
             .toList()
     }.getOrDefault(emptyList())
 
+    /** 根 .gitignore 带缓存：每次重排都重读浪费两次远程往返；变动失效与手动刷新时作废。 */
+    private fun cachedRootGitignore(root: String): List<String> =
+        rootGitignoreCache ?: loadRootGitignore(root).also { rootGitignoreCache = it }
+
     private fun appendBrowseChildren(
         parent: String,
         entries: List<FileEntry>,
@@ -869,31 +944,45 @@ class AIAgentViewModel @Inject constructor(
                 out += FileTreeNode(entry, path, depth, isExpanded = false, ignored = ignored)
                 continue
             }
-            val children = runCatching { fileAccess.listFiles(path) }.getOrNull()
-            out += FileTreeNode(entry, path, depth, isExpanded = true, hasError = children == null, ignored = ignored)
-            if (children != null) appendBrowseChildren(path, children, depth + 1, expanded, ignorePatterns, parts, out)
+            val children = browseChildrenCache[path]
+            if (children == null) {
+                // 子项未就绪：先占住展开位（isLoading 显示等待动画），后台补齐后重排自然长出子行；
+                // 曾列失败的标红不转圈，等变动信号或手动刷新后重试。
+                val failed = path in failedBrowse
+                if (!failed) pendingBrowse.add(path)
+                out += FileTreeNode(
+                    entry, path, depth, isExpanded = true,
+                    hasError = failed, isLoading = !failed, ignored = ignored
+                )
+                continue
+            }
+            out += FileTreeNode(entry, path, depth, isExpanded = true, ignored = ignored)
+            appendBrowseChildren(path, children, depth + 1, expanded, ignorePatterns, parts, out)
         }
     }
 
     fun refreshBrowse() {
+        browseChildrenCache.clear()
+        failedBrowse.clear()
+        pendingBrowse.clear()
+        rootGitignoreCache = null
         _browseRefresh.value++
     }
 
     /** 展开/折叠目录；折叠时连同其所有后代一并移出展开集，避免残留监听与再展开时意外深开。改变后按工作区持久化。
-     *  展开需等列目录返回，期间标记 [expandingPath] 让 UI 显示等待动画，并忽略对同一目录的重复点击（否则会把它折回去）。 */
+     *  子项未就绪的目录由树流后台补齐（[FileTreeNode.isLoading] 行显示等待动画），补齐期间在
+     *  [pendingBrowse] 中，重复点击直接忽略（否则会把它折回去）。折叠时子项缓存一并作废，再展开现读保证新鲜。 */
     fun toggleExpand(path: String) {
-        if (path == _expandingPath.value) return
+        if (path in pendingBrowse) return
         val current = _expandedPaths.value
         val updated = if (path in current) {
-            current.filterNot { it == path || it.startsWith(childPathPrefix(path)) }.toSet()
+            val prefix = childPathPrefix(path)
+            browseChildrenCache.keys.removeAll { it == path || it.startsWith(prefix) }
+            failedBrowse.removeAll { it == path || it.startsWith(prefix) }
+            pendingBrowse.removeAll { it == path || it.startsWith(prefix) }
+            current.filterNot { it == path || it.startsWith(prefix) }.toSet()
         } else {
-            _expandingPath.value = path
-            // 兜底清除：树流可能因订阅超时（WhileSubscribed 5s）没跑完就停，标记会永久残留。
-            expandMarkerTimeout?.cancel()
-            expandMarkerTimeout = viewModelScope.launch {
-                delay(EXPAND_MARKER_TIMEOUT_MS)
-                if (_expandingPath.value == path) _expandingPath.value = null
-            }
+            pendingBrowse.add(path)
             current + path
         }
         _expandedPaths.value = updated
@@ -1720,12 +1809,6 @@ class AIAgentViewModel @Inject constructor(
         val BROWSE_ORDER: Comparator<FileEntry> =
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-
-        /** 写文件会连珠触发多个 inotify 事件，合并后再重读目录。 */
-        const val BROWSE_DEBOUNCE_MS = 300L
-
-        /** 展开等待态的兜底清除时长：覆盖一次完整列目录，超时即认为这轮不会再回来。 */
-        const val EXPAND_MARKER_TIMEOUT_MS = 10_000L
 
         /** 会话目标文本长度上限，避免 system 提示词过长。 */
         const val MAX_GOAL_CHARS = 2000
