@@ -33,8 +33,8 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
-/** 时间线节点类型（v1：提问 / 结果 / 验收报告；「方案、进度汇报」节点留 v1.1）。 */
-internal enum class TimelineNodeType { USER, ASSISTANT_RESULT, VERIFICATION }
+/** 时间线节点类型（v1：提问 / 工具调用 / 结果 / 验收报告；「方案、进度汇报」节点留 v1.1）。 */
+internal enum class TimelineNodeType { USER, TOOL, ASSISTANT_RESULT, VERIFICATION }
 
 /** 时间线节点：[itemIndex] 为对应 chatItems 下标（点击跳转定位用）。 */
 internal data class TimelineNode(val itemIndex: Int, val type: TimelineNodeType)
@@ -108,6 +108,7 @@ internal fun TimelineRail(
 
         val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
         val userColor = MaterialTheme.colorScheme.primary
+        val toolColor = MaterialTheme.colorScheme.tertiary
         val resultColor = MaterialTheme.colorScheme.onSurfaceVariant
         val verificationColor = MaterialTheme.semanticColors.warning
         val viewportColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
@@ -164,16 +165,18 @@ internal fun TimelineRail(
                 }
             }
 
-            // 节点圆点：提问=主色实心、结果=弱色细点、验收报告=警告色特标（验收反馈：整体调小一档）。
+            // 节点圆点：提问=主色实心、工具=第三色细点、结果=弱色细点、验收报告=警告色特标（验收反馈：整体调小一档）。
             displayNodes.forEachIndexed { index, node ->
                 val y = yAt(index)
                 val diameter = when (node.type) {
                     TimelineNodeType.USER -> 2.5.dp.toPx()
+                    TimelineNodeType.TOOL -> 2.dp.toPx()
                     TimelineNodeType.ASSISTANT_RESULT -> 2.dp.toPx()
                     TimelineNodeType.VERIFICATION -> 3.dp.toPx()
                 }
                 val color = when (node.type) {
                     TimelineNodeType.USER -> userColor
+                    TimelineNodeType.TOOL -> toolColor
                     TimelineNodeType.ASSISTANT_RESULT -> resultColor
                     TimelineNodeType.VERIFICATION -> verificationColor
                 }
@@ -193,7 +196,7 @@ internal fun TimelineRail(
 /**
  * 高密降级：节点间距不足时逐级收敛显示。
  *
- * 1）间距 < [minSpacingPx]：只留「提问」节点（最能代表会话骨架；若一个提问都没有则保留原列表）；
+ * 1）间距 < [minSpacingPx]：只留「提问」节点（最能代表会话骨架，工具/结果/验收一并剪掉；若一个提问都没有则保留原列表）；
  * 2）仍 < [tightSpacingPx]：等距抽稀（保头尾），控制堆叠。
  */
 private fun collapseTimelineNodes(

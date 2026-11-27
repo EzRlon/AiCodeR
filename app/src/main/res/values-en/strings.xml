@@ -417,6 +417,7 @@
     <!-- SettingsScreen common -->
     <string name="common_back">Back</string>
     <string name="common_scroll_to_bottom">Back to bottom</string>
+    <string name="common_scroll_to_top">Back to top</string>
     <string name="common_prev">Previous</string>
     <string name="common_next">Next</string>
     <string name="settings_add_provider">Add vendor</string>

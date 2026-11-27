@@ -77,6 +77,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ClipEntry
@@ -135,6 +136,7 @@ import com.aicode.feature.workspace.domain.WorkspacePathMapper
 import com.aicode.feature.workspace.presentation.WorkspaceViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowDown
+import compose.icons.feathericons.ArrowUp
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -169,7 +171,7 @@ private const val CALIBRATE_TAIL_MS = 1_200L
 private const val AUTO_SCROLL_TICK_MS = 33L
 
 /** 滚动到底部按钮直径（dp）。 */
-private const val SCROLL_TO_BOTTOM_BTN_SIZE = 34
+private const val FLOATING_JUMP_BTN_SIZE = 34
 
 /** 连续新消息的入场错开间隔（ms）与总上限：一次插入很多卡片时不能让最后一张等好几秒。 */
 private const val MESSAGE_ENTRY_STAGGER_MS = 90L
@@ -497,8 +499,9 @@ private fun splitChatTurns(messages: List<AgentUIMessage>): Pair<List<AgentUIMes
  * 会话消息 → 右侧时间线（对话鸟瞰）节点。
  *
  * 口径与 [buildChatItems] 一致：①用户提问取轮首用户消息 item（轮头 item 的 message 也是用户
- * 消息，靠 contentType 区分）；②每轮只取「结果」正文的第一块（长文拆块不产生多个节点）；
- * ③验收报告单独标出。itemIndex 即该 item 在 [chatItems] 中的下标，点击节点据此定位。
+ * 消息，靠 contentType 区分）；②工具调用锚点取轮头/工具分组/常显工具行——折叠轮的过程区入口
+ * 就是轮头，展开轮的「N 次工具调用」分组头直接可见；③每轮只取「结果」正文的第一块（长文拆块
+ * 不产生多个节点）；④验收报告单独标出。itemIndex 即该 item 在 [chatItems] 中的下标，点击节点据此定位。
  */
 internal fun buildTimelineNodes(
     messages: List<AgentUIMessage>,
@@ -524,6 +527,11 @@ internal fun buildTimelineNodes(
             }
             message.id in resultIds && seenResults.add(message.id) ->
                 nodes += TimelineNode(index, TimelineNodeType.ASSISTANT_RESULT)
+            // 工具调用锚点：折叠轮头（过程区入口）、工具分组头、常显独立工具行；分支在后，不抢提问/结果口径
+            item.contentType == TOOL_GROUP_CONTENT_TYPE ||
+                item.contentType == TURN_HEADER_CONTENT_TYPE ||
+                item.contentType == MessageRole.TOOL.name ->
+                nodes += TimelineNode(index, TimelineNodeType.TOOL)
         }
     }
     return nodes
@@ -1460,6 +1468,19 @@ fun AIChatPanel(
             if (lastVisible.index < layout.totalItemsCount - 1) return@derivedStateOf true
             val safeBottom = layout.viewportEndOffset - inputBarReservePx
             (lastVisible.offset + lastVisible.size) - safeBottom > layout.viewportEndOffset / 2
+        }
+    }
+
+    // 回顶按钮的显示判定：与回底同款防护（空列表/旧布局/未重测时不出），离开首条即算「翻离顶部」。
+    // key 同 isFarFromBottom：切会话残留旧布局时不能悬着一个回顶按钮。
+    val isFarFromTop by remember(inputBarReservePx, messagesReady, messages.size, chatItems.size) {
+        derivedStateOf {
+            if (!messagesReady || messages.isEmpty()) return@derivedStateOf false
+            val layout = listState.layoutInfo
+            val firstVisible = layout.visibleItemsInfo.firstOrNull()
+                ?: return@derivedStateOf false
+            if (layout.totalItemsCount != chatItems.size + 1) return@derivedStateOf false
+            firstVisible.index > 0 || listState.firstVisibleItemScrollOffset > 0
         }
     }
 
@@ -2760,13 +2781,14 @@ fun AIChatPanel(
                 }
             }
 
-            // 滚动到底部按钮：悬浮在输入框右上角上方（避让底栏及可能悬浮的授权弹窗），离底超过半屏时
-            // 显示，不看滚动方向——往上翻历史后停住恰恰是最需要一键回底的时刻；滚动时跟随输入框淡出。
+            // 快速导航双钮：跳顶部/跳底部，悬浮在输入框右上角上方（避让底栏及可能悬浮的授权弹窗）。
+            // 底钮离底超过半屏显示、顶钮离开顶部显示（都是「真的翻远才出现」，不看滚动方向）；
+            // 滚动时跟随输入框淡出。与右侧时间线鸟瞰互补——时间线按节点定位，双钮一键到端。
             val permissionOffsetPx = with(LocalDensity.current) {
                 if (pendingPermission != null) permissionPanelHeightPx + Spacing.xs.toPx() else 0f
             }
             androidx.compose.animation.AnimatedVisibility(
-                visible = isFarFromBottom,
+                visible = isFarFromBottom || isFarFromTop,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = Spacing.lg)
@@ -2778,12 +2800,39 @@ fun AIChatPanel(
                 enter = fadeIn() + scaleIn(),
                 exit = fadeOut() + scaleOut()
             ) {
-                ScrollToBottomButton(
-                    onClick = {
-                        followBottom = true
-                        scope.launch { snapToBottom() }
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isFarFromTop,
+                        enter = fadeIn() + scaleIn(),
+                        exit = fadeOut() + scaleOut()
+                    ) {
+                        FloatingChatJumpButton(
+                            icon = FeatherIcons.ArrowUp,
+                            contentDescription = stringResource(R.string.common_scroll_to_top),
+                            onClick = {
+                                followBottom = false
+                                scope.launch { listState.animateScrollToItem(0) }
+                            }
+                        )
                     }
-                )
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isFarFromBottom,
+                        enter = fadeIn() + scaleIn(),
+                        exit = fadeOut() + scaleOut()
+                    ) {
+                        FloatingChatJumpButton(
+                            icon = FeatherIcons.ArrowDown,
+                            contentDescription = stringResource(R.string.common_scroll_to_bottom),
+                            onClick = {
+                                followBottom = true
+                                scope.launch { snapToBottom() }
+                            }
+                        )
+                    }
+                }
             }
 
             targetRewindMessageId?.let { targetId ->
@@ -2977,9 +3026,11 @@ private class MessageEntryScheduler {
     }
 }
 
-/** 滚动到底部按钮：圆形，悬浮在输入框右上角，不在底部时显示。 */
+/** 快速导航按钮（跳顶部/跳底部）：圆形，悬浮在输入框右上角，图标与文案由调用方传入。 */
 @Composable
-private fun ScrollToBottomButton(
+private fun FloatingChatJumpButton(
+    icon: ImageVector,
+    contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2989,13 +3040,13 @@ private fun ScrollToBottomButton(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 6.dp,
         modifier = modifier
-            .size(SCROLL_TO_BOTTOM_BTN_SIZE.dp)
+            .size(FLOATING_JUMP_BTN_SIZE.dp)
             .clickable(onClick = onClick)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
-                imageVector = FeatherIcons.ArrowDown,
-                contentDescription = stringResource(R.string.common_scroll_to_bottom),
+                imageVector = icon,
+                contentDescription = contentDescription,
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(20.dp)
             )
