@@ -91,6 +91,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private val INPUT_COLOR = TokenStatsPalette.Input
 private val OUTPUT_COLOR = TokenStatsPalette.Output
@@ -1115,6 +1116,9 @@ private fun CallRecordCard(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
                 DetailCell(stringResource(R.string.settings_token_stats_col_ttfb), formatDuration(r.ttfbMillis?.toDouble()))
                 DetailCell(stringResource(R.string.settings_token_stats_col_duration), formatDuration(r.durationMillis?.toDouble()))
+                r.outputTokensPerSecond()?.let { rate ->
+                    DetailCell(stringResource(R.string.settings_token_stats_col_output_rate), formatRate(rate))
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
                 DetailCell(
@@ -1207,6 +1211,17 @@ private fun formatSuccessRate(s: CallSummary): String {
     val rate = (s.calls - s.errors) * 100.0 / s.calls
     return String.format(Locale.getDefault(), "%.1f%%", rate)
 }
+
+/** 生成阶段输出速率（t/s）：扣除 TTBF 后的纯生成时长；非成功对话调用不参与。 */
+private fun LlmCallRecordEntity.outputTokensPerSecond(): Double? {
+    val ttfb = ttfbMillis ?: return null
+    val duration = durationMillis ?: return null
+    if (kind != "chat" || status != "success" || outputTokens <= 0 || duration - ttfb <= 0) return null
+    return outputTokens * 1000.0 / (duration - ttfb)
+}
+
+private fun formatRate(value: Double): String =
+    "${value.roundToInt().coerceAtLeast(1)} t/s"
 
 private fun formatDuration(ms: Double?): String {
     if (ms == null) return "-"

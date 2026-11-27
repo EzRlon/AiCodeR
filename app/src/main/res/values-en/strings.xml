@@ -201,6 +201,7 @@
     <string name="settings_token_stats_col_cache_hit_rate">Hit rate</string>
     <string name="settings_token_stats_col_ttfb">TTFB</string>
     <string name="settings_token_stats_col_duration">Duration</string>
+    <string name="settings_token_stats_col_output_rate">Output rate</string>
     <string name="settings_token_stats_col_time">Time</string>
     <string name="settings_token_stats_col_status">Status</string>
     <string name="settings_token_stats_col_cost">Cost</string>
