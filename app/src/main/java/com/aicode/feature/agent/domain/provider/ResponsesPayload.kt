@@ -1,5 +1,6 @@
 package com.aicode.feature.agent.domain.provider
 
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.remote.openai.ResponsesItem
 import com.aicode.feature.agent.data.remote.openai.ResponsesPart
 import com.aicode.feature.agent.data.remote.openai.ResponsesToolDefinition
@@ -12,11 +13,23 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
-/** 把模型给出的工具入参 JSON 字符串解析为 JsonObject；为空或非法时回退为空对象。 */
-internal fun parseToolArguments(raw: String): JsonObject {
+/**
+ * 把模型给出的工具入参 JSON 字符串解析为 JsonObject；为空或非法时回退为空对象。
+ * 非法不抛而是回退空对象：流式增量拼坏时工具层报「参数缺失」比整个请求崩掉更能自愈（模型会重试）。
+ * 但回退必须留痕——否则工具层只见「参数不能为空」，定位不到是拼坏还是根本没传。
+ */
+internal fun parseToolArguments(raw: String, toolName: String = ""): JsonObject {
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return JsonObject(emptyMap())
-    return runCatching { Json.parseToJsonElement(trimmed).jsonObject }.getOrElse { JsonObject(emptyMap()) }
+    return try {
+        Json.parseToJsonElement(trimmed).jsonObject
+    } catch (e: Exception) {
+        FileLogger.w(
+            "ToolArgs",
+            "工具参数 JSON 解析失败 tool=$toolName len=${trimmed.length}: ${e.message}; raw[:500]=${trimmed.take(500)}"
+        )
+        JsonObject(emptyMap())
+    }
 }
 
 /** 工具定义 → Responses 扁平 function 定义；无工具时返回 null（不发 `tools` 字段）。 */

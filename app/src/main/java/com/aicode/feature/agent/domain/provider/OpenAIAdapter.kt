@@ -1,6 +1,7 @@
 package com.aicode.feature.agent.domain.provider
 
 import com.aicode.core.util.AILogger
+import com.aicode.core.util.FileLogger
 import com.aicode.feature.agent.data.remote.openai.OpenAIApi
 import com.aicode.feature.settings.domain.model.ProviderType
 import com.aicode.feature.settings.domain.model.defaultProviderApiPath
@@ -500,7 +501,15 @@ class OpenAIAdapter @Inject constructor(
                                         if (acc.name.isEmpty()) emit(AIStreamChunk.ToolCallDeclared(name))
                                         acc.name = name
                                     }
-                                    fn.get("arguments")?.takeIf { !it.isJsonNull }?.asString?.let { budget.add(it); acc.args.append(it) }
+                                    fn.get("arguments")?.takeIf { !it.isJsonNull }?.let { argsEl ->
+                                        // 个别兼容实现把 arguments 传成 JSON 对象而非字符串：asString 会抛异常，
+                                        // 被行级 catch 吞掉后整块增量丢失，工具层只见空参数。对象型即完整参数，直接采用。
+                                        val piece = if (argsEl.isJsonObject) argsEl.toString() else argsEl.asString
+                                        if (piece.isNotEmpty()) {
+                                            budget.add(piece)
+                                            acc.args.append(piece)
+                                        }
+                                    }
                                 }
                             }
                             // 生图扩展：图片整块到达、无增量，累积待 Final 交工作流落盘。
@@ -518,7 +527,9 @@ class OpenAIAdapter @Inject constructor(
                             throw e
                         } catch (e: Exception) {
                             coroutineContext.ensureActive()
-                            // 该行 SSE 解析失败，跳过；不影响已累积文本与后续行。
+                            // 该行 SSE 解析失败，跳过；不影响已累积文本与后续行。留痕：静默跳过曾把
+                            // 对象型 arguments 的整块工具增量吞成空参数，排查时无从下手。
+                            FileLogger.w("OpenAIAdapter", "SSE 行解析失败: ${e.message}; line=${line.take(200)}")
                         }
                     }
                 } finally {
@@ -529,7 +540,7 @@ class OpenAIAdapter @Inject constructor(
 
             val toolCalls = toolAccs.values
                 .filter { it.id.isNotEmpty() || it.name.isNotEmpty() }
-                .map { acc -> ToolCall(id = acc.id, name = acc.name, arguments = parseToolArguments(acc.args.toString())) }
+                .map { acc -> ToolCall(id = acc.id, name = acc.name, arguments = parseToolArguments(acc.args.toString(), acc.name)) }
             usageReporter?.invoke(apiKey, streamInputTokens.toLong(), streamOutputTokens.toLong(), rateHeaders)
             emit(AIStreamChunk.Final(AIResponse(content = textBuilder.toString(), toolCalls = toolCalls, stopReason = finishReason, inputTokens = streamInputTokens, outputTokens = streamOutputTokens, cachedInputTokens = streamCachedInputTokens, cacheCreationTokens = streamCacheCreationTokens, images = streamedImages)))
                     }
