@@ -235,4 +235,36 @@ class SubprogramRegistryTest {
 
         assertTrue(registry.check(sub.copy(token = "tok'one\"two\$three")))
     }
+
+    /** body 结构等价断言：从 -d 参数提取实际发送体，逐字段比对修复前的字段名/类型/嵌套（非仅可解析）。 */
+    @Test
+    fun check_bodyStructure_isFieldEquivalent() = runTest {
+        val (registry, _, commandEngine) = newRegistry()
+        var captured = ""
+        coEvery {
+            commandEngine.runCommandSyncWithExit(any(), any(), any())
+        } answers {
+            captured = firstArg()
+            com.aicode.feature.agent.domain.container.CommandResult(
+                output = """{"result":{}}""",
+                exitCode = 0
+            )
+        }
+
+        registry.check(sub)
+
+        val bodyJson = captured.substringAfter("-d '").substringBeforeLast("'")
+        val parsed = JSONObject(bodyJson)
+        assertEquals("2.0", parsed.getString("jsonrpc"))
+        assertEquals(1, parsed.getInt("id"))
+        assertEquals("initialize", parsed.getString("method"))
+        val params = parsed.getJSONObject("params")
+        assertEquals("2026-07-28", params.getString("protocolVersion"))
+        assertEquals(0, params.getJSONObject("capabilities").length())
+        val clientInfo = params.getJSONObject("clientInfo")
+        assertEquals("aicoder", clientInfo.getString("name"))
+        assertEquals("1.0", clientInfo.getString("version"))
+        assertEquals(4, parsed.length())
+        assertEquals(3, params.length())
+    }
 }
