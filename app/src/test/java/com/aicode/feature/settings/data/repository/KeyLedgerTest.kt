@@ -5,6 +5,7 @@ import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -22,11 +23,13 @@ class KeyLedgerTest {
 
     /** 账本落盘是异步单飞写：轮询等 ledger 目录下文件出现，超时返回 null。 */
 
-    private fun ledgerFileName(dir: File, providerId: String): File {
-        val hash = MessageDigest.getInstance("SHA-256")
-            .digest(providerId.toByteArray(Charsets.UTF_8))
+    private fun sha256Hex(raw: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(raw.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
-            .take(16)
+
+    private fun ledgerFileName(dir: File, providerId: String): File {
+        val hash = sha256Hex(providerId).take(16)
         return File(File(dir, "keyledger"), "ledger_$hash.json")
     }
 
@@ -215,6 +218,33 @@ class KeyLedgerTest {
         assertEquals(1L, snapshot.total429)
         assertEquals(1L, snapshot.totalSuccess)
         assertEquals(10L, snapshot.dayTokensIn)
+    }
+
+    /** 上次选中 Key 的哈希跨实例存活：recordSelected 只落哈希不落明文，新实例可读回；与 keys 数组互不截断。 */
+    @Test
+    fun persistence_lastSelected_roundtripAcrossInstances() {
+        val dir = Files.createTempDirectory("keyledger-test").toFile()
+        val (writer, _) = newLedger(dir)
+
+        assertNull(writer.lastSelectedHash("persist-p1"))
+        writer.recordSelected("persist-p1", "key-x")
+        // 同时写一条 Key 状态，验证 keys 数组存在时顶层 last 字段仍能读出
+        writer.reportRateLimit("persist-p1", "key-y", baseCooldownMs = 600_000L)
+
+        val expected = sha256Hex("key-x").take(12)
+        val deadline = System.currentTimeMillis() + 10_000L
+        var last: String? = null
+        while (System.currentTimeMillis() < deadline) {
+            val (probe, _) = newLedger(dir)
+            last = probe.lastSelectedHash("persist-p1")
+            if (last == expected && probe.isCoolingDown("persist-p1", "key-y")) break
+            Thread.sleep(100)
+        }
+        assertEquals("lastSelected 未在超时内落盘（最后读到 $last）", expected, last)
+
+        val (reader, _) = newLedger(dir)
+        assertEquals(expected, reader.lastSelectedHash("persist-p1"))
+        assertTrue("同一账本内的冷却状态仍可读回", reader.isCoolingDown("persist-p1", "key-y"))
     }
 
     /** 账本文件损坏：不崩溃、按全新账本重建，坏文件保留为 .bak 供诊断。 */

@@ -12,16 +12,40 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.nio.file.Files
+import java.security.MessageDigest
 
 class ProviderKeyRotatorTest {
 
     /** v2 起构造需要 KeyLedger（跨进程持久化冷却状态）；测试里给每个实例配独立临时目录，互不串扰。 */
-    private fun newRotator(): ProviderKeyRotator {
-        val dir = Files.createTempDirectory("keyledger-test").toFile()
+    private fun newRotator(dir: File = Files.createTempDirectory("keyledger-test").toFile()): ProviderKeyRotator {
         val context = mockk<Context>()
         every { context.filesDir } returns dir
         return ProviderKeyRotator(KeyLedger(context))
+    }
+
+    /** 在共享目录上构造一个只读探针账本（不写盘），用于轮询异步落盘结果。 */
+    private fun probeLedger(dir: File): KeyLedger {
+        val context = mockk<Context>()
+        every { context.filesDir } returns dir
+        return KeyLedger(context)
+    }
+
+    /** 账本落盘是异步的：轮询共享目录里的持久化 lastSelected，直到等于期望 Key 的哈希。 */
+    private fun waitUntilPersistedLastSelected(dir: File, providerId: String, key: String) {
+        val expected = MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(12)
+        val deadline = System.currentTimeMillis() + 10_000L
+        var last: String? = null
+        while (System.currentTimeMillis() < deadline) {
+            last = probeLedger(dir).lastSelectedHash(providerId)
+            if (last == expected) return
+            Thread.sleep(100)
+        }
+        throw AssertionError("lastSelected 未在超时内落盘：期望 $expected，实际 $last")
     }
 
     private fun config(
@@ -399,5 +423,59 @@ class ProviderKeyRotatorTest {
         )
 
         assertNull(rotator.activeKey(cfg, "session-1"))
+    }
+
+    // ---------- 重启接续（持久化 lastSelected） ----------
+
+    /** 重启接续：上个进程持久化了「上次选中 Key」后，新实例 SEQUENTIAL 首次选取从其下一个健康 Key 开始，而不是重头薅第一个。 */
+    @Test
+    fun pickKey_afterRestart_sequentialResumesFromNextKeyAfterLastSelected() {
+        val dir = Files.createTempDirectory("keyledger-test").toFile()
+        val cfg = multiKeyConfig(keys = listOf("key-a", "key-b", "key-c"))
+
+        // 第一进程：选中 key-a，lastSelected 随账本异步落盘
+        newRotator(dir).activeKey(cfg, "session-1")
+        waitUntilPersistedLastSelected(dir, "provider-1", "key-a")
+
+        // 第二进程（模拟重启）：共享同一账本目录，内存 lastSelected 为空
+        val pick = newRotator(dir).pickKey(cfg, "session-restart")
+
+        assertTrue("期望 Available，实际 $pick", pick is KeyPick.Available)
+        pick as KeyPick.Available
+        assertEquals("key-b", pick.key)
+        assertEquals(2, pick.index)
+    }
+
+    /** 重启接续只发生在首次：接续选取后内存已有记录，同一进程内后续新会话回归「从第一个健康 Key 开始」的正常语义。 */
+    @Test
+    fun pickKey_afterRestart_nextNewSessionStartsFromFirstAgain() {
+        val dir = Files.createTempDirectory("keyledger-test").toFile()
+        val cfg = multiKeyConfig(keys = listOf("key-a", "key-b", "key-c"))
+
+        newRotator(dir).activeKey(cfg, "session-1")
+        waitUntilPersistedLastSelected(dir, "provider-1", "key-a")
+
+        val restarted = newRotator(dir)
+        assertEquals("key-b", (restarted.pickKey(cfg, "session-restart") as KeyPick.Available).key)
+        assertEquals("key-a", (restarted.pickKey(cfg, "session-next") as KeyPick.Available).key)
+    }
+
+    /** 重启接续 + 冷却联动：持久化的「上次选中 Key」若已进入冷却，环形扫描自动跳过它取下一个健康 Key。 */
+    @Test
+    fun pickKey_afterRestart_skipsCoolingPersistedKey() {
+        val dir = Files.createTempDirectory("keyledger-test").toFile()
+        val cfg = multiKeyConfig(keys = listOf("key-a", "key-b", "key-c"), cooldownMinutes = 60)
+
+        val first = newRotator(dir)
+        first.activeKey(cfg, "session-1") // 选中 key-a
+        // 全部 Key 都已试过：无可切换目标返回 null，但 key-a 的失败已记账进入冷却，lastSelected 保持 key-a
+        assertNull(first.reportFailure("provider-1", "session-1", "key-a", triedKeys = setOf("key-a", "key-b", "key-c")))
+        waitUntilPersistedLastSelected(dir, "provider-1", "key-a")
+
+        // 重启后 key-a 冷却中：从它的下一个位置环形找，落到 key-b
+        val pick = newRotator(dir).pickKey(cfg, "session-restart")
+
+        assertTrue("期望 Available，实际 $pick", pick is KeyPick.Available)
+        assertEquals("key-b", (pick as KeyPick.Available).key)
     }
 }

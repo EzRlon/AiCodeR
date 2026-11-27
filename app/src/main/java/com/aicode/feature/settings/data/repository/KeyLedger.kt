@@ -102,6 +102,9 @@ class KeyLedger @Inject constructor(
     private val loadedProviders = HashSet<String>()
     private val dirtyProviders = HashSet<String>()
 
+    /** providerId → 最近选中 Key 的哈希（跨进程持久化，重启后接续轮换用；不落明文）。 */
+    private val lastSelectedByProvider = HashMap<String, String>()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val saveMutex = Mutex()
 
@@ -144,6 +147,15 @@ class KeyLedger @Inject constructor(
         val now = now()
         keys.map { snapshotOf(stateOf(providerId, it), hashOf(it), now) }
     }
+
+    /** 该 provider 最近选中 Key 的哈希（先确保账本已从磁盘恢复）；无记录返回 null。 */
+    fun lastSelectedHash(providerId: String): String? = synchronized(lock) {
+        ensureLoaded(providerId)
+        lastSelectedByProvider[providerId]
+    }
+
+    /** Key 明文 → 账本内使用的哈希，供调用方把持久化的 lastSelectedHash 匹配回候选 Key。 */
+    fun keyHash(key: String): String = hashOf(key)
 
     // ---------------------------------------------------------------- 上报
 
@@ -304,6 +316,18 @@ class KeyLedger @Inject constructor(
         }
     }
 
+    /**
+     * 记录 provider 最近选中的 Key：只存哈希不落明文，随账本异步落盘。
+     * 供轮换器在选中/切换 Key 时同步调用，进程重启后从「上次选中 Key 的下一个」接续轮换。
+     */
+    fun recordSelected(providerId: String, key: String) {
+        synchronized(lock) {
+            ensureLoaded(providerId)
+            lastSelectedByProvider[providerId] = hashOf(key)
+            markDirty(providerId)
+        }
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private fun cooldownFor(baseMs: Long, level: Int): Long {
@@ -415,7 +439,8 @@ class KeyLedger @Inject constructor(
     private fun buildJson(providerId: String): String? {
         val prefix = "$providerId\u0000"
         val entries = states.entries.filter { it.key.startsWith(prefix) }
-        if (entries.isEmpty()) return null
+        val lastHash = lastSelectedByProvider[providerId]
+        if (entries.isEmpty() && lastHash == null) return null
         val array = JSONArray()
         for ((compositeKey, state) in entries) {
             val keyHash = compositeKey.substring(prefix.length)
@@ -447,6 +472,7 @@ class KeyLedger @Inject constructor(
         return JSONObject().apply {
             put("provider", providerId)
             put("version", FILE_VERSION)
+            if (lastHash != null) put("last", lastHash)
             put("keys", array)
         }.toString()
     }
@@ -458,6 +484,10 @@ class KeyLedger @Inject constructor(
         if (!file.exists()) return
         runCatching {
             val root = JSONObject(file.readText())
+            // 先读顶层 last：下面的 keys 数组缺省时提前返回，不能截断对 last 的读取
+            root.optString("last").takeIf { it.isNotEmpty() && it != "null" }?.let {
+                lastSelectedByProvider[providerId] = it
+            }
             val array = root.optJSONArray("keys") ?: return
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
