@@ -2,8 +2,6 @@ package com.aicode.core.watch
 
 import com.aicode.core.util.GitIgnoreMatcher
 import java.io.File
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 
 /** 变更所属的监听根：工作区、AI 配置目录（`~/.aicode`），或订阅方指定的其它宿主目录。 */
 enum class ChangeRoot { WORKSPACE, AICODE, OTHER }
@@ -65,9 +63,6 @@ class IgnoreRules internal constructor(
             IgnoreRules(filter.ignoredNames, gitignorePatterns + filter.extraPatterns)
     }
 }
-
-/** 仅需「有变更」这一信号的 UI 订阅用；批量窗口已把同一目录的密集变更合并为一次。 */
-fun Flow<FileChangeBatch>.asDirtySignal(): Flow<Unit> = map { }
 
 /** 把宿主绝对路径转成相对 [root] 的路径段。 */
 internal fun relativePartsOf(root: File, path: File): List<String> {

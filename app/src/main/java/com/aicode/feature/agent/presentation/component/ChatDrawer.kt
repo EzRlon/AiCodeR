@@ -314,7 +314,6 @@ fun ChatDrawerContent(
     runningSubSessionIds: Set<String> = emptySet(),
     browseState: FileBrowseState,
     expandedPaths: Set<String>,
-    expandingPath: String? = null,
     fileOpPaths: Set<String> = emptySet(),
     clipboard: BrowseClipboard? = null,
     pasteConflict: Pair<String, String>? = null,
@@ -568,7 +567,6 @@ fun ChatDrawerContent(
                             1 -> FileBrowserTab(
                                 state = browseState,
                                 expandedPaths = expandedPaths,
-                                expandingPath = expandingPath,
                                 fileOpPaths = fileOpPaths,
                                 clipboard = clipboard,
                                 onToggleExpand = onToggleExpand,
@@ -1479,7 +1477,6 @@ private fun SubAgentExpandToggle(
 private fun FileBrowserTab(
     state: FileBrowseState,
     expandedPaths: Set<String>,
-    expandingPath: String?,
     fileOpPaths: Set<String>,
     clipboard: BrowseClipboard?,
     onToggleExpand: (String) -> Unit,
@@ -1553,7 +1550,7 @@ private fun FileBrowserTab(
                             FileTreeRow(
                                 node = node,
                                 rowWidth = rowWidth,
-                                expanding = node.entry.isDirectory && node.path == expandingPath,
+                                expanding = node.isLoading,
                                 busy = node.path in fileOpPaths,
                                 onClick = {
                                     if (node.entry.isDirectory) onToggleExpand(node.path)
