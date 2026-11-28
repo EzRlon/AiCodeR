@@ -3277,6 +3277,10 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** 弹窗内即时识别：只解析单个模型名，不写缓存。 */
+    suspend fun resolveAutoModelMetadata(type: ProviderType, modelId: String): ModelMetadata =
+        modelMetadataService.resolveAuto(type, modelId)
+
     fun resolveModelMetadata(providerId: String, type: ProviderType, modelIds: List<String>) {
         val normalizedIds = modelIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (normalizedIds.isEmpty()) return

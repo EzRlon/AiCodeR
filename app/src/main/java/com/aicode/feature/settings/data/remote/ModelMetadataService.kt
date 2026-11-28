@@ -60,6 +60,12 @@ class ModelMetadataService @Inject constructor(
             }
         }
 
+    /** 不落库的即时解析：目录命中即返回；否则返回兜底默认值。 */
+    suspend fun resolveAuto(type: ProviderType, modelId: String): ModelMetadata =
+        withContext(Dispatchers.IO) {
+            findMetadata(loadCatalog(), type, modelId) ?: default(type, modelId)
+        }
+
     /** 自定义元数据优先于自动解析（拉取/内置）结果；providerId 为空（未关联配置）时跳过合并。 */
     private suspend fun mergeCustom(providerId: String, modelId: String, auto: ModelMetadata): ModelMetadata {
         if (providerId.isBlank()) return auto
