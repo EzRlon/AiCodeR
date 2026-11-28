@@ -196,7 +196,11 @@ class CredentialViewModel @Inject constructor(
         viewModelScope.launch {
             val key = currentServerKey() ?: return@launch
             injectSettings.setAutoInject(key, enabled)
-            applyInjection(key, enabled)
+            if (!applyInjection(key, enabled)) {
+                // 远程注入失败：回滚开关并提示，避免 UI 显示已开启但服务器上没有任何凭据。
+                injectSettings.setAutoInject(key, !enabled)
+                toast(context.getString(R.string.credential_toast_auto_inject_failed))
+            }
             refreshAutoInjectState()
         }
     }
@@ -207,22 +211,25 @@ class CredentialViewModel @Inject constructor(
             val key = currentServerKey() ?: return@launch
             injectSettings.markAsked(key)
             injectSettings.setAutoInject(key, enabled)
-            applyInjection(key, enabled)
+            if (!applyInjection(key, enabled)) {
+                injectSettings.setAutoInject(key, !enabled)
+                toast(context.getString(R.string.credential_toast_auto_inject_failed))
+            }
             refreshAutoInjectState()
         }
     }
 
-    /** 开启时上传远程注入配置（凭据 + includeIf 限定的 gitconfig），关闭时撤销。 */
-    private suspend fun applyInjection(key: String, enabled: Boolean) {
-        if (!enabled) {
-            remoteSshConnection.removeGitCredentialConfig()
-            return
-        }
+    /**
+     * 开启时上传远程注入配置（凭据 + includeIf 限定的 gitconfig），关闭时撤销。
+     * 返回注入操作是否成功；失败时调用方应回滚开关状态。
+     */
+    private suspend fun applyInjection(key: String, enabled: Boolean): Boolean {
+        if (!enabled) return remoteSshConnection.removeGitCredentialConfig()
         val creds = credentialRepository.getAll().first()
         val workspaceRoot = workspaceRepository.currentPath()
             .takeIf { it.isNotBlank() && it != "/" }
             ?: remoteSshConnection.config?.remoteWorkspacePath.orEmpty()
-        remoteSshConnection.uploadGitCredentialConfig(creds, workspaceRoot)
+        return remoteSshConnection.uploadGitCredentialConfig(creds, workspaceRoot)
     }
 
     /** 凭据增删后若当前服务器已开启注入，重新同步到远程。 */

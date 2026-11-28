@@ -294,7 +294,11 @@ class RemoteSftpFileAccess @Inject constructor(
 
     override fun copyToLocal(path: String): File {
         val remote = toRemotePath(path)
-        val tempFile = File.createTempFile("aicode_remote_", ".copy").apply { deleteOnExit() }
+        // 临时文件保留远程原文件名：下游靠文件名/扩展名做格式探测时才拿得到真实类型（如 BitmapFactory）。
+        val remoteName = remote.substringAfterLast('/')
+        val tempDir = File.createTempFile("aicode_remote_", ".dir").apply { deleteOnExit() }
+        tempDir.delete()
+        val tempFile = File(tempDir, remoteName).apply { deleteOnExit() }
         return try {
             withSftp { sftp ->
                 if (sftp.statExistence(remote) == null) throw NoSuchFileException(File(remote))
@@ -302,8 +306,8 @@ class RemoteSftpFileAccess @Inject constructor(
             }
             tempFile
         } catch (e: Exception) {
-            // 用完即删：临时文件不依赖 deleteOnExit（只在进程退出清），失败路径也回收，避免长会话累积。
-            runCatching { tempFile.delete() }
+            // 用完即删：临时目录不依赖 deleteOnExit（只在进程退出清），失败路径也回收，避免长会话累积。
+            runCatching { tempDir.deleteRecursively() }
             if (e is NoSuchFileException) throw e
             FileLogger.e(TAG, "copyToLocal 失败: $remote", e)
             throw NoSuchFileException(File(remote))

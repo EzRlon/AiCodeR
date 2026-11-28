@@ -1506,6 +1506,7 @@
     <!-- Credential Toast -->
     <string name="credential_toast_saved">Credential saved</string>
     <string name="credential_toast_save_failed">Save failed: %1$s</string>
+    <string name="credential_toast_auto_inject_failed">Remote injection failed, switch rolled back, check SSH connection and retry</string>
     <string name="credential_toast_deleted">Credential deleted</string>
     <string name="credential_toast_identity_saved">Identity and repository URL saved</string>
 
