@@ -1333,6 +1333,9 @@ class StatefulAgentWorkflow @Inject constructor(
         var ttfbElapsed: Long? = null
         var retryAttempts = 0
 
+        /** 排队放行（RequestStarted）后的起点：排队等待时长与首包口径；未排队时即请求起点。 */
+        private var requestStartElapsed = callStartElapsed
+
         /** 收集完成（Final）时的累计耗时：首块到流结束，generationWindow 的分母。 */
         var durationElapsed: Long? = null
 
@@ -1343,6 +1346,11 @@ class StatefulAgentWorkflow @Inject constructor(
 
         suspend fun onChunk(chunk: AIStreamChunk) {
             when (chunk) {
+                is AIStreamChunk.RequestQueued -> emit(AgentEvent.RequestQueued(chunk.requestsAhead))
+                AIStreamChunk.RequestStarted -> {
+                    requestStartElapsed = SystemClock.elapsedRealtime()
+                    emit(AgentEvent.RequestStarted)
+                }
                 is AIStreamChunk.TextDelta -> {
                     markTtfb()
                     text.append(chunk.text)
@@ -1376,7 +1384,7 @@ class StatefulAgentWorkflow @Inject constructor(
                 is AIStreamChunk.Final -> {
                     // 纯工具调用轮没有文本/思考增量，Final 是首个内容事件，兜底记为 TTFB
                     markTtfb()
-                    durationElapsed = SystemClock.elapsedRealtime() - callStartElapsed
+                    durationElapsed = SystemClock.elapsedRealtime() - requestStartElapsed
                     finalResponse = chunk.response
                 }
                 is AIStreamChunk.ToolCallDeclared -> {
@@ -1402,7 +1410,7 @@ class StatefulAgentWorkflow @Inject constructor(
 
         private fun markTtfb() {
             if (ttfbElapsed == null) {
-                ttfbElapsed = SystemClock.elapsedRealtime() - callStartElapsed
+                ttfbElapsed = SystemClock.elapsedRealtime() - requestStartElapsed
             }
         }
 

@@ -39,6 +39,7 @@ import com.aicode.feature.backup.domain.toMetadata
 import com.aicode.feature.credentials.data.repository.FileCredentialRepository
 import com.aicode.feature.schedule.data.ScheduledTaskRepository
 import com.aicode.feature.schedule.domain.ScheduledTask
+import com.aicode.feature.settings.domain.model.DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS
 import com.aicode.feature.settings.data.local.dao.AIProviderDao
 import com.aicode.feature.settings.data.local.entity.AIProviderEntity
 import com.aicode.feature.settings.data.repository.CompactionModelSettingsRepository
@@ -1102,7 +1103,8 @@ class BackupManagerImpl @Inject constructor(
         keyFailoverThreshold = keyFailoverThreshold,
         keyCooldownMinutes = keyCooldownMinutes,
         scriptParams = KeystoreCipher.decryptString(scriptParams),
-        keySwitchStatusCodes = keySwitchStatusCodes
+        keySwitchStatusCodes = keySwitchStatusCodes,
+        maxConcurrentRequests = maxConcurrentRequests
     )
 
     private fun ProviderDto.toEntity() = AIProviderEntity(
@@ -1128,7 +1130,9 @@ class BackupManagerImpl @Inject constructor(
         keyFailoverThreshold = keyFailoverThreshold ?: 2,
         keyCooldownMinutes = keyCooldownMinutes ?: 5,
         scriptParams = KeystoreCipher.encryptString(scriptParams ?: ""),
-        keySwitchStatusCodes = keySwitchStatusCodes ?: ""
+        keySwitchStatusCodes = keySwitchStatusCodes ?: "",
+        maxConcurrentRequests = (maxConcurrentRequests ?: DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS)
+            .coerceAtLeast(0)
     )
 
     private fun RemoteConnectionEntity.toDto() = RemoteConnectionDto(

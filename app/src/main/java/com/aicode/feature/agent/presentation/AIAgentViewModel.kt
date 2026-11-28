@@ -3601,6 +3601,8 @@ class AIAgentViewModel @Inject constructor(
                         setStreamingText(sessionId, null)
                         setStreamingReasoning(sessionId, null)
                     }
+                    is AgentEvent.RequestQueued,
+                    AgentEvent.RequestStarted -> Unit
                     is AgentEvent.CompactionStarted -> {
                         currentReasoningStart = null
                         currentReasoningEnd = null

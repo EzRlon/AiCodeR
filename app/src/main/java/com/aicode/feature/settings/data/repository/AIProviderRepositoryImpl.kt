@@ -169,6 +169,7 @@ class AIProviderRepositoryImpl @Inject constructor(
             keyCooldownMinutes = keyCooldownMinutes,
             keySwitchStatusCodes = keySwitchStatusCodes
                 .split(",").mapNotNull { it.trim().toIntOrNull() }.distinct(),
+            maxConcurrentRequests = maxConcurrentRequests,
             baseUrl = baseUrl,
             defaultModel = defaultModel,
             models = modelList,
@@ -209,6 +210,7 @@ class AIProviderRepositoryImpl @Inject constructor(
             keyFailoverThreshold = keyFailoverThreshold,
             keyCooldownMinutes = keyCooldownMinutes,
             keySwitchStatusCodes = keySwitchStatusCodes.joinToString(","),
+            maxConcurrentRequests = maxConcurrentRequests,
             baseUrl = baseUrl,
             useFullUrl = useFullUrl,
             defaultModel = defaultModel,
