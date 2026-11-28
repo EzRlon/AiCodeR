@@ -61,8 +61,17 @@ class GitRepository @Inject constructor(
         vararg args: String
     ): String = gitRaw(args)
 
-    /** 当前 git 命令的执行目录：选中了子目录仓库用其路径，否则工作区根。 */
-    private fun repoCwd(): String = currentRepoPath ?: workspaceRepository.currentPath()
+    /** 当前 git 命令的执行目录：选中了子目录仓库用其路径（且必须仍在当前工作区内），否则工作区根。 */
+    private fun repoCwd(): String {
+        val root = workspaceRepository.currentPath().trimEnd('/')
+        currentRepoPath?.let { repo ->
+            val repoDir = repo.trimEnd('/')
+            if (repoDir == root || repoDir.startsWith("$root/")) return repoDir
+            // 工作区切换后残留在旧工作区的仓库路径，不作为 git 命令的执行目录，回退到新工作区根。
+            currentRepoPath = null
+        }
+        return root
+    }
 
     /** 设置当前选中的 git 仓库路径（null 回到工作区根）。 */
     fun setRepoPath(path: String?) {

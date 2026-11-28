@@ -359,6 +359,15 @@ class RemoteSshConnection @Inject constructor(
     }
 
     /**
+     * 返回当前远程命令/交互终端都要继承的 Git 环境前缀：把 git 全局配置指向 App 管理的
+     * `~/.aicode/gitconfig`（内含用户 ~/.gitconfig 的 include 与工作区限定的凭据 helper）。
+     * [RemoteSshEngine] 与 [RemoteTerminalSessionManager] 必须用同一前缀，保证 exec 与交互 shell
+     * 里的 git 行为一致（远程终端里跑 git 也能拿到凭据与署名）。
+     */
+    fun gitEnvironmentPrefix(): String =
+        "export GIT_CONFIG_GLOBAL=\"\$HOME/.aicode/gitconfig\"; "
+
+    /**
      * 把 App 的 git 凭据注入远程服务器（仅当用户开启「自动注入」时调用）：
      * 写 `~/.aicode/git-credentials`（store 格式）+ `~/.aicode/gitconfig` + `~/.aicode/gitconfig.credential`。
      *
@@ -369,12 +378,12 @@ class RemoteSshConnection @Inject constructor(
      * @param credentials 要注入的凭据列表（每 host 一条）。
      * @param workspaceRoot 远程工作区根路径（AI 的 ~/workspace 映射目录），限定注入范围。
      */
-    suspend fun uploadGitCredentialConfig(credentials: List<GitCredential>, workspaceRoot: String) {
-        val client = sshClient ?: return
-        val home = remoteHome ?: return
+    suspend fun uploadGitCredentialConfig(credentials: List<GitCredential>, workspaceRoot: String): Boolean {
+        val client = sshClient ?: return false
+        val home = remoteHome ?: return false
         val aicodeDir = home.trimEnd('/') + "/.aicode"
-        val wsRoot = workspaceRoot.trimEnd('/').ifEmpty { return }
-        withContext(Dispatchers.IO) {
+        val wsRoot = workspaceRoot.trimEnd('/').ifEmpty { return false }
+        return withContext(Dispatchers.IO) {
             runCatching {
                 val mkdirSession = client.startSession()
                 mkdirSession.exec("mkdir -p '$aicodeDir'").join()
@@ -408,7 +417,13 @@ class RemoteSshConnection @Inject constructor(
                 }
                 writeRemoteFile(client, "$aicodeDir/gitconfig.credential", credentialConfig)
                 FileLogger.i(TAG, "已注入 git 凭据到远程 $aicodeDir（限定 $wsRoot/）")
-            }.onFailure { FileLogger.w(TAG, "注入 git 凭据到远程失败", it) }
+            }.fold(
+                onSuccess = { true },
+                onFailure = {
+                    FileLogger.w(TAG, "注入 git 凭据到远程失败", it)
+                    false
+                }
+            )
         }
     }
 
@@ -416,17 +431,23 @@ class RemoteSshConnection @Inject constructor(
      * 撤销远程注入：删除 App 管理的三个配置/凭据文件。
      * `GIT_CONFIG_GLOBAL` 指向不存在的文件时 git 静默跳过，注入即失效，服务器用户配置不受影响。
      */
-    suspend fun removeGitCredentialConfig() {
-        val client = sshClient ?: return
-        val home = remoteHome ?: return
+    suspend fun removeGitCredentialConfig(): Boolean {
+        val client = sshClient ?: return false
+        val home = remoteHome ?: return false
         val aicodeDir = home.trimEnd('/') + "/.aicode"
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             runCatching {
                 val session = client.startSession()
                 session.exec("rm -f '$aicodeDir/gitconfig' '$aicodeDir/gitconfig.credential' '$aicodeDir/git-credentials' '$aicodeDir/git-credential-aicode' 2>/dev/null; echo done").join()
                 session.close()
                 FileLogger.i(TAG, "已撤销远程 git 凭据注入")
-            }.onFailure { FileLogger.w(TAG, "撤销远程 git 凭据注入失败", it) }
+            }.fold(
+                onSuccess = { true },
+                onFailure = {
+                    FileLogger.w(TAG, "撤销远程 git 凭据注入失败", it)
+                    false
+                }
+            )
         }
     }
 

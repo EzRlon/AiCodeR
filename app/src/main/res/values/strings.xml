@@ -1542,6 +1542,7 @@
     <!-- Credential Toast -->
     <string name="credential_toast_saved">凭据已保存</string>
     <string name="credential_toast_save_failed">保存失败：%1$s</string>
+    <string name="credential_toast_auto_inject_failed">远程注入失败，已回滚开关，请检查 SSH 连接后重试</string>
     <string name="credential_toast_deleted">凭据已删除</string>
     <string name="credential_toast_identity_saved">署名与仓库地址已保存</string>
 

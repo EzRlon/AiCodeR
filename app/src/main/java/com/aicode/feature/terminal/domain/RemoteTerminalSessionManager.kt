@@ -110,11 +110,11 @@ class RemoteTerminalSessionManager @Inject constructor(
         val backend = SshShellBackend(shell)
         val termSession = TerminalSession(TRANSCRIPT_ROWS, AppRemoteSessionClient(), backend)
         termSession.updateSize(DEFAULT_COLUMNS, DEFAULT_ROWS)
-        // shell 登录后默认在 home，先 cd 到当前工作区，与命令执行链路（RemoteSshEngine.buildCdCommand）保持一致：
-        // 优先 ~/workspace 符号链接，失败回退到真实工作区路径。
+        // shell 登录后默认在 home，先继承 Git 环境再 cd 到当前工作区，与命令执行链路（RemoteSshEngine.buildCdCommand）保持一致：
+        // 远程终端里跑 git 才能拿到与 exec 命令相同的凭据/署名配置。优先 ~/workspace 符号链接，失败回退到真实工作区路径。
         val wsPath = workspaceRepository.currentPath()
         if (wsPath.isNotBlank() && wsPath != "/") {
-            termSession.write("cd ~/workspace 2>/dev/null || cd '${wsPath.trimEnd('/')}' 2>/dev/null\n")
+            termSession.write("${connection.gitEnvironmentPrefix()}cd ~/workspace 2>/dev/null || cd '${wsPath.trimEnd('/')}' 2>/dev/null\n")
         }
         if (command != null) {
             val init = command + (if (notify) "" else "; exec /bin/sh")

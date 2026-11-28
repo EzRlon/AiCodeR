@@ -34,6 +34,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
@@ -256,6 +257,10 @@ class AIEditorApp : Application(), Configuration.Provider {
     @Inject
     lateinit var remoteSshConnection: com.aicode.feature.agent.domain.container.RemoteSshConnection
 
+    /** 自动注入开关的持久化：重连成功后判断是否需要重新上传远程凭据配置。 */
+    @Inject
+    lateinit var credentialInjectSettingsRepository: com.aicode.feature.credentials.data.CredentialInjectSettingsRepository
+
     /** 全局网络可用性监听：网络恢复/切换链路时驱动即时重连。 */
     @Inject
     lateinit var networkConnectivityObserver: com.aicode.core.net.NetworkConnectivityObserver
@@ -468,6 +473,9 @@ class AIEditorApp : Application(), Configuration.Provider {
             remoteSshConnection.startSupervisor(appScope) {
                 runCatching { workspaceRepository.initialize() }
                     .onFailure { FileLogger.w(TAG, "SSH 重连后重新加载工作区失败", it) }
+                // 重连可能伴随远程 home 被清空，若用户开启过自动注入则重新上传凭据配置，
+                // 避免重连后 AI 的 git 操作突然丢凭据/丢署名。
+                resyncGitCredentialsIfEnabled()
                 syncDocsToRemote()
                 releaseBuiltinAssetsToRemote()
             }
@@ -685,6 +693,24 @@ class AIEditorApp : Application(), Configuration.Provider {
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
             .build()
+
+    /**
+     * 重连成功后若用户开启过「自动注入」，重新上传远程 git 凭据配置（凭据 store + includeIf 限定的 gitconfig + helper）。
+     * SSH 重连可能伴随远程容器重建/home 清空，凭据文件丢失会让 AI 的 git 操作突然失效，这里主动恢复。
+     * 失败仅记日志，不阻断重连流程（用户下次打开凭据页仍可手动处理）。
+     */
+    private suspend fun resyncGitCredentialsIfEnabled() {
+        runCatching {
+            val cfg = remoteSshConnection.config ?: return
+            val key = credentialInjectSettingsRepository.serverKey(cfg.host, cfg.port)
+            if (!credentialInjectSettingsRepository.isAutoInjectEnabled(key)) return
+            val creds = fileCredentialRepository.getAll().first()
+            val workspaceRoot = workspaceRepository.currentPath()
+                .takeIf { it.isNotBlank() && it != "/" }
+                ?: cfg.remoteWorkspacePath
+            remoteSshConnection.uploadGitCredentialConfig(creds, workspaceRoot)
+        }.onFailure { FileLogger.w(TAG, "重连后同步远程 git 凭据失败", it) }
+    }
 
     /**
      * 读取 assets/docs 下所有内置文档（含 guide/ advanced/ 等分类子目录），通过 SSH exec 同步到远程 ~/.aicode/docs/。
