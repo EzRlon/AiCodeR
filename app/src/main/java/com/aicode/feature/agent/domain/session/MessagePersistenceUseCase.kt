@@ -162,6 +162,13 @@ class MessagePersistenceUseCase @Inject constructor(
         dbVersion.incrementAndGet()
     }
 
+    /** 签名校验失败后的官方恢复步骤：清掉报错位置及其后所有 thinking 快照并落库。 */
+    suspend fun clearThinkingSnapshots(sessionId: String, messageIds: List<String>) {
+        if (messageIds.isEmpty()) return
+        agentMessageDao.clearThinkingSnapshotsBefore(messageIds)
+        invalidateHistory(sessionId)
+    }
+
     /**
      * 删除单条消息。用户消息会连带删除其后的全部对话（timestamp 大于它的消息）：
      * 其后内容都是基于这条输入产生的回答与工具结果，留下会成为无源头的孤儿。
