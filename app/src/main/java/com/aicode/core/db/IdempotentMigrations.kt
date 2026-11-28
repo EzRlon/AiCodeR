@@ -368,3 +368,13 @@ internal class Migration79To80 : Migration(79, 80) {
         addColumnIfMissing(db, "agent_messages", "generationWindowMillis", "ALTER TABLE `agent_messages` ADD COLUMN `generationWindowMillis` INTEGER")
     }
 }
+
+/**
+ * 80→81：提供商并发上限（上游 7bad0d92，本仓 v81 重编号）——
+ * ai_providers 新增 maxConcurrentRequests，0=不限。
+ */
+internal class Migration80To81 : Migration(80, 81) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ai_providers", "maxConcurrentRequests", "ALTER TABLE `ai_providers` ADD COLUMN `maxConcurrentRequests` INTEGER NOT NULL DEFAULT 0")
+    }
+}

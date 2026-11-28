@@ -7,6 +7,7 @@ import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
 import com.aicode.feature.agent.domain.tool.modelToolResultText
+import com.aicode.feature.settings.domain.model.DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS
 import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import javax.inject.Inject
@@ -16,6 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -35,6 +38,8 @@ class GeminiAdapter @Inject constructor(
     override var useResponseApi = false
     override var model = "gemini-1.5-flash"
     override var providerId = ""
+    override var requestConcurrencyLimiter: ProviderRequestConcurrencyLimiter? = null
+    override var maxConcurrentRequests: Int = DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS
     override var logSessionId: String? = null
     override var firstByteTimeoutMs: Long = FIRST_BYTE_TIMEOUT_MS
     override var streamIdleTimeoutMs: Long = 0L
@@ -68,6 +73,15 @@ class GeminiAdapter @Inject constructor(
     }
 
     override suspend fun complete(
+        systemPrompt: String,
+        messages: List<AgentMessage>,
+        tools: List<AgentTool>,
+        reasoningEffort: String?
+    ): AIResponse = withRequestPermit {
+        completeRequest(systemPrompt, messages, tools, reasoningEffort)
+    }
+
+    private suspend fun completeRequest(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool>,
@@ -182,6 +196,20 @@ class GeminiAdapter @Inject constructor(
     }
 
     override fun completeStream(
+        systemPrompt: String,
+        messages: List<AgentMessage>,
+        tools: List<AgentTool>,
+        reasoningEffort: String?
+    ): Flow<AIStreamChunk> = flow {
+        withRequestPermit(
+            onQueued = { emit(AIStreamChunk.RequestQueued(it)) },
+            onAdmitted = { emit(AIStreamChunk.RequestStarted) }
+        ) {
+            emitAll(completeStreamRequest(systemPrompt, messages, tools, reasoningEffort))
+        }
+    }
+
+    private fun completeStreamRequest(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool>,

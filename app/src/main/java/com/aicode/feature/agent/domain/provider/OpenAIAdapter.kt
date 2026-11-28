@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -45,6 +47,8 @@ class OpenAIAdapter @Inject constructor(
     override var useResponseApi = false
     override var model = "gpt-4-turbo"
     override var providerId = ""
+    override var requestConcurrencyLimiter: ProviderRequestConcurrencyLimiter? = null
+    override var maxConcurrentRequests: Int = 0
     override var logSessionId: String? = null
     override var firstByteTimeoutMs: Long = FIRST_BYTE_TIMEOUT_MS
 
@@ -92,6 +96,15 @@ class OpenAIAdapter @Inject constructor(
     }
 
     override suspend fun complete(
+        systemPrompt: String,
+        messages: List<AgentMessage>,
+        tools: List<AgentTool>,
+        reasoningEffort: String?
+    ): AIResponse = withRequestPermit {
+        completeRequest(systemPrompt, messages, tools, reasoningEffort)
+    }
+
+    private suspend fun completeRequest(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool>,
@@ -325,6 +338,20 @@ class OpenAIAdapter @Inject constructor(
     }
 
     override fun completeStream(
+        systemPrompt: String,
+        messages: List<AgentMessage>,
+        tools: List<AgentTool>,
+        reasoningEffort: String?
+    ): Flow<AIStreamChunk> = flow {
+        withRequestPermit(
+            onQueued = { emit(AIStreamChunk.RequestQueued(it)) },
+            onAdmitted = { emit(AIStreamChunk.RequestStarted) }
+        ) {
+            emitAll(completeStreamRequest(systemPrompt, messages, tools, reasoningEffort))
+        }
+    }
+
+    private fun completeStreamRequest(
         systemPrompt: String,
         messages: List<AgentMessage>,
         tools: List<AgentTool>,

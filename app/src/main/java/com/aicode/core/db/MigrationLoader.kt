@@ -69,7 +69,7 @@ object MigrationLoader {
         // 68（会话回收站）同属这一轨：ALTER ADD COLUMN 要按列存在性幂等补，见 Migration67To68。
         // 旧编号 60/61（annotations/session_team）中间开发版的设备——那类设备缺官方
         // 60/61 两列，需要在 62/63 里按列存在性补齐；正常设备行为等价。见 IdempotentMigrations.kt。
-        migrations.removeAll { it is FileMigration && (it.version == 62 || it.version == 63 || it.version == 64 || it.version == 65 || it.version == 67 || it.version == 68 || it.version == 69 || it.version == 70 || it.version == 71 || it.version == 72 || it.version == 73 || it.version == 74 || it.version == 75 || it.version == 76 || it.version == 77 || it.version == 78 || it.version == 79 || it.version == 80) }
+        migrations.removeAll { it is FileMigration && (it.version == 62 || it.version == 63 || it.version == 64 || it.version == 65 || it.version == 67 || it.version == 68 || it.version == 69 || it.version == 70 || it.version == 71 || it.version == 72 || it.version == 73 || it.version == 74 || it.version == 75 || it.version == 76 || it.version == 77 || it.version == 78 || it.version == 79 || it.version == 80 || it.version == 81) }
         migrations.add(Migration61To62())
         migrations.add(Migration62To63())
         migrations.add(Migration63To64())
@@ -88,6 +88,7 @@ object MigrationLoader {
         migrations.add(Migration77To78())
         migrations.add(Migration78To79())
         migrations.add(Migration79To80())
+        migrations.add(Migration80To81())
 
         return migrations.toTypedArray()
     }
