@@ -13,7 +13,7 @@ import java.io.File
 /**
  * WorkspacePathMapper：容器路径 ↔ 宿主真实路径互转。
  * 固定环境：宿主工作区=/data/ws、AI 配置目录=/data/aicode、rootfs=/data/rootfs、容器 home=/root。
- * activeProfileIdFlow 用 emptyFlow()，让 init 协程的 collect 永不触发，避免真实 DataStore 调用
+ * activeProfileFlow 用 emptyFlow()，让 init 协程的 collect 永不触发，避免真实 DataStore 调用
  * 与异步 profile 切换（extraBindings 挂载分支依赖该异步更新，纯 JVM 下竞态不稳定，不在本类覆盖）。
  */
 class WorkspacePathMapperTest {
@@ -32,7 +32,7 @@ class WorkspacePathMapperTest {
         every { workspaceRepository.currentPath() } returns wsRoot
         every { containerInstaller.aicodeDir } returns File(aicodeDir)
         every { containerInstaller.rootfsDirFor(any()) } returns File(rootfsDir)
-        every { containerSettingsRepository.activeProfileIdFlow } returns emptyFlow()
+        every { containerSettingsRepository.activeProfileFlow } returns emptyFlow()
         every { pathHomeResolver.home() } returns home
         // expandHome 保持真实展开语义，让 toHostFile 里的 ~ 前缀与生产行为一致
         every { pathHomeResolver.expandHome(any()) } answers {

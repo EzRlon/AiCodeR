@@ -2722,6 +2722,7 @@ class SettingsViewModel @Inject constructor(
             ?: ContainerProfile.BUILTIN_ALPINE.takeIf { it.id == id }
             ?: _customProfiles.value.firstOrNull()
             ?: return
+        if (profile.mode == ExecutionMode.REMOTE_SSH && profile.rootfsSource !is RootfsSource.RemoteSsh) return
         containerSettingsRepository.setActiveProfile(profile.id)
         when (profile.mode) {
             ExecutionMode.LOCAL_PROOT -> {
@@ -2730,7 +2731,6 @@ class SettingsViewModel @Inject constructor(
             }
 
             ExecutionMode.REMOTE_SSH -> {
-                if (profile.rootfsSource !is RootfsSource.RemoteSsh) return
                 // 连接参数由 ActiveRemoteConnectionResolver 按激活 profile 实时解析，AIEditorApp 的常驻订阅据此重连。
                 executionModeRepository.setExecutionMode(ExecutionMode.REMOTE_SSH)
                 executionModeHolder.setMode(ExecutionMode.REMOTE_SSH)
