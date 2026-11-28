@@ -342,24 +342,37 @@ internal fun LogSection(
             }
         }
 
-        // ── 5. 底部日志源切换（上游为悬浮底栏，本分支复用 FilterPillChip 胶囊行） ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // ── 5. 底部日志源切换：悬浮底栏；缺 align 会默认叠在 Box 左上角盖住文件选择行 ──
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.semanticColors.cardSurface,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+            shadowElevation = 2.dp
         ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
             val sourceLabels = listOf(
                 stringResource(R.string.log_source_app),
                 stringResource(R.string.log_source_ai),
                 stringResource(R.string.log_source_crash)
             )
-            LogSourceTab.entries.forEachIndexed { index, source ->
-                FilterPillChip(
-                    label = sourceLabels[index],
-                    selected = state.source == source,
-                    accentColor = MaterialTheme.colorScheme.primary,
-                    onClick = { onSelectSource(source) }
-                )
+                LogSourceTab.entries.forEachIndexed { index, source ->
+                    FilterPillChip(
+                        label = sourceLabels[index],
+                        selected = state.source == source,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        onClick = { onSelectSource(source) }
+                    )
+                }
             }
         }
     }
