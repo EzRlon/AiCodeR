@@ -772,6 +772,8 @@
     <string name="settings_permission_apk_install_desc">允许安装 APK 安装包</string>
     <string name="settings_permission_storage">访问存储空间</string>
     <string name="settings_permission_storage_desc">读写工作区文件与容器镜像</string>
+    <string name="settings_permission_overlay">显示在其他应用上层</string>
+    <string name="settings_permission_overlay_desc">允许本应用在其他应用上方显示内容</string>
     <string name="settings_permission_battery">忽略电池优化</string>
     <string name="settings_permission_battery_desc">允许后台持续运行，减少被杀</string>
     <string name="settings_autostart_title">自启动管理</string>

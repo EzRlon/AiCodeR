@@ -752,6 +752,8 @@
     <string name="settings_permission_apk_install_desc">Allow installing APK packages</string>
     <string name="settings_permission_storage">Storage access</string>
     <string name="settings_permission_storage_desc">Read/write workspace files and container images</string>
+    <string name="settings_permission_overlay">Display over other apps</string>
+    <string name="settings_permission_overlay_desc">Allow this app to display content above other apps</string>
     <string name="settings_permission_battery">Ignore battery optimization</string>
     <string name="settings_permission_battery_desc">Keep running in background to reduce process kill</string>
     <string name="settings_autostart_title">Auto-start management</string>
