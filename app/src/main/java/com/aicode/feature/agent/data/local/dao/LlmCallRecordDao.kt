@@ -20,7 +20,9 @@ data class DayCallStats(
     val avgDurationMillis: Double?,
     val retryCount: Long = 0,
     /** 写入缓存的 token 数之和（inputTokens 的子集）。 */
-    val cacheCreationTokens: Long = 0
+    val cacheCreationTokens: Long = 0,
+    /** 用户主动取消的调用数。 */
+    val cancelled: Int = 0
 )
 
 /** 按渠道（provider）聚合的调用统计，供渠道排行使用。 */
@@ -34,7 +36,9 @@ data class ProviderCallStats(
     val errors: Int,
     val retryCount: Long = 0,
     /** 写入缓存的 token 数之和（inputTokens 的子集）。 */
-    val cacheCreationTokens: Long = 0
+    val cacheCreationTokens: Long = 0,
+    /** 用户主动取消的调用数。 */
+    val cancelled: Int = 0
 )
 
 /** 按模型聚合的调用统计，供模型排行使用。 */
@@ -76,7 +80,8 @@ data class CallSummary(
     val errors: Int,
     val avgTtfbMillis: Double?,
     val avgDurationMillis: Double?,
-    val retryCount: Long = 0
+    val retryCount: Long = 0,
+    val outputTokensPerSecond: Double? = null
 )
 
 /** 调用明细分页记录：单次调用 + 渠道名（LEFT JOIN ai_providers 取，渠道被删除后仍显示）。 */
@@ -111,6 +116,7 @@ interface LlmCallRecordDao {
                SUM(cacheCreationTokens) AS cacheCreationTokens,
                COUNT(*) AS calls,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
+               SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
                AVG(ttfbMillis) AS avgTtfbMillis,
                AVG(durationMillis) AS avgDurationMillis,
                SUM(retryCount) AS retryCount
@@ -139,6 +145,7 @@ interface LlmCallRecordDao {
                SUM(cacheCreationTokens) AS cacheCreationTokens,
                COUNT(*) AS calls,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
+               SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
                AVG(ttfbMillis) AS avgTtfbMillis,
                AVG(durationMillis) AS avgDurationMillis,
                SUM(retryCount) AS retryCount
@@ -168,6 +175,7 @@ interface LlmCallRecordDao {
                SUM(r.cachedInputTokens) AS cachedInputTokens,
                SUM(r.cacheCreationTokens) AS cacheCreationTokens,
                SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END) AS errors,
+               SUM(CASE WHEN r.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
                SUM(r.retryCount) AS retryCount
         FROM llm_call_records r
         LEFT JOIN ai_providers p ON p.id = r.providerId
@@ -263,9 +271,13 @@ interface LlmCallRecordDao {
                SUM(cachedInputTokens) AS cachedInputTokens,
                SUM(cacheCreationTokens) AS cacheCreationTokens,
                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
+               SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
                AVG(ttfbMillis) AS avgTtfbMillis,
                AVG(durationMillis) AS avgDurationMillis,
-               SUM(retryCount) AS retryCount
+               SUM(retryCount) AS retryCount,
+               1000.0 * SUM(CASE WHEN kind = 'chat' AND status = 'success' AND outputTokens > 0 AND ttfbMillis IS NOT NULL AND durationMillis > ttfbMillis THEN outputTokens ELSE 0 END) /
+                   NULLIF(SUM(CASE WHEN kind = 'chat' AND status = 'success' AND outputTokens > 0 AND ttfbMillis IS NOT NULL AND durationMillis > ttfbMillis THEN durationMillis - ttfbMillis ELSE 0 END), 0)
+                   AS outputTokensPerSecond
         FROM llm_call_records
         WHERE createdAt >= :start
           AND (:providerId IS NULL OR providerId = :providerId)
@@ -285,12 +297,16 @@ interface LlmCallRecordDao {
         WHERE createdAt >= :start
           AND (:providerId IS NULL OR providerId = :providerId)
           AND (:model IS NULL OR model = :model)
+          AND (:kind IS NULL OR kind = :kind)
+          AND (:status IS NULL OR status = :status)
         """
     )
     fun getCallsCount(
         start: Long,
         providerId: String? = null,
-        model: String? = null
+        model: String? = null,
+        kind: String? = null,
+        status: String? = null
     ): Flow<Int>
 
     /** 调用明细分页（倒序，[offset] 起取 [limit] 条），LEFT JOIN 渠道名。 */
@@ -302,6 +318,8 @@ interface LlmCallRecordDao {
         WHERE r.createdAt >= :start
           AND (:providerId IS NULL OR r.providerId = :providerId)
           AND (:model IS NULL OR r.model = :model)
+          AND (:kind IS NULL OR r.kind = :kind)
+          AND (:status IS NULL OR r.status = :status)
         ORDER BY r.createdAt DESC
         LIMIT :limit OFFSET :offset
         """
@@ -311,6 +329,8 @@ interface LlmCallRecordDao {
         limit: Int,
         offset: Int,
         providerId: String? = null,
-        model: String? = null
+        model: String? = null,
+        kind: String? = null,
+        status: String? = null
     ): Flow<List<RecentCallRecord>>
 }

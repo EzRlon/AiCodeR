@@ -105,6 +105,9 @@ import com.aicode.feature.agent.domain.tool.PendingToolPermission
 import com.aicode.feature.agent.domain.tool.ToolPermissionManager
 import com.aicode.feature.agent.domain.tool.ToolRegistry
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalChoice
+import com.aicode.feature.agent.presentation.component.PendingUploadAttachment
+import com.aicode.feature.agent.presentation.component.toAgentAttachments
+import com.aicode.feature.agent.presentation.component.toPendingAttachment
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalManager
 import com.aicode.feature.agent.domain.tool.mode.PlanApprovalRequest
 import com.aicode.feature.agent.domain.tool.question.AskUserQuestionManager
@@ -174,6 +177,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.io.File
 import android.media.MediaScannerConnection
 import java.io.OutputStream
@@ -539,6 +543,7 @@ class AIAgentViewModel @Inject constructor(
             pendingDraftWrites.remove(id)
             // 清空立即落盘：防止切换会话后残留旧草稿
             draftPrefs.edit().remove(id).apply()
+            updateAttachmentDraft(emptyList(), id)
             return
         }
         _inputDrafts.value = _inputDrafts.value + (id to text)
@@ -583,6 +588,66 @@ class AIAgentViewModel @Inject constructor(
         _inputDrafts.value = _inputDrafts.value - id
         draftPrefs.edit().remove(id).apply()
         _intentDrafts.value = _intentDrafts.value - id
+    }
+
+    /** 附件草稿与会话输入草稿同生命周期：切走不丢，进会话恢复为待上传态；键即 sessionId。 */
+    private val attachmentDraftPrefs = context.getSharedPreferences("agent_input_attachment_drafts", Context.MODE_PRIVATE)
+    private val attachmentDraftJson = Json { ignoreUnknownKeys = true }
+    private val _attachmentDrafts = MutableStateFlow<Map<String, List<PendingUploadAttachment>>>(emptyMap())
+    internal val attachmentDraft: StateFlow<List<PendingUploadAttachment>> = _currentSessionId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList()) else _attachmentDrafts.map { it[id].orEmpty() }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            val restored = attachmentDraftPrefs.all.mapNotNull { (k, v) ->
+                val raw = (v as? String)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val list = runCatching {
+                    attachmentDraftJson.decodeFromString<List<AgentAttachment>>(raw)
+                }.getOrNull()?.map { it.toPendingAttachment() }
+                list?.takeIf { it.isNotEmpty() }?.let { k to it }
+            }.toMap()
+            if (restored.isNotEmpty()) {
+                _attachmentDrafts.update { current -> restored + current }
+            }
+        }
+    }
+
+    internal fun updateAttachmentDraft(
+        attachments: List<PendingUploadAttachment>,
+        sessionId: String? = _currentSessionId.value
+    ) {
+        val id = sessionId ?: return
+        val editor = attachmentDraftPrefs.edit()
+        if (attachments.isEmpty()) {
+            _attachmentDrafts.value = _attachmentDrafts.value - id
+            editor.remove(id)
+        } else {
+            _attachmentDrafts.value = _attachmentDrafts.value + (id to attachments)
+            editor.putString(id, attachmentDraftJson.encodeToString(attachments.toAgentAttachments()))
+        }
+        editor.apply()
+    }
+
+    internal fun addAttachmentDraft(
+        attachment: PendingUploadAttachment,
+        sessionId: String? = _currentSessionId.value
+    ) {
+        val id = sessionId ?: return
+        val next = _attachmentDrafts.value[id].orEmpty() + attachment
+        updateAttachmentDraft(next, id)
+    }
+
+    internal fun removeAttachmentDraft(
+        index: Int,
+        sessionId: String? = _currentSessionId.value
+    ) {
+        val id = sessionId ?: return
+        val current = _attachmentDrafts.value[id].orEmpty()
+        if (index !in current.indices) return
+        updateAttachmentDraft(current.filterIndexed { i, _ -> i != index }, id)
     }
 
     /** 外部投递进来的文本（系统分享等）：会话未就绪时先暂存，聊天面板在会话就绪后消费并合并进输入草稿。 */
@@ -2263,6 +2328,8 @@ class AIAgentViewModel @Inject constructor(
         _contextUsages.value = _contextUsages.value - sessionId
         _inputDrafts.value = _inputDrafts.value - sessionId
         _intentDrafts.value = _intentDrafts.value - sessionId
+        _attachmentDrafts.value = _attachmentDrafts.value - sessionId
+        attachmentDraftPrefs.edit().remove(sessionId).apply()
         reasoningDurationSessions.entries.removeAll { (msgId, sid) ->
             val owned = sid == sessionId
             if (owned) reasoningDurations.remove(msgId)
@@ -3634,7 +3701,9 @@ class AIAgentViewModel @Inject constructor(
                             attachments = event.attachments,
                             inputTokens = event.inputTokens,
                             outputTokens = event.outputTokens,
-                            cachedInputTokens = event.cachedInputTokens
+                            cachedInputTokens = event.cachedInputTokens,
+                            ttfbMillis = event.ttfbMillis,
+                            generationWindowMillis = event.generationWindowMillis
                         )
                         if (event.inputTokens > 0 || event.outputTokens > 0) {
                             _llmCallEvents.tryEmit(LlmCallEvent(sessionId, event.inputTokens, event.outputTokens, event.cachedInputTokens))
