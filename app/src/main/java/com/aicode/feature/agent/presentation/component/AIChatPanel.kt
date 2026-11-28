@@ -1232,7 +1232,7 @@ fun AIChatPanel(
     }
 
     fun removePendingAttachment(index: Int) {
-        pendingAttachments = pendingAttachments.filterIndexed { i, _ -> i != index }
+        viewModel.removeAttachmentDraft(index)
     }
 
     fun handlePickedAttachments(uris: List<Uri>, images: Boolean) {
@@ -1246,6 +1246,7 @@ fun AIChatPanel(
             return
         }
         val selected = selectedAttachments(uris, pendingAttachments.size)
+        val targetSessionId = currentSessionId
         scope.launch {
             var successCount = 0
             val failures = mutableListOf<String>()
@@ -1255,7 +1256,7 @@ fun AIChatPanel(
                     runCatching {
                         copyUriToWorkspace(context, uri, viewModel.fileAccess, includeImageData = images)
                     }.onSuccess { uploaded ->
-                        pendingAttachments = pendingAttachments + uploaded.toPendingAttachment()
+                        viewModel.addAttachmentDraft(uploaded.toPendingAttachment(), targetSessionId)
                         successCount += 1
                     }.onFailure { error ->
                         failures += (error.message ?: uploadFallbackError(context))
@@ -2842,7 +2843,7 @@ fun AIChatPanel(
                     onOptionSelected = { option ->
                         viewModel.executeRewindOption(targetId, option) { text, attachments ->
                             viewModel.updateInputDraft(text)
-                            pendingAttachments = attachments.map { it.toPendingAttachment() }
+                            viewModel.updateAttachmentDraft(attachments.map { it.toPendingAttachment() })
                         }
                     },
                     onDismissRequest = { viewModel.dismissRewindMenu() }

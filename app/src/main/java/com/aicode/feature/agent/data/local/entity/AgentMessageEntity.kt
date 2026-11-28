@@ -58,7 +58,11 @@ data class AgentMessageEntity(
     val isContextExcluded: Boolean = false,
     val compactedBySummaryId: String? = null,
     /** 仅 USER 行：消息类型标签键（如 "bug_fix"）；null=未分类。追加在表尾：备份 DTO 按位置映射。 */
-    val intentType: String? = null
+    val intentType: String? = null,
+    /** 首包毫秒；null=未采集。追加在表尾：备份 DTO 按位置映射。 */
+    val ttfbMillis: Int? = null,
+    /** 生成窗口毫秒（首个 token 到完成）。追加在表尾：备份 DTO 按位置映射。 */
+    val generationWindowMillis: Int? = null
 ) {
     fun toUIMessage(): AgentUIMessage {
         val roleEnum = MessageRole.valueOf(role)
@@ -81,7 +85,9 @@ data class AgentMessageEntity(
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             cachedInputTokens = cachedInputTokens,
-            intentType = intentType
+            intentType = intentType,
+            ttfbMillis = ttfbMillis,
+            generationWindowMillis = generationWindowMillis
         )
     }
 

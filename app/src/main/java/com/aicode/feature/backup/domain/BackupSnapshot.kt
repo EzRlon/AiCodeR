@@ -265,7 +265,11 @@ data class AgentMessageDto(
     val isContextExcluded: Boolean = false,
     val compactedBySummaryId: String? = null,
     /** 仅 USER 行：消息类型标签键；null 表示旧备份无此字段，导入时回退未分类。 */
-    val intentType: String? = null
+    val intentType: String? = null,
+    /** 首包毫秒；null 表示旧备份无此字段。 */
+    val ttfbMillis: Int? = null,
+    /** 生成窗口毫秒；null 表示旧备份无此字段。 */
+    val generationWindowMillis: Int? = null
 )
 
 @Serializable

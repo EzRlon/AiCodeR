@@ -1,20 +1,14 @@
 package com.aicode.feature.settings.presentation.component
 
-import com.aicode.core.ui.settings.SettingsGroup
-import com.aicode.core.ui.settings.SettingsGroupHeader
-import com.aicode.core.ui.settings.SettingsDivider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -40,21 +33,23 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aicode.R
+import com.aicode.core.theme.Radius
 import com.aicode.core.theme.Spacing
 import com.aicode.core.theme.TokenStatsPalette
 import com.aicode.core.theme.semanticColors
@@ -65,8 +60,10 @@ import com.aicode.feature.agent.data.local.dao.ModelCallStats
 import com.aicode.feature.agent.data.local.dao.ProviderCallStats
 import com.aicode.feature.agent.data.local.dao.RecentCallRecord
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
-import com.aicode.feature.agent.domain.engine.AgentEngines
 import com.aicode.core.ui.markdown.formatTokenCount
+import com.aicode.core.ui.settings.SettingsDivider
+import com.aicode.core.ui.settings.SettingsGroup
+import com.aicode.core.ui.settings.SettingsGroupHeader
 import com.aicode.feature.settings.presentation.TokenStatsPeriod
 import com.aicode.feature.settings.presentation.TokenStatsUiState
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
@@ -85,26 +82,43 @@ import com.patrykandpatrick.vico.core.common.Fill
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
-import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.X
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 private val INPUT_COLOR = TokenStatsPalette.Input
 private val OUTPUT_COLOR = TokenStatsPalette.Output
 private val CACHE_COLOR = TokenStatsPalette.Cache
-private val CACHE_WRITE_COLOR = TokenStatsPalette.CacheWrite
 private val ERROR_COLOR = TokenStatsPalette.Error
 private val CANCELLED_COLOR = TokenStatsPalette.Cancelled
-// 成功率色改走语义 token（深浅主题各自变体；原先固定 700 系在深色下偏暗难辨）
+private val SUCCESS_COLOR = Color(0xFF2E7D32)
+private val WARNING_COLOR = Color(0xFFE65100)
+
+private fun formatRate(value: Double): String =
+    "${value.roundToInt().coerceAtLeast(1)} t/s"
+
+private fun LlmCallRecordEntity.outputTokensPerSecond(): Double? {
+    val ttfb = ttfbMillis ?: return null
+    val duration = durationMillis ?: return null
+    val generationMillis = duration - ttfb
+    if (kind != "chat" || status != "success" || outputTokens <= 0 || generationMillis <= 0) return null
+    return outputTokens * 1000.0 / generationMillis
+}
 
 private const val STATS_PAGE_SIZE = 5
 private const val CALLS_PAGE_SIZE = 10
 
-/** Token 统计页：周期与维度筛选 + 概览 + 趋势图 + 渠道/模型排行 + 调用明细。使用 LazyColumn 实现虚拟化渲染，消除首帧卡顿。 */
+private enum class TokenStatsTab(val labelRes: Int) {
+    OVERVIEW(R.string.settings_token_stats_overview_tab),
+    CALLS(R.string.settings_token_stats_calls_tab),
+    ANALYSIS(R.string.settings_token_stats_analysis_tab)
+}
+
+/** Token 统计页：概览、请求日志与分析分段展示。 */
 @Composable
 internal fun TokenStatsSection(
     state: TokenStatsUiState,
@@ -114,19 +128,65 @@ internal fun TokenStatsSection(
     onSelectModelPage: (Int) -> Unit = {},
     onSelectFilterProvider: (String?) -> Unit = {},
     onSelectFilterModel: (String?) -> Unit = {},
+    onSelectFilterCallKind: (String?) -> Unit = {},
+    onSelectFilterCallStatus: (String?) -> Unit = {},
     onClearFilters: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lazyListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var selectedTab by rememberSaveable { mutableStateOf(TokenStatsTab.OVERVIEW) }
 
-    LazyColumn(
-        state = lazyListState,
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = Spacing.lg),
-        contentPadding = PaddingValues(top = Spacing.sm, bottom = Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.md)
+            .padding(horizontal = Spacing.lg)
     ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = Spacing.sm, bottom = Spacing.md),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+        ) {
+            TokenStatsTab.entries.forEach { tab ->
+                FilterChip(
+                    selected = selectedTab == tab,
+                    onClick = {
+                        selectedTab = tab
+                        scope.launch { lazyListState.scrollToItem(0) }
+                    },
+                    label = {
+                        Text(
+                            stringResource(tab.labelRes),
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    shape = RoundedCornerShape(Radius.mdLarge),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                        containerColor = MaterialTheme.semanticColors.cardSurface,
+                        labelColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selectedTab == tab,
+                        borderColor = MaterialTheme.semanticColors.subtleBorder,
+                        selectedBorderColor = Color.Transparent
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        LazyColumn(
+            state = lazyListState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md)
+        ) {
         // ── 周期切换 ──
         item(key = "period_selector") {
             Row(
@@ -170,41 +230,97 @@ internal fun TokenStatsSection(
             )
         }
 
-        // ── 概览卡：总量 + 费用 + token 构成（新增/缓存/输出）+ 关键指标标签 ──
-        item(key = "summary_cards") {
-            TokenOverviewCard(
-                summary = state.summary,
-                costUsd = state.totalCostUsd
-            )
+        // ── 概览卡片（无数据时保留占位，值显示 -）──
+        if (selectedTab == TokenStatsTab.OVERVIEW) item(key = "summary_cards") {
+            val summary = state.summary
+            val hasData = summary != null && summary.calls > 0
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
+                    SummaryCard(
+                        label = stringResource(R.string.settings_token_stats_total),
+                        value = if (hasData) formatTokenCount(summary.inputTokens + summary.outputTokens) else "-",
+                        modifier = Modifier.weight(1f)
+                    )
+                    SummaryCard(
+                        label = stringResource(R.string.settings_token_stats_requests),
+                        value = if (hasData) summary.calls.toString() else "-",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
+                    SummaryCard(
+                        label = stringResource(R.string.settings_token_stats_cost),
+                        value = formatCostUsd(state.totalCostUsd),
+                        modifier = Modifier.weight(1f)
+                    )
+                    SummaryCard(
+                        label = stringResource(R.string.settings_token_stats_cache_hit_rate),
+                        value = if (hasData) formatCacheHitRate(summary) else "-",
+                        sub = if (hasData) formatCache(context, summary.cachedInputTokens, summary.cacheCreationTokens) else null,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
+                    SummaryCard(
+                        label = stringResource(R.string.settings_token_stats_output_rate),
+                        value = summary?.outputTokensPerSecond?.let { formatRate(it) } ?: "-",
+                        modifier = Modifier.weight(1f)
+                    )
+                    SummaryCard(
+                        label = stringResource(R.string.settings_token_stats_avg_ttfb),
+                        value = summary?.avgTtfbMillis?.let { formatDuration(it) } ?: "-",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
 
-        // ── 趋势图（无数据或仅单点时整块不渲染，避免 Vico 空 series / 单点 xStep 异常）──
-        if (state.trend.size > 1) {
+        if (selectedTab == TokenStatsTab.OVERVIEW) {
+            item(key = "recent_activity") {
+                RecentActivityHeatmap(state.trend, state.period)
+            }
+            item(key = "request_health") {
+                RequestHealthTimeline(state.trend, state.period)
+            }
             item(key = "trend_chart") {
                 Column {
                     SettingsGroupHeader(text = stringResource(R.string.settings_token_stats_trend))
                     Spacer(Modifier.height(Spacing.xs))
                     SettingsGroup {
-                        TokenTrendChart(
-                            trend = state.trend,
-                            isHourly = state.period == TokenStatsPeriod.TODAY
-                        )
-                        SettingsDivider()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = Spacing.lg, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.md)
-                        ) {
-                            LegendDot(INPUT_COLOR, stringResource(R.string.settings_token_stats_fresh_input))
-                            LegendDot(CACHE_COLOR, stringResource(R.string.settings_token_stats_col_cached_read))
-                            LegendDot(OUTPUT_COLOR, stringResource(R.string.settings_token_stats_legend_output))
+                        if (state.trend.size > 1) {
+                            TokenTrendChart(
+                                trend = state.trend,
+                                isHourly = state.period == TokenStatsPeriod.TODAY
+                            )
+                            SettingsDivider()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.lg, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
+                            ) {
+                                LegendDot(INPUT_COLOR, stringResource(R.string.settings_token_stats_legend_input))
+                                LegendDot(OUTPUT_COLOR, stringResource(R.string.settings_token_stats_legend_output))
+                                LegendDot(CACHE_COLOR, stringResource(R.string.settings_token_stats_legend_cached))
+                            }
+                        } else {
+                            EmptyStatsPlaceholder()
                         }
                     }
                 }
             }
         }
 
+        if (selectedTab == TokenStatsTab.ANALYSIS) {
         // ── 渠道统计（无数据时显示占位）──
         item(key = "provider_stats_header") {
             SettingsGroupHeader(text = stringResource(R.string.settings_token_stats_provider))
@@ -278,23 +394,138 @@ internal fun TokenStatsSection(
             }
         }
 
-        // ── 调用明细（无数据时显示占位）──
-        item(key = "calls_header") {
-            SettingsGroupHeader(text = stringResource(R.string.settings_token_stats_recent_calls))
         }
-        item(key = "calls_content") {
-            SettingsGroup {
-                if (state.recentCalls.isEmpty()) {
-                    EmptyStatsPlaceholder()
-                } else {
-                    CallRecordsTable(
-                        calls = state.recentCalls,
-                        costs = state.recentCallCosts,
-                        page = state.callsPage,
-                        total = state.callsTotal,
-                        onSelectPage = onSelectPage
-                    )
+
+        if (selectedTab == TokenStatsTab.CALLS) {
+            item(key = "call_record_filters") {
+                CallRecordFilterBar(
+                    selectedKind = state.filterCallKind,
+                    selectedStatus = state.filterCallStatus,
+                    onSelectKind = onSelectFilterCallKind,
+                    onSelectStatus = onSelectFilterCallStatus,
+                    onClearFilters = onClearFilters
+                )
+            }
+            item(key = "calls_header") {
+                SettingsGroupHeader(text = stringResource(R.string.settings_token_stats_recent_calls))
+            }
+            item(key = "calls_content") {
+                SettingsGroup {
+                    if (state.recentCalls.isEmpty()) {
+                        EmptyStatsPlaceholder()
+                    } else {
+                        CallRecordsTable(
+                            calls = state.recentCalls,
+                            costs = state.recentCallCosts,
+                            page = state.callsPage,
+                            total = state.callsTotal,
+                            onSelectPage = onSelectPage
+                        )
+                    }
                 }
+            }
+        }
+        }
+    }
+}
+
+@Composable
+private fun CallRecordFilterBar(
+    selectedKind: String?,
+    selectedStatus: String?,
+    onSelectKind: (String?) -> Unit,
+    onSelectStatus: (String?) -> Unit,
+    onClearFilters: () -> Unit
+) {
+    val kinds = listOf(
+        null to R.string.settings_token_stats_call_kind_all,
+        "chat" to R.string.settings_token_stats_kind_chat,
+        "compaction" to R.string.settings_token_stats_kind_compaction,
+        "title" to R.string.settings_token_stats_kind_title,
+        "vision" to R.string.settings_token_stats_kind_vision
+    )
+    val statuses = listOf(
+        null to R.string.settings_token_stats_call_status_all,
+        "success" to R.string.settings_token_stats_status_success,
+        "error" to R.string.settings_token_stats_status_error,
+        "cancelled" to R.string.settings_token_stats_status_cancelled
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
+        CallFilterMenu(
+            label = stringResource(R.string.settings_token_stats_call_kind),
+            options = kinds,
+            selected = selectedKind,
+            onSelect = onSelectKind,
+            modifier = Modifier.weight(1f)
+        )
+        CallFilterMenu(
+            label = stringResource(R.string.settings_token_stats_call_status),
+            options = statuses,
+            selected = selectedStatus,
+            onSelect = onSelectStatus,
+            modifier = Modifier.weight(1f)
+        )
+        if (selectedKind != null || selectedStatus != null) {
+            FilterChip(
+                selected = false,
+                onClick = onClearFilters,
+                label = { Text(stringResource(R.string.settings_token_stats_filter_clear), fontSize = 12.sp) },
+                shape = RoundedCornerShape(Radius.mdLarge)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CallFilterMenu(
+    label: String,
+    options: List<Pair<String?, Int>>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: options.first().second
+    Box(modifier) {
+        FilterChip(
+            selected = selected != null,
+            onClick = { expanded = true },
+            label = {
+                Text(
+                    "$label · ${stringResource(selectedLabel)}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 12.sp
+                )
+            },
+            trailingIcon = { Icon(FeatherIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(16.dp)) },
+            shape = RoundedCornerShape(Radius.mdLarge),
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                containerColor = MaterialTheme.semanticColors.cardSurface,
+                labelColor = MaterialTheme.colorScheme.onSurface
+            ),
+            border = FilterChipDefaults.filterChipBorder(
+                enabled = true,
+                selected = selected != null,
+                borderColor = MaterialTheme.semanticColors.subtleBorder,
+                selectedBorderColor = MaterialTheme.colorScheme.primary
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, labelRes) ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(labelRes)) },
+                    trailingIcon = if (selected == value) {
+                        { Icon(FeatherIcons.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else null,
+                    onClick = {
+                        onSelect(value)
+                        expanded = false
+                    }
+                )
             }
         }
     }
@@ -335,7 +566,7 @@ private fun TokenStatsFilterBar(
                         } else {
                             stringResource(R.string.settings_token_stats_filter_all_providers)
                         },
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -344,10 +575,10 @@ private fun TokenStatsFilterBar(
                     Icon(
                         imageVector = FeatherIcons.ChevronDown,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.mdLarge),
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -360,7 +591,9 @@ private fun TokenStatsFilterBar(
                     borderColor = MaterialTheme.semanticColors.subtleBorder,
                     selectedBorderColor = MaterialTheme.colorScheme.primary
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
             )
             DropdownMenu(
                 expanded = providerMenuExpanded,
@@ -403,7 +636,7 @@ private fun TokenStatsFilterBar(
                         } else {
                             stringResource(R.string.settings_token_stats_filter_all_models)
                         },
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -412,10 +645,10 @@ private fun TokenStatsFilterBar(
                     Icon(
                         imageVector = FeatherIcons.ChevronDown,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.mdLarge),
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -428,7 +661,9 @@ private fun TokenStatsFilterBar(
                     borderColor = MaterialTheme.semanticColors.subtleBorder,
                     selectedBorderColor = MaterialTheme.colorScheme.primary
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
             )
             DropdownMenu(
                 expanded = modelMenuExpanded,
@@ -464,15 +699,15 @@ private fun TokenStatsFilterBar(
             FilterChip(
                 selected = true,
                 onClick = onClearFilters,
-                label = { Text(stringResource(R.string.settings_token_stats_filter_clear), fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.settings_token_stats_filter_clear), fontSize = 13.sp) },
                 trailingIcon = {
                     Icon(
                         imageVector = FeatherIcons.X,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.mdLarge),
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.semanticColors.cardSurface,
                     selectedLabelColor = MaterialTheme.colorScheme.error
@@ -482,172 +717,46 @@ private fun TokenStatsFilterBar(
                     selected = true,
                     borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f),
                     selectedBorderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
-                )
+                ),
+                modifier = Modifier.height(40.dp)
             )
         }
     }
 }
 
-/**
- * 概览卡：把「总量/费用/构成/关键指标」压进一张卡，而不是四张并列小卡。
- *
- * 手机上四宫格每格只有两三个字，越看越像仪表盘噪声；改为一张卡后，
- * 用户先看到总量与费用，再顺着构成条理解「钱花在哪」——缓存命中占比通常最大。
- */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TokenOverviewCard(summary: CallSummary?, costUsd: Double?) {
-    val hasData = summary != null && summary.calls > 0
+private fun SummaryCard(label: String, value: String, sub: String? = null, modifier: Modifier = Modifier) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.semanticColors.cardSurface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.semanticColors.cardSurface
     ) {
-        Column(modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.settings_token_stats_total),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = if (hasData) formatTokenCount(summary.inputTokens + summary.outputTokens) else "-",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = stringResource(R.string.settings_token_stats_cost),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = formatCostUsd(costUsd ?: 0.0),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(Spacing.md))
-            if (!hasData) {
+        Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 12.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (sub != null) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = stringResource(R.string.settings_token_stats_no_data),
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = sub,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = Spacing.sm)
+                    maxLines = 1
                 )
-                return@Column
-            }
-
-            val fresh = (summary.inputTokens - summary.cachedInputTokens - summary.cacheCreationTokens).coerceAtLeast(0)
-            TokenCompositionBar(
-                fresh = fresh,
-                cached = summary.cachedInputTokens,
-                creation = summary.cacheCreationTokens,
-                output = summary.outputTokens
-            )
-            Spacer(Modifier.height(Spacing.sm))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                CompositionLegend(INPUT_COLOR, stringResource(R.string.settings_token_stats_fresh_input), fresh)
-                CompositionLegend(CACHE_COLOR, stringResource(R.string.settings_token_stats_col_cached_read), summary.cachedInputTokens)
-                if (summary.cacheCreationTokens > 0) {
-                    CompositionLegend(CACHE_WRITE_COLOR, stringResource(R.string.settings_token_stats_col_cached_write), summary.cacheCreationTokens)
-                }
-                CompositionLegend(OUTPUT_COLOR, stringResource(R.string.settings_token_stats_legend_output), summary.outputTokens)
-            }
-            Spacer(Modifier.height(Spacing.sm))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                InfoTag(stringResource(R.string.settings_token_stats_calls_suffix2, summary.calls))
-                InfoTag(stringResource(R.string.settings_token_stats_success_rate, formatSuccessRate(summary)))
-                InfoTag(
-                    stringResource(
-                        R.string.settings_token_stats_cache_hit_tag,
-                        formatCacheHitRate(summary)
-                    )
-                )
+            } else {
+                // 无副文本时占位，保持四张卡片等高
+                Spacer(Modifier.height(2.dp + 16.dp))
             }
         }
-    }
-}
-
-/** 堆叠条：新增输入 / 缓存读取 / 缓存写入 / 输出。宽度按占比分配。 */
-@Composable
-private fun TokenCompositionBar(
-    fresh: Long,
-    cached: Long,
-    creation: Long,
-    output: Long,
-    height: Dp = 8.dp
-) {
-    val segments = listOf(
-        fresh to INPUT_COLOR,
-        cached to CACHE_COLOR,
-        creation to CACHE_WRITE_COLOR,
-        output to OUTPUT_COLOR
-    ).filter { it.first > 0 }
-    if (segments.isEmpty()) return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(height)
-            .clip(RoundedCornerShape(999.dp))
-    ) {
-        segments.forEach { (value, color) ->
-            Box(
-                modifier = Modifier
-                    .weight(value.toFloat())
-                    .fillMaxHeight()
-                    .background(color)
-            )
-        }
-    }
-}
-
-@Composable
-private fun CompositionLegend(color: Color, label: String, value: Long) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = "$label ${formatTokenCount(value)}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-/** 轻量标签：比纯文字更易扫读，又不像按钮那样抢注意力。 */
-@Composable
-private fun InfoTag(text: String) {
-    Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-        )
     }
 }
 
@@ -679,12 +788,10 @@ private fun TokenTrendChart(trend: List<DayCallStats>, isHourly: Boolean) {
     LaunchedEffect(trend) {
         modelProducer.runTransaction {
             val x = trend.map { it.day.toDouble() }
-            // 三条线互斥：缓存是输入的子集，若直接画「输入总量 + 缓存」会重叠误导。
-            val fresh = trend.map { (it.inputTokens - it.cachedInputTokens - it.cacheCreationTokens).coerceAtLeast(0) }
             lineSeries {
-                series(x = x, y = fresh)
-                series(x = x, y = trend.map { it.cachedInputTokens })
+                series(x = x, y = trend.map { it.inputTokens })
                 series(x = x, y = trend.map { it.outputTokens })
+                series(x = x, y = trend.map { it.cachedInputTokens })
             }
         }
     }
@@ -693,8 +800,8 @@ private fun TokenTrendChart(trend: List<DayCallStats>, isHourly: Boolean) {
             rememberLineCartesianLayer(
                 lineProvider = LineCartesianLayer.LineProvider.series(
                     trendLine(INPUT_COLOR),
-                    trendLine(CACHE_COLOR),
-                    trendLine(OUTPUT_COLOR)
+                    trendLine(OUTPUT_COLOR),
+                    trendLine(CACHE_COLOR)
                 )
             ),
             startAxis = VerticalAxis.rememberStart(
@@ -724,6 +831,192 @@ private fun trendLine(color: Color): LineCartesianLayer.Line = LineCartesianLaye
 
 private fun tzOffsetNow(): Long =
     java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()).toLong()
+
+@Composable
+private fun RecentActivityHeatmap(trend: List<DayCallStats>, period: TokenStatsPeriod) {
+    val isHourly = period == TokenStatsPeriod.TODAY
+    val placeholderCount = when (period) {
+        TokenStatsPeriod.TODAY -> 24
+        TokenStatsPeriod.LAST_7_DAYS -> 7
+        TokenStatsPeriod.LAST_30_DAYS -> 30
+        TokenStatsPeriod.ALL -> 364
+    }
+    val hasData = trend.isNotEmpty()
+    val points = trend.takeLast(placeholderCount).ifEmpty {
+        List(placeholderCount) { DayCallStats(0, 0, 0, 0, 0, 0, null, null) }
+    }
+    val totalInputTokens = points.sumOf { it.inputTokens }
+    val totalOutputTokens = points.sumOf { it.outputTokens }
+    val maxTokens = points.maxOfOrNull { it.inputTokens + it.outputTokens }?.coerceAtLeast(1L) ?: 1L
+    SettingsGroupHeader(text = stringResource(R.string.settings_token_stats_recent_activity))
+    SettingsGroup {
+        Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md)) {
+            Text(
+                text = if (hasData) formatTokenCount(totalInputTokens + totalOutputTokens) else "-",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = if (hasData) stringResource(
+                    R.string.settings_token_stats_activity_breakdown,
+                    formatTokenCount(totalInputTokens),
+                    formatTokenCount(totalOutputTokens)
+                ) else stringResource(R.string.settings_token_stats_no_data),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg)) {
+            val weeks = points.chunked(7)
+            val horizontal = isHourly || points.size <= 30
+            val rowCount = if (horizontal) 1 else 7
+            val columnCount = if (horizontal) points.size.coerceAtLeast(1) else weeks.size.coerceAtLeast(1)
+            val gap = 2.dp
+            val dotSize = ((maxWidth - gap * (columnCount - 1)) / columnCount).coerceAtMost(8.dp)
+            Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                repeat(rowCount) { rowIndex ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                        if (horizontal) {
+                            points.forEach { point -> ActivityDot(point, maxTokens, dotSize) }
+                        } else {
+                            weeks.forEach { week ->
+                                week.getOrNull(rowIndex)?.let { ActivityDot(it, maxTokens, dotSize) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(stringResource(R.string.settings_token_stats_activity_empty), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(Spacing.xs))
+            listOf(0.15f, 0.35f, 0.6f, 0.85f, 1f).forEach { fraction ->
+                Box(
+                    Modifier
+                        .padding(horizontal = 1.dp)
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(lerp(MaterialTheme.semanticColors.subtleBorder, INPUT_COLOR, fraction))
+                )
+            }
+            Spacer(Modifier.width(Spacing.xs))
+            Text(stringResource(R.string.settings_token_stats_activity_busy), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun ActivityDot(point: DayCallStats, maxTokens: Long, size: androidx.compose.ui.unit.Dp) {
+    val tokens = point.inputTokens + point.outputTokens
+    val fraction = if (tokens > 0) (tokens.toFloat() / maxTokens).coerceIn(0f, 1f) else 0f
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                if (tokens == 0L) MaterialTheme.semanticColors.subtleBorder
+                else lerp(MaterialTheme.semanticColors.subtleBorder, INPUT_COLOR, fraction)
+            )
+    )
+}
+
+@Composable
+private fun RequestHealthTimeline(trend: List<DayCallStats>, period: TokenStatsPeriod) {
+    val isHourly = period == TokenStatsPeriod.TODAY
+    val placeholderCount = when (period) {
+        TokenStatsPeriod.TODAY -> 24
+        TokenStatsPeriod.LAST_7_DAYS -> 7
+        TokenStatsPeriod.LAST_30_DAYS -> 30
+        TokenStatsPeriod.ALL -> 364
+    }
+    val hasData = trend.isNotEmpty()
+    val points = trend.takeLast(placeholderCount).ifEmpty {
+        List(placeholderCount) { DayCallStats(0, 0, 0, 0, 0, 0, null, null) }
+    }
+    val totalCancelled = points.sumOf { it.cancelled }
+    val completedCalls = points.sumOf { it.calls - it.cancelled }
+    val totalErrors = points.sumOf { it.errors }
+    val totalSuccesses = (completedCalls - totalErrors).coerceAtLeast(0)
+    SettingsGroupHeader(text = stringResource(R.string.settings_token_stats_health_timeline))
+    SettingsGroup {
+        Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md)) {
+            Text(
+                text = if (hasData && completedCalls > 0) String.format(Locale.getDefault(), "%.1f%%", totalSuccesses * 100.0 / completedCalls) else "-",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = when {
+                    completedCalls == 0 -> MaterialTheme.colorScheme.onSurfaceVariant
+                    totalErrors == 0 -> SUCCESS_COLOR
+                    else -> WARNING_COLOR
+                }
+            )
+            Text(
+                text = stringResource(R.string.settings_token_stats_health_counts, totalSuccesses, totalErrors, totalCancelled),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(Spacing.sm))
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val weeks = points.chunked(7)
+                val horizontal = isHourly || points.size <= 30
+                val rowCount = if (horizontal) 1 else 7
+                val columnCount = if (horizontal) points.size.coerceAtLeast(1) else weeks.size.coerceAtLeast(1)
+                val gap = 2.dp
+                val dotSize = ((maxWidth - gap * (columnCount - 1)) / columnCount).coerceAtMost(8.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                    repeat(rowCount) { rowIndex ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                            val rowPoints = if (horizontal) points else weeks.mapNotNull { it.getOrNull(rowIndex) }
+                            rowPoints.forEach { point -> HealthDot(point, dotSize) }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(Spacing.sm))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(stringResource(R.string.settings_token_stats_health_unhealthy), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(Spacing.xs))
+                listOf(0f, 0.2f, 0.4f, 0.6f, 0.8f, 1f).forEach { fraction ->
+                    Box(
+                        Modifier
+                            .padding(horizontal = 1.dp)
+                            .size(9.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(lerp(ERROR_COLOR, SUCCESS_COLOR, fraction))
+                    )
+                }
+                Spacer(Modifier.width(Spacing.xs))
+                Text(stringResource(R.string.settings_token_stats_health_healthy), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HealthDot(point: DayCallStats, size: androidx.compose.ui.unit.Dp) {
+    val measuredCalls = point.calls - point.cancelled
+    val successRate = if (measuredCalls > 0) {
+        ((measuredCalls - point.errors).toFloat() / measuredCalls).coerceIn(0f, 1f)
+    } else null
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                successRate?.let { lerp(ERROR_COLOR, SUCCESS_COLOR, it) }
+                    ?: MaterialTheme.semanticColors.subtleBorder
+            )
+    )
+}
 
 @Composable
 private fun EmptyStatsPlaceholder() {
@@ -763,7 +1056,6 @@ private fun LegendDot(color: Color, label: String) {
  * 整合参考图的请求量、成功率、凭证数量与进度条视觉层级，
  * 隐藏重试展示，支持点击直接联动筛选该渠道。
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ProviderStatsRow(
     p: ProviderCallStats,
@@ -773,6 +1065,7 @@ private fun ProviderStatsRow(
 ) {
     val successRateFloat = if (p.calls > 0) (p.calls - p.errors).toFloat() / p.calls else 0f
     val successRatePercent = String.format(Locale.getDefault(), "%.1f%%", successRateFloat * 100f)
+    val successColor = if (successRateFloat >= 0.95f) SUCCESS_COLOR else WARNING_COLOR
 
     val backgroundColor = if (isSelected) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
@@ -793,8 +1086,7 @@ private fun ProviderStatsRow(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = p.providerName ?: AgentEngines.displayName(p.providerId) ?: p.providerId
-                    ?: stringResource(R.string.settings_token_stats_unknown),
+                text = p.providerName ?: p.providerId ?: stringResource(R.string.settings_token_stats_unknown),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -817,53 +1109,53 @@ private fun ProviderStatsRow(
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
 
-        // 第二行：分类标签（内置/引擎桥接）+ 凭证数 + 成功率 + 缓存命中率
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        // 第二行：凭证数量 + 成功率百分比 + Token 消耗
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            InfoTag(
-                stringResource(
-                    if (AgentEngines.displayName(p.providerId) != null) {
-                        R.string.settings_token_stats_source_engine
-                    } else {
-                        R.string.settings_token_stats_source_builtin
-                    }
-                )
-            )
             if (keyCount != null && keyCount > 0) {
-                InfoTag(stringResource(R.string.settings_token_stats_provider_keys, keyCount))
-            }
-            InfoTag(stringResource(R.string.settings_token_stats_success_tag, successRatePercent))
-            if (p.inputTokens > 0) {
-                InfoTag(
-                    stringResource(
-                        R.string.settings_token_stats_cache_hit_tag,
-                        String.format(Locale.getDefault(), "%.0f%%", (p.cachedInputTokens * 100.0 / p.inputTokens).coerceAtMost(100.0))
-                    )
+                Text(
+                    text = stringResource(R.string.settings_token_stats_provider_keys, keyCount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.width(Spacing.sm))
             }
+            Text(
+                text = successRatePercent,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = successColor
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            Text(
+                text = "↑${formatTokenCount(p.inputTokens)} ↓${formatTokenCount(p.outputTokens)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         Spacer(Modifier.height(8.dp))
 
-        // 第三行：token 构成条（新增 / 缓存 / 输出），比单一成功率条更能解释消耗
-        TokenCompositionBar(
-            fresh = (p.inputTokens - p.cachedInputTokens - p.cacheCreationTokens).coerceAtLeast(0),
-            cached = p.cachedInputTokens,
-            creation = p.cacheCreationTokens,
-            output = p.outputTokens,
-            height = 6.dp
-        )
-        if (p.errors > 0) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.settings_token_stats_errors_tag, p.errors),
-                style = MaterialTheme.typography.labelSmall,
-                color = ERROR_COLOR
+        // 第三行：成功率细条进度条
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.semanticColors.subtleBorder)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction = successRateFloat.coerceIn(0f, 1f))
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(successColor)
             )
         }
     }
@@ -873,7 +1165,6 @@ private fun ProviderStatsRow(
  * 模型统计行：
  * 隐藏重试芯片，展示调用次数与成功率，支持点击直接联动筛选该模型。
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ModelStatsRow(
     m: ModelCallStats,
@@ -916,32 +1207,38 @@ private fun ModelStatsRow(
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
-        Spacer(Modifier.height(6.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            InfoTag(stringResource(R.string.settings_token_stats_calls_suffix2, m.calls))
-            InfoTag(stringResource(R.string.settings_token_stats_success_tag, successRate))
-            if (m.inputTokens > 0) {
-                InfoTag(
-                    stringResource(
-                        R.string.settings_token_stats_cache_hit_tag,
-                        String.format(Locale.getDefault(), "%.0f%%", (m.cachedInputTokens * 100.0 / m.inputTokens).coerceAtMost(100.0))
-                    )
-                )
-            }
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            StatChip(stringResource(R.string.settings_token_stats_calls_suffix2, m.calls))
+            StatChip(stringResource(R.string.settings_token_stats_success_rate, successRate))
         }
         Spacer(Modifier.height(6.dp))
-        // token 构成条（新增输入 / 缓存读取 / 缓存写入 / 输出）
-        TokenCompositionBar(
-            fresh = (m.inputTokens - m.cachedInputTokens - m.cacheCreationTokens).coerceAtLeast(0),
-            cached = m.cachedInputTokens,
-            creation = m.cacheCreationTokens,
-            output = m.outputTokens,
-            height = 6.dp
-        )
+        // 消耗占比进度条（输入 + 输出两段）
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .weight((m.inputTokens + 1f).toFloat())
+                    .height(6.dp)
+                    .background(INPUT_COLOR, RoundedCornerShape(3.dp))
+            )
+            Spacer(Modifier.width(2.dp))
+            Box(
+                modifier = Modifier
+                    .weight((m.outputTokens + 1f).toFloat())
+                    .height(6.dp)
+                    .background(OUTPUT_COLOR, RoundedCornerShape(3.dp))
+            )
+        }
     }
+}
+
+@Composable
+private fun StatChip(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
@@ -974,12 +1271,6 @@ private fun StatsPaginationBar(
     }
 }
 
-/**
- * 调用明细：手机竖屏放不下 13 列表格，改成「一行一次调用」的可展开卡片。
- *
- * 第一屏只给最常看的四件事：什么时候、哪个渠道、花了多少 token、多少钱；
- * 缓存读/写、首字节、耗时、重试、思考强度收进展开态，避免默认视图被数字淹没。
- */
 @Composable
 private fun CallRecordsTable(
     calls: List<RecentCallRecord>,
@@ -988,20 +1279,10 @@ private fun CallRecordsTable(
     total: Int,
     onSelectPage: (Int) -> Unit
 ) {
-    var expandedIds by rememberSaveable { mutableStateOf(listOf<Long>()) }
     Column {
         calls.forEachIndexed { index, call ->
             if (index > 0) SettingsDivider()
-            val id = call.record.id
-            val expanded = id in expandedIds
-            CallRecordCard(
-                call = call,
-                cost = costs[id],
-                expanded = expanded,
-                onToggle = {
-                    expandedIds = if (expanded) expandedIds - id else expandedIds + id
-                }
-            )
+            CallRecordRow(call, costs[call.record.id])
         }
         StatsPaginationBar(
             page = page,
@@ -1012,157 +1293,91 @@ private fun CallRecordsTable(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CallRecordCard(
-    call: RecentCallRecord,
-    cost: Double?,
-    expanded: Boolean,
-    onToggle: () -> Unit
-) {
-    val r = call.record
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val fresh = (r.inputTokens - r.cachedInputTokens - r.cacheCreationTokens).coerceAtLeast(0)
-    val provider = call.providerName ?: AgentEngines.displayName(r.providerId) ?: r.providerId
-        ?: stringResource(R.string.settings_token_stats_unknown)
-    val isError = r.status == "error"
-    val isCancelled = r.status == "cancelled"
-
+private fun CallRecordRow(call: RecentCallRecord, cost: Double?) {
+    val record = call.record
+    val statusColor = when (record.status) {
+        "error" -> ERROR_COLOR
+        "cancelled" -> CANCELLED_COLOR
+        else -> SUCCESS_COLOR
+    }
+    val statusLabel = when (record.status) {
+        "error" -> stringResource(R.string.settings_token_stats_status_error)
+        "cancelled" -> stringResource(R.string.settings_token_stats_status_cancelled)
+        else -> stringResource(R.string.settings_token_stats_status_success)
+    }
+    val kindLabel = when (record.kind) {
+        "compaction" -> stringResource(R.string.settings_token_stats_kind_compaction)
+        "title" -> stringResource(R.string.settings_token_stats_kind_title)
+        "vision" -> stringResource(R.string.settings_token_stats_kind_vision)
+        else -> stringResource(R.string.settings_token_stats_kind_chat)
+    }
+    val provider = call.providerName ?: record.providerId ?: stringResource(R.string.settings_token_stats_unknown)
+    val rate = record.outputTokensPerSecond()
+    var expanded by rememberSaveable(record.id) { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .padding(horizontal = Spacing.lg, vertical = 10.dp)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when {
-                            isError -> ERROR_COLOR
-                            isCancelled -> CANCELLED_COLOR
-                            else -> TokenStatsPalette.Progress
-                        }
-                    )
-            )
-            Spacer(Modifier.width(6.dp))
             Text(
-                text = formatCallTime(r.createdAt),
-                style = MaterialTheme.typography.labelSmall,
-                color = muted
-            )
-            Spacer(Modifier.width(6.dp))
-            InfoTag(provider)
-            if (isError || isCancelled) {
-                Spacer(Modifier.width(4.dp))
-                InfoTag(
-                    stringResource(
-                        if (isError) R.string.settings_token_stats_status_error
-                        else R.string.settings_token_stats_status_cancelled
-                    )
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = if (cost == null) "-" else formatCostUsd(cost),
-                style = MaterialTheme.typography.bodySmall,
+                text = record.model ?: stringResource(R.string.settings_token_stats_unknown),
+                style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-        Spacer(Modifier.height(3.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = r.model ?: stringResource(R.string.settings_token_stats_unknown),
-                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Icon(
-                imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                contentDescription = null,
-                tint = muted,
-                modifier = Modifier.size(14.dp)
-            )
+            Text(statusLabel, style = MaterialTheme.typography.labelMedium, color = statusColor, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.height(4.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text("↑${formatTokenCount(fresh.toLong())}", style = MaterialTheme.typography.labelSmall, color = INPUT_COLOR)
-            if (r.cachedInputTokens > 0 && r.inputTokens > 0) {
-                Text(
-                    "⚡${String.format(Locale.getDefault(), "%.0f%%", (r.cachedInputTokens * 100.0 / r.inputTokens).coerceAtMost(100.0))}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = CACHE_COLOR
-                )
-            }
-            Text("↓${formatTokenCount(r.outputTokens.toLong())}", style = MaterialTheme.typography.labelSmall, color = OUTPUT_COLOR)
-            r.durationMillis?.let {
-                Text(formatDuration(it.toDouble()), style = MaterialTheme.typography.labelSmall, color = muted)
-            }
+        Text(
+            text = "$provider · $kindLabel · ${formatCallTime(record.createdAt)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md), verticalAlignment = Alignment.CenterVertically) {
+            Text("↑${formatTokenCount(record.inputTokens.toLong())} ↓${formatTokenCount(record.outputTokens.toLong())}", style = MaterialTheme.typography.bodySmall)
+            rate?.let { Text(formatRate(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+            Text(formatDuration(record.durationMillis?.toDouble()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (expanded) {
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
-                DetailCell(stringResource(R.string.settings_token_stats_col_cached_read), r.cachedInputTokens.toString())
-                DetailCell(stringResource(R.string.settings_token_stats_col_cached_write), r.cacheCreationTokens.toString())
+            Spacer(Modifier.height(Spacing.sm))
+            SettingsDivider()
+            Spacer(Modifier.height(Spacing.sm))
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_reasoning_effort), record.reasoningEffort ?: "-")
+            val reasoningWire = record.reasoningClampedFrom?.let { "$it → ${record.reasoningWire}" } ?: record.reasoningWire
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_reasoning_wire), reasoningWire ?: "-")
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_cached_read), record.cachedInputTokens.toString())
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_cached_write), record.cacheCreationTokens.toString())
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_cache_hit_rate), formatRecordCacheHitRate(record))
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_ttfb), formatDuration(record.ttfbMillis?.toDouble()))
+            CallDetailLine(stringResource(R.string.settings_token_stats_col_cost), cost?.let(::formatCostUsd) ?: "-")
+            if (record.retryCount > 0) {
+                CallDetailLine(stringResource(R.string.settings_token_stats_retries, record.retryCount), "")
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
-                DetailCell(stringResource(R.string.settings_token_stats_col_ttfb), formatDuration(r.ttfbMillis?.toDouble()))
-                DetailCell(stringResource(R.string.settings_token_stats_col_duration), formatDuration(r.durationMillis?.toDouble()))
-                r.outputTokensPerSecond()?.let { rate ->
-                    DetailCell(stringResource(R.string.settings_token_stats_col_output_rate), formatRate(rate))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
-                DetailCell(
-                    stringResource(R.string.settings_token_stats_col_reasoning_effort),
-                    formatReasoningEffort(r.reasoningEffort, r.reasoningWire)
-                )
-                DetailCell(stringResource(R.string.settings_token_stats_retries_short), r.retryCount.toString())
-            }
-            // 仅在实际发出的档位与所选不一致时给出「已降级」提示：把静默降级显式化。
-            r.reasoningClampedFrom?.takeIf { it.isNotBlank() }?.let { from ->
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.settings_token_stats_reasoning_clamped, from, r.reasoningWire ?: "-"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.semanticColors.warning
-                )
-            }
-            r.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ERROR_COLOR,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
+            record.stopReason?.let { CallDetailLine(stringResource(R.string.settings_token_stats_stop_reason), it) }
+            record.errorMessage?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
     }
 }
 
 @Composable
-private fun DetailCell(label: String, value: String) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+private fun CallDetailLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (value.isNotEmpty()) Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -1181,16 +1396,6 @@ private fun formatCache(context: android.content.Context, cachedRead: Long, cach
 private fun formatCallTime(epochMillis: Long): String =
     SimpleDateFormat("yyyy/M/d HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
-/**
- * 「思考强度」单元格：所选与实际一致时只显示一档（如 `high`）；不一致时显示 `所选→实发`
- * （如 `max→high`），让降级一眼可见。实际档位缺失（旧记录 / 未发思考字段）时退回只显示所选。
- */
-private fun formatReasoningEffort(requested: String?, wire: String?): String {
-    if (requested == null) return wire ?: "-"
-    if (wire == null || wire == requested) return requested
-    return "$requested→$wire"
-}
-
 /** 单次调用缓存命中率：缓存输入 / 总输入（inputTokens 含缓存命中部分，各 provider 适配器已统一该口径）。 */
 private fun formatRecordCacheHitRate(call: LlmCallRecordEntity): String {
     if (call.inputTokens <= 0) return "-"
@@ -1204,24 +1409,6 @@ private fun formatCacheHitRate(s: CallSummary): String {
     val rate = min(s.cachedInputTokens * 100.0 / s.inputTokens, 100.0)
     return String.format(Locale.getDefault(), "%.1f%%", rate)
 }
-
-/** 概览成功率：成功调用 / 总调用。 */
-private fun formatSuccessRate(s: CallSummary): String {
-    if (s.calls <= 0) return "-"
-    val rate = (s.calls - s.errors) * 100.0 / s.calls
-    return String.format(Locale.getDefault(), "%.1f%%", rate)
-}
-
-/** 生成阶段输出速率（t/s）：扣除 TTBF 后的纯生成时长；非成功对话调用不参与。 */
-private fun LlmCallRecordEntity.outputTokensPerSecond(): Double? {
-    val ttfb = ttfbMillis ?: return null
-    val duration = durationMillis ?: return null
-    if (kind != "chat" || status != "success" || outputTokens <= 0 || duration - ttfb <= 0) return null
-    return outputTokens * 1000.0 / (duration - ttfb)
-}
-
-private fun formatRate(value: Double): String =
-    "${value.roundToInt().coerceAtLeast(1)} t/s"
 
 private fun formatDuration(ms: Double?): String {
     if (ms == null) return "-"

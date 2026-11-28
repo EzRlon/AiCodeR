@@ -136,8 +136,10 @@ object ReasoningLearning {
             ?: return null
         val levels = raw.split(',', ';', '|')
             .map { it.trim().trim('\'', '"', '.', '`') }
-            .mapNotNull { ReasoningEffort.fromApiValue(it)?.apiValue }
+            .mapNotNull { ReasoningEffort.fromApiValue(it) }
             .distinct()
+            .sortedBy { it.ordinal }
+            .map { it.apiValue }
         // 防 400 文案误学：tool_choice 之类的错误也会写 "supported values are: 'auto', 'none', 'required'"，
         // 过滤后只剩 none，这不是档位白名单，学进去会把后续真实档位全部钳没。
         return levels.takeIf { list -> list.any { it != ReasoningEffort.NONE.apiValue } }

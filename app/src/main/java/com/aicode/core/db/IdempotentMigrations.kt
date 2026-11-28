@@ -357,3 +357,14 @@ private fun addColumnIfMissing(db: SupportSQLiteDatabase, table: String, column:
     }
     if (!exists) db.execSQL(ddl)
 }
+
+/**
+ * 79→80：消息级生成计时（上游 81d88b7c，本仓 v80 重编号）——
+ * agent_messages 新增首包与生成窗口毫秒，供 Token 统计图表与消息耗时展示。
+ */
+internal class Migration79To80 : Migration(79, 80) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "agent_messages", "ttfbMillis", "ALTER TABLE `agent_messages` ADD COLUMN `ttfbMillis` INTEGER")
+        addColumnIfMissing(db, "agent_messages", "generationWindowMillis", "ALTER TABLE `agent_messages` ADD COLUMN `generationWindowMillis` INTEGER")
+    }
+}

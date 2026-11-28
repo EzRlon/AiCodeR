@@ -1333,6 +1333,9 @@ class StatefulAgentWorkflow @Inject constructor(
         var ttfbElapsed: Long? = null
         var retryAttempts = 0
 
+        /** 收集完成（Final）时的累计耗时：首块到流结束，generationWindow 的分母。 */
+        var durationElapsed: Long? = null
+
         private var pendingText: String? = null
         private var pendingReasoning: String? = null
         private var lastTextSentAt = 0L
@@ -1373,6 +1376,7 @@ class StatefulAgentWorkflow @Inject constructor(
                 is AIStreamChunk.Final -> {
                     // 纯工具调用轮没有文本/思考增量，Final 是首个内容事件，兜底记为 TTFB
                     markTtfb()
+                    durationElapsed = SystemClock.elapsedRealtime() - callStartElapsed
                     finalResponse = chunk.response
                 }
                 is AIStreamChunk.ToolCallDeclared -> {
@@ -1390,8 +1394,16 @@ class StatefulAgentWorkflow @Inject constructor(
             flushReasoning()
         }
 
+        fun generationWindowMillis(totalDurationMillis: Int?): Int? {
+            val ttfb = ttfbElapsed ?: return null
+            val duration = totalDurationMillis ?: return null
+            return (duration - ttfb.toInt()).takeIf { it > 0 }
+        }
+
         private fun markTtfb() {
-            if (ttfbElapsed == null) ttfbElapsed = SystemClock.elapsedRealtime() - callStartElapsed
+            if (ttfbElapsed == null) {
+                ttfbElapsed = SystemClock.elapsedRealtime() - callStartElapsed
+            }
         }
 
         /** 重试/换 Key 后重放：丢弃已推送内容，避免新旧文本拼接。 */
