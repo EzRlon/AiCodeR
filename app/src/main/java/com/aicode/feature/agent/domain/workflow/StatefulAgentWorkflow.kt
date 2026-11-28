@@ -7,6 +7,7 @@ import com.aicode.feature.agent.data.local.dao.LlmCallRecordDao
 import com.aicode.feature.agent.data.local.dao.TodoItemDao
 import com.aicode.feature.agent.data.local.entity.LlmCallRecordEntity
 import com.aicode.feature.agent.domain.model.AgentContext
+import com.aicode.feature.agent.domain.model.id
 import com.aicode.feature.agent.domain.model.AgentImage
 import com.aicode.feature.agent.domain.model.AgentMessage
 import com.aicode.feature.agent.domain.model.CONTEXT_COMPACTION_MARKER
@@ -30,6 +31,7 @@ import com.aicode.feature.agent.domain.provider.AIProvider
 import com.aicode.feature.agent.domain.provider.AIProviderFactory
 import com.aicode.feature.agent.domain.provider.AIResponse
 import com.aicode.feature.agent.domain.provider.AIStreamChunk
+import com.aicode.feature.agent.domain.provider.ThinkingSignatureInvalidException
 import com.aicode.feature.agent.domain.tool.AgentTool
 import com.aicode.feature.agent.domain.tool.StreamingAgentTool
 import com.aicode.feature.agent.domain.tool.ToolCall
@@ -1003,6 +1005,19 @@ class StatefulAgentWorkflow @Inject constructor(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
+                            // 签名校验失败：按官方恢复步骤清掉报错位置及其后的 thinking 快照、落库，再重发一次。
+                            if (e is ThinkingSignatureInvalidException && stream.text.isEmpty() && stream.reasoning.isEmpty()) {
+                                val (stripped, changedIds) = stripThinkingSnapshots(state.messages, e.fromMessageId)
+                                if (changedIds.isNotEmpty()) {
+                                    state = state.copy(messages = stripped)
+                                    currentContext.sessionId?.let { sessionId ->
+                                        runCatching { messagePersistenceUseCase.clearThinkingSnapshots(sessionId, changedIds) }
+                                    }
+                                    callError = e.message
+                                    actionQueue.addLast(AgentAction.InitRequest(stripped))
+                                    continue
+                                }
+                            }
                             if (stream.text.isEmpty() && stream.reasoning.isEmpty() && isContextOverflow(e) && overflowRecoveryStreakNow() < MAX_OVERFLOW_RECOVERIES) {
                                 noteOverflowRecovery()
                                 // 连续第 2 次起跳过工作集回注（同 stop_reason 溢出路径）。
@@ -1407,6 +1422,25 @@ class StatefulAgentWorkflow @Inject constructor(
         val text = error.message.orEmpty().lowercase()
         return listOf("context_length_exceeded", "context_window_exceeded", "maximum context length",
             "prompt is too long", "input token limit").any { it in text }
+    }
+
+    /**
+     * 签名校验失败的官方恢复步骤：从报错消息开始，把它及其后所有消息的 thinking 快照清空。
+     * fromMessageId 为 null（位置无法解析）时清空全部；返回剥离后的列表与实际变更的消息 id。
+     */
+    private fun stripThinkingSnapshots(messages: List<AgentMessage>, fromMessageId: String?): Pair<List<AgentMessage>, List<String>> {
+        val start = fromMessageId?.let { id -> messages.indexOfFirst { it.id == id } } ?: 0
+        if (start < 0) return messages to emptyList()
+        val changedIds = mutableListOf<String>()
+        val stripped = messages.mapIndexed { index, message ->
+            val target = message as? AgentMessage.AssistantMessage ?: return@mapIndexed message
+            if (index < start || (target.signature.isEmpty() && target.thinkingBlocksJson.isEmpty())) {
+                return@mapIndexed message
+            }
+            changedIds.add(message.id)
+            target.copy(signature = "", thinkingBlocksJson = "[]")
+        }
+        return stripped to changedIds
     }
 
     /**
